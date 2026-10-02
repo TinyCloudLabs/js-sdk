@@ -11,15 +11,43 @@ This release has **Commander coverage tracked, not complete parity**:
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
+## Calling the CLI
+
+`/usr/sbin/tc` (iproute2 traffic control) shadows TinyCloud's `tc` on many Linux hosts. Call the CLI by absolute path: `TC="$(npm prefix --global)/bin/tc"; "$TC" --version`.
+
 ## Global Options
 
 | Flag | Description |
 |------|-------------|
 | `-p, --profile <name>` | Profile to use |
-| `-H, --host <url>` | Node URL override |
+| `-H, --host <url>` | Node URL override (default `https://tee.node.tinycloud.xyz`) |
 | `-v, --verbose` | Verbose output |
 | `-q, --quiet` | Suppress non-essential output |
 | `--no-cache` | Disable caching |
+| `--json` | Force machine-readable output |
+
+## Context and Login
+
+```bash
+tc init --name agent --key-only
+tc --profile agent auth login --device --manifest builtin:share-publishing --expiry 7d
+tc --profile agent context --json
+```
+
+`context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
+
+| `auth login` flag | Description |
+|------|-------------|
+| `--device` | Approve on another device (phone) through OpenKey device authorization. Requires `--manifest`. Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
+| `--manifest <file>` | Request only this manifest's permissions (one space). File path, `base64:<json>`, or `builtin:share-publishing` |
+| `--expiry <duration>` | Session lifetime, e.g. `1h`, `7d`. Device login: at most `30d`, default `30d` |
+| `--owner <did>` | Refuse approval by any identity other than this `did:pkh` |
+| `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
+| `--paste`, `--no-popup` | Browser flow without a local callback / without opening a browser |
+
+Device login JSON lists approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tc auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way. `tc enable share` is shorthand for device login with `builtin:share-publishing`. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`. See [AUTH.md](AUTH.md).
+
+`builtin:share-publishing` requests, in the owner's `default` space, KV `get`/`put`/`list`/`del` on `xyz.tinycloud.share/shares/` (bearer links) and KV `get`/`metadata`/`put`/`list`/`del` on `shares/` (addressed links). Nothing else.
 
 ## Delegations
 
@@ -101,33 +129,30 @@ eval "$(tc completion zsh)"
 tc completion fish | source
 ```
 
-## Share Publish, Inspect, and Receive
+## Share Publish, Inspect, Receive, List, Revoke
+
+Publishing needs the publishing scope on the profile (`auth login --device --manifest builtin:share-publishing` or `tc enable share`).
 
 ```bash
-tc share publish ./decision.md
-cat decision.md | tc share publish - --name decision.md
-printf '%s' "$SHARE_URL" | tc share inspect - --json
+tc share publish ./note.md --json                                  # bearer link
+tc share publish ./note.md --to email:alice@example.com --notify   # addressed: exact email, emailed invitation
+tc share publish ./note.md --to did:pkh:eip155:1:0xRecipient...    # addressed: one DID
+tc share publish ./note.md --to domain:example.com                 # addressed: any verified address at the domain
+cat note.md | tc share publish - --name note.md --expires 7d
+
+printf '%s' "$SHARE_URL" | tc share inspect - --json               # verify, print safe metadata
+printf '%s' "$SHARE_URL" | tc share receive - --stdout             # bearer link: verified bytes
 printf '%s' "$SHARE_URL" | tc share receive - --output .
-printf '%s' "$SHARE_URL" | tc share receive - --stdout
+
+tc share list --json                                               # sender history, no complete URLs
+tc share show <id> [--reveal-link]
+tc share notify <id> --to alice@example.com                        # retry email delivery
+tc share revoke <id>
 ```
 
-Human publish output is exactly one canonical URL. Bearer shares use
-`/viewer#tc1=<opaque TinyCloud delegation>`; addressed shares use
-`/s/inline#v=2&p=<sealed Policy/v3 envelope>`. The sealed envelope and its
-AES-GCM key remain in the fragment, never in a query string or HTTP request.
-Inspect never prints plaintext or secret-bearing fields. Receive invokes the
-owner node, uses a sanitized single-segment filename, and refuses overwrite
-unless `--force` is explicit. Pre-cutover blob-backed and plaintext `?tc2`
-link forms are not accepted.
-Share publication without `--expires` requests a seven-day lifetime. For a
-session-only profile, the CLI clamps that request to the verified SIWE session
-expiry, prints a notice to stderr, and reports `"expiryClamped": true` in JSON.
-Explicit lifetimes beyond the session end, or with less than 60 seconds left
-after second-precision rounding, fail with `SESSION_LIFETIME_EXCEEDED`.
-Expired/invalid restored sessions and missing owner authority return
-`AUTH_REQUIRED`; rejected KV upload or delegation scopes return
-`PERMISSION_DENIED`. JSON publish output includes `expiryClamped: false` when
-no clamp was needed.
+**Bearer vs addressed.** A bearer link (default, `--to anyone`) is `/viewer#tc1=<TinyCloud delegation>`: anyone holding the complete URL can read the file until it expires, and revocation cannot recall copies already received. Addressed links (`--to email:`, `--to did:`, `--to domain:`) are `/s/inline#v=2&p=<sealed Policy/v3 envelope>`: the content is encrypted and only the named recipient can open it after proving their email or DID in Share. `tc share receive` returns the bytes of a bearer link; for an addressed link it exits 6 with `CLAIM_REQUIRED` because the recipient claims it in Share. `--notify` emails an exact-email recipient an invitation.
+
+The fragment after `#` is the read authority. It never reaches a server in a query string or HTTP request; keep complete URLs out of logs. Human publish output is exactly one URL. Inspect never prints plaintext or secret-bearing fields. Receive uses a sanitized single-segment filename and refuses overwrite unless `--force`. `revoke` revokes addressed shares at the owner node and reports bearer retention honestly. Pre-cutover blob-backed and plaintext `?tc2` links are not accepted.
 
 ### Share Publish Options
 
@@ -137,7 +162,7 @@ no clamp was needed.
 | `--name <filename>` | Safe filename for stdin | `stdin.md` |
 | `--to <target>` | `anyone`, recipient DID, email, or `domain:<name>` | `anyone` |
 | `--notify` | Send the addressed link through the email-only API | off |
-| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | implicit `7d`, clamped for session-only profiles |
+| `--expires <duration>` | Duration: `1h`, `7d`, `1w`, or ISO date | `7d` |
 | `--media-type <type>` | Media type for a single input | inferred |
 | `--action <actions...>` | Addressed permission: `read`, `list`, or `edit` | `read` |
 | `--prefix` | Publish multiple inputs beneath one addressed prefix | off |
@@ -155,13 +180,13 @@ no clamp was needed.
 ## Profile Directory Structure
 
 ```
-~/.tinycloud/
+~/.tinycloud/                      # 0700
 ├── config.json                    # Global config (defaultProfile)
 └── profiles/
-    └── {name}/
-        ├── profile.json           # Host, DID, chainId
-        ├── key.json               # Ed25519 JWK keypair
-        ├── session.json           # Delegation, spaceId
+    └── {name}/                    # 0700
+        ├── profile.json           # Host, DID, chainId, ownerDid, spaceId (0600)
+        ├── key.json               # Ed25519 JWK keypair (0600)
+        ├── session.json           # Delegation, spaceId (0600)
         └── cache/
 ```
 
@@ -170,4 +195,6 @@ no clamp was needed.
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
 - **Owner DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
 
-All output is JSON. Errors go to stderr as `{error: {code, message}}`.
+Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?}}`. Inspect the structured code, not only the exit status.
+
+General storage/auth exit codes: 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error. `tc share` uses its own: 3 upload authority required, 4 unavailable or expired, 5 verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success.

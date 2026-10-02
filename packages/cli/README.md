@@ -8,7 +8,16 @@ Self-sovereign storage from the terminal. `tc` is the command-line interface for
 npm install -g @tinycloud/cli
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 20. On Linux, `/usr/sbin/tc` (iproute2) can shadow this
+CLI; call it as `"$(npm prefix --global)/bin/tc"` when in doubt.
+
+## Agent skills
+
+The package ships the general `tc-cli` skill and its references in
+`skills/tc-cli`. See [skill installation](skills/tc-cli/INSTALL.md) for a
+pinned, cross-agent installation with OpenCode, Codex and Claude Code, and
+[authentication](skills/tc-cli/AUTH.md) for device login and relaying the
+approval code to the owner.
 
 ## Operations coverage
 
@@ -34,11 +43,16 @@ tc init
 # Authenticate via browser
 tc auth login
 
-# Authenticate on a remote/headless machine
-tc auth login --device
+# Authenticate on a remote/headless machine: the owner approves an explicit
+# manifest on their phone (URL + code printed to stderr)
+tc init --name agent --key-only
+tc --profile agent auth login --device --manifest builtin:share-publishing
 
-# Enable only Share publishing authority
+# Same Share publishing scope, as a shortcut
 tc enable share
+
+# Selected profile, owner, host and space (JSON; does not test access)
+tc context
 
 # Store and retrieve data
 tc kv put greeting "Hello, world"
@@ -64,8 +78,10 @@ tc delegation create --to did:pkh:eip155:1:0x...
 |---------|-------------|
 | `tc init` | Set up a profile and generate keys |
 | `tc auth login` | Authenticate via browser |
-| `tc auth login --device` | Authenticate with an OpenKey URL and user code |
-| `tc enable share` | Enable narrowly scoped Share publishing authority |
+| `tc auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) |
+| `tc auth login --manifest <file>` | Browser OpenKey login scoped to a manifest |
+| `tc enable share` | Device login with the built-in Share publishing manifest |
+| `tc context` | Show the selected profile, owner, host, space and session state |
 | `tc auth status` | Show authentication status |
 | `tc auth whoami` | Show current identity |
 | `tc kv get <key>` | Retrieve a value |

@@ -18,18 +18,23 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** TinyCloud state holds keys, sessions and delegations: owner-only access. */
+export const PRIVATE_FILE_MODE = 0o600;
+export const PRIVATE_DIR_MODE = 0o700;
+
 /**
  * Write data as JSON to a file. Creates parent directories if needed.
  *
  * Writes to a temp file in the same directory and renames it into place, so
- * a crash or concurrent read never observes a partially-written file.
+ * a crash or concurrent read never observes a partially-written file. The
+ * file is created 0600 and new directories 0700.
  */
 export async function writeJson(filePath: string, data: unknown): Promise<void> {
   const directory = dirname(filePath);
   const tempPath = join(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true });
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
     await rename(tempPath, filePath);
   } catch (err) {
     await rm(tempPath, { force: true }).catch(() => undefined);
@@ -53,10 +58,10 @@ export async function fileExists(filePath: string): Promise<boolean> {
 }
 
 /**
- * Ensure a directory exists (mkdir -p).
+ * Ensure a directory exists (mkdir -p); new directories are created 0700.
  */
 export async function ensureDir(dirPath: string): Promise<void> {
-  await mkdir(dirPath, { recursive: true });
+  await mkdir(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
 }
 
 /**

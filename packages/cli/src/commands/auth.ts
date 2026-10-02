@@ -11,7 +11,7 @@ import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
-import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST } from "../config/constants.js";
+import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -33,9 +33,14 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import {
-  ensureShareDeviceAuthorization,
+  acquireDeviceDelegation,
+  DEVICE_DELEGATION_MAX_SECONDS,
+  loginWithDeviceAuthorization,
   mergePrivateJwkIntoSession,
 } from "../auth/device-auth.js";
+import { validateLoginPermissions, verifyScopedLogin } from "../auth/scoped-login.js";
+import { parseDuration } from "../lib/duration.js";
+import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
 import {
   generateLocalIdentity,
@@ -108,26 +113,70 @@ export function registerAuthCommand(program: Command): void {
   auth
     .command("login")
     .description("Authenticate with TinyCloud")
-    .option("--device", "Use OpenKey device authorization (recommended for remote/headless use)")
+    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires --manifest")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
+    .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
+    .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
+    .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
           throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
         }
+        const scoped = options.device || options.manifest || options.expiry || options.owner;
+        if (scoped && options.method === "local") {
+          throw new CLIError("INVALID_ARGUMENT", "--device, --manifest, --expiry and --owner require OpenKey login.", ExitCode.USAGE_ERROR);
+        }
+        if (options.owner && !options.manifest) {
+          throw new CLIError("INVALID_ARGUMENT", "--owner requires --manifest so the signed identity is verified.", ExitCode.USAGE_ERROR);
+        }
+        if (options.device && !options.manifest) {
+          throw new CLIError(
+            "MANIFEST_REQUIRED",
+            `Device login requests an explicit scope. Pass --manifest FILE, or --manifest ${SHARE_PUBLISHING_MANIFEST_REF} for Share publishing.`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        const permissions = options.manifest
+          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true })
+          : undefined;
+
+        if (options.device) {
+          const { profile, result } = await loginWithDeviceAuthorization({
+            profileName: ctx.profile,
+            nodeOrigin: ctx.host,
+            shareOrigin: DEFAULT_SHARE_ORIGIN,
+            permissions: permissions!,
+            delegationTtlSeconds: deviceTtlSeconds(options.expiry, DEVICE_DELEGATION_MAX_SECONDS),
+            reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
+            expectedOwner: options.owner,
+            openkeyHost: process.env.TC_OPENKEY_HOST,
+          });
+          reportDeclined(result.declined);
+          outputJson({
+            authenticated: true,
+            profile: ctx.profile,
+            did: profile.did,
+            ownerDid: result.ownerDid,
+            spaceId: result.spaceId,
+            host: ctx.host,
+            authMethod: "openkey",
+            mode: "device",
+            scoped: true,
+            permissions: result.approved,
+            declined: result.declined,
+            expiresAt: result.expiresAt,
+          });
+          return;
+        }
 
         // Determine auth method
         let method: AuthMethod;
-        if (options.device && options.method === "local") {
-          throw new CLIError("INVALID_ARGUMENT", "--device requires --method openkey.", ExitCode.USAGE_ERROR);
-        }
-        if (options.device) {
-          method = "openkey";
-        } else if (options.method) {
+        if (options.method) {
           if (options.method !== "local" && options.method !== "openkey") {
             throw new CLIError(
               "INVALID_METHOD",
@@ -137,7 +186,7 @@ export function registerAuthCommand(program: Command): void {
           }
           method = options.method;
         } else {
-          method = await promptAuthMethod();
+          method = scoped ? "openkey" : await promptAuthMethod();
         }
 
         if (method === "local") {
@@ -146,7 +195,9 @@ export function registerAuthCommand(program: Command): void {
           await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
-            device: options.device === true || (!isInteractive() && options.paste !== true),
+            permissions,
+            expiry: parseExpiryOption(options.expiry),
+            expectedOwner: options.owner,
           });
         }
       } catch (error) {
@@ -261,11 +312,15 @@ export function registerAuthCommand(program: Command): void {
     .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
+    .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const profile = await ProfileManager.getProfile(ctx.profile);
+        if (options.device && (!options.grant || profile.authMethod !== "openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey profile.", ExitCode.USAGE_ERROR);
+        }
         const requested = await collectRequestedPermissions(options, ctx.profile);
         const expiryOption = parseExpiryOption(options.expiry);
 
@@ -312,19 +367,38 @@ export function registerAuthCommand(program: Command): void {
           // delegation so the CLI output reports what was actually
           // conferred (never over-reports the originally-requested set).
           const openkeyEffective: typeof requested = [];
+          const declined: PermissionEntry[] = [];
           for (const group of groupPermissionsBySpace(requested)) {
-            const delegationData = await startAuthFlow(profile.did, {
-              jwk: key,
-              host: ctx.host,
-              permissions: group,
-              reason: permissionGrantReason(
-                "Grant requested TinyCloud permissions from `tc auth request --grant`.",
-                group,
-              ),
-              openkeyHost,
-              expiry: expiryOption,
-              noPopup: options.popup === false,
-            });
+            const reason = permissionGrantReason(
+              "Grant requested TinyCloud permissions from `tc auth request --grant`.",
+              group,
+            );
+            let delegationData: Record<string, unknown>;
+            if (options.device) {
+              const approval = await acquireDeviceDelegation({
+                sessionDid: keyToDID(key),
+                jwk: key,
+                nodeOrigin: ctx.host,
+                shareOrigin: DEFAULT_SHARE_ORIGIN,
+                permissions: group,
+                delegationTtlSeconds: deviceTtlSeconds(options.expiry, 7 * 24 * 60 * 60),
+                reason,
+                expectedOwner: profile.ownerDid,
+                openkeyHost: process.env.TC_OPENKEY_HOST,
+              });
+              declined.push(...approval.declined);
+              delegationData = approval.session;
+            } else {
+              delegationData = await startAuthFlow(profile.did, {
+                jwk: key,
+                host: ctx.host,
+                permissions: group,
+                reason,
+                openkeyHost,
+                expiry: expiryOption,
+                noPopup: options.popup === false,
+              });
+            }
             const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
             // Sol MAJOR-6: report EFFECTIVE grants (what the delegation
             // actually confers) rather than the requested `group`. The
@@ -344,12 +418,14 @@ export function registerAuthCommand(program: Command): void {
               expiry,
             });
           }
+          reportDeclined(declined);
           outputJson({
             changed: delegationCids.length > 0,
             added: openkeyEffective,
             delegationCid: delegationCids[0],
             delegationCids,
             expiry,
+            ...(options.device ? { declined } : {}),
           });
           return;
         }
@@ -1607,32 +1683,14 @@ async function handleLocalAuth(
 }
 
 /**
- * Handle OpenKey (browser-based) authentication.
- * This is the original auth flow.
+ * Handle OpenKey (browser-based) authentication. With `permissions`, only the
+ * manifest's scope is requested and the signed proof is verified first.
  */
 async function handleOpenKeyAuth(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean; device?: boolean } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<void> {
-  if (options.device) {
-    const result = await ensureShareDeviceAuthorization({
-      profileName,
-      nodeOrigin: host,
-      shareOrigin: "https://share.tinycloud.xyz",
-      openkeyHost: process.env.TC_OPENKEY_HOST,
-      allowReplaceLocal: true,
-    });
-    outputJson({
-      authenticated: true,
-      profile: profileName,
-      did: result.profile.did,
-      spaceId: result.profile.spaceId ?? null,
-      authMethod: "openkey",
-      mode: "device",
-    });
-    return;
-  }
   const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
 
   outputJson({
@@ -1641,29 +1699,58 @@ async function handleOpenKeyAuth(
     did: profile.did,
     spaceId: delegationData.spaceId,
     authMethod: "openkey",
+    ...(options.permissions
+      ? {
+          scoped: true,
+          ownerDid: profile.ownerDid,
+          host,
+          permissions: delegationData.permissions,
+          expiresAt: delegationData.expiresAt,
+          activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified",
+        }
+      : {}),
   });
 }
 
-/**
- * If the OpenKey callback returned a public-only JWK (no `d`), splice the
- * private parameter from the profile's `key.json` back in so the persisted
- * session is usable for WASM signing later.
- *
- * Why this exists: `browser-auth.ts:publicJwkForDelegation` strips `d` before
- * sending the JWK to OpenKey, OpenKey echoes the public-only JWK back, and
- * the previous code path persisted it verbatim. Downstream callers
- * (`tc kv get`, `tc sql execute`) then hit `Missing private key parameter in
- * JWK` because `sdk.ts` preferred `session.jwk` over `key.json`.
- *
- * Note: `key` here is the profile's full JWK (loaded from `key.json` above)
- * and is exported with `d`. If the delegation flow ever evolves so OpenKey
- * legitimately returns a session JWK with its own private parameter, this
- * function leaves that JWK untouched.
- */
+/** Device lifetime in seconds from `--expiry` (duration or milliseconds). */
+function deviceTtlSeconds(raw: unknown, fallbackSeconds: number): number {
+  const parsed = parseExpiryOption(raw);
+  if (parsed === undefined) return fallbackSeconds;
+  let milliseconds: number;
+  try {
+    milliseconds = typeof parsed === "number" ? parsed : parseDuration(parsed);
+  } catch (error) {
+    throw new CLIError("INVALID_EXPIRY", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+  }
+  const seconds = Math.floor(milliseconds / 1000);
+  if (seconds < 60 || seconds > DEVICE_DELEGATION_MAX_SECONDS) {
+    throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1m and 30d.", ExitCode.USAGE_ERROR);
+  }
+  return seconds;
+}
+
+/** Tell the operator which requested capabilities the owner unchecked. */
+function reportDeclined(declined: PermissionEntry[]): void {
+  if (declined.length === 0) return;
+  process.stderr.write(
+    `${theme.warn("The owner did not approve:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
+  );
+}
+
+interface OpenKeyLoginOptions {
+  paste?: boolean;
+  noPopup?: boolean;
+  /** Manifest scope for first login: one space, verified before persistence. */
+  permissions?: PermissionEntry[];
+  expiry?: string | number;
+  expectedOwner?: string;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}
+
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean; openKeyAcquisition?: OpenKeyAcquisition } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
   const key = await ProfileManager.getKey(profileName);
   if (!key) {
@@ -1676,6 +1763,7 @@ export async function refreshOpenKeySession(
 
   // Get DID from profile
   const profile = await ProfileManager.getProfile(profileName);
+  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
@@ -1685,14 +1773,25 @@ export async function refreshOpenKeySession(
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
+    permissions: options.permissions,
+    expiry: options.expiry,
+    ...(options.permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
-  // Defensive: OpenKey only ever receives the public JWK (see
-  // browser-auth.ts `publicJwkForDelegation`), so any JWK it echoes back is
-  // public-only. Persisting that verbatim shadows the full keypair in
-  // key.json and breaks anything that needs the WASM signer (kv/sql). Merge
-  // the private parameter from key.json back in before writing session.json.
-  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+  // Scoped login persists only signed, verified authority. Otherwise OpenKey
+  // only ever receives the public JWK (browser-auth.ts
+  // `publicJwkForDelegation`), so any JWK it echoes back is public-only;
+  // persisting it verbatim would shadow key.json and break the WASM signer
+  // (kv/sql). Merge the private parameter back in before writing session.json.
+  const sanitizedSession = options.permissions
+    ? await verifyScopedLogin(
+        delegationData,
+        key,
+        profile.sessionDid ?? profile.did,
+        options.permissions,
+        options.expectedOwner ?? (profile.authMethod === "openkey" ? profile.ownerDid : undefined),
+      )
+    : mergePrivateJwkIntoSession(delegationData, key);
 
   // Store session
   await ProfileManager.setSession(profileName, sanitizedSession);
@@ -1700,6 +1799,7 @@ export async function refreshOpenKeySession(
   // Update profile with owner DID if present
   const updatedProfile = {
     ...profile,
+    host,
     sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",

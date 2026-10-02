@@ -1,0 +1,15 @@
+{
+  "name": "tc-cli",
+  "cli": ">=1.0.0-beta.15 <2.0.0",
+  "node": ">=20",
+  "installer": {
+    "package": "skills",
+    "version": "1.7.0",
+    "node": ">=22.20.0"
+  },
+  "agents": [
+    "opencode",
+    "codex",
+    "claude-code"
+  ]
+}

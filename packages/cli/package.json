@@ -12,7 +12,8 @@
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "skills"
   ],
   "engines": {
     "node": ">=20"
@@ -24,7 +25,8 @@
     "generate:reference": "bun scripts/generate-reference.ts",
     "check:generated": "bun scripts/generate-reference.ts --check",
     "check:coverage": "bun scripts/check-coverage.ts",
-    "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts"
+    "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
+    "check:skill-pack": "node scripts/check-skill-pack.mjs"
   },
   "dependencies": {
     "@tinycloud/share-sdk": "1.0.0-beta.7",

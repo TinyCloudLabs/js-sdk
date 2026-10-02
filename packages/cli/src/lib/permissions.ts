@@ -34,6 +34,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
+import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -268,7 +269,7 @@ export async function appendGrantHistory(
     profile,
     ...entry,
   }) + "\n";
-  await appendFile(grantHistoryPath(profile), line, "utf8");
+  await appendFile(grantHistoryPath(profile), line, { encoding: "utf8", mode: 0o600 });
 }
 
 export async function readGrantHistory(
@@ -334,13 +335,14 @@ export async function loadPermissionRequest(
 export async function loadManifestPermissions(
   source: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
 
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
-    return resolvePermissionSpaces(resolved.resources, profile);
+    return resolvePermissionSpaces(resolved.resources, profile, options);
   }
 
   if (typeof manifest.app_id === "string") {
@@ -366,7 +368,7 @@ export async function loadManifestPermissions(
         };
       });
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
-    return resolvePermissionSpaces(permissions, profile);
+    return resolvePermissionSpaces(permissions, profile, options);
   }
 
   throw new CLIError(
@@ -468,9 +470,13 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
-  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
+  // First login (and delegates) may not know the owner's address yet. Keep
+  // logical space names; the approving owner binds them to their own space.
+  const allowLogicalSpaces = options.allowLogicalSpaces === true ||
+    resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved: PermissionEntry[] = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
@@ -501,6 +507,9 @@ export async function resolvePermissionSpaces(
 }
 
 async function loadManifestText(source: string): Promise<string> {
+  if (source === SHARE_PUBLISHING_MANIFEST_REF) {
+    return JSON.stringify(SHARE_PUBLISHING_MANIFEST);
+  }
   if (source.startsWith("base64:")) {
     return Buffer.from(source.slice("base64:".length), "base64").toString("utf8");
   }

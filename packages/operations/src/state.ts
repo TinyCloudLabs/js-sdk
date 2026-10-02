@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
+  chmod,
   mkdir,
   readFile,
   rename,
@@ -16,6 +17,9 @@ const DEFAULT_LOCK_TIMEOUT_MS = 2_000;
 const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
 const TEST_LOCK_CONTENTION_SIGNAL_PATH = "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH";
+// Profile state holds keys, sessions and delegations: owner-only access.
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIR_MODE = 0o700;
 const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
 
@@ -143,9 +147,9 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
   );
   const contents = `${JSON.stringify(value, null, 2)}\n`;
 
-  await mkdir(directory, { recursive: true });
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    await writeFile(temporaryPath, contents, "utf8");
+    await writeFile(temporaryPath, contents, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
     await rename(temporaryPath, filePath);
   } catch (error) {
     await rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -299,6 +303,9 @@ export async function writeSession<T extends object>(
 ): Promise<void> {
   await withProfileLock(profile, async () => {
     await readStoreMetadata(profile, "session");
+    // Tighten profile directories created by older releases before writing
+    // session authority into them.
+    await chmod(profilePath(profile), PRIVATE_DIR_MODE);
     await writeJsonAtomic(sessionPath(profile), session);
     await writeFormatOneMetadata(profile, "session");
   }, options);
@@ -328,7 +335,7 @@ async function acquireProfileLock(
   const startedAt = Date.now();
   const lockPath = profileLockPath(profile);
 
-  await mkdir(profilePath(profile), { recursive: true });
+  await mkdir(profilePath(profile), { recursive: true, mode: PRIVATE_DIR_MODE });
 
   while (true) {
     try {

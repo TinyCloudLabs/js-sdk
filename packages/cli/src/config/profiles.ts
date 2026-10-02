@@ -1,3 +1,4 @@
+import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import {
   readSession,
@@ -18,6 +19,7 @@ import {
   ensureDir,
   removeDir,
   listDirs,
+  PRIVATE_DIR_MODE,
 } from "./storage.js";
 import type { GlobalConfig, ProfileConfig, CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
@@ -121,11 +123,13 @@ export class ProfileManager {
   }
 
   /**
-   * Saves a JWK key for a profile.
+   * Saves a JWK key for a profile. The key file is 0600; the profile
+   * directory is (re)set to 0700 because older releases created it 0775.
    */
   static async setKey(name: string, jwk: object): Promise<void> {
     const profileDir = join(PROFILES_DIR, name);
     await ensureDir(profileDir);
+    await chmod(profileDir, PRIVATE_DIR_MODE);
     await writeJson(join(profileDir, "key.json"), jwk);
   }
 

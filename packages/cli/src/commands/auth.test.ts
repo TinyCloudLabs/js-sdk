@@ -253,6 +253,8 @@ mock.module("@tinycloud/node-sdk", () => ({
   },
   principalDidEquals: (left: string, right: string) =>
     left.split("#", 1)[0] === right.split("#", 1)[0],
+  // Scoped-login proof verification is covered in auth/scoped-login.test.ts.
+  NodeWasmBindings: class NodeWasmBindings {},
 }));
 
 const operationRecorded = {
@@ -654,6 +656,37 @@ describe("CLI auth rotate command", () => {
         }),
       ],
     }));
+  });
+});
+
+describe("CLI auth login command", () => {
+  beforeEach(() => {
+    resetState();
+  });
+
+  test("non-interactive OpenKey login keeps the requested browser/paste flow instead of switching to device mode", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", key);
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([
+      { did: "did:key:openkey-session", options: expect.objectContaining({ noPopup: true, jwk: key }) },
+    ]);
+    expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
+  });
+
+  test("device login without an explicit manifest is refused before any approval starts", async () => {
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+
+    await runAuthCommand(["auth", "login", "--device"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "MANIFEST_REQUIRED" })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(sessions.has("default")).toBe(false);
   });
 });
 

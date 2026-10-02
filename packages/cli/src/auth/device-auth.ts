@@ -8,27 +8,40 @@ import {
   randomBytes,
   type KeyObject,
 } from "node:crypto";
-import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST } from "../config/constants.js";
+import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import type { ProfileConfig } from "../config/types.js";
+import { CLIError } from "../output/errors.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
+import {
+  permissionTuples,
+  permissionsFromTuples,
+  validateLoginPermissions,
+  verifyScopedLogin,
+} from "./scoped-login.js";
 
-export const SHARE_DEVICE_DELEGATION_SECONDS = 30 * 24 * 60 * 60;
-export const SHARE_DEVICE_PERMISSIONS = [{
-  service: "tinycloud.capabilities",
-  space: "applications",
-  path: "",
-  actions: ["tinycloud.capabilities/read"],
-}] as const;
+/** OpenKey caps device-approved delegations at 30 days. */
+export const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
+const DEVICE_REASON_MAX_LENGTH = 200;
+const CLOCK_SKEW_MS = 30_000;
 
 type DeviceStartResponse = {
   transactionId: string;
   userCode: string;
   verificationUri: string;
-  verificationUriComplete: string;
+  verificationUriComplete?: string;
   expiresIn: number;
   interval: number;
+};
+
+/** What the owner needs to approve the request on another device. */
+export type DeviceApprovalPrompt = {
+  verificationUri: string;
+  verificationUriComplete?: string;
+  userCode: string;
+  expiresAt: string;
 };
 
 type DeviceRelayEnvelope = {
@@ -44,13 +57,43 @@ type DeviceBinding = {
   sessionDid: string;
   nodeOrigin: string;
   shareOrigin: string;
-  permissions: typeof SHARE_DEVICE_PERMISSIONS | Array<Record<string, unknown>>;
+  permissions: unknown;
   delegationExpiresAt: string;
 };
 
 type DevicePollResponse =
   | { status: "pending"; interval: number }
   | { status: "approved"; relay: DeviceRelayEnvelope; binding: DeviceBinding };
+
+export interface DeviceAuthorizationInput {
+  sessionDid: string;
+  /** The local session key. Only its public half leaves this process. */
+  jwk: object;
+  nodeOrigin: string;
+  shareOrigin: string;
+  /** Manifest permissions: one space, fully qualified services and actions. */
+  permissions: PermissionEntry[];
+  delegationTtlSeconds?: number;
+  reason?: string;
+  /** Primary DID the approving identity must match, when known. */
+  expectedOwner?: string;
+  openkeyHost?: string;
+  fetchFn?: typeof globalThis.fetch;
+  emitInstructions?: (prompt: DeviceApprovalPrompt) => void;
+  wait?: (milliseconds: number) => Promise<void>;
+}
+
+export interface DeviceAuthorizationResult {
+  /** Verified session, ready to persist (local private key merged back in). */
+  session: Record<string, unknown>;
+  ownerDid: string;
+  spaceId: string;
+  expiresAt: string;
+  /** Capabilities the owner approved (a subset of the request). */
+  approved: PermissionEntry[];
+  /** Requested capabilities the owner unchecked. */
+  declined: PermissionEntry[];
+}
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
@@ -74,36 +117,47 @@ function jsonEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
+function invalidResponse(message: string): CLIError {
+  return new CLIError("DEVICE_AUTH_INVALID_RESPONSE", message, ExitCode.ERROR);
+}
+
 function validateStart(value: unknown): DeviceStartResponse {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("OpenKey returned an invalid device authorization response");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid device authorization response");
   const result = value as Record<string, unknown>;
   if (
     typeof result.transactionId !== "string" || !/^[A-Za-z0-9_-]{20,}$/.test(result.transactionId) ||
     typeof result.userCode !== "string" || !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(result.userCode) ||
     typeof result.verificationUri !== "string" ||
-    typeof result.verificationUriComplete !== "string" ||
+    (result.verificationUriComplete !== undefined && typeof result.verificationUriComplete !== "string") ||
     !Number.isSafeInteger(result.expiresIn) || Number(result.expiresIn) < 60 ||
     !Number.isSafeInteger(result.interval) || Number(result.interval) < 1
-  ) throw new Error("OpenKey returned an invalid device authorization response");
+  ) throw invalidResponse("OpenKey returned an invalid device authorization response");
   canonicalOrigin(new URL(result.verificationUri).origin, "verification URI");
-  if (new URL(result.verificationUriComplete).origin !== new URL(result.verificationUri).origin) {
-    throw new Error("OpenKey returned an invalid verification URI");
+  if (
+    typeof result.verificationUriComplete === "string" &&
+    new URL(result.verificationUriComplete).origin !== new URL(result.verificationUri).origin
+  ) {
+    throw invalidResponse("OpenKey returned an invalid verification URI");
   }
   return result as unknown as DeviceStartResponse;
 }
 
-async function responseJson(response: Response): Promise<unknown> {
+async function responseJson(response: Response): Promise<Record<string, unknown> | undefined> {
   try {
-    return await response.json();
+    const value = await response.json() as unknown;
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
   } catch {
-    throw new Error(`OpenKey device authorization failed (HTTP ${response.status})`);
+    return undefined;
   }
 }
 
-function errorCode(value: unknown): string | undefined {
-  return value && typeof value === "object" && typeof (value as Record<string, unknown>).error === "string"
-    ? (value as Record<string, unknown>).error as string
-    : undefined;
+function errorCode(value: Record<string, unknown> | undefined): string | undefined {
+  return typeof value?.error === "string" ? value.error : undefined;
+}
+
+function errorDescription(value: Record<string, unknown> | undefined): string | undefined {
+  const description = value?.errorDescription ?? value?.error_description;
+  return typeof description === "string" && description.length > 0 ? description : undefined;
 }
 
 function publicSessionJwk(value: object): object {
@@ -116,21 +170,21 @@ function publicSessionJwk(value: object): object {
 }
 
 function publicRelayJwk(value: unknown): DeviceRelayEnvelope["ephemeralPublicJwk"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("OpenKey returned an invalid relay key");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid relay key");
   const jwk = value as Record<string, unknown>;
   if (
     jwk.kty !== "EC" || jwk.crv !== "P-256" ||
     typeof jwk.x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.x) ||
     typeof jwk.y !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.y) ||
     "d" in jwk
-  ) throw new Error("OpenKey returned an invalid relay key");
+  ) throw invalidResponse("OpenKey returned an invalid relay key");
   return { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
 }
 
 function decodeCanonicalBase64Url(value: unknown, label: string): Buffer {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error(`OpenKey returned an invalid ${label}`);
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw invalidResponse(`OpenKey returned an invalid ${label}`);
   const decoded = Buffer.from(value, "base64url");
-  if (decoded.toString("base64url") !== value) throw new Error(`OpenKey returned an invalid ${label}`);
+  if (decoded.toString("base64url") !== value) throw invalidResponse(`OpenKey returned an invalid ${label}`);
   return decoded;
 }
 
@@ -143,13 +197,13 @@ function deriveRelayKey(sharedSecret: Buffer, transactionId: string): Buffer {
 }
 
 function decryptRelayResult(envelope: unknown, transactionId: string, privateKey: KeyObject): Record<string, unknown> {
-  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw new Error("OpenKey returned an invalid encrypted relay result");
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
   const relay = envelope as Partial<DeviceRelayEnvelope>;
-  if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw new Error("OpenKey returned an unsupported encrypted relay result");
+  if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResponse("OpenKey returned an unsupported encrypted relay result");
   const peer = createPublicKey({ key: publicRelayJwk(relay.ephemeralPublicJwk), format: "jwk" });
   const nonce = decodeCanonicalBase64Url(relay.nonce, "relay nonce");
   const ciphertext = decodeCanonicalBase64Url(relay.ciphertext, "relay ciphertext");
-  if (nonce.length !== 12 || ciphertext.length <= 16) throw new Error("OpenKey returned an invalid encrypted relay result");
+  if (nonce.length !== 12 || ciphertext.length <= 16) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
   const sharedSecret = diffieHellman({ privateKey, publicKey: peer });
   const key = deriveRelayKey(sharedSecret, transactionId);
   const decipher = createDecipheriv("aes-256-gcm", key, nonce);
@@ -159,71 +213,124 @@ function decryptRelayResult(envelope: unknown, transactionId: string, privateKey
   try {
     value = JSON.parse(Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()]).toString("utf8"));
   } catch {
-    throw new Error("OpenKey returned an unreadable encrypted relay result");
+    throw invalidResponse("OpenKey returned an unreadable encrypted relay result");
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("OpenKey returned an invalid encrypted relay result");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
   return value as Record<string, unknown>;
 }
 
-function assertShareDelegationPermissions(value: unknown): void {
-  if (!Array.isArray(value) || value.length !== 1) throw new Error("OpenKey returned a delegation outside the requested Share scope");
-  const permission = value[0] as Record<string, unknown>;
-  if (
-    !permission ||
-    (permission.service !== "tinycloud.capabilities" && permission.service !== "capabilities") ||
-    (permission.space !== "applications" && !(typeof permission.space === "string" && permission.space.endsWith(":applications"))) ||
-    permission.path !== "" ||
-    !Array.isArray(permission.actions) || permission.actions.length !== 1 ||
-    permission.actions[0] !== "tinycloud.capabilities/read"
-  ) throw new Error("OpenKey returned a delegation outside the requested Share scope");
+function permissionList(value: unknown, label: string): PermissionEntry[] {
+  const valid = Array.isArray(value) && value.length > 0 && value.every((entry: Record<string, unknown> | null) =>
+    entry !== null && typeof entry === "object" &&
+    typeof entry.service === "string" && typeof entry.space === "string" && typeof entry.path === "string" &&
+    Array.isArray(entry.actions) && entry.actions.length > 0 &&
+    entry.actions.every((action) => typeof action === "string" && action.length > 0));
+  if (!valid) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", `OpenKey returned no valid ${label} permissions. No session was saved.`, ExitCode.PERMISSION_DENIED);
+  }
+  return value as PermissionEntry[];
 }
 
-function assertApprovedBinding(input: {
+function sameTuples(left: Set<string>, right: Set<string>): boolean {
+  return left.size === right.size && [...left].every((tuple) => right.has(tuple));
+}
+
+function delegationExpiry(delegation: Record<string, unknown>): number {
+  const value = delegation.expiresAt ?? delegation.expirationTime ?? delegation.expiry;
+  return typeof value === "string" ? Date.parse(value) : Number.NaN;
+}
+
+/**
+ * Accept an approval only when every independent statement of it agrees:
+ * the transaction binding, the relayed delegation, and the signed SIWE proof.
+ */
+async function verifyApproval(input: {
   binding: DeviceBinding;
+  delegation: Record<string, unknown>;
   transactionId: string;
   sessionDid: string;
   nodeOrigin: string;
   shareOrigin: string;
   publicJwk: object;
-  delegation: Record<string, unknown>;
-}): void {
+  key: object;
+  requested: PermissionEntry[];
+  ttlSeconds: number;
+  expectedOwner?: string;
+}): Promise<DeviceAuthorizationResult> {
+  const { binding, delegation } = input;
   if (
-    input.binding.transactionId !== input.transactionId ||
-    input.binding.sessionDid !== input.sessionDid ||
-    input.binding.nodeOrigin !== input.nodeOrigin ||
-    input.binding.shareOrigin !== input.shareOrigin ||
-    !jsonEqual(input.binding.permissions, SHARE_DEVICE_PERMISSIONS)
-  ) throw new Error("OpenKey returned a delegation with the wrong device binding");
-  const expiresAt = Date.parse(input.binding.delegationExpiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + SHARE_DEVICE_DELEGATION_SECONDS * 1000 + 30_000) {
-    throw new Error("OpenKey returned a delegation outside the requested expiry window");
+    binding.transactionId !== input.transactionId ||
+    binding.sessionDid !== input.sessionDid ||
+    binding.nodeOrigin !== input.nodeOrigin ||
+    binding.shareOrigin !== input.shareOrigin
+  ) throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation with the wrong device binding. No session was saved.", ExitCode.PERMISSION_DENIED);
+  const expiresAt = Date.parse(binding.delegationExpiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + input.ttlSeconds * 1000 + CLOCK_SKEW_MS) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation outside the requested expiry window. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  if (input.delegation.verificationMethod !== input.sessionDid) {
-    throw new Error("OpenKey returned a delegation for a different CLI session DID");
+  if (delegationExpiry(delegation) !== expiresAt) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation outside the approved expiry window. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  assertShareDelegationPermissions(input.delegation.permissions);
-  const delegationExpiryValue = input.delegation.expiresAt ?? input.delegation.expirationTime ?? input.delegation.expiry;
-  const delegationExpiresAt = typeof delegationExpiryValue === "string" ? Date.parse(delegationExpiryValue) : Number.NaN;
-  if (!Number.isFinite(delegationExpiresAt) || delegationExpiresAt !== expiresAt) {
-    throw new Error("OpenKey returned a delegation outside the approved expiry window");
+  if (delegation.verificationMethod !== input.sessionDid) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation for a different CLI session DID. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  if (!input.delegation.jwk || typeof input.delegation.jwk !== "object" || !jsonEqual(publicSessionJwk(input.delegation.jwk), input.publicJwk)) {
-    throw new Error("OpenKey returned a delegation for a different CLI session key");
+  if (!delegation.jwk || typeof delegation.jwk !== "object" || !jsonEqual(publicSessionJwk(delegation.jwk), input.publicJwk)) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation for a different CLI session key. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  const invalid = validateDelegationCallbackPayload(input.delegation);
-  if (invalid) throw new Error(`OpenKey returned an invalid delegation: ${invalid}`);
+  const invalid = validateDelegationCallbackPayload(delegation);
+  if (invalid) throw invalidResponse(`OpenKey returned an invalid delegation: ${invalid}`);
+
+  // Signed authority: owner, space, session key, expiry, and a recap that
+  // stays inside the request.
+  const session = await verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, input.expectedOwner);
+  const { ownerDid } = session;
+  if (Math.abs(Date.parse(session.expiresAt) - expiresAt) > 1000) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "The signed session expiry differs from the approved expiry. No session was saved.", ExitCode.PERMISSION_DENIED);
+  }
+
+  // Approved set: binding and relayed delegation agree exactly, the set is a
+  // subset of the request, and the signed recap does not exceed it.
+  const requested = permissionTuples(input.requested, ownerDid);
+  const approved = permissionTuples(permissionList(binding.permissions, "approved"), ownerDid);
+  if (!sameTuples(approved, permissionTuples(permissionList(delegation.permissions, "delegated"), ownerDid))) {
+    throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the delegated permissions. No session was saved.", ExitCode.PERMISSION_DENIED);
+  }
+  for (const tuple of [...approved, ...permissionTuples(session.permissions, ownerDid)]) {
+    if (!requested.has(tuple) || !approved.has(tuple)) {
+      throw new CLIError("OPENKEY_GRANT_BROADENED", "OpenKey returned authority beyond the requested manifest. No session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+  }
+  return {
+    session,
+    ownerDid,
+    spaceId: delegation.spaceId as string,
+    expiresAt: session.expiresAt,
+    approved: permissionsFromTuples(approved),
+    declined: permissionsFromTuples([...requested].filter((tuple) => !approved.has(tuple))),
+  };
 }
 
-export async function acquireShareDeviceDelegation(input: {
-  sessionDid: string;
-  jwk: object;
-  nodeOrigin: string;
-  shareOrigin: string;
-  openkeyHost?: string;
-  fetchFn?: typeof globalThis.fetch;
-  emitInstructions?: (value: { verificationUri: string; verificationUriComplete: string; userCode: string }) => void;
-  wait?: (milliseconds: number) => Promise<void>;
-}): Promise<Record<string, unknown>> {
+function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
+  const link = prompt.verificationUriComplete ?? prompt.verificationUri;
+  process.stderr.write(
+    `Approve on your phone: ${link} (code ${prompt.userCode})\n` +
+    `  Or open ${prompt.verificationUri} and enter code ${prompt.userCode}.\n` +
+    `  Waiting for approval until ${prompt.expiresAt}. Keep this command running.\n`,
+  );
+}
+
+/**
+ * Request exactly `permissions` through OpenKey device authorization, wait
+ * for the owner's approval for the whole approval window, and return the
+ * verified session. Nothing is persisted here.
+ */
+export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
+  validateLoginPermissions(input.permissions);
+  const ttlSeconds = input.delegationTtlSeconds ?? DEVICE_DELEGATION_MAX_SECONDS;
+  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
+    throw new CLIError("INVALID_EXPIRY", "Device authorization lifetime must be between 1 minute and 30 days.", ExitCode.USAGE_ERROR);
+  }
+  const reason = input.reason?.trim().slice(0, DEVICE_REASON_MAX_LENGTH);
   const openkeyHost = canonicalOrigin(input.openkeyHost ?? DEFAULT_OPENKEY_DEVICE_API_HOST, "OpenKey host");
   const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
   const shareOrigin = canonicalOrigin(input.shareOrigin, "Share origin");
@@ -245,52 +352,93 @@ export async function acquireShareDeviceDelegation(input: {
       relayPublicJwk,
       sessionDid: input.sessionDid,
       publicJwk,
-      permissions: SHARE_DEVICE_PERMISSIONS,
+      permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
       nodeOrigin,
       shareOrigin,
-      delegationTtlSeconds: SHARE_DEVICE_DELEGATION_SECONDS,
+      delegationTtlSeconds: ttlSeconds,
+      ...(reason ? { reason } : {}),
     }),
   });
   const startValue = await responseJson(startResponse);
-  if (!startResponse.ok) throw new Error(`OpenKey device authorization failed: ${errorCode(startValue) ?? startResponse.status}`);
+  if (!startResponse.ok) {
+    const code = errorCode(startValue);
+    const description = errorDescription(startValue);
+    if (code === "invalid_scope") {
+      throw new CLIError(
+        "SCOPE_REJECTED",
+        `OpenKey rejected the requested scope${description ? `: ${description}` : "."} Remove that capability from the manifest or use another approval flow.`,
+        ExitCode.PERMISSION_DENIED,
+        { openkeyError: code, ...(description ? { capability: description } : {}) },
+      );
+    }
+    throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
+  }
   const started = validateStart(startValue);
-  (input.emitInstructions ?? ((value) => {
-    process.stderr.write(`OpenKey device authorization\nVisit: ${value.verificationUri}\nCode:  ${value.userCode}\n\nWaiting for approval…\n`);
-  }))({ verificationUri: started.verificationUri, verificationUriComplete: started.verificationUriComplete, userCode: started.userCode });
-
   const deadline = Date.now() + started.expiresIn * 1000;
+  (input.emitInstructions ?? writeApprovalPrompt)({
+    verificationUri: started.verificationUri,
+    ...(started.verificationUriComplete ? { verificationUriComplete: started.verificationUriComplete } : {}),
+    userCode: started.userCode,
+    expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z"),
+  });
+
   let interval = started.interval;
   const wait = input.wait ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   while (Date.now() < deadline) {
     await wait(interval * 1000);
-    const response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
-      method: "POST",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ transactionId: started.transactionId, deviceSecret, codeVerifier }),
-    });
+    let response: Response;
+    try {
+      response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
+        method: "POST",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({ transactionId: started.transactionId, deviceSecret, codeVerifier }),
+      });
+    } catch {
+      // Phone approval takes minutes; a dropped poll must not end the window.
+      continue;
+    }
     const value = await responseJson(response);
     const code = errorCode(value);
-    if (response.status === 429 && code === "slow_down") {
-      interval += 1;
+    if (response.status >= 500 || (response.status === 429 && code !== "slow_down")) continue;
+    if (code === "slow_down") {
+      interval += 5;
       continue;
     }
-    if (!response.ok) throw new Error(`OpenKey device authorization failed: ${code ?? response.status}`);
-    const result = value as DevicePollResponse;
-    if (result.status === "pending") {
-      interval = Math.max(interval, result.interval);
+    if (code === "authorization_pending") continue;
+    if (code === "access_denied") {
+      throw new CLIError("DEVICE_AUTH_DENIED", "The owner denied the OpenKey device authorization. No session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+    if (code === "expired_token") {
+      throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed. Run the command again.", ExitCode.AUTH_REQUIRED);
+    }
+    if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
+    const result = value as DevicePollResponse | undefined;
+    if (result?.status === "pending") {
+      interval = Math.max(interval, Number.isSafeInteger(result.interval) ? result.interval : interval);
       continue;
     }
-    if (result.status !== "approved" || !result.relay || !result.binding) {
-      throw new Error("OpenKey returned an invalid device authorization result");
+    if (result?.status !== "approved" || !result.relay || !result.binding) {
+      throw invalidResponse("OpenKey returned an invalid device authorization result");
     }
     const delegation = decryptRelayResult(result.relay, started.transactionId, relayKeys.privateKey);
-    assertApprovedBinding({ binding: result.binding, transactionId: started.transactionId, sessionDid: input.sessionDid, nodeOrigin, shareOrigin, publicJwk, delegation });
-    return delegation;
+    return verifyApproval({
+      binding: result.binding,
+      delegation,
+      transactionId: started.transactionId,
+      sessionDid: input.sessionDid,
+      nodeOrigin,
+      shareOrigin,
+      publicJwk,
+      key: input.jwk,
+      requested: input.permissions,
+      ttlSeconds,
+      expectedOwner: input.expectedOwner,
+    });
   }
-  throw new Error("OpenKey device authorization expired before approval");
+  throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
 }
 
 export function mergePrivateJwkIntoSession(session: Record<string, unknown>, key: object): Record<string, unknown> {
@@ -303,60 +451,43 @@ export function mergePrivateJwkIntoSession(session: Record<string, unknown>, key
   return { ...session, jwk: { ...sessionJwkRecord, d: privateParameter } };
 }
 
-export async function ensureShareDeviceAuthorization(input: {
+/**
+ * Device login for a profile: request `permissions`, verify the approval, and
+ * only then persist key, session and the OpenKey owner posture.
+ */
+export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizationInput, "sessionDid" | "jwk"> & {
   profileName: string;
-  nodeOrigin: string;
-  shareOrigin: string;
-  openkeyHost?: string;
-  fetchFn?: typeof globalThis.fetch;
-  allowReplaceLocal?: boolean;
-  emitInstructions?: (value: { verificationUri: string; verificationUriComplete: string; userCode: string }) => void;
-  wait?: (milliseconds: number) => Promise<void>;
-}): Promise<{ profile: ProfileConfig; delegation: Record<string, unknown> }> {
-  let profile = await ProfileManager.getProfile(input.profileName).catch(() => null);
-  if (profile?.authMethod === "local" && input.allowReplaceLocal !== true) {
-    throw new Error("This profile uses a local owner key. Run `tc auth login --device` explicitly to replace its authentication posture.");
-  }
-  let key = await ProfileManager.getKey(input.profileName);
-  if (!key) {
-    const generated = generateKey();
-    key = generated.jwk;
-    await ProfileManager.setKey(input.profileName, key);
-  }
+}): Promise<{ profile: ProfileConfig; result: DeviceAuthorizationResult }> {
+  const existing = await ProfileManager.getProfile(input.profileName).catch(() => null);
+  const key = await ProfileManager.getKey(input.profileName) ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
-  profile = {
-    ...profile,
-    name: input.profileName,
-    host: input.nodeOrigin,
-    chainId: profile?.chainId ?? DEFAULT_CHAIN_ID,
-    spaceName: profile?.spaceName ?? "applications",
-    did: sessionDid,
-    sessionDid,
-    createdAt: profile?.createdAt ?? new Date().toISOString(),
-    posture: "owner-openkey",
-    operatorType: profile?.operatorType ?? "human",
-    authMethod: "openkey",
-    openkeyHost: input.openkeyHost ?? profile?.openkeyHost,
-  };
-  await ProfileManager.setProfile(input.profileName, profile);
-
-  const delegation = await acquireShareDeviceDelegation({
+  const openkeyHost = input.openkeyHost ?? existing?.openkeyHost;
+  const result = await acquireDeviceDelegation({
+    ...input,
     sessionDid,
     jwk: key,
-    nodeOrigin: input.nodeOrigin,
-    shareOrigin: input.shareOrigin,
-    openkeyHost: input.openkeyHost ?? profile.openkeyHost,
-    fetchFn: input.fetchFn,
-    emitInstructions: input.emitInstructions,
-    wait: input.wait,
+    openkeyHost,
+    // A profile already bound to an OpenKey owner must stay with that owner.
+    expectedOwner: input.expectedOwner ?? (existing?.authMethod === "openkey" ? existing.ownerDid : undefined),
   });
-  const session = mergePrivateJwkIntoSession(delegation, key);
-  await ProfileManager.setSession(input.profileName, session);
-  const updatedProfile: ProfileConfig = {
-    ...profile,
-    ownerDid: typeof session.ownerDid === "string" ? session.ownerDid : profile.ownerDid,
-    spaceId: typeof session.spaceId === "string" ? session.spaceId : profile.spaceId,
+  const profile: ProfileConfig = {
+    ...existing,
+    name: input.profileName,
+    host: input.nodeOrigin,
+    chainId: existing?.chainId ?? DEFAULT_CHAIN_ID,
+    spaceName: result.spaceId.slice(result.spaceId.lastIndexOf(":") + 1),
+    did: sessionDid,
+    sessionDid,
+    ownerDid: result.ownerDid,
+    spaceId: result.spaceId,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    posture: "owner-openkey",
+    operatorType: existing?.operatorType ?? "human",
+    authMethod: "openkey",
+    ...(openkeyHost ? { openkeyHost } : {}),
   };
-  await ProfileManager.setProfile(input.profileName, updatedProfile);
-  return { profile: updatedProfile, delegation: session };
+  await ProfileManager.setKey(input.profileName, key);
+  await ProfileManager.setSession(input.profileName, result.session);
+  await ProfileManager.setProfile(input.profileName, profile);
+  return { profile, result };
 }
