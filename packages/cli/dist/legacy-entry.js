@@ -16907,6 +16907,23 @@ async function throwKvError(error, spaceUri, profileName) {
   if (hosted) throw hosted;
   throw new CLIError(error.code, error.message, ExitCode.ERROR);
 }
+function isByteCount(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function storageQuotaError(error) {
+  if (error.code !== "STORAGE_QUOTA_EXCEEDED") return void 0;
+  const { usedBytes, limitBytes } = typeof error.meta === "object" && error.meta !== null ? error.meta : {};
+  const sizes = isByteCount(usedBytes) && isByteCount(limitBytes) ? ` (${formatBytes(usedBytes)} used of ${formatBytes(limitBytes)} limit)` : "";
+  return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was written`, ExitCode.ERROR);
+}
+function assertAddressableKey(key) {
+  for (let i = 0; i < key.length; i++) {
+    const code2 = key.charCodeAt(i);
+    if (code2 <= 32 || code2 === 127) {
+      throw new CLIError("USAGE_ERROR", "KV keys cannot contain spaces or control characters; use a URL-safe key", ExitCode.USAGE_ERROR);
+    }
+  }
+}
 async function readStdin2() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -16923,6 +16940,7 @@ function registerKvCommand(program) {
   const kv = program.command("kv").description("Key-value store operations");
   kv.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
+      assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
@@ -16967,6 +16985,7 @@ function registerKvCommand(program) {
   });
   kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
     try {
+      assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
@@ -16992,6 +17011,8 @@ function registerKvCommand(program) {
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const result = await withSpinner(`Writing ${key}...`, () => kv2.put(key, putValue));
       if (!result.ok) {
+        const quota = storageQuotaError(result.error);
+        if (quota) throw quota;
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
       outputJson({ key, written: true });
@@ -17001,6 +17022,7 @@ function registerKvCommand(program) {
   });
   kv.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
+      assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
@@ -17016,6 +17038,7 @@ function registerKvCommand(program) {
   });
   kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (options, cmd) => {
     try {
+      if (options.prefix) assertAddressableKey(options.prefix);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
@@ -17051,6 +17074,7 @@ function registerKvCommand(program) {
   });
   kv.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
+      assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
@@ -27204,6 +27228,7 @@ function parseNativeShareUrl(value) {
 }
 
 // src/commands/share.ts
+init_formatter();
 init_errors();
 
 // src/share/output.ts
@@ -27403,7 +27428,7 @@ function shareCliError(error) {
     }
     if (failure.kind === "scope-denied") {
       const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
-      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `request the builtin:share-publishing scope with ${loginHint}`;
+      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `verify the session includes the builtin:share-publishing scope; if it does not, request it with ${loginHint}`;
       return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
     }
     if (failure.kind === "lifetime-exceeds-session") {
@@ -27427,6 +27452,13 @@ function shareCliError(error) {
     }
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
+    }
+    if (failure.kind === "storage-quota-exceeded") {
+      const sizes = failure.usedBytes === void 0 || failure.limitBytes === void 0 ? "" : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
+      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
+    }
+    if (failure.kind === "upload-failed") {
+      return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
   }
   if (error instanceof ShareNotifyError) {

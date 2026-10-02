@@ -94,6 +94,11 @@ function outputError(code3, message, hint) {
 function isInteractive() {
   return Boolean(process.stdout.isTTY);
 }
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 var init_formatter = __esm({
   "src/output/formatter.ts"() {
     "use strict";
@@ -15051,6 +15056,7 @@ function parseDuration(input) {
 }
 
 // src/commands/share.ts
+init_formatter();
 init_errors();
 
 // src/share/output.ts
@@ -15253,7 +15259,7 @@ function shareCliError(error) {
     }
     if (failure.kind === "scope-denied") {
       const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
-      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `request the builtin:share-publishing scope with ${loginHint}`;
+      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `verify the session includes the builtin:share-publishing scope; if it does not, request it with ${loginHint}`;
       return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
     }
     if (failure.kind === "lifetime-exceeds-session") {
@@ -15277,6 +15283,13 @@ function shareCliError(error) {
     }
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
+    }
+    if (failure.kind === "storage-quota-exceeded") {
+      const sizes = failure.usedBytes === void 0 || failure.limitBytes === void 0 ? "" : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
+      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
+    }
+    if (failure.kind === "upload-failed") {
+      return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
   }
   if (error instanceof ShareNotifyError) {
@@ -16897,7 +16910,26 @@ function requiredKvAction(meta) {
   const action = meta.requiredAction;
   return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : void 0;
 }
+function isByteCount(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function throwKvUploadFailure(error) {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED") {
+    const meta = "meta" in error && typeof error.meta === "object" && error.meta !== null ? error.meta : {};
+    const { usedBytes, limitBytes } = meta;
+    throw new SharePublishAuthorityError(isByteCount(usedBytes) && isByteCount(limitBytes) ? { kind: "storage-quota-exceeded", usedBytes, limitBytes } : { kind: "storage-quota-exceeded" });
+  }
+  throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+var URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+function safeStorageFilename(filename) {
+  if (URI_SAFE_FILENAME.test(filename) && !filename.includes("..")) return filename;
+  const dot = filename.lastIndexOf(".");
+  const extension = dot >= 0 && /^[A-Za-z0-9]{1,16}$/.test(filename.slice(dot + 1)) ? filename.slice(dot + 1) : "";
+  const stem = (extension === "" ? filename : filename.slice(0, dot)).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(extension === "" ? /[^A-Za-z0-9_-]+/g : /[^A-Za-z0-9._-]+/g, "-").replace(/\.{2,}/g, ".").replace(/-{2,}/g, "-").slice(0, 100).replace(/^[^A-Za-z0-9]+|[-.]+$/g, "");
+  return `${stem === "" ? "share" : stem}${extension === "" ? "" : `.${extension}`}`;
+}
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
   let keyPromise;
@@ -17129,7 +17161,7 @@ function createShareAuthorityAdapters(input = {}) {
     if (targetInput.target.kind === "bearer") {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file2 = files[0];
-      const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
+      const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
         contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
       });
@@ -17145,7 +17177,7 @@ function createShareAuthorityAdapters(input = {}) {
             profileName: activeProfileName2
           });
         }
-        throw new Error("native bearer source upload failed");
+        throwKvUploadFailure(written.error);
       }
       let native;
       try {
@@ -17193,7 +17225,7 @@ function createShareAuthorityAdapters(input = {}) {
     }
     if (resourceKind !== "exact" || files.length !== 1) throw new Error("addressed publication requires a single exact source file");
     const file = files[0];
-    const resourcePath = `shares/${shareId}/${targetInput.filename}`;
+    const resourcePath = `shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
@@ -17228,7 +17260,7 @@ function createShareAuthorityAdapters(input = {}) {
           profileName: activeProfileName2
         });
       }
-      throw new Error("addressed source upload failed");
+      throwKvUploadFailure(stored.error);
     }
     const contentSource = {
       shareId,

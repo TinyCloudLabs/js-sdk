@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.0.0-beta.18
+
+### Patch Changes
+
+- b3db51a: `tc share publish` no longer fails with `PERMISSION_DENIED` when a filename contains spaces. A name that has characters other than `A-Z a-z 0-9 . _ -`, starts with anything but a letter or digit, contains `..`, or is longer than 128 characters is stored under a readable URI-safe name (`Edge test (A).md` is stored as `Edge-test-A.md`). It keeps its extension when that is 1-16 ASCII letters or digits; a leading dot is dropped (`.env` becomes `share.env`), and a name without such an extension never gains one. Anyone-with-link pages and `tc share receive` show the stored name; addressed shares keep the original display filename. A full storage quota reports `STORAGE_QUOTA_EXCEEDED`, with used and limit sizes when the node includes them, and other upload failures report `UPLOAD_FAILED`, never server text. `tc kv get`, `put`, `head`, `delete` and `list --prefix` refuse keys with spaces or control characters (`USAGE_ERROR`) before authenticating, because the SDK sends keys unescaped in the node resource URI, and `tc kv put` reports a full quota as `STORAGE_QUOTA_EXCEEDED` (exit 1). Permission errors advise checking the existing scope before requesting it again.
+
 ## 1.0.0-beta.17
 
 ### Minor Changes
