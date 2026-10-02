@@ -7,6 +7,8 @@ import {
   createNativeShare,
   parseNativeShareUrl,
   SHARE_PUBLISH_RESULT_VERSION,
+  prepareAddressedShare,
+  type PreparedAddressedShare,
   publishAddressedShare,
   redactPublishedShare,
   type NativeShareResult,
@@ -21,7 +23,7 @@ import {
   deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
 import { canonicalize } from "@tinycloud/share-envelope";
-import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
+import { LocationRecordValidationError, LocationRegistryHttpError, revokePolicyRootV3 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
@@ -352,6 +354,30 @@ export function createShareAuthorityAdapters(input: {
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
+    const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
+    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
+    // Refuse a bad target, recipient, filename or action set before anything
+    // is published or uploaded. This also canonicalizes the recipient and
+    // derives the credential commitment mailbox recipients open the share
+    // with; without it the SDK would sign a Policy/v1 share no receiver opens.
+    let prepared: PreparedAddressedShare;
+    try {
+      prepared = prepareAddressedShare({ target: targetInput.target, actions, policyActions, filename: targetInput.filename });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "invalid-request", reason: error instanceof TypeError ? error.message : "addressed share request is invalid" });
+    }
+    // Receivers find the owner's node through a registry record signed by the
+    // policy owner (this session key). Publish it before storing content so a
+    // registry failure cannot leave an orphaned object or an unverifiable link.
+    try {
+      await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
+    } catch (error) {
+      // An unreachable or failing registry (network error, 5xx, 408, 429) may
+      // recover; a refused or invalid record will not, so don't suggest a retry.
+      const rejected = error instanceof LocationRecordValidationError
+        || (error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429);
+      throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
+    }
     const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
@@ -381,8 +407,6 @@ export function createShareAuthorityAdapters(input: {
       mode: "immutable" as const,
       initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex"),
     };
-    const actions = targetInput.actions === undefined || targetInput.actions.length === 0 ? ["read"] as const : targetInput.actions;
-    const policyActions = [...new Set(actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]))] as ("tinycloud.kv/get" | "tinycloud.kv/list" | "tinycloud.kv/metadata" | "tinycloud.kv/put")[];
     const published = await publishAddressedShare({
       shareId,
       shareOrigin: config.shareOrigin,
@@ -390,11 +414,12 @@ export function createShareAuthorityAdapters(input: {
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
       spaceId: ownerSpaceId,
-      target: targetInput.target,
+      target: prepared.target,
       resource: { kind: resourceKind, path: resourcePath },
       actions,
       policyActions,
       contentSource,
+      ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
       filename: targetInput.filename,
       mediaType,
       byteLength,

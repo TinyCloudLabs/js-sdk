@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { encodeSealedInlineShareUrl } from "@tinycloud/share-envelope";
-import { notifyShare, type SenderShareRecord } from "@tinycloud/share-sdk";
+import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
+import { notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
@@ -11,6 +12,8 @@ const sessionSignatures: Uint8Array[] = [];
 const deliveryAuthorizationInputs: Array<Record<string, unknown>> = [];
 let deliveryAuthorization: { readonly key: string; readonly body: string; readonly receipt: Record<string, unknown> } | undefined;
 let deliveryAuthorizationConflicts = 0;
+const publishEvents: string[] = [];
+const registeredPolicies: unknown[] = [];
 
 let nodeSpaceId: string | undefined = "tinycloud:test-space";
 let restoredSpaceId: string | undefined = "tinycloud:test-space";
@@ -21,6 +24,16 @@ let sessionOnly = true;
 let uploadErrorCode: string | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
+let registryError: unknown;
+
+/** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
+async function goldenDescriptorDigest(name: string): Promise<string> {
+  const fixture: unknown = JSON.parse(await readFile(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url), "utf8"));
+  const vectors: unknown[] = typeof fixture === "object" && fixture !== null && "vectors" in fixture && Array.isArray(fixture.vectors) ? fixture.vectors : [];
+  const vector = vectors.find((candidate) => typeof candidate === "object" && candidate !== null && "name" in candidate && candidate.name === name);
+  if (typeof vector !== "object" || vector === null || !("digest" in vector) || typeof vector.digest !== "string") throw new Error(`golden descriptor vector ${name} is missing`);
+  return vector.digest;
+}
 const node = {
   did: transportDid,
   credentialHolderDid,
@@ -34,6 +47,10 @@ const node = {
     };
   },
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
+  publishActiveNodeLocation: async (registryUrl: string) => {
+    if (registryError !== undefined) throw registryError;
+    publishEvents.push(`location ${registryUrl}`);
+  },
   getEncryptionNetworkIdForSpace: (spaceId: string) => {
     encryptionSpaces.push(spaceId);
     return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
@@ -55,6 +72,7 @@ const node = {
   },
   kvForSpace: (spaceId: string) => ({
     put: async () => {
+      publishEvents.push("upload");
       uploadedSpaces.push(spaceId);
       return uploadErrorCode === undefined
         ? { ok: true as const }
@@ -77,20 +95,23 @@ const node = {
     sessionSignatures.push(bytes.slice());
     return new Uint8Array(64).fill(7);
   },
-  registerPolicy: async (input: { readonly policyCid: string; readonly policyRoot: { readonly cid: string }; readonly enforcementRoot: { readonly cid: string } }) => ({
-    policyCid: input.policyCid,
-    policyRootCid: input.policyRoot.cid,
-    enforcementRootCid: input.enforcementRoot.cid,
-    attestedEnforcerBinding: {
-      schema: "xyz.tinycloud.policy/attested-enforcer/v2" as const,
-      enforcerDid: nodeDid,
-      nodeAudience: nodeDid,
-      attestationBindingDigestHex: "2".repeat(64),
-      issuedAt: "2026-01-01T00:00:00.000Z",
-      expiresAt: "2100-01-01T00:00:00.000Z",
-      signature: { suite: "Ed25519" as const, signerDid: nodeDid, value: "AQ" },
-    },
-  }),
+  registerPolicy: async (input: { readonly policyCid: string; readonly policy: unknown; readonly policyRoot: { readonly cid: string }; readonly enforcementRoot: { readonly cid: string } }) => {
+    registeredPolicies.push(input.policy);
+    return {
+      policyCid: input.policyCid,
+      policyRootCid: input.policyRoot.cid,
+      enforcementRootCid: input.enforcementRoot.cid,
+      attestedEnforcerBinding: {
+        schema: "xyz.tinycloud.policy/attested-enforcer/v2" as const,
+        enforcerDid: nodeDid,
+        nodeAudience: nodeDid,
+        attestationBindingDigestHex: "2".repeat(64),
+        issuedAt: "2026-01-01T00:00:00.000Z",
+        expiresAt: "2100-01-01T00:00:00.000Z",
+        signature: { suite: "Ed25519" as const, signerDid: nodeDid, value: "AQ" },
+      },
+    };
+  },
   authorizeShareDeliveryV3: async (input: Record<string, unknown> & { readonly expiresAt: string; readonly idempotencyKey: string; readonly shareUrl: string }) => {
     const captured = { ...input };
     const body = JSON.stringify(captured);
@@ -139,8 +160,11 @@ afterEach(() => {
   deliveryAuthorizationInputs.length = 0;
   deliveryAuthorization = undefined;
   deliveryAuthorizationConflicts = 0;
+  publishEvents.length = 0;
+  registeredPolicies.length = 0;
   sessionExpiresAt = "2099-01-01T00:00:00.000Z";
   authenticationError = undefined;
+  registryError = undefined;
 });
 
 describe("TinyCloud share authority adapter", () => {
@@ -420,6 +444,83 @@ describe("TinyCloud share authority adapter", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  const addressedAdapter = () => createShareAuthorityAdapters({
+    origin: "https://share.example",
+    profileName: async () => "test",
+    fetchFn: (async () => Response.json({
+      version: "tinycloud.share/config-v2",
+      shareOrigin: "https://share.example",
+      registryOrigin: "https://registry.example",
+      credentialsOrigin: "https://credentials.example",
+    })) as unknown as typeof globalThis.fetch,
+  }).targetAdapter;
+  const addressedInput = (target: TargetPublishInput["target"], actions?: TargetPublishInput["actions"]): TargetPublishInput => ({
+    source: new TextEncoder().encode("only me"),
+    filename: "note.md",
+    target,
+    ...(actions === undefined ? {} : { actions }),
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    origin: "https://share.example",
+    mediaType: "text/markdown",
+  });
+
+  it("publishes owner-only email shares a receiver can open (TC-556)", async () => {
+    const published = await addressedAdapter().publish(addressedInput({ kind: "email", address: "Owner@Example.COM" }));
+    if ("state" in published) throw new Error("expected addressed publication");
+    // The viewer verifies the node binding against the owner's registry record,
+    // so it must exist before the invitation does.
+    expect(publishEvents).toEqual(["location https://registry.example", "upload"]);
+    // The issuer accepts only the lowercase mailbox, so the matcher is canonical.
+    expect(published.metadata.recipientMatcher).toEqual({ kind: "exactEmail", value: "owner@example.com" });
+    // The accountless receiver accepts only Policy/v2 and rebuilds the
+    // requirement from the signed recipient matcher, exactly as here.
+    expect(registeredPolicies).toHaveLength(1);
+    const policy = unifiedPolicyV2Schema.parse(registeredPolicies[0]);
+    const commitment = policy.credentialRequirement;
+    const requirement = createEmailCredentialRequirement({ email: "owner@example.com", profile: commitment.profile, credentialType: commitment.credentialType });
+    expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
+    expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email"));
+  });
+
+  it("publishes view-only email-domain shares with the domain credential commitment", async () => {
+    const published = await addressedAdapter().publish(addressedInput({ kind: "emailDomain", domain: "Example.com" }));
+    if ("state" in published) throw new Error("expected addressed publication");
+    expect(published.metadata.recipientMatcher).toEqual({ kind: "emailDomain", value: "example.com" });
+    const commitment = unifiedPolicyV2Schema.parse(registeredPolicies[0]).credentialRequirement;
+    const requirement = createEmailDomainCredentialRequirement({ domain: "example.com", profile: commitment.profile, credentialType: commitment.credentialType });
+    expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
+    expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email-domain-proof-v1"));
+  });
+
+  it("refuses an invalid addressed request before publishing a location or uploading", async () => {
+    const adapter = addressedAdapter();
+    await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.com" }, ["read", "edit"])))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "email-domain shares are view-only" } });
+    await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.123" })))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "recipient email domain is invalid" } });
+    await expect(adapter.publish(addressedInput({ kind: "email", address: "a%b@example.com" })))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "recipient email is invalid" } });
+    expect(publishEvents).toEqual([]);
+    expect(uploadedSpaces).toEqual([]);
+  });
+
+  it("separates a retryable registry outage from a rejection, and uploads nothing either way", async () => {
+    const cases: Array<[unknown, "registry-unavailable" | "registry-rejected"]> = [
+      [new TypeError("fetch failed"), "registry-unavailable"],
+      [new LocationRegistryHttpError("location registry publish returned HTTP 503", 503), "registry-unavailable"],
+      [new LocationRegistryHttpError("location registry publish returned HTTP 429", 429), "registry-unavailable"],
+      [new LocationRegistryHttpError("location registry publish returned HTTP 400", 400), "registry-rejected"],
+      [new LocationRegistryHttpError("location registry returned HTTP 403", 403), "registry-rejected"],
+      [new LocationRecordValidationError("existing location record signature is invalid"), "registry-rejected"],
+    ];
+    for (const [error, kind] of cases) {
+      registryError = error;
+      await expect(addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" })))
+        .rejects.toMatchObject({ failure: { kind } });
+    }
+    expect(uploadedSpaces).toEqual([]);
   });
 
   it("uses the reusable Share SDK invitation client and forwards notify idempotency to Node", async () => {

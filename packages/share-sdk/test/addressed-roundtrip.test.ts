@@ -9,7 +9,7 @@ import {
   parseSealedInlineShareUrl,
   verifyCid,
 } from "@tinycloud/share-envelope";
-import { historyRecordForPublishedShare, inspectShare, publishAddressedShare, type AddressedPolicyRegistrationInput, type AddressedSharePublishOptions } from "../src/index.js";
+import { addressedCredentialRequirement, historyRecordForPublishedShare, inspectShare, publishAddressedShare, type AddressedPolicyRegistrationInput, type AddressedSharePublishOptions } from "../src/index.js";
 
 const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerSeed)]))}`;
@@ -39,6 +39,7 @@ async function fixture(onDeliveryMaterial?: AddressedSharePublishOptions["onDeli
       mode: "immutable",
       initialCiphertextDigestHex: "2".repeat(64),
     },
+    credentialRequirement: addressedCredentialRequirement({ kind: "email", address: "alice@example.com" }),
     filename: "readme.md",
     mediaType: "text/markdown",
     byteLength: 8,

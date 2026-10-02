@@ -308,6 +308,14 @@ export class LocationRecordValidationError extends Error {
   }
 }
 
+/** The location registry answered with a non-success HTTP status. */
+export class LocationRegistryHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "LocationRegistryHttpError";
+  }
+}
+
 export class CloudLocationResolutionError extends Error {
   public readonly attempts: LocationResolutionAttempt[];
 
@@ -439,7 +447,7 @@ export async function fetchLocationRecord(
     return null;
   }
   if (!response.ok) {
-    throw new Error(`location registry returned HTTP ${response.status}`);
+    throw new LocationRegistryHttpError(`location registry returned HTTP ${response.status}`, response.status);
   }
   const text = await boundedResponseText(response, "location registry", 64 * 1024);
   let body: { record?: unknown };
@@ -496,7 +504,7 @@ export async function publishLocationRecord(
     },
   );
   if (!response.ok) {
-    throw new Error(`location registry publish returned HTTP ${response.status}`);
+    throw new LocationRegistryHttpError(`location registry publish returned HTTP ${response.status}`, response.status);
   }
   const text = await boundedResponseText(response, "location registry", 64 * 1024);
   let body: { record?: unknown };

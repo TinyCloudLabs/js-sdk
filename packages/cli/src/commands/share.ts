@@ -9,6 +9,8 @@ import {
   listShares,
   showShare,
   notifyShare,
+  normalizeShareTarget,
+  ShareNotifyError,
   revokeShare,
   redactPublishedShare,
   historyRecordForPublishedShare,
@@ -48,10 +50,19 @@ export function configureShareCommandServices(services: ShareCommandServices): v
 export function parseShareTarget(value: string): ShareTarget {
   if (value === "anyone" || value === "bearer") return { kind: "bearer" };
   if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
-  if (value.startsWith("domain:")) return { kind: "emailDomain", domain: value.slice("domain:".length) };
-  if (value.startsWith("email:")) return { kind: "email", address: value.slice("email:".length) };
-  if (value.includes("@")) return { kind: "email", address: value };
+  if (value.startsWith("domain:")) return canonicalMailboxTarget({ kind: "emailDomain", domain: value.slice("domain:".length) });
+  if (value.startsWith("email:")) return canonicalMailboxTarget({ kind: "email", address: value.slice("email:".length) });
+  if (value.includes("@")) return canonicalMailboxTarget({ kind: "email", address: value });
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
+}
+
+/** The issuer-canonical recipient, refused up front with the SDK's specific reason. */
+function canonicalMailboxTarget(target: Extract<ShareTarget, { readonly kind: "email" | "emailDomain" }>): ShareTarget {
+  try {
+    return normalizeShareTarget(target);
+  } catch (error) {
+    throw new CLIError("INVALID_ARGUMENT", error instanceof TypeError ? error.message : "share recipient is invalid", 2);
+  }
 }
 
 /** @internal Map publish authority failures without echoing remote error text. */
@@ -83,6 +94,19 @@ export function shareCliError(error: unknown): CLIError {
     if (failure.kind === "origin-mismatch") {
       return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
     }
+    if (failure.kind === "invalid-request") {
+      return new CLIError("INVALID_ARGUMENT", failure.reason, 2);
+    }
+    if (failure.kind === "registry-unavailable") {
+      return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
+    }
+    if (failure.kind === "registry-rejected") {
+      return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
+    }
+  }
+  // Fixed SDK refusals (invalid or mismatched recipient); never remote text.
+  if (error instanceof ShareNotifyError) {
+    return new CLIError("INVALID_ARGUMENT", error.message, 2);
   }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
@@ -249,7 +273,10 @@ export function registerShareCommand(program: Command): void {
         const record = await rememberPublishedShare(result);
         if (options.notify === true && target.kind === "email") {
           if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-          const delivery = await notifyShare({ shareId: record.shareId, recipient: target.address, record, adapter: shareServices.delivery });
+          // Deliver to the recipient the share was published for, in the
+          // canonical form recorded in history and the invitation.
+          const recipient = record.recipientMatcher.kind === "exactEmail" ? record.recipientMatcher.value : target.address;
+          const delivery = await notifyShare({ shareId: record.shareId, recipient, record, adapter: shareServices.delivery });
           if (delivery.state === "partial-failure") process.exitCode = 9;
         }
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);

@@ -2,6 +2,7 @@ import type { ShareAuthorizationRequired, ShareAuthorizationMethod } from "./aut
 import { authorizationMethodForTarget } from "./authorization.js";
 import { DEFAULT_SHARE_LIFETIME_MS, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 import { base58btc } from "multiformats/bases/base58";
+import { canonicalMailbox, isCanonicalEmailDomain } from "@tinycloud/share-envelope";
 
 export type ShareTarget = SharePublishTarget;
 
@@ -24,14 +25,6 @@ export type TargetPublishOutcome = PublishedShare | ShareAuthorizationRequired;
 
 export interface TargetPublishAdapter {
   publish(input: TargetPublishInput): Promise<TargetPublishOutcome>;
-}
-
-function validEmail(value: string): boolean {
-  return /^[^@\s]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(value);
-}
-
-function validDomain(value: string): boolean {
-  return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))+$/i.test(value);
 }
 
 function validRecipientDid(value: string): boolean {
@@ -63,13 +56,17 @@ export function normalizeShareTarget(target: ShareTarget): ShareTarget {
     if (!validRecipientDid(target.did)) throw new TypeError("recipient DID is invalid");
     return { kind: target.kind, did: target.did };
   }
+  // The credential issuer accepts only the canonical (lowercase) mailbox and
+  // domain, and receivers recompute the commitment from this matcher, so the
+  // target is canonicalized here rather than kept as typed.
   if (target.kind === "email") {
-    if (!validEmail(target.address)) throw new TypeError("recipient email is invalid");
-    const at = target.address.lastIndexOf("@");
-    return { kind: target.kind, address: `${target.address.slice(0, at)}@${target.address.slice(at + 1).toLowerCase()}` };
+    const mailbox = canonicalMailbox(target.address);
+    if (mailbox === undefined) throw new TypeError("recipient email is invalid");
+    return { kind: target.kind, address: mailbox.email };
   }
-  if (!validDomain(target.domain)) throw new TypeError("recipient email domain is invalid");
-  return { kind: target.kind, domain: target.domain.toLowerCase() };
+  const domain = target.domain.toLowerCase();
+  if (!isCanonicalEmailDomain(domain)) throw new TypeError("recipient email domain is invalid");
+  return { kind: target.kind, domain };
 }
 
 export function targetAuthorizationMethod(target: ShareTarget): ShareAuthorizationMethod | undefined {
