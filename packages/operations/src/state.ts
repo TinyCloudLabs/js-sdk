@@ -22,6 +22,8 @@ const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIR_MODE = 0o700;
 const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
 const invocationStateRoot = new AsyncLocalStorage<string>();
+/** Profile locks held by the current async call chain (see withProfileLock). */
+const heldProfileLocks = new AsyncLocalStorage<ReadonlySet<string>>();
 
 export type ProfileStoreName =
   | "session"
@@ -215,6 +217,11 @@ export async function readProfileStore<T>(
  * Runs a small critical section under the one advisory lock shared by all
  * profile stores. Lock release verifies its ownership token before removing
  * the exact metadata instance it acquired.
+ *
+ * Reentrant within one async call chain: a critical section that already
+ * holds a profile's lock (for example a login's compare-and-commit) can call
+ * store writers that take the same lock without deadlocking. Other call
+ * chains and other processes still wait for the lock.
  */
 export async function withProfileLock<T>(
   profile: string,
@@ -222,9 +229,11 @@ export async function withProfileLock<T>(
   options: ProfileLockOptions = {},
 ): Promise<T> {
   const normalizedProfile = validateProfileName(profile);
+  const held = heldProfileLocks.getStore();
+  if (held?.has(normalizedProfile)) return action();
   const release = await acquireProfileLock(normalizedProfile, options);
   try {
-    return await action();
+    return await heldProfileLocks.run(new Set([...(held ?? []), normalizedProfile]), action);
   } finally {
     await release();
   }

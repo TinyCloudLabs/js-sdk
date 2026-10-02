@@ -18,10 +18,11 @@ TC="$(npm prefix --global)/bin/tc"
 
 - `--manifest FILE` (required with `--device`) is an app manifest (`app_id`, `space`, `permissions`) given as a file path or `base64:<json>`. `builtin:share-publishing` is the built-in manifest for `tc share publish`; [REFERENCE.md](REFERENCE.md#context-and-login) lists exactly what it requests, and the owner's consent page shows every capability. One space per login.
 - Device login is for KV-scoped manifests, and every device manifest must also request `{ "service": "tinycloud.capabilities", "path": "", "skipPrefix": true, "actions": ["read"] }` in the same space: OpenKey requires it to sign any delegation, shows it as required, and rejects a request without it with `SCOPE_REJECTED`. `builtin:share-publishing` already includes it. OpenKey also refuses `tinycloud.sql` and any other ability its device policy excludes with `SCOPE_REJECTED`; request SQL through [browser login with a manifest](#browser-login-with-a-manifest) on a machine with a browser.
-- `--expiry` sets the session lifetime: a duration (`1h`, `7d`; at most `30d`, default `30d`) counted from approval, or an ISO date that stays an absolute deadline however long approval takes. A signed session that would outlive it is refused (30 s clock-skew allowance).
-- `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. Scoped and device logins on a profile that already recorded an owner DID are held to that owner automatically, whatever wrote it (`tc init`, an earlier login, or `profile.json` with any posture), and `--owner` must agree with it. Only a local-owner-key profile is not pinned. Owner addresses compare case-insensitively; chain id and space name compare exactly.
-- Device login refuses a profile that holds a local owner key (`LOCAL_OWNER_PROFILE`): use a separate profile.
-- If the profile has a live, unexpired session with a different scope, device login refuses with `SESSION_IN_USE` instead of replacing it. Use a new profile; pass `--replace-session` only when replacing that session is intended. Renewing exactly the same scope is allowed.
+- `--expiry` sets the session lifetime: a duration (`1h`, `7d`; at most `30d`, default `30d`) counted from approval, or an ISO date that stays an absolute deadline however long approval takes. It must leave at least 1 minute. A signed session that would outlive it is refused (30 s clock-skew allowance).
+- `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. Every login on a profile that already recorded an owner DID is held to that owner automatically, whatever wrote it (`tc init`, an earlier login, or `profile.json` with any posture), and `--owner` must agree with it. Only a local-owner-key profile is not pinned. Owner addresses compare case-insensitively; chain id and space name compare exactly. The owner recorded on a profile only ever comes from a verified signed proof.
+- Scoped and device logins refuse a profile that holds a local owner key (`LOCAL_OWNER_PROFILE`): use a separate profile.
+- A live, unexpired session is replaced only by a scope that keeps everything it holds for the same owner: renewing the same manifest, or widening a session the owner narrowed earlier. Anything else, including an approval the owner narrowed, refuses with `SESSION_IN_USE` and saves nothing. Use a new profile; pass `--replace-session` only when replacing that session is intended. The check runs on the request before consent and again on the approved scope before saving.
+- Approval can take minutes. Before saving, the CLI re-reads the profile, key and session under the profile lock; if another login, key rotation or logout changed them meanwhile, it refuses with `PROFILE_CHANGED_DURING_LOGIN` and saves nothing.
 
 While waiting, the command writes one approval line to stderr and keeps polling for the whole approval window (about 10 minutes), riding out dropped connections:
 
@@ -60,7 +61,7 @@ On a machine with a browser, request the same manifest through the OpenKey brows
 tc --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
 ```
 
-`--paste` prints a URL and waits for a return code in the terminal; `--no-popup` prints the callback URL without opening a browser. The same signed-proof checks apply. Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure.
+`--paste` prints a URL and waits for a return code in the terminal; `--no-popup` prints the callback URL without opening a browser. The same signed-proof, owner, live-session, local-owner and commit-time checks apply. Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure. `--expiry` reaches OpenKey as seconds (an ISO date becomes the seconds left), so a value OpenKey cannot sign fails before the browser opens.
 
 ## More spaces after login
 
@@ -74,7 +75,7 @@ tc --profile PROFILE auth request --manifest FILE --grant --device
 
 ## Unscoped login and sign-out
 
-`tc init` and `tc auth login` without a manifest request broad default-space consent, including writes. Prefer `init --key-only` followed by a scoped login. `--expiry` is enforced against the signed session on every login path, with or without a manifest. Non-interactive `auth login` never switches to device mode on its own, and never waits on a browser that cannot open: without `--device --manifest`, `--paste` or `--no-popup` it fails fast with `INTERACTIVE_LOGIN_REQUIRED`.
+`tc init` and `tc auth login` without a manifest request broad default-space consent, including writes, and replace the profile's session as before. Prefer `init --key-only` followed by a scoped login. They still verify OpenKey's signed proof whenever it carries one, the profile records an owner, or `--expiry` is given, and they keep the recorded owner. Non-interactive `auth login` never switches to device mode on its own, and never waits on a browser that cannot open: without `--device --manifest`, `--paste` or `--no-popup` it fails fast with `INTERACTIVE_LOGIN_REQUIRED`.
 
 Only an explicit `--host` becomes the profile's stored host; `TC_HOST` and a discovered local node apply to that command only.
 

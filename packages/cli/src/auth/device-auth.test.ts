@@ -392,6 +392,61 @@ describe("device login persistence", () => {
     expect(renewed.result.ownerDid).toBe(ownerDid);
   });
 
+  test("a narrowed approval does not replace a live, broader session; a broader one renews a narrowed session", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid, posture: "owner-openkey" });
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
+    const full = await ProfileManager.getSession("agent");
+
+    // Requested scope keeps everything, but the owner approves only the capability read.
+    const narrowed = fakeOpenKey((start, id) => approved(start, id, { signed: [capabilityRead] }));
+    await expect(login(narrowed)).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(narrowed.polls).toBe(1);
+    expect(await ProfileManager.getSession("agent")).toEqual(full);
+
+    // Explicitly replacing installs the narrowed session...
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: bearerOnly })), { replaceSession: true });
+    // ...and renewing with the full manifest widens it again without the flag.
+    const widened = await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
+    expect(widened.result.declined).toEqual([]);
+  });
+
+  test("refuses to commit when another login for a different owner finished during approval", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", baseProfile);
+    const ownerB = { ...baseProfile, ownerDid: OTHER_OWNER, posture: "owner-openkey" as const, authMethod: "openkey" as const };
+    const sessionB = { spaceId: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default", ownerDid: OTHER_OWNER, expiresAt: new Date(Date.now() + 86_400_000).toISOString() };
+    const openkey = fakeOpenKey(async (start, id) => {
+      // A scoped login for owner B completes while owner A is still approving.
+      await ProfileManager.setSession("agent", sessionB);
+      await ProfileManager.setProfile("agent", ownerB);
+      return approved(start, id, { signed: requested });
+    });
+    await expect(login(openkey)).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
+    expect(await ProfileManager.getProfile("agent")).toEqual(ownerB);
+    expect(await ProfileManager.getSession("agent")).toEqual(sessionB);
+  });
+
+  test("refuses to commit over an applications session that appeared during approval", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid });
+    const appSession = { spaceId: wasm.makeSpaceId(address, 1, "applications"), expiresAt: new Date(Date.now() + 86_400_000).toISOString() };
+    const openkey = fakeOpenKey(async (start, id) => {
+      await ProfileManager.setSession("agent", appSession);
+      return approved(start, id, { signed: requested });
+    });
+    await expect(login(openkey)).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
+    expect(await ProfileManager.getSession("agent")).toEqual(appSession);
+  });
+
+  test("treats an unreadable profile as an error instead of a missing one", async () => {
+    await ProfileManager.setKey("agent", key);
+    await writeFile(join(PROFILES_DIR, "agent", "profile.json"), "{ not json");
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+    await expect(login(openkey)).rejects.toBeInstanceOf(SyntaxError);
+    expect(openkey.urls).toEqual([]);
+  });
+
   test("replaces an expired session without a flag", async () => {
     await ProfileManager.setKey("agent", key);
     await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid });

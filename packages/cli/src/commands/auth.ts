@@ -45,7 +45,9 @@ import {
   validateLoginPermissions,
   verifyScopedLogin,
   verifySignedSession,
+  openKeyExpiryParam,
 } from "../auth/scoped-login.js";
+import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
 import {
@@ -127,7 +129,7 @@ export function registerAuthCommand(program: Command): void {
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login")
-    .option("--replace-session", "Device login: replace this profile's live session even though its scope differs (prefer a new profile)")
+    .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow it (prefer a new profile)")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
@@ -218,6 +220,7 @@ export function registerAuthCommand(program: Command): void {
             permissions,
             expiry: parseExpiryOption(options.expiry),
             expectedOwner: options.owner,
+            replaceSession: options.replaceSession === true,
             persistHost,
           });
         }
@@ -416,7 +419,7 @@ export function registerAuthCommand(program: Command): void {
                 permissions: group,
                 reason,
                 openkeyHost,
-                expiry: expiryOption,
+                expiry: expiryOption === undefined ? undefined : openKeyExpiryParam(parseRequestedExpiry(expiryOption)),
                 noPopup: options.popup === false,
               });
             }
@@ -1110,7 +1113,7 @@ export async function ensureDelegationAuthority(params: {
         permissions: group,
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
-        expiry: params.expiryOption,
+        expiry: params.expiryOption === undefined ? undefined : openKeyExpiryParam(parseRequestedExpiry(params.expiryOption)),
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
       // Sol MAJOR-6: report effective grants, not requested `group`.
@@ -1730,6 +1733,8 @@ interface OpenKeyLoginOptions {
   permissions?: PermissionEntry[];
   expiry?: string | number;
   expectedOwner?: string;
+  /** Scoped login: replace a live session the approved scope would narrow. */
+  replaceSession?: boolean;
   /** Record `host` as the profile host (an explicit `--host`). */
   persistHost?: boolean;
   openKeyAcquisition?: OpenKeyAcquisition;
@@ -1740,7 +1745,8 @@ export async function refreshOpenKeySession(
   host: string,
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
-  const key = await ProfileManager.getKey(profileName);
+  const snapshot = await readProfileSnapshot(profileName);
+  const key = snapshot.key;
   if (!key) {
     throw new CLIError(
       "NO_KEY",
@@ -1748,13 +1754,19 @@ export async function refreshOpenKeySession(
       ExitCode.AUTH_REQUIRED,
     );
   }
-
-  // Get DID from profile
-  const profile = await ProfileManager.getProfile(profileName);
-  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
-  // Resolve before consent so an invalid --expiry or owner conflict never opens OpenKey.
+  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
+  if (options.permissions !== undefined) {
+    validateLoginPermissions(options.permissions);
+    assertNotLocalOwner(profileName, profile, "Scoped browser login");
+  }
+  // Resolve before consent so an invalid --expiry, owner conflict or live
+  // session in use never opens OpenKey.
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
+  const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
   const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
+  if (options.permissions !== undefined && options.replaceSession !== true) {
+    assertSessionReplaceable(profileName, snapshot.session, expectedOwner, options.permissions);
+  }
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
@@ -1765,44 +1777,52 @@ export async function refreshOpenKeySession(
     host,
     openkeyHost: resolveOpenKeyHost(profile),
     permissions: options.permissions,
-    expiry: options.expiry,
+    expiry: openKeyExpiry,
     ...(options.permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
-  // Scoped login persists only signed, verified authority. Any requested
-  // --expiry is checked against the signed SIWE expiry on every path.
-  // Otherwise OpenKey only ever receives the public JWK (browser-auth.ts
+  // Scoped login persists only signed, verified authority. Every path checks
+  // the signed proof whenever it carries one, the profile records an owner
+  // (which it must keep) or --expiry was requested; the owner recorded on the
+  // profile only ever comes from a verified proof.
+  // OpenKey only ever receives the public JWK (browser-auth.ts
   // `publicJwkForDelegation`), so any JWK it echoes back is public-only;
   // persisting it verbatim would shadow key.json and break the WASM signer
   // (kv/sql). Merge the private parameter back in before writing session.json.
   const sessionDid = profile.sessionDid ?? profile.did;
   let sanitizedSession: Record<string, unknown>;
+  let verifiedOwner: string | undefined;
   if (options.permissions) {
     sanitizedSession = verifyScopedLogin(delegationData, key, sessionDid, options.permissions, { expectedOwner, expiry });
+    verifiedOwner = sanitizedSession.ownerDid as string;
   } else {
-    if (expiry !== undefined) verifySignedSession(delegationData, key, sessionDid, { expiry });
-    sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+    const carriesProof = typeof delegationData.siwe === "string" && typeof delegationData.signature === "string";
+    if (carriesProof || expiry !== undefined || expectedOwner !== undefined) {
+      verifiedOwner = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry }).ownerDid;
+    }
+    const { ownerDid: _unsignedOwner, ...merged } = mergePrivateJwkIntoSession(delegationData, key);
+    sanitizedSession = verifiedOwner === undefined ? merged : { ...merged, ownerDid: verifiedOwner };
   }
 
-  // Store session
-  await ProfileManager.setSession(profileName, sanitizedSession);
-
-  // Update profile with owner DID if present
-  const updatedProfile = {
+  const updatedProfile: ProfileConfig = {
     ...profile,
     host: options.persistHost === true || !profile.host ? host : profile.host,
     sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",
     authMethod: "openkey" as const,
+    ...(typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {}),
+    ...(verifiedOwner === undefined ? {} : { ownerDid: verifiedOwner }),
   };
 
-  if (sanitizedSession.spaceId) {
-    updatedProfile.spaceId = sanitizedSession.spaceId as string;
-    updatedProfile.ownerDid = sanitizedSession.ownerDid as string | undefined;
-  }
-
-  await ProfileManager.setProfile(profileName, updatedProfile);
+  await commitLogin(profileName, snapshot, {
+    key,
+    session: sanitizedSession,
+    profile: updatedProfile,
+    ...(options.permissions && verifiedOwner
+      ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
+      : {}),
+  });
 
   return { profile: updatedProfile, delegationData: sanitizedSession };
 }

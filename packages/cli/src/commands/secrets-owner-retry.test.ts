@@ -82,12 +82,15 @@ mock.module("@tinycloud/node-sdk", () => ({
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
+    // Real logins commit under the profile lock; these mocks keep state in memory.
+    withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     resolveContext: async () => ({ profile: "default", host: profile.host }),
     getProfile: async () => profile,
     getSession: async () => currentSession,
     setSession: async (_profile: string, session: Record<string, unknown>) => {
       currentSession = session;
     },
+    setKey: async () => undefined,
     setProfile: async () => undefined,
     ensureProfileDir: async (name: string) => {
       const directory = join(TEST_HOME, ".tinycloud", "profiles", name);

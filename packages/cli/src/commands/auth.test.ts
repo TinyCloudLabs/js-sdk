@@ -135,6 +135,11 @@ function resetState(): void {
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
     expiry: "2099-01-01T00:00:00.000Z",
+    // OpenKey always returns its SIWE proof; the wasm verifier below stands in for checking it.
+    siwe: "siwe-message",
+    signature: "0xsignature",
+    address: "0xowner",
+    chainId: 1,
   };
   localSignInResult = {
     spaceId: "space-local-new",
@@ -172,6 +177,8 @@ function makeProfile(overrides: Partial<ProfileLike> = {}): ProfileLike {
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
+    // Real logins commit under the profile lock; these mocks keep state in memory.
+    withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     resolveContext: async () => ({
       profile: activeProfile,
       host: activeHost,
@@ -253,8 +260,16 @@ mock.module("@tinycloud/node-sdk", () => ({
   },
   principalDidEquals: (left: string, right: string) =>
     left.split("#", 1)[0] === right.split("#", 1)[0],
-  // Scoped-login proof verification is covered in auth/scoped-login.test.ts.
-  NodeWasmBindings: class NodeWasmBindings {},
+  // Signature checks run against real proofs in auth/scoped-login.test.ts and
+  // auth/device-auth.test.ts; here any structurally complete proof verifies.
+  NodeWasmBindings: class NodeWasmBindings {
+    validatePersistedSession(proof: { spaceId: string }) {
+      return {
+        verifiedRecap: [{ service: "kv", space: proof.spaceId, path: "", actions: ["tinycloud.kv/get"] }],
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      };
+    }
+  },
 }));
 
 const operationRecorded = {
@@ -666,8 +681,9 @@ describe("CLI auth login command", () => {
 
   test("non-interactive OpenKey login keeps the requested browser/paste flow instead of switching to device mode", async () => {
     const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
     keys.set("default", key);
+    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session" };
 
     await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
 

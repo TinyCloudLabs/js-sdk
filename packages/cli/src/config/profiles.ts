@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   readSession,
   removeSession,
+  withProfileLock,
   writeSession,
 } from "@tinycloud/operations/state";
 import {
@@ -26,6 +27,14 @@ import { CLIError, setActiveProfileName } from "../output/errors.js";
 
 export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
+
+  /**
+   * Runs `action` holding the profile's store lock (shared with operations
+   * and MCP). Reentrant, so store writes inside `action` do not deadlock.
+   */
+  static async withLock<T>(name: string, action: () => Promise<T>): Promise<T> {
+    return withProfileLock(name, action);
+  }
 
   /**
    * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist and

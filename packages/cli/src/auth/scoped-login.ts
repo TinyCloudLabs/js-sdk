@@ -8,6 +8,9 @@ import { normalizePkhIdentifier } from "../lib/space.js";
 /** Tolerated clock difference between OpenKey and this machine. */
 export const CLOCK_SKEW_MS = 30_000;
 
+/** Session `permissionsSource` value for permissions taken from the verified signed recap. */
+export const SIGNED_RECAP = "signed-recap";
+
 /**
  * A requested `--expiry`: a lifetime counted from approval, or an absolute
  * deadline. Absolute deadlines stay timestamps so time spent waiting for
@@ -32,6 +35,22 @@ export function parseRequestedExpiry(value: string | number): RequestedExpiry {
 /** Latest signed expiry the request allows, evaluated when the approval arrives. */
 export function expiryLimit(expiry: RequestedExpiry): number {
   return ("notAfter" in expiry ? expiry.notAfter : Date.now() + expiry.durationMs) + CLOCK_SKEW_MS;
+}
+
+/** OpenKey's minimum delegation lifetime; it raises anything shorter. */
+const OPENKEY_MIN_LIFETIME_SECONDS = 60;
+
+/**
+ * `--expiry` as OpenKey's `/delegate?expiry=` accepts it (`<seconds>s`).
+ * OpenKey rejects ISO dates only after the owner opens the page and raises
+ * lifetimes under a minute, so convert or refuse here, before consent.
+ */
+export function openKeyExpiryParam(expiry: RequestedExpiry): string {
+  const seconds = Math.floor(("notAfter" in expiry ? expiry.notAfter - Date.now() : expiry.durationMs) / 1000);
+  if (seconds < OPENKEY_MIN_LIFETIME_SECONDS) {
+    throw new CLIError("INVALID_EXPIRY", "--expiry must leave at least 1 minute: OpenKey does not sign shorter sessions.", ExitCode.USAGE_ERROR);
+  }
+  return `${seconds}s`;
 }
 
 /**
@@ -191,5 +210,7 @@ export function verifyScopedLogin(
   }
   // Keep signed proof intact; unsigned callback identity/expiry/permissions
   // cannot override the verified values. Never accept a returned private key.
-  return { ...data, jwk: key, ...signed, expiry: signed.expiresAt, expirationTime: signed.expiresAt };
+  // `permissionsSource` marks `permissions` as the signed recap, so a later
+  // login may rely on it to tell whether replacing this session drops authority.
+  return { ...data, jwk: key, ...signed, permissionsSource: SIGNED_RECAP, expiry: signed.expiresAt, expirationTime: signed.expiresAt };
 }

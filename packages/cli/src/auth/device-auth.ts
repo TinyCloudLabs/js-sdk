@@ -10,8 +10,7 @@ import {
 } from "node:crypto";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
-import { ProfileManager } from "../config/profiles.js";
-import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
+import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
@@ -20,11 +19,11 @@ import {
   permissionTuples,
   permissionsFromTuples,
   expectedOwnerFor,
-  sessionExpiresAt,
   validateLoginPermissions,
   verifyScopedLogin,
   type RequestedExpiry,
 } from "./scoped-login.js";
+import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -491,47 +490,26 @@ export function mergePrivateJwkIntoSession(session: Record<string, unknown>, key
   return { ...session, jwk: { ...sessionJwkRecord, d: privateParameter } };
 }
 
-/** Refuse to silently drop a live session that another app or task relies on. */
-async function assertSessionReplaceable(profileName: string, ownerDid: string | undefined, requested: PermissionEntry[]): Promise<void> {
-  const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-  if (session === null) return;
-  const expiresAt = sessionExpiresAt(session);
-  if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
-  // Renewing exactly the same scope for the same owner replaces nothing.
-  if (ownerDid !== undefined && Array.isArray(session.permissions) &&
-    sameTuples(permissionTuples(session.permissions as PermissionEntry[], ownerDid), permissionTuples(requested, ownerDid))) return;
-  const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";
-  throw new CLIError(
-    "SESSION_IN_USE",
-    `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} with a different scope. Device login would replace it and drop that authority. ` +
-      "Keep the user's existing profiles: use a new profile name (`tc init --name publisher --key-only`, then `tc --profile publisher auth login --device --manifest ...`), or pass --replace-session to replace this session.",
-    ExitCode.USAGE_ERROR,
-  );
-}
-
 /**
  * Device login for a profile: request `permissions`, verify the approval, and
- * only then persist key, session and the OpenKey owner posture.
+ * only then persist key, session and the OpenKey owner posture, in one
+ * lock-protected compare-and-commit against the state seen before consent.
  */
 export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizationInput, "sessionDid" | "jwk"> & {
   profileName: string;
-  /** Explicitly allow replacing a live session with a different scope. */
+  /** Explicitly allow replacing a live session that the new scope would narrow. */
   replaceSession?: boolean;
   /** Record `nodeOrigin` as the profile host (an explicit `--host`, or a profile without one). */
   persistHost?: boolean;
 }): Promise<{ profile: ProfileConfig; result: DeviceAuthorizationResult }> {
-  const existing = await ProfileManager.getProfile(input.profileName).catch(() => null);
-  if (existing && resolveProfilePosture(existing) === "local-owner-key") {
-    throw new CLIError(
-      "LOCAL_OWNER_PROFILE",
-      `Profile "${input.profileName}" holds a local owner key. Device login would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
-      ExitCode.USAGE_ERROR,
-    );
-  }
+  const snapshot = await readProfileSnapshot(input.profileName);
+  const existing = snapshot.profile;
+  assertNotLocalOwner(input.profileName, existing, "Device login");
   // Every profile that recorded an owner stays with that owner.
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
-  if (existing && input.replaceSession !== true) await assertSessionReplaceable(input.profileName, expectedOwner, input.permissions);
-  const key = await ProfileManager.getKey(input.profileName) ?? generateKey().jwk;
+  // Early refusal on the request; the commit re-checks the approved scope.
+  if (input.replaceSession !== true) assertSessionReplaceable(input.profileName, snapshot.session, expectedOwner, input.permissions);
+  const key = snapshot.key ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
   const result = await acquireDeviceDelegation({
     ...input,
@@ -555,8 +533,11 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     operatorType: existing?.operatorType ?? "human",
     authMethod: "openkey",
   };
-  await ProfileManager.setKey(input.profileName, key);
-  await ProfileManager.setSession(input.profileName, result.session);
-  await ProfileManager.setProfile(input.profileName, profile);
+  await commitLogin(input.profileName, snapshot, {
+    key,
+    session: result.session,
+    profile,
+    approved: { scope: result.approved, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
+  });
   return { profile, result };
 }
