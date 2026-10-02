@@ -23,7 +23,7 @@ import {
   deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
 import { canonicalize } from "@tinycloud/share-envelope";
-import { revokePolicyRootV3 } from "@tinycloud/sdk-core";
+import { LocationRecordValidationError, LocationRegistryHttpError, revokePolicyRootV3 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
@@ -371,8 +371,12 @@ export function createShareAuthorityAdapters(input: {
     // registry failure cannot leave an orphaned object or an unverifiable link.
     try {
       await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
-    } catch {
-      throw new SharePublishAuthorityError({ kind: "registry-unavailable" });
+    } catch (error) {
+      // An unreachable or failing registry (network error, 5xx, 408, 429) may
+      // recover; a refused or invalid record will not, so don't suggest a retry.
+      const rejected = error instanceof LocationRecordValidationError
+        || (error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429);
+      throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
     const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });

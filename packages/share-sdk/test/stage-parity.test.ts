@@ -76,6 +76,19 @@ describe("Share lifecycle and authorization parity", () => {
     await expect(notifyShare({ shareId: exact.shareId, recipient: "Mallory@example.com", record: exact, adapter: { async deliver() { throw new Error("must not deliver"); } } })).rejects.toThrow(/stored share target/);
   });
 
+  it("notifies the canonical mailbox whatever case the sender types", async () => {
+    const exact = { ...record, targetKind: "email" as const, recipientMatcher: { kind: "exactEmail" as const, value: "foo@x.com" } };
+    const delivered: string[] = [];
+    const keys: string[] = [];
+    const adapter = { async deliver(input: { readonly recipient: string; readonly idempotencyKey?: string }) { delivered.push(input.recipient); keys.push(input.idempotencyKey!); return "delivered" as const; } };
+    await expect(notifyShare({ shareId: exact.shareId, recipient: "Foo@X.com", record: exact, adapter })).resolves.toMatchObject({ state: "delivered" });
+    await notifyShare({ shareId: exact.shareId, recipient: "foo@x.com", record: exact, adapter });
+    // The issuer accepts only the canonical mailbox; retries share one idempotency key.
+    expect(delivered).toEqual(["foo@x.com", "foo@x.com"]);
+    expect(keys[0]).toBe(keys[1]);
+    await expect(notifyShare({ shareId: exact.shareId, recipient: "a%b@x.com", record: exact, adapter })).rejects.toThrow("recipient is invalid");
+  });
+
   it("revokes the exact native bearer delegation", async () => {
     const calls: string[] = [];
     await expect(revokeShare({ record, adapter: { async revokeDelegation(input) { calls.push(`${input.delegationCid}:${input.scope}`); } } })).resolves.toMatchObject({

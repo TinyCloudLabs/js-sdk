@@ -915,6 +915,7 @@ export {
   LOCAL_LOOPBACK_PROBE_TIMEOUT_MS,
   OWNER_NODE_BINDING_TIMEOUT_MS,
   LocationRecordValidationError,
+  LocationRegistryHttpError,
   canonicalLocationPayload,
   createInMemoryLocalNodeIdentityStore,
   createLocalStorageLocalNodeIdentityStore,

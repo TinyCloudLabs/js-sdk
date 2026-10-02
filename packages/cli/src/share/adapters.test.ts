@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
 import { notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
-import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest } from "@tinycloud/sdk-core";
+import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
@@ -506,10 +506,20 @@ describe("TinyCloud share authority adapter", () => {
     expect(uploadedSpaces).toEqual([]);
   });
 
-  it("reports an unreachable location registry as unavailable and uploads nothing", async () => {
-    registryError = new TypeError("fetch failed");
-    await expect(addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" })))
-      .rejects.toMatchObject({ failure: { kind: "registry-unavailable" } });
+  it("separates a retryable registry outage from a rejection, and uploads nothing either way", async () => {
+    const cases: Array<[unknown, "registry-unavailable" | "registry-rejected"]> = [
+      [new TypeError("fetch failed"), "registry-unavailable"],
+      [new LocationRegistryHttpError("location registry publish returned HTTP 503", 503), "registry-unavailable"],
+      [new LocationRegistryHttpError("location registry publish returned HTTP 429", 429), "registry-unavailable"],
+      [new LocationRegistryHttpError("location registry publish returned HTTP 400", 400), "registry-rejected"],
+      [new LocationRegistryHttpError("location registry returned HTTP 403", 403), "registry-rejected"],
+      [new LocationRecordValidationError("existing location record signature is invalid"), "registry-rejected"],
+    ];
+    for (const [error, kind] of cases) {
+      registryError = error;
+      await expect(addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" })))
+        .rejects.toMatchObject({ failure: { kind } });
+    }
     expect(uploadedSpaces).toEqual([]);
   });
 
