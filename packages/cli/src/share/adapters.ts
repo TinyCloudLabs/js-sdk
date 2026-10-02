@@ -7,6 +7,7 @@ import {
   createNativeShare,
   parseNativeShareUrl,
   SHARE_PUBLISH_RESULT_VERSION,
+  addressedCredentialRequirement,
   publishAddressedShare,
   redactPublishedShare,
   type NativeShareResult,
@@ -352,6 +353,15 @@ export function createShareAuthorityAdapters(input: {
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
+    // Mailbox recipients open the share by proving the mailbox, so the policy
+    // must commit to that credential; without it the SDK would sign a
+    // Policy/v1 share that no receiver accepts.
+    const target = targetInput.target;
+    const credentialRequirement = target.kind === "email" || target.kind === "emailDomain" ? addressedCredentialRequirement(target) : undefined;
+    // Receivers find the owner's node through a registry record signed by the
+    // policy owner (this session key). Publish it before storing content so a
+    // registry failure cannot leave an orphaned object or an unverifiable link.
+    await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
     const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
@@ -390,11 +400,12 @@ export function createShareAuthorityAdapters(input: {
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
       spaceId: ownerSpaceId,
-      target: targetInput.target,
+      target,
       resource: { kind: resourceKind, path: resourcePath },
       actions,
       policyActions,
       contentSource,
+      ...(credentialRequirement === undefined ? {} : { credentialRequirement }),
       filename: targetInput.filename,
       mediaType,
       byteLength,

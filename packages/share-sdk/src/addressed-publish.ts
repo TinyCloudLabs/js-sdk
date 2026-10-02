@@ -219,37 +219,78 @@ function publicationResult(input: {
   return result;
 }
 
-/** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
 /**
- * A domain share admits every mailbox at the domain, so it is view-only,
- * never emailed, and its credential requirement must name exactly that
- * domain (the receiving SDK recomputes the same digest).
+ * Mailbox-addressed shares are opened by proving the mailbox to
+ * OpenCredentials, so their policy must commit to that credential (Policy/v2).
+ * The receiving SDK recomputes the requirement from the envelope's recipient
+ * matcher and refuses any share whose commitment differs, so the commitment
+ * is derived here from the same normalized target rather than trusted from
+ * the caller. A domain share additionally admits every mailbox at the
+ * domain, so it is view-only and never emailed.
  */
+const EMAIL_PROFILE = { id: "tinycloud.email-proof/v1", version: 1 } as const;
 const EMAIL_DOMAIN_PROFILE = { id: "tinycloud.email-domain-proof/v1", version: 1 } as const;
 const EMAIL_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", version: 1 } as const;
-/** Digest of the OpenCredentials email-domain descriptor (pinned by issuer and SDK tests). */
+/** Digests of the OpenCredentials descriptors (pinned by issuer and SDK tests). */
+const EMAIL_DESCRIPTOR_DIGEST = "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0";
 const EMAIL_DOMAIN_DESCRIPTOR_DIGEST = "33X5mAkZZgApdD3xh_T-3KS5moop0J2Nloi2nqWsdWY";
+const EMAIL_CREDENTIAL_ISSUER_DID = "did:web:issuer.credentials.org";
+const EMAIL_CREDENTIAL_ISSUER_KID = `${EMAIL_CREDENTIAL_ISSUER_DID}#controller`;
 
-function assertEmailDomainPolicy(options: AddressedSharePublishOptions, domain: string): void {
-  if (!options.actions.every((action) => action === "read" || action === "list")
-    || !options.policyActions.every((action) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list" || action === "tinycloud.kv/metadata")) throw new TypeError("email-domain shares are view-only");
-  if (options.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
-  const commitment = options.credentialRequirement;
-  if (commitment === undefined) throw new TypeError("email-domain shares require a credential requirement");
-  // Only the domain profile derives emailDomain under the canonical mailbox
-  // rules and challenge limits; pin it rather than trusting the caller.
-  if (canonicalize(commitment.profile) !== canonicalize(EMAIL_DOMAIN_PROFILE)
-    || canonicalize(commitment.credentialType) !== canonicalize(EMAIL_CREDENTIAL_TYPE)
-    || commitment.descriptorDigest !== EMAIL_DOMAIN_DESCRIPTOR_DIGEST) throw new TypeError("email-domain shares require the email-domain credential profile");
-  const expected = { type: "TinyCloudCredentialRequirement", version: 1, profile: EMAIL_DOMAIN_PROFILE, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { emailDomain: domain }, maxAgeSeconds: 300 };
-  if (toBase64Url(sha256(textEncoder.encode(canonicalize(expected)))) !== commitment.requirementDigest) throw new TypeError("credential requirement is not bound to the email domain");
+type MailboxTarget = Extract<ShareTarget, { readonly kind: "email" | "emailDomain" }>;
+
+function mailboxCredentialCommitment(target: MailboxTarget): PolicyCredentialRequirementV1 {
+  const profile = target.kind === "email" ? EMAIL_PROFILE : EMAIL_DOMAIN_PROFILE;
+  // Field-for-field the requirement sdk-core's createEmail(Domain)CredentialRequirement builds on receive.
+  const requirement = target.kind === "email"
+    ? { type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { email: target.address }, maxAgeSeconds: 3600 }
+    : { type: "TinyCloudCredentialRequirement", version: 1, profile, credentialType: EMAIL_CREDENTIAL_TYPE, claims: { emailDomain: target.domain }, maxAgeSeconds: 300 };
+  return {
+    type: "TinyCloudPolicyCredentialRequirement",
+    version: 1,
+    requirementDigest: toBase64Url(sha256(textEncoder.encode(canonicalize(requirement)))),
+    descriptorDigest: target.kind === "email" ? EMAIL_DESCRIPTOR_DIGEST : EMAIL_DOMAIN_DESCRIPTOR_DIGEST,
+    issuerDid: EMAIL_CREDENTIAL_ISSUER_DID,
+    issuerKid: EMAIL_CREDENTIAL_ISSUER_KID,
+    profile,
+    credentialType: EMAIL_CREDENTIAL_TYPE,
+  };
 }
 
+/** The Policy/v2 credential commitment a share addressed to `target` must carry. */
+export function addressedCredentialRequirement(target: MailboxTarget): PolicyCredentialRequirementV1 {
+  const normalized = normalizeShareTarget(target);
+  if (normalized.kind !== "email" && normalized.kind !== "emailDomain") throw new TypeError("a mailbox target is required");
+  return mailboxCredentialCommitment(normalized);
+}
+
+function assertMailboxPolicy(options: AddressedSharePublishOptions, target: MailboxTarget): void {
+  const label = target.kind === "email" ? "email" : "email-domain";
+  if (target.kind === "emailDomain") {
+    if (!options.actions.every((action) => action === "read" || action === "list")
+      || !options.policyActions.every((action) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list" || action === "tinycloud.kv/metadata")) throw new TypeError("email-domain shares are view-only");
+    if (options.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
+  }
+  const commitment = options.credentialRequirement;
+  // Without a commitment the policy would be Policy/v1, which no receiver can open.
+  if (commitment === undefined) throw new TypeError(`${label} shares require a credential requirement`);
+  const expected = mailboxCredentialCommitment(target);
+  // Pin the profile, descriptor and issuer rather than trusting the caller:
+  // only these derive the claim under the canonical mailbox rules.
+  if (canonicalize(commitment.profile) !== canonicalize(expected.profile)
+    || canonicalize(commitment.credentialType) !== canonicalize(expected.credentialType)
+    || commitment.descriptorDigest !== expected.descriptorDigest
+    || commitment.issuerDid !== expected.issuerDid
+    || commitment.issuerKid !== expected.issuerKid) throw new TypeError(`${label} shares require the ${label} credential profile`);
+  if (commitment.requirementDigest !== expected.requirementDigest) throw new TypeError(`credential requirement is not bound to the email ${target.kind === "email" ? "address" : "domain"}`);
+}
+
+/** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
 export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
   assertSafeInput(options);
   const target = normalizeShareTarget(options.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
-  if (target.kind === "emailDomain") assertEmailDomainPolicy(options, target.domain);
+  if (target.kind === "email" || target.kind === "emailDomain") assertMailboxPolicy(options, target);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
   const capabilities = sortCanonical<UnifiedPolicyCapability>([
