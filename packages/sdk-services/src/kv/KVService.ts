@@ -23,6 +23,7 @@ import {
   parseAuthError,
   parsePermissionHintFromErrorText,
   authUnauthorizedError,
+  isRequestTimeoutError,
 } from "../errors";
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
@@ -246,14 +247,14 @@ export class KVService extends BaseService implements IKVService {
    * @param path - Resource path
    * @param action - KV action
    * @param body - Optional request body
-   * @param signal - Optional abort signal
+   * @param signal - Request signal from createRequestSignal()
    * @returns Fetch response
    */
   private async invokeOperation(
     path: string,
     action: string,
-    body?: Blob | string,
-    signal?: AbortSignal,
+    body: Blob | string | undefined,
+    signal: AbortSignal,
     extraHeaders?: Readonly<Record<string, string>>
   ): Promise<FetchResponse> {
     const session = this.context.session!;
@@ -272,7 +273,7 @@ export class KVService extends BaseService implements IKVService {
       method: "POST",
       headers: requestHeaders,
       body,
-      signal: this.combineSignals(signal),
+      signal,
     });
   }
 
@@ -527,6 +528,7 @@ export class KVService extends BaseService implements IKVService {
       ));
     }
 
+    const request = this.createRequestSignal(options?.signal, options?.timeout);
     try {
       const session = this.context.session!;
       const invocationHeaders = this.context.invokeAny(
@@ -550,7 +552,7 @@ export class KVService extends BaseService implements IKVService {
       const response = await this.context.fetch(`${this.host}/invoke`, {
         method: "POST",
         headers,
-        signal: this.combineSignals(options?.signal),
+        signal: request.signal,
       });
 
       if (!response.ok) {
@@ -619,6 +621,8 @@ export class KVService extends BaseService implements IKVService {
       return ok({ results, count: results.length });
     } catch (error) {
       return err(wrapError("kv", error));
+    } finally {
+      request.dispose();
     }
   }
 
@@ -749,12 +753,13 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
 
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.GET,
           undefined,
-          options?.signal,
+          request.signal,
           options?.maxResponseBytes === undefined
             ? undefined
             : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
@@ -807,6 +812,8 @@ export class KVService extends BaseService implements IKVService {
         });
       } catch (error) {
         return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -848,12 +855,13 @@ export class KVService extends BaseService implements IKVService {
       // sent as-is; everything else is JSON. Mirrors serializeBatchPutValue.
       const body = this.serializePutValue(value, options?.contentType);
 
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.PUT,
           body,
-          options?.signal,
+          request.signal,
           {
             ...(options?.ifMatch === undefined ? {} : { "if-match": options.ifMatch }),
             ...(options?.ifNoneMatch === undefined ? {} : { "if-none-match": options.ifNoneMatch }),
@@ -923,6 +931,8 @@ export class KVService extends BaseService implements IKVService {
         });
       } catch (error) {
         return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -977,6 +987,7 @@ export class KVService extends BaseService implements IKVService {
       // only cause a reconciliation of at most N idempotent, byte-identical
       // overwrites — never a corrupted or differently-timestamped record.
       let requestMayHaveDispatched = false;
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const body = new FormData();
         for (let index = 0; index < items.length; index++) {
@@ -1001,7 +1012,7 @@ export class KVService extends BaseService implements IKVService {
           method: "POST",
           headers,
           body,
-          signal: this.combineSignals(options?.signal),
+          signal: request.signal,
         };
 
         // Resolve the fetch function to a local BEFORE flipping the flag.
@@ -1090,14 +1101,20 @@ export class KVService extends BaseService implements IKVService {
           // debugging trap the no-swallowed-errors rule exists to
           // prevent.
           const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+          // The configured timeout can also elapse while the 2xx body is
+          // still streaming: report TIMEOUT, with the same unconfirmed meta.
+          const timedOut = isRequestTimeoutError(cause);
           return err(
             serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `KV batchPut response was not valid JSON: ${cause.message}`,
+              timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
+              timedOut
+                ? `KV batchPut response body did not arrive in time: ${cause.message}`
+                : `KV batchPut response was not valid JSON: ${cause.message}`,
               "kv",
               {
                 cause,
                 meta: {
+                  ...(timedOut ? { timeoutMs: cause.timeoutMs } : {}),
                   requestMayHaveDispatched: true,
                   responseReceived: true,
                   status: response.status,
@@ -1172,6 +1189,8 @@ export class KVService extends BaseService implements IKVService {
           ...wrapped,
           meta: { ...wrapped.meta, requestMayHaveDispatched },
         });
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -1202,12 +1221,13 @@ export class KVService extends BaseService implements IKVService {
         listPath = listPath ? `${listPath}/${options.path}` : options.path;
       }
 
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           listPath,
           KVAction.LIST,
           undefined,
-          options?.signal,
+          request.signal,
           options?.limit === undefined && options?.cursor === undefined
             ? undefined
             : {
@@ -1264,6 +1284,8 @@ export class KVService extends BaseService implements IKVService {
         });
       } catch (error) {
         return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -1282,12 +1304,13 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
 
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.DELETE,
           undefined,
-          options?.signal,
+          request.signal,
           options?.ifMatch === undefined
             ? undefined
             : { "if-match": options.ifMatch }
@@ -1341,6 +1364,8 @@ export class KVService extends BaseService implements IKVService {
         });
       } catch (error) {
         return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -1359,12 +1384,13 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
 
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.HEAD,
           undefined,
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -1399,6 +1425,8 @@ export class KVService extends BaseService implements IKVService {
         });
       } catch (error) {
         return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -1454,12 +1482,13 @@ export class KVService extends BaseService implements IKVService {
         body.etag = options.etag;
       }
 
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.context.fetch(`${this.host}/signed/kv`, {
           method: "POST",
           headers: this.withJsonContentType(headers),
           body: JSON.stringify(body),
-          signal: this.combineSignals(options?.signal),
+          signal: request.signal,
         });
 
         if (!response.ok) {
@@ -1482,6 +1511,8 @@ export class KVService extends BaseService implements IKVService {
         return ok(signedUrl);
       } catch (error) {
         return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }

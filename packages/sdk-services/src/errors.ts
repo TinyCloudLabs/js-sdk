@@ -99,13 +99,61 @@ export function networkError(
 }
 
 /**
- * Create a service error for timeouts.
+ * Abort reason for a service request that exceeded its configured timeout.
+ *
+ * Named `TimeoutError` (like the reason of the platform's
+ * `AbortSignal.timeout()`), so it maps to `ErrorCodes.TIMEOUT` and never to
+ * `ErrorCodes.ABORTED`, which is reserved for caller and sign-out aborts.
  */
-export function timeoutError(service: string): ServiceError {
+export class RequestTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Request timed out after ${timeoutMs}ms.`);
+    this.name = "TimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * Whether an error is a {@link RequestTimeoutError}. Also matches by shape so
+ * that a copy of the class from another bundle (ESM/CJS entrypoint) is
+ * recognized.
+ */
+export function isRequestTimeoutError(error: unknown): error is RequestTimeoutError {
+  return (
+    error instanceof RequestTimeoutError ||
+    (error instanceof Error &&
+      error.name === "TimeoutError" &&
+      typeof (error as { timeoutMs?: unknown }).timeoutMs === "number")
+  );
+}
+
+/**
+ * Create a service error for timeouts.
+ *
+ * @param timeoutMs - The configured timeout that elapsed, when known
+ * @param cause - The underlying timeout error, when known
+ */
+export function timeoutError(
+  service: string,
+  timeoutMs?: number,
+  cause?: Error
+): ServiceError {
+  if (timeoutMs === undefined) {
+    return {
+      code: ErrorCodes.TIMEOUT,
+      message: "Request timed out.",
+      service,
+      ...(cause === undefined ? {} : { cause }),
+    };
+  }
   return {
     code: ErrorCodes.TIMEOUT,
-    message: "Request timed out.",
+    message: `Request timed out after ${timeoutMs}ms.`,
     service,
+    ...(cause === undefined ? {} : { cause }),
+    meta: { timeoutMs },
   };
 }
 
@@ -211,6 +259,11 @@ export function wrapError(
   defaultCode: string = ErrorCodes.NETWORK_ERROR
 ): ServiceError {
   if (error instanceof Error) {
+    // A configured request timeout elapsed (see BaseService.createRequestSignal)
+    if (isRequestTimeoutError(error)) {
+      return timeoutError(service, error.timeoutMs, error);
+    }
+
     // Check for abort errors
     if (error.name === "AbortError") {
       return abortedError(service);
