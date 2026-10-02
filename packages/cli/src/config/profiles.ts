@@ -28,11 +28,23 @@ export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
 
   /**
-   * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist.
+   * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist and
+   * (re)sets both to 0700: older releases created them 0775.
    */
   static async ensureConfigDir(): Promise<void> {
-    await ensureDir(CONFIG_DIR);
-    await ensureDir(PROFILES_DIR);
+    for (const directory of [CONFIG_DIR, PROFILES_DIR]) {
+      await ensureDir(directory);
+      await chmod(directory, PRIVATE_DIR_MODE);
+    }
+  }
+
+  /** Owner-only profile directory (0700), created or tightened before any write into it. */
+  static async ensureProfileDir(name: string): Promise<string> {
+    await ProfileManager.ensureConfigDir();
+    const profileDir = join(PROFILES_DIR, name);
+    await ensureDir(profileDir);
+    await chmod(profileDir, PRIVATE_DIR_MODE);
+    return profileDir;
   }
 
   // ── Global config ───────────────────────────────────────────────────
@@ -78,9 +90,7 @@ export class ProfileManager {
    * Saves a profile config, creating the profile directory if needed.
    */
   static async setProfile(name: string, data: ProfileConfig): Promise<void> {
-    const profileDir = join(PROFILES_DIR, name);
-    await ensureDir(profileDir);
-    await writeJson(join(profileDir, "profile.json"), data);
+    await writeJson(join(await ProfileManager.ensureProfileDir(name), "profile.json"), data);
   }
 
   /**
@@ -122,15 +132,9 @@ export class ProfileManager {
     return readJson<object>(join(PROFILES_DIR, name, "key.json"));
   }
 
-  /**
-   * Saves a JWK key for a profile. The key file is 0600; the profile
-   * directory is (re)set to 0700 because older releases created it 0775.
-   */
+  /** Saves a JWK key for a profile (0600, in an owner-only profile directory). */
   static async setKey(name: string, jwk: object): Promise<void> {
-    const profileDir = join(PROFILES_DIR, name);
-    await ensureDir(profileDir);
-    await chmod(profileDir, PRIVATE_DIR_MODE);
-    await writeJson(join(profileDir, "key.json"), jwk);
+    await writeJson(join(await ProfileManager.ensureProfileDir(name), "key.json"), jwk);
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -159,11 +163,13 @@ export class ProfileManager {
   // ── Cache management ────────────────────────────────────────────────
 
   /**
-   * Returns the path to the profile's cache directory, creating it if needed.
+   * Returns the profile's cache directory (share history lives here),
+   * created or tightened to 0700.
    */
   static async getCacheDir(name: string): Promise<string> {
-    const cacheDir = join(PROFILES_DIR, name, "cache");
+    const cacheDir = join(await ProfileManager.ensureProfileDir(name), "cache");
     await ensureDir(cacheDir);
+    await chmod(cacheDir, PRIVATE_DIR_MODE);
     return cacheDir;
   }
 

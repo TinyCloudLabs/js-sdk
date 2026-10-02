@@ -1,16 +1,65 @@
 import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
+import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 
 /** Tolerated clock difference between OpenKey and this machine. */
 export const CLOCK_SKEW_MS = 30_000;
 
-export interface ScopedLoginExpectations {
-  /** Primary DID the approving identity must match, when known. */
-  expectedOwner?: string;
-  /** Requested session lifetime; a signed expiry beyond now + this (+ skew) is refused. */
-  maxLifetimeMs?: number;
+/**
+ * A requested `--expiry`: a lifetime counted from approval, or an absolute
+ * deadline. Absolute deadlines stay timestamps so time spent waiting for
+ * consent never extends them.
+ */
+export type RequestedExpiry = { readonly durationMs: number } | { readonly notAfter: number };
+
+/** Parse a `--expiry` value: `30m`/`7d`/`1w`, raw milliseconds, or an ISO date. */
+export function parseRequestedExpiry(value: string | number): RequestedExpiry {
+  if (typeof value === "number") return { durationMs: value };
+  if (/^\d+(m|h|d|w)$/.test(value)) return { durationMs: parseDuration(value) };
+  const notAfter = Date.parse(value);
+  if (!Number.isFinite(notAfter)) {
+    throw new CLIError("INVALID_EXPIRY", `Invalid --expiry "${value}". Use a duration like 1h or 7d, milliseconds, or an ISO date.`, ExitCode.USAGE_ERROR);
+  }
+  if (notAfter <= Date.now()) {
+    throw new CLIError("INVALID_EXPIRY", `--expiry "${value}" is in the past.`, ExitCode.USAGE_ERROR);
+  }
+  return { notAfter };
+}
+
+/** Latest signed expiry the request allows, evaluated when the approval arrives. */
+export function expiryLimit(expiry: RequestedExpiry): number {
+  return ("notAfter" in expiry ? expiry.notAfter : Date.now() + expiry.durationMs) + CLOCK_SKEW_MS;
+}
+
+/**
+ * The owner a re-login must keep. Every profile that recorded an owner is
+ * pinned to it, whatever wrote it (`tc init`, `tc profile create`, a scoped
+ * or device login); only a local-owner-key profile, whose owner is the local
+ * key itself, is not pinned to an OpenKey identity.
+ */
+export function pinnedOwner(profile: ProfileConfig | null | undefined): string | undefined {
+  return profile && resolveProfilePosture(profile) !== "local-owner-key" ? profile.ownerDid : undefined;
+}
+
+/** The owner a login must match: the profile's pinned owner, or `--owner`. They must agree when both exist. */
+export function expectedOwnerFor(profileName: string, profile: ProfileConfig | null | undefined, requested: string | undefined): string | undefined {
+  const pinned = pinnedOwner(profile);
+  if (pinned && requested && normalizePkhIdentifier(pinned) !== normalizePkhIdentifier(requested)) {
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", `Profile "${profileName}" belongs to ${pinned}, not ${requested}. Use a new profile for another account.`, ExitCode.USAGE_ERROR);
+  }
+  return pinned ?? requested;
+}
+
+/** Expiry recorded in a saved session (explicit fields, else the SIWE message). */
+export function sessionExpiresAt(session: Record<string, unknown> | null): string | null {
+  if (session === null) return null;
+  const candidates = [session.expiresAt, session.expiry, session.expirationTime,
+    typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : undefined];
+  const value = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
+  return typeof value === "string" ? new Date(value).toISOString() : null;
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
@@ -52,14 +101,30 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
   }
 }
 
-/** Verify signed authority before a scoped login can replace local state. */
-export async function verifyScopedLogin(
+export interface SignedSessionExpectations {
+  /** Primary DID the approving identity must match, when known. */
+  expectedOwner?: string;
+  /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
+  expiry?: RequestedExpiry;
+}
+
+export interface SignedSession {
+  ownerDid: string;
+  /** The verified ReCap, with fully qualified services and actions. */
+  permissions: PermissionEntry[];
+  expiresAt: string;
+}
+
+/**
+ * Verify an OpenKey session proof: SIWE signature, session key, owner and
+ * lifetime. Unsigned callback fields never stand in for these values.
+ */
+export function verifySignedSession(
   data: Record<string, unknown>,
   key: object,
   sessionDid: string,
-  requested: PermissionEntry[],
-  expected: ScopedLoginExpectations = {},
-): Promise<Record<string, unknown> & { ownerDid: string; permissions: PermissionEntry[]; expiresAt: string }> {
+  expected: SignedSessionExpectations = {},
+): SignedSession {
   let recap: PermissionEntry[];
   let expiresAt: string;
   try {
@@ -80,39 +145,51 @@ export async function verifyScopedLogin(
     expiresAt = proof.expiresAt;
   } catch (error) {
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
-      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
+      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    throw new CLIError("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete, verifiable session proof. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
+    throw new CLIError("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete, verifiable session proof. No session was saved.", ExitCode.AUTH_REQUIRED);
   }
   const signedExpiry = Date.parse(expiresAt);
   if (signedExpiry <= Date.now()) {
-    throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No scoped session was saved.", ExitCode.AUTH_REQUIRED);
+    throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
   }
-  if (expected.maxLifetimeMs !== undefined && signedExpiry > Date.now() + expected.maxLifetimeMs + CLOCK_SKEW_MS) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", "The signed session outlives the requested --expiry. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+  if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
+    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", "The signed session outlives the requested --expiry. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
-    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from the expected owner. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from this profile's owner. No session was saved. Use a new profile for another account.", ExitCode.PERMISSION_DENIED);
   }
-  const spaceId = data.spaceId as string;
-  for (const permission of requested) {
-    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
-    }
-  }
-  const allowed = permissionTuples(requested, ownerDid);
   const permissions = recap.map((entry) => {
     const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
     const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
     return { service, space: entry.space, path: entry.path, actions };
   });
-  for (const tuple of permissionTuples(permissions, ownerDid)) {
+  return { ownerDid, permissions, expiresAt };
+}
+
+/** Verify signed authority, and that it stays inside the requested manifest, before a scoped login saves anything. */
+export function verifyScopedLogin(
+  data: Record<string, unknown>,
+  key: object,
+  sessionDid: string,
+  requested: PermissionEntry[],
+  expected: SignedSessionExpectations = {},
+): Record<string, unknown> & SignedSession {
+  const signed = verifySignedSession(data, key, sessionDid, expected);
+  const spaceId = data.spaceId as string;
+  for (const permission of requested) {
+    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+  }
+  const allowed = permissionTuples(requested, signed.ownerDid);
+  for (const tuple of permissionTuples(signed.permissions, signed.ownerDid)) {
     if (!allowed.has(tuple)) {
       throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
     }
   }
   // Keep signed proof intact; unsigned callback identity/expiry/permissions
   // cannot override the verified values. Never accept a returned private key.
-  return { ...data, jwk: key, ownerDid, permissions, expiresAt, expiry: expiresAt, expirationTime: expiresAt };
+  return { ...data, jwk: key, ...signed, expiry: signed.expiresAt, expirationTime: signed.expiresAt };
 }

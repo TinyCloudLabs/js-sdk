@@ -1,6 +1,6 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { createCipheriv, createHmac, createPublicKey, diffieHellman, generateKeyPairSync, randomBytes, type JsonWebKey } from "node:crypto";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
@@ -50,13 +50,13 @@ function encryptRelay(relayPublicJwk: object, transactionId: string, value: unkn
 }
 
 /** What OpenKey's /delegate/complete returns for an owner-signed SIWE over `signed`. */
-async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed) {
+async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000) {
   const abilities: Record<string, Record<string, string[]>> = {};
   for (const permission of signed) {
     const service = permission.service.slice("tinycloud.".length);
     (abilities[service] ??= {})[permission.path] = permission.actions;
   }
-  const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + 3600_000).toISOString();
+  const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + lifetimeMs).toISOString();
   const prepared = wasm.prepareSession({
     abilities, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
     issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
@@ -87,11 +87,14 @@ function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: st
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     if (String(url).endsWith("/api/device-authorizations")) {
       startBodies.push(body);
+      // Real OpenKey serves the page on its site: api.openkey.so -> openkey.so.
+      const site = new URL(String(url));
+      site.hostname = site.hostname.replace(/^api\./, "");
       return options.start ?? response({
         transactionId,
         userCode: "ABCD-EFGH",
-        verificationUri: "https://openkey.so/device",
-        verificationUriComplete: "https://openkey.so/device?user_code=ABCD-EFGH",
+        verificationUri: `${site.origin}/device`,
+        verificationUriComplete: `${site.origin}/device?user_code=ABCD-EFGH`,
         expiresIn: 600,
         interval: 2,
       }, 201);
@@ -102,8 +105,8 @@ function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: st
   return { fetchFn, startBodies, urls, get polls() { return polls; } };
 }
 
-async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string }) {
-  const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed);
+async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number }) {
+  const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs);
   return response({
     status: "approved",
     relay: encryptRelay(start.relayPublicJwk as object, transactionId, delegation),
@@ -135,7 +138,7 @@ describe("OpenKey device authorization", () => {
   test("requests the manifest scope without private key material and returns the verified session", async () => {
     const prompts: unknown[] = [];
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
-    const result = await acquire(openkey, { delegationTtlSeconds: 7200, reason: "Publish Share links.", emitInstructions: (prompt) => prompts.push(prompt) });
+    const result = await acquire(openkey, { expiry: { durationMs: 7_200_000 }, reason: "Publish Share links.", emitInstructions: (prompt) => prompts.push(prompt) });
 
     const start = openkey.startBodies[0]!;
     expect(start.permissions).toEqual(requested);
@@ -245,8 +248,46 @@ describe("OpenKey device authorization", () => {
   test("refuses multi-space requests and lifetimes above 30 days before contacting OpenKey", async () => {
     const openkey = fakeOpenKey(() => response({}));
     await expect(acquire(openkey, { permissions: [...requested, { ...requested[0]!, space: "applications" }] })).rejects.toMatchObject({ code: "INVALID_LOGIN_SCOPE" });
-    await expect(acquire(openkey, { delegationTtlSeconds: 31 * 24 * 60 * 60 })).rejects.toMatchObject({ code: "INVALID_EXPIRY" });
+    await expect(acquire(openkey, { expiry: { durationMs: 31 * 24 * 60 * 60 * 1000 } })).rejects.toMatchObject({ code: "INVALID_EXPIRY" });
     expect(openkey.startBodies).toEqual([]);
+  });
+
+  test("an absolute --expiry deadline is not stretched by the time approval takes", async () => {
+    // Approval arrives 20 minutes in and signs a 40-minute session (ends at +60).
+    const t0 = Date.now();
+    const delayedApproval = async (expiry: DeviceAuthorizationInput["expiry"]) => {
+      const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, lifetimeMs: 40 * 60_000 }));
+      try {
+        return await acquire(openkey, { expiry, wait: async () => { setSystemTime(new Date(t0 + 20 * 60_000)); } });
+      } finally {
+        setSystemTime();
+      }
+    };
+    // A 45-minute lifetime counts from approval (+65): accepted.
+    expect((await delayedApproval({ durationMs: 45 * 60_000 })).declined).toEqual([]);
+    // A deadline 45 minutes after the request (+45) stays fixed: refused.
+    await expect(delayedApproval({ notAfter: t0 + 45 * 60_000 })).rejects.toMatchObject({ code: "DEVICE_AUTH_BINDING_MISMATCH" });
+  });
+
+  test("names OpenKey when its device API is unreachable", async () => {
+    const fetchFn = Object.assign(async () => { throw new TypeError("fetch failed"); }, { preconnect: () => undefined }) as typeof globalThis.fetch;
+    await expect(acquireDeviceDelegation({
+      sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested,
+      openkeyHost: "https://openkey.example", fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
+    })).rejects.toMatchObject({ code: "OPENKEY_UNREACHABLE", message: expect.stringContaining("https://openkey.example") });
+  });
+
+  test("refuses verification pages off the OpenKey site and unbounded approval windows", async () => {
+    const start = (overrides: Record<string, unknown>) => response({
+      transactionId: randomBytes(18).toString("base64url"), userCode: "ABCD-EFGH",
+      verificationUri: "https://openkey.so/device", expiresIn: 600, interval: 2, ...overrides,
+    }, 201);
+    const prompts: unknown[] = [];
+    for (const overrides of [{ verificationUri: "https://openkey.attacker.example/device" }, { expiresIn: 7 * 24 * 60 * 60 }]) {
+      const openkey = fakeOpenKey(() => response({}), { start: start(overrides) });
+      await expect(acquire(openkey, { emitInstructions: (prompt) => prompts.push(prompt) })).rejects.toMatchObject({ code: "DEVICE_AUTH_INVALID_RESPONSE" });
+    }
+    expect(prompts).toEqual([]);
   });
 });
 
@@ -288,5 +329,91 @@ describe("device login persistence", () => {
 
     expect(new Set(openkey.urls.map((url) => new URL(url).origin))).toEqual(new Set(["https://openkey.example"]));
     expect((await ProfileManager.getProfile("agent")).openkeyHost).toBe("https://openkey.example");
+  });
+
+  const OTHER_OWNER = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
+  const baseProfile = { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" };
+  const login = (openkey: FakeOpenKey, extra: Record<string, unknown> = {}) => loginWithDeviceAuthorization({
+    profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested,
+    fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined, ...extra,
+  });
+
+  test("pins the recorded owner on init-shaped and posture-only profiles", async () => {
+    // `tc init` records ownerDid without authMethod; `tc profile create` records only a posture.
+    for (const shape of [{ ownerDid: OTHER_OWNER }, { ownerDid: OTHER_OWNER, posture: "owner-openkey" as const }]) {
+      await rm(join(home, ".tinycloud"), { recursive: true, force: true });
+      await ProfileManager.setKey("agent", key);
+      await ProfileManager.setProfile("agent", { ...baseProfile, ...shape });
+      const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+      await expect(login(openkey)).rejects.toMatchObject({ code: "OPENKEY_OWNER_MISMATCH" });
+      expect(await ProfileManager.getProfile("agent")).toEqual({ ...baseProfile, ...shape });
+      expect(await ProfileManager.getSession("agent")).toBeNull();
+    }
+  });
+
+  test("refuses a local-owner-key profile before contacting OpenKey", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, authMethod: "local", privateKey: "0xlocal", ownerDid: OTHER_OWNER });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+    await expect(login(openkey)).rejects.toMatchObject({ code: "LOCAL_OWNER_PROFILE" });
+    expect(openkey.urls).toEqual([]);
+  });
+
+  test("keeps another app's live session unless --replace-session; renewing the same scope is allowed", async () => {
+    const appSession = { spaceId: wasm.makeSpaceId(address, 1, "applications"), expiresAt: new Date(Date.now() + 86_400_000).toISOString(), permissions: [{ service: "tinycloud.kv", space: "applications", path: "tinychat/", actions: ["tinycloud.kv/get"] }] };
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid, posture: "owner-openkey" });
+    await ProfileManager.setSession("agent", appSession);
+
+    const refused = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+    await expect(login(refused)).rejects.toMatchObject({ code: "SESSION_IN_USE", message: expect.stringContaining("--replace-session") });
+    expect(refused.urls).toEqual([]);
+    expect(await ProfileManager.getSession("agent")).toEqual(appSession);
+
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })), { replaceSession: true });
+    // The publishing session is now live; logging in again for the same scope renews it.
+    const renewed = await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
+    expect(renewed.result.ownerDid).toBe(ownerDid);
+  });
+
+  test("replaces an expired session without a flag", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid });
+    await ProfileManager.setSession("agent", { spaceId: "tinycloud:pkh:eip155:1:0x0:applications", expiresAt: new Date(Date.now() - 1000).toISOString() });
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
+    expect(await ProfileManager.getSession("agent")).toMatchObject({ spaceId });
+  });
+
+  test("stores the node host only when it was chosen explicitly", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { ...baseProfile, host: "https://stored.example" });
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })));
+    expect((await ProfileManager.getProfile("agent")).host).toBe("https://stored.example");
+    await login(fakeOpenKey((start, id) => approved(start, id, { signed: requested })), { persistHost: true });
+    expect((await ProfileManager.getProfile("agent")).host).toBe(NODE);
+  });
+
+  test("tightens state written 0775/0664 by older releases on the next write", async () => {
+    const { appendGrantHistory } = await import("../lib/permissions.js");
+    const tinycloud = join(home, ".tinycloud");
+    const profileDir = join(PROFILES_DIR, "agent");
+    await mkdir(join(profileDir, "cache"), { recursive: true, mode: 0o775 });
+    for (const directory of [tinycloud, PROFILES_DIR, profileDir, join(profileDir, "cache")]) await chmod(directory, 0o775);
+    await writeFile(join(profileDir, "key.json"), JSON.stringify(key), { mode: 0o664 });
+    await writeFile(join(profileDir, "auth-grants.jsonl"), "", { mode: 0o664 });
+    await chmod(join(profileDir, "auth-grants.jsonl"), 0o664);
+
+    await ProfileManager.setProfile("agent", baseProfile);
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setSession("agent", { spaceId });
+    await ProfileManager.getCacheDir("agent");
+    await appendGrantHistory("agent", { addedCaps: [], source: "cli" });
+
+    for (const directory of [tinycloud, PROFILES_DIR, profileDir, join(profileDir, "cache")]) {
+      expect((await stat(directory)).mode & 0o777).toBe(0o700);
+    }
+    for (const file of ["key.json", "profile.json", "session.json", "auth-grants.jsonl"]) {
+      expect((await stat(join(profileDir, file))).mode & 0o777).toBe(0o600);
+    }
   });
 });

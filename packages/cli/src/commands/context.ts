@@ -3,6 +3,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { outputJson } from "../output/formatter.js";
 import { handleError } from "../output/errors.js";
+import { sessionExpiresAt } from "../auth/scoped-login.js";
 
 export function registerContextCommand(program: Command): void {
   program.command("context")
@@ -15,10 +16,7 @@ export function registerContextCommand(program: Command): void {
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
         const spaceId = await resolveSpaceUri(options.space, ctx.profile) ??
           (typeof session?.spaceId === "string" ? session.spaceId : profile.spaceId ?? null);
-        const expiryValues = [session?.expiresAt, session?.expiry, session?.expirationTime,
-          typeof session?.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : undefined];
-        const expiry = expiryValues.find((value) => typeof value === "string" && Number.isFinite(Date.parse(value)));
-        const expiresAt = typeof expiry === "string" ? new Date(expiry).toISOString() : null;
+        const expiresAt = sessionExpiresAt(session);
         let root = cmd;
         while (root.parent) root = root.parent;
         outputJson({

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -89,6 +89,11 @@ mock.module("../config/profiles.js", () => ({
       currentSession = session;
     },
     setProfile: async () => undefined,
+    ensureProfileDir: async (name: string) => {
+      const directory = join(TEST_HOME, ".tinycloud", "profiles", name);
+      await mkdir(directory, { recursive: true });
+      return directory;
+    },
     getKey: async () => ({
       kty: "OKP",
       crv: "Ed25519",

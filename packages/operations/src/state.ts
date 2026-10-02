@@ -303,9 +303,6 @@ export async function writeSession<T extends object>(
 ): Promise<void> {
   await withProfileLock(profile, async () => {
     await readStoreMetadata(profile, "session");
-    // Tighten profile directories created by older releases before writing
-    // session authority into them.
-    await chmod(profilePath(profile), PRIVATE_DIR_MODE);
     await writeJsonAtomic(sessionPath(profile), session);
     await writeFormatOneMetadata(profile, "session");
   }, options);
@@ -336,6 +333,11 @@ async function acquireProfileLock(
   const lockPath = profileLockPath(profile);
 
   await mkdir(profilePath(profile), { recursive: true, mode: PRIVATE_DIR_MODE });
+  // Every store write takes this lock: tighten the tree older releases
+  // created 0775 before writing sessions or delegations into it.
+  for (const directory of [tinycloudHomePath(), profilesPath(), profilePath(profile)]) {
+    await chmod(directory, PRIVATE_DIR_MODE);
+  }
 
   while (true) {
     try {

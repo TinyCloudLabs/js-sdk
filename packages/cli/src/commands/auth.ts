@@ -34,13 +34,18 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 import { startAuthFlow } from "../auth/browser-auth.js";
 import {
   acquireDeviceDelegation,
-  DEVICE_DELEGATION_MAX_SECONDS,
   loginWithDeviceAuthorization,
   mergePrivateJwkIntoSession,
   resolveDeviceApiHost,
 } from "../auth/device-auth.js";
-import { validateLoginPermissions, verifyScopedLogin } from "../auth/scoped-login.js";
-import { parseDuration } from "../lib/duration.js";
+import {
+  expectedOwnerFor,
+  parseRequestedExpiry,
+  pinnedOwner,
+  validateLoginPermissions,
+  verifyScopedLogin,
+  verifySignedSession,
+} from "../auth/scoped-login.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
 import {
@@ -122,6 +127,7 @@ export function registerAuthCommand(program: Command): void {
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login")
+    .option("--replace-session", "Device login: replace this profile's live session even though its scope differs (prefer a new profile)")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
@@ -147,15 +153,21 @@ export function registerAuthCommand(program: Command): void {
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true })
           : undefined;
 
+        // Only an explicit --host becomes the profile's host; TC_HOST and a
+        // discovered local node stay one-off.
+        const persistHost = globalOpts.host !== undefined;
+
         if (options.device) {
           const { profile, result } = await loginWithDeviceAuthorization({
             profileName: ctx.profile,
             nodeOrigin: ctx.host,
             shareOrigin: DEFAULT_SHARE_ORIGIN,
             permissions: permissions!,
-            delegationTtlSeconds: deviceTtlSeconds(options.expiry, DEVICE_DELEGATION_MAX_SECONDS),
+            ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: options.owner,
+            replaceSession: options.replaceSession === true,
+            persistHost,
           });
           reportDeclined(result.declined);
           outputJson({
@@ -189,6 +201,13 @@ export function registerAuthCommand(program: Command): void {
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
+        if (method === "openkey" && !options.paste && options.popup !== false && !isInteractive()) {
+          throw new CLIError(
+            "INTERACTIVE_LOGIN_REQUIRED",
+            `Browser login needs a browser on this machine and would wait silently. Use \`tc auth login --device --manifest ${SHARE_PUBLISHING_MANIFEST_REF}\` (or your app's manifest) to approve on a phone, or \`--paste\` to paste a return code.`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
 
         if (method === "local") {
           await handleLocalAuth(ctx.profile, ctx.host);
@@ -199,6 +218,7 @@ export function registerAuthCommand(program: Command): void {
             permissions,
             expiry: parseExpiryOption(options.expiry),
             expectedOwner: options.owner,
+            persistHost,
           });
         }
       } catch (error) {
@@ -319,8 +339,8 @@ export function registerAuthCommand(program: Command): void {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const profile = await ProfileManager.getProfile(ctx.profile);
-        if (options.device && (!options.grant || profile.authMethod !== "openkey")) {
-          throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey profile.", ExitCode.USAGE_ERROR);
+        if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
         const requested = await collectRequestedPermissions(options, ctx.profile);
         const expiryOption = parseExpiryOption(options.expiry);
@@ -356,7 +376,7 @@ export function registerAuthCommand(program: Command): void {
           return;
         }
 
-        if (profile.authMethod === "openkey") {
+        if (profile.authMethod === "openkey" || options.device) {
           const key = await ProfileManager.getKey(ctx.profile);
           if (!key) {
             throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc init\` first.`, ExitCode.AUTH_REQUIRED);
@@ -382,9 +402,9 @@ export function registerAuthCommand(program: Command): void {
                 nodeOrigin: ctx.host,
                 shareOrigin: DEFAULT_SHARE_ORIGIN,
                 permissions: group,
-                delegationTtlSeconds: deviceTtlSeconds(options.expiry, 7 * 24 * 60 * 60),
+                expiry: parseRequestedExpiry(expiryOption ?? "7d"),
                 reason,
-                expectedOwner: profile.ownerDid,
+                expectedOwner: pinnedOwner(profile),
                 openkeyHost: resolveDeviceApiHost(profile),
               });
               declined.push(...approval.declined);
@@ -1695,26 +1715,6 @@ async function handleOpenKeyAuth(
   });
 }
 
-/** Milliseconds of a parsed `--expiry` (duration string, ISO date, or raw ms). */
-function lifetimeMilliseconds(expiry: string | number): number {
-  try {
-    return typeof expiry === "number" ? expiry : parseDuration(expiry);
-  } catch (error) {
-    throw new CLIError("INVALID_EXPIRY", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-  }
-}
-
-/** Device lifetime in seconds from `--expiry` (duration or milliseconds). */
-function deviceTtlSeconds(raw: unknown, fallbackSeconds: number): number {
-  const parsed = parseExpiryOption(raw);
-  if (parsed === undefined) return fallbackSeconds;
-  const seconds = Math.floor(lifetimeMilliseconds(parsed) / 1000);
-  if (seconds < 60 || seconds > DEVICE_DELEGATION_MAX_SECONDS) {
-    throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1m and 30d.", ExitCode.USAGE_ERROR);
-  }
-  return seconds;
-}
-
 /** Tell the operator which requested capabilities the owner unchecked. */
 function reportDeclined(declined: PermissionEntry[]): void {
   if (declined.length === 0) return;
@@ -1730,6 +1730,8 @@ interface OpenKeyLoginOptions {
   permissions?: PermissionEntry[];
   expiry?: string | number;
   expectedOwner?: string;
+  /** Record `host` as the profile host (an explicit `--host`). */
+  persistHost?: boolean;
   openKeyAcquisition?: OpenKeyAcquisition;
 }
 
@@ -1750,8 +1752,9 @@ export async function refreshOpenKeySession(
   // Get DID from profile
   const profile = await ProfileManager.getProfile(profileName);
   if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
-  // Parse before consent so an invalid --expiry never opens OpenKey.
-  const maxLifetimeMs = options.expiry === undefined ? undefined : lifetimeMilliseconds(options.expiry);
+  // Resolve before consent so an invalid --expiry or owner conflict never opens OpenKey.
+  const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
+  const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
@@ -1766,17 +1769,20 @@ export async function refreshOpenKeySession(
     ...(options.permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
-  // Scoped login persists only signed, verified authority. Otherwise OpenKey
-  // only ever receives the public JWK (browser-auth.ts
+  // Scoped login persists only signed, verified authority. Any requested
+  // --expiry is checked against the signed SIWE expiry on every path.
+  // Otherwise OpenKey only ever receives the public JWK (browser-auth.ts
   // `publicJwkForDelegation`), so any JWK it echoes back is public-only;
   // persisting it verbatim would shadow key.json and break the WASM signer
   // (kv/sql). Merge the private parameter back in before writing session.json.
-  const sanitizedSession = options.permissions
-    ? await verifyScopedLogin(delegationData, key, profile.sessionDid ?? profile.did, options.permissions, {
-        expectedOwner: options.expectedOwner ?? (profile.authMethod === "openkey" ? profile.ownerDid : undefined),
-        maxLifetimeMs,
-      })
-    : mergePrivateJwkIntoSession(delegationData, key);
+  const sessionDid = profile.sessionDid ?? profile.did;
+  let sanitizedSession: Record<string, unknown>;
+  if (options.permissions) {
+    sanitizedSession = verifyScopedLogin(delegationData, key, sessionDid, options.permissions, { expectedOwner, expiry });
+  } else {
+    if (expiry !== undefined) verifySignedSession(delegationData, key, sessionDid, { expiry });
+    sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
+  }
 
   // Store session
   await ProfileManager.setSession(profileName, sanitizedSession);
@@ -1784,7 +1790,7 @@ export async function refreshOpenKeySession(
   // Update profile with owner DID if present
   const updatedProfile = {
     ...profile,
-    host,
+    host: options.persistHost === true || !profile.host ? host : profile.host,
     sessionDid: profile.sessionDid ?? profile.did,
     posture: profile.posture ?? "owner-openkey",
     operatorType: profile.operatorType ?? "human",

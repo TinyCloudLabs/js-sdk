@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,13 +20,13 @@ const key = JSON.parse(manager.jwk("default")!);
 const did = manager.getDID("default");
 const requested: PermissionEntry[] = [{ service: "tinycloud.kv", space: "applications", path: "example/", actions: ["tinycloud.kv/get"] }];
 
-async function proof(options: { write?: boolean; expired?: boolean } = {}) {
+async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?: number } = {}) {
   const now = Date.now();
   const prepared = wasm.prepareSession({
     abilities: { kv: { "example/": options.write ? ["tinycloud.kv/get", "tinycloud.kv/put"] : ["tinycloud.kv/get"] } },
     address, chainId: 1, domain: "cli.example.test", spaceId, jwk: key,
     issuedAt: new Date(now - 60_000).toISOString(),
-    expirationTime: new Date(now + (options.expired ? -30_000 : 3600_000)).toISOString(),
+    expirationTime: new Date(now + (options.expired ? -30_000 : options.lifetimeMs ?? 3600_000)).toISOString(),
   });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -89,5 +89,50 @@ describe("scoped first login", () => {
     await expect(refreshOpenKeySession("scoped", host, { permissions: [], openKeyAcquisition: acquire })).rejects.toMatchObject({ code: "INVALID_LOGIN_SCOPE" });
     await expect(refreshOpenKeySession("scoped", host, { permissions: [...requested, { ...requested[0]!, space: "default" }], openKeyAcquisition: acquire })).rejects.toMatchObject({ code: "INVALID_LOGIN_SCOPE" });
     expect(calls).toBe(0);
+  });
+
+  test("enforces --expiry on unscoped login too", async () => {
+    const oneHour = await proof();
+    await expect(refreshOpenKeySession("scoped", host, { expiry: "1m", openKeyAcquisition: async () => oneHour }))
+      .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+    await refreshOpenKeySession("scoped", host, { expiry: "2h", openKeyAcquisition: async () => oneHour });
+    expect(await ProfileManager.getSession("scoped")).not.toBeNull();
+  });
+
+  test("an ISO --expiry stays an absolute deadline while consent is pending", async () => {
+    // Consent takes 20 minutes and OpenKey signs 40 minutes from then (+60).
+    const t0 = Date.now();
+    const delayedConsent = async () => {
+      setSystemTime(new Date(t0 + 20 * 60_000));
+      return proof({ lifetimeMs: 40 * 60_000 });
+    };
+    try {
+      await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: new Date(t0 + 45 * 60_000).toISOString(), openKeyAcquisition: delayedConsent }))
+        .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+      setSystemTime();
+      // The same 45 minutes as a duration counts from approval (+65): accepted.
+      await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "45m", openKeyAcquisition: delayedConsent });
+    } finally {
+      setSystemTime();
+    }
+    expect(await ProfileManager.getSession("scoped")).not.toBeNull();
+  });
+
+  test("pins the owner a profile recorded without authMethod (tc init shape)", async () => {
+    const other = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
+    await ProfileManager.setProfile("scoped", { name: "scoped", host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString(), ownerDid: other });
+    const valid = await proof();
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => valid })).rejects.toMatchObject({ code: "OPENKEY_OWNER_MISMATCH" });
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expectedOwner: ownerDid, openKeyAcquisition: async () => valid })).rejects.toMatchObject({ code: "OPENKEY_OWNER_MISMATCH" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
+  test("keeps the stored host unless the login chose one explicitly", async () => {
+    const valid = await proof();
+    await refreshOpenKeySession("scoped", "https://discovered.local.example", { permissions: requested, openKeyAcquisition: async () => valid });
+    expect((await ProfileManager.getProfile("scoped")).host).toBe(host);
+    await refreshOpenKeySession("scoped", "https://chosen.example", { permissions: requested, persistHost: true, openKeyAcquisition: async () => valid });
+    expect((await ProfileManager.getProfile("scoped")).host).toBe("https://chosen.example");
   });
 });

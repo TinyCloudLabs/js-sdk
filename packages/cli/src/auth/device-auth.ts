@@ -11,20 +11,25 @@ import {
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
-import type { ProfileConfig } from "../config/types.js";
+import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
-  CLOCK_SKEW_MS,
+  expiryLimit,
   permissionTuples,
   permissionsFromTuples,
+  expectedOwnerFor,
+  sessionExpiresAt,
   validateLoginPermissions,
   verifyScopedLogin,
+  type RequestedExpiry,
 } from "./scoped-login.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
-export const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
+const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
+/** OpenKey's approval window is minutes; refuse a server asking us to poll for longer. */
+const DEVICE_APPROVAL_WINDOW_MAX_SECONDS = 60 * 60;
 const DEVICE_REASON_MAX_LENGTH = 200;
 
 /**
@@ -82,7 +87,8 @@ export interface DeviceAuthorizationInput {
   shareOrigin: string;
   /** Manifest permissions: one space, fully qualified services and actions. */
   permissions: PermissionEntry[];
-  delegationTtlSeconds?: number;
+  /** Requested lifetime or absolute deadline; defaults to the 30-day maximum. */
+  expiry?: RequestedExpiry;
   reason?: string;
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
@@ -130,7 +136,15 @@ function invalidResponse(message: string): CLIError {
   return new CLIError("DEVICE_AUTH_INVALID_RESPONSE", message, ExitCode.ERROR);
 }
 
-function validateStart(value: unknown): DeviceStartResponse {
+/** Verification pages live on the OpenKey site whose device API we called (`api.X` serves `X`). */
+function verificationOrigins(openkeyHost: string): Set<string> {
+  const api = new URL(openkeyHost);
+  const site = new URL(openkeyHost);
+  if (site.hostname.startsWith("api.")) site.hostname = site.hostname.slice("api.".length);
+  return new Set([api.origin, site.origin]);
+}
+
+function validateStart(value: unknown, openkeyHost: string): DeviceStartResponse {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid device authorization response");
   const result = value as Record<string, unknown>;
   if (
@@ -138,10 +152,13 @@ function validateStart(value: unknown): DeviceStartResponse {
     typeof result.userCode !== "string" || !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(result.userCode) ||
     typeof result.verificationUri !== "string" ||
     (result.verificationUriComplete !== undefined && typeof result.verificationUriComplete !== "string") ||
-    !Number.isSafeInteger(result.expiresIn) || Number(result.expiresIn) < 60 ||
+    !Number.isSafeInteger(result.expiresIn) || Number(result.expiresIn) < 60 || Number(result.expiresIn) > DEVICE_APPROVAL_WINDOW_MAX_SECONDS ||
     !Number.isSafeInteger(result.interval) || Number(result.interval) < 1
   ) throw invalidResponse("OpenKey returned an invalid device authorization response");
   canonicalOrigin(new URL(result.verificationUri).origin, "verification URI");
+  if (!verificationOrigins(openkeyHost).has(new URL(result.verificationUri).origin)) {
+    throw invalidResponse("OpenKey returned a verification URI outside its own site");
+  }
   if (
     typeof result.verificationUriComplete === "string" &&
     new URL(result.verificationUriComplete).origin !== new URL(result.verificationUri).origin
@@ -263,7 +280,7 @@ async function verifyApproval(input: {
   publicJwk: object;
   key: object;
   requested: PermissionEntry[];
-  ttlSeconds: number;
+  expiry: RequestedExpiry;
   expectedOwner?: string;
 }): Promise<DeviceAuthorizationResult> {
   const { binding, delegation } = input;
@@ -274,7 +291,7 @@ async function verifyApproval(input: {
     binding.shareOrigin !== input.shareOrigin
   ) throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation with the wrong device binding. No session was saved.", ExitCode.PERMISSION_DENIED);
   const expiresAt = Date.parse(binding.delegationExpiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + input.ttlSeconds * 1000 + CLOCK_SKEW_MS) {
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > expiryLimit(input.expiry)) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation outside the requested expiry window. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
   if (delegationExpiry(delegation) !== expiresAt) {
@@ -291,9 +308,9 @@ async function verifyApproval(input: {
 
   // Signed authority: owner, space, session key, lifetime, and a recap that
   // stays inside the request.
-  const session = await verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
+  const session = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
-    maxLifetimeMs: input.ttlSeconds * 1000,
+    expiry: input.expiry,
   });
   const { ownerDid } = session;
   if (Math.abs(Date.parse(session.expiresAt) - expiresAt) > 1000) {
@@ -337,9 +354,12 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   validateLoginPermissions(input.permissions);
-  const ttlSeconds = input.delegationTtlSeconds ?? DEVICE_DELEGATION_MAX_SECONDS;
+  const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1000 };
+  // OpenKey takes a lifetime; an absolute deadline becomes the time left now
+  // and is still enforced as the deadline itself when the approval arrives.
+  const ttlSeconds = "notAfter" in expiry ? Math.floor((expiry.notAfter - Date.now()) / 1000) : Math.floor(expiry.durationMs / 1000);
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
-    throw new CLIError("INVALID_EXPIRY", "Device authorization lifetime must be between 1 minute and 30 days.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1 minute and 30 days from now.", ExitCode.USAGE_ERROR);
   }
   const reason = input.reason?.trim().slice(0, DEVICE_REASON_MAX_LENGTH);
   const openkeyHost = canonicalOrigin(input.openkeyHost ?? DEFAULT_OPENKEY_DEVICE_API_HOST, "OpenKey host");
@@ -351,25 +371,34 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   const relayKeys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const relayPublicJwk = publicRelayJwk(relayKeys.publicKey.export({ format: "jwk" }));
   const publicJwk = publicSessionJwk(input.jwk);
-  const startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
-    method: "POST",
-    credentials: "omit",
-    redirect: "error",
-    referrerPolicy: "no-referrer",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify({
-      deviceSecretHash: digest(deviceSecret),
-      codeChallenge: digest(codeVerifier),
-      relayPublicJwk,
-      sessionDid: input.sessionDid,
-      publicJwk,
-      permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
-      nodeOrigin,
-      shareOrigin,
-      delegationTtlSeconds: ttlSeconds,
-      ...(reason ? { reason } : {}),
-    }),
-  });
+  let startResponse: Response;
+  try {
+    startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({
+        deviceSecretHash: digest(deviceSecret),
+        codeChallenge: digest(codeVerifier),
+        relayPublicJwk,
+        sessionDid: input.sessionDid,
+        publicJwk,
+        permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
+        nodeOrigin,
+        shareOrigin,
+        delegationTtlSeconds: ttlSeconds,
+        ...(reason ? { reason } : {}),
+      }),
+    });
+  } catch (error) {
+    throw new CLIError(
+      "OPENKEY_UNREACHABLE",
+      `Could not reach the OpenKey device API at ${openkeyHost}: ${error instanceof Error ? error.message : String(error)}. Check TC_OPENKEY_HOST or the profile's openkeyHost.`,
+      ExitCode.NETWORK_ERROR,
+    );
+  }
   const startValue = await responseJson(startResponse);
   if (!startResponse.ok) {
     const code = errorCode(startValue);
@@ -384,7 +413,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
     }
     throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
   }
-  const started = validateStart(startValue);
+  const started = validateStart(startValue, openkeyHost);
   const deadline = Date.now() + started.expiresIn * 1000;
   (input.emitInstructions ?? writeApprovalPrompt)({
     verificationUri: started.verificationUri,
@@ -445,7 +474,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       publicJwk,
       key: input.jwk,
       requested: input.permissions,
-      ttlSeconds,
+      expiry,
       expectedOwner: input.expectedOwner,
     });
   }
@@ -462,29 +491,59 @@ export function mergePrivateJwkIntoSession(session: Record<string, unknown>, key
   return { ...session, jwk: { ...sessionJwkRecord, d: privateParameter } };
 }
 
+/** Refuse to silently drop a live session that another app or task relies on. */
+async function assertSessionReplaceable(profileName: string, ownerDid: string | undefined, requested: PermissionEntry[]): Promise<void> {
+  const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+  if (session === null) return;
+  const expiresAt = sessionExpiresAt(session);
+  if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
+  // Renewing exactly the same scope for the same owner replaces nothing.
+  if (ownerDid !== undefined && Array.isArray(session.permissions) &&
+    sameTuples(permissionTuples(session.permissions as PermissionEntry[], ownerDid), permissionTuples(requested, ownerDid))) return;
+  const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";
+  throw new CLIError(
+    "SESSION_IN_USE",
+    `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} with a different scope. Device login would replace it and drop that authority. ` +
+      "Keep the user's existing profiles: use a new profile name (`tc init --name publisher --key-only`, then `tc --profile publisher auth login --device --manifest ...`), or pass --replace-session to replace this session.",
+    ExitCode.USAGE_ERROR,
+  );
+}
+
 /**
  * Device login for a profile: request `permissions`, verify the approval, and
  * only then persist key, session and the OpenKey owner posture.
  */
 export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizationInput, "sessionDid" | "jwk"> & {
   profileName: string;
+  /** Explicitly allow replacing a live session with a different scope. */
+  replaceSession?: boolean;
+  /** Record `nodeOrigin` as the profile host (an explicit `--host`, or a profile without one). */
+  persistHost?: boolean;
 }): Promise<{ profile: ProfileConfig; result: DeviceAuthorizationResult }> {
   const existing = await ProfileManager.getProfile(input.profileName).catch(() => null);
+  if (existing && resolveProfilePosture(existing) === "local-owner-key") {
+    throw new CLIError(
+      "LOCAL_OWNER_PROFILE",
+      `Profile "${input.profileName}" holds a local owner key. Device login would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  // Every profile that recorded an owner stays with that owner.
+  const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
+  if (existing && input.replaceSession !== true) await assertSessionReplaceable(input.profileName, expectedOwner, input.permissions);
   const key = await ProfileManager.getKey(input.profileName) ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
-  const openkeyHost = input.openkeyHost ?? resolveDeviceApiHost(existing);
   const result = await acquireDeviceDelegation({
     ...input,
     sessionDid,
     jwk: key,
-    openkeyHost,
-    // A profile already bound to an OpenKey owner must stay with that owner.
-    expectedOwner: input.expectedOwner ?? (existing?.authMethod === "openkey" ? existing.ownerDid : undefined),
+    openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
+    expectedOwner,
   });
   const profile: ProfileConfig = {
     ...existing,
     name: input.profileName,
-    host: input.nodeOrigin,
+    host: input.persistHost === true || !existing?.host ? input.nodeOrigin : existing.host,
     chainId: existing?.chainId ?? DEFAULT_CHAIN_ID,
     spaceName: result.spaceId.slice(result.spaceId.lastIndexOf(":") + 1),
     did: sessionDid,

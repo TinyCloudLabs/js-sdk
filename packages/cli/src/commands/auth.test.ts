@@ -678,6 +678,19 @@ describe("CLI auth login command", () => {
     expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
   });
 
+  test("non-interactive login with no flags fails fast instead of waiting on a browser", async () => {
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+
+    await runAuthCommand(["auth", "login"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({
+      code: "INTERACTIVE_LOGIN_REQUIRED",
+      message: expect.stringMatching(/--device --manifest.*--paste/s),
+    })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+  });
+
   test("device login without an explicit manifest is refused before any approval starts", async () => {
     profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
     keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });

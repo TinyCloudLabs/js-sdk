@@ -2,21 +2,26 @@
 
 The profile is local session state. The OpenKey signing identity owns the data. Reuse the identity the owner already uses; do not create a different account or reconnect integrations to obtain agent access. Every login below requests an explicit manifest, so the owner sees and approves exactly what this profile may do.
 
+Use a new profile name if it already exists. Keep the user's existing profiles: a profile may hold another app's session (for example a TinyChat agent's `applications` session), and logging it in again for a different purpose would drop that authority. Give each purpose its own profile, such as `publisher` for Share publishing.
+
 ## Device login (agents, servers, phones)
 
 Use device login when the owner cannot open a browser on the machine running `tc`. The owner approves on their phone.
 
 ```bash
 TC="$(npm prefix --global)/bin/tc"
-"$TC" init --name PROFILE --key-only
-"$TC" --profile PROFILE auth login --device --manifest builtin:share-publishing --expiry 7d
-"$TC" --profile PROFILE context --json
+"$TC" profile list                         # pick a name that is not taken
+"$TC" init --name publisher --key-only
+"$TC" --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
+"$TC" --profile publisher context --json
 ```
 
 - `--manifest FILE` (required with `--device`) is an app manifest (`app_id`, `space`, `permissions`) given as a file path or `base64:<json>`. `builtin:share-publishing` is the built-in manifest for `tc share publish`; [REFERENCE.md](REFERENCE.md#context-and-login) lists exactly what it requests, and the owner's consent page shows every capability. One space per login.
 - Device login is for KV-scoped manifests. OpenKey refuses `tinycloud.sql` and any other ability its device policy excludes with `SCOPE_REJECTED`; request SQL through [browser login with a manifest](#browser-login-with-a-manifest) on a machine with a browser.
-- `--expiry DURATION` sets the session lifetime (`1h`, `7d`; at most `30d`, default `30d`).
-- `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. A profile already bound to an OpenKey owner is held to that owner automatically.
+- `--expiry` sets the session lifetime: a duration (`1h`, `7d`; at most `30d`, default `30d`) counted from approval, or an ISO date that stays an absolute deadline however long approval takes. A signed session that would outlive it is refused (30 s clock-skew allowance).
+- `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. Scoped and device logins on a profile that already recorded an owner DID are held to that owner automatically, whatever wrote it (`tc init`, an earlier login, or `profile.json` with any posture), and `--owner` must agree with it. Only a local-owner-key profile is not pinned. Owner addresses compare case-insensitively; chain id and space name compare exactly.
+- Device login refuses a profile that holds a local owner key (`LOCAL_OWNER_PROFILE`): use a separate profile.
+- If the profile has a live, unexpired session with a different scope, device login refuses with `SESSION_IN_USE` instead of replacing it. Use a new profile; pass `--replace-session` only when replacing that session is intended. Renewing exactly the same scope is allowed.
 
 While waiting, the command writes one approval line to stderr and keeps polling for the whole approval window (about 10 minutes), riding out dropped connections:
 
@@ -31,7 +36,7 @@ Approve on your phone: https://openkey.so/device?user_code=ABCD-EFGH (code ABCD-
 The command blocks until the owner approves, so a tool call that waits for exit never shows the code in time. Start it in the background with stderr captured, relay the approval line, then wait:
 
 ```bash
-"$TC" --profile PROFILE auth login --device --manifest builtin:share-publishing > login.json 2> login.err &
+"$TC" --profile publisher auth login --device --manifest builtin:share-publishing > login.json 2> login.err &
 LOGIN_PID=$!
 sleep 3; grep 'Approve on your phone' login.err   # send this line to the owner
 wait "$LOGIN_PID"; cat login.json
@@ -65,11 +70,13 @@ Login covers one space. Request further spaces on the logged-in profile:
 tc --profile PROFILE auth request --manifest FILE --grant --device
 ```
 
-Without `--device`, `--grant` opens the OpenKey browser flow.
+`auth request --device` defaults to a 7-day lifetime (`--expiry` to change it, at most `30d`). Without `--device`, `--grant` opens the OpenKey browser flow.
 
 ## Unscoped login and sign-out
 
-`tc init` and `tc auth login` without a manifest request broad default-space consent, including writes. Prefer `init --key-only` followed by a scoped login. Non-interactive `auth login` never switches to device mode on its own; pass `--device --manifest` explicitly.
+`tc init` and `tc auth login` without a manifest request broad default-space consent, including writes. Prefer `init --key-only` followed by a scoped login. `--expiry` is enforced against the signed session on every login path, with or without a manifest. Non-interactive `auth login` never switches to device mode on its own, and never waits on a browser that cannot open: without `--device --manifest`, `--paste` or `--no-popup` it fails fast with `INTERACTIVE_LOGIN_REQUIRED`.
+
+Only an explicit `--host` becomes the profile's stored host; `TC_HOST` and a discovered local node apply to that command only.
 
 `tc auth logout` clears the local session and keeps the key. It is not node revocation, app disconnection, or removal of an agent's conversation history.
 
@@ -77,4 +84,4 @@ Without `--device`, `--grant` opens the OpenKey browser flow.
 
 `context` and `auth caps` report local state. A real read of the intended resource is the only proof of access. A 403 can mean a missing capability; a missing or unhosted space means checking the intended location, not switching owner. An expired session needs renewed consent only when a read is needed.
 
-Profile files (`key.json`, `session.json`, `profile.json`) are written owner-only (0600) in owner-only directories (0700).
+Profile files (`key.json`, `session.json`, `profile.json`, grant history) are written owner-only (0600) in owner-only directories (0700); directories created 0775 by older releases are tightened on the next write.

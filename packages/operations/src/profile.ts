@@ -11,7 +11,7 @@ import type {
   TinyCloudPosture,
 } from "./contract.js";
 
-const DEFAULT_HOST = "https://node.tinycloud.xyz";
+const DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
 
 export type SafeInvocationContext = OperationContextSummary & {
   operatorType: OperationOperatorType;

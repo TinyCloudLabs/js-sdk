@@ -44,12 +44,13 @@ tc init
 tc auth login
 
 # Authenticate on a remote/headless machine: the owner approves an explicit
-# manifest on their phone (URL + code printed to stderr)
-tc init --name agent --key-only
-tc --profile agent auth login --device --manifest builtin:share-publishing
+# manifest on their phone (URL + code printed to stderr). Use a new profile
+# name if it already exists; keep the user's existing profiles.
+tc init --name publisher --key-only
+tc --profile publisher auth login --device --manifest builtin:share-publishing
 
-# Same Share publishing scope, as a shortcut
-tc enable share
+# Same Share publishing scope, as a shortcut (on the dedicated profile)
+tc --profile publisher enable share
 
 # Selected profile, owner, host and space (JSON; does not test access)
 tc context
@@ -80,7 +81,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc auth login` | Authenticate via browser |
 | `tc auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) |
 | `tc auth login --manifest <file>` | Browser OpenKey login scoped to a manifest |
-| `tc enable share` | Device login with the built-in Share publishing manifest |
+| `tc enable share` | Device login with the built-in Share publishing manifest (use a dedicated profile) |
 | `tc context` | Show the selected profile, owner, host, space and session state |
 | `tc auth status` | Show authentication status |
 | `tc auth whoami` | Show current identity |

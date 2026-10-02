@@ -1,4 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   buildPermissionRequestArtifact,
@@ -29,7 +29,7 @@ import {
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { PROFILES_DIR } from "../config/constants.js";
-import { ensureDir, fileExists } from "../config/storage.js";
+import { fileExists, PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -262,14 +262,16 @@ export async function appendGrantHistory(
   profile: string,
   entry: Omit<GrantHistoryEntry, "ts" | "profile">,
 ): Promise<void> {
-  const profileDir = join(PROFILES_DIR, profile);
-  await ensureDir(profileDir);
+  await ProfileManager.ensureProfileDir(profile);
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     profile,
     ...entry,
   }) + "\n";
-  await appendFile(grantHistoryPath(profile), line, { encoding: "utf8", mode: 0o600 });
+  const path = grantHistoryPath(profile);
+  await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
+  // `mode` only applies on creation; tighten history written by older releases.
+  await chmod(path, PRIVATE_FILE_MODE);
 }
 
 export async function readGrantHistory(

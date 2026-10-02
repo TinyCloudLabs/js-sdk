@@ -4,18 +4,27 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
 
 /**
- * Exactly the owner-space authority `tc share publish` needs, in the app
- * manifest shape `tc auth login --manifest` already accepts. One space
- * (`default`), two KV prefixes, nothing else:
+ * Exactly the owner-space authority `tc share` needs, in the app manifest
+ * shape `tc auth login --manifest` accepts. One space (`default`), two KV
+ * prefixes, no delete anywhere:
  *
- * - `xyz.tinycloud.share/shares/` (bearer links): `put` stores the source;
- *   `get` lets the session mint the link's read-only child delegation, which
- *   it can only do for authority it holds itself.
- * - `shares/` (addressed `--to email:|did:|domain:`): `put` stores the
- *   network-encrypted source; `get` + `metadata` back the Policy/v3 root that
- *   grants recipients exactly those two actions.
- * - `list` + `del` on both prefixes let the owner inventory and remove
- *   published sources.
+ * - `xyz.tinycloud.share/shares/` (bearer links):
+ *   - `put` stores the source file;
+ *   - `get` lets the session mint the link's read-only child delegation
+ *     (a session can only delegate authority it holds).
+ * - `shares/` (addressed `--to email:|did:|domain:`):
+ *   - `put` stores the network-encrypted source, and backs `--action edit`;
+ *   - `get` + `metadata` back the Policy/v3 root that grants recipients read,
+ *     and `get` signs `--notify` delivery authorization;
+ *   - `list` backs `--action list` (recipient listing of a `--prefix` share).
+ *
+ * Not requested:
+ * - `del`: no `tc share` command deletes stored sources.
+ * - `list` on the bearer prefix: bearer links are single files.
+ * - Inspect and receive use the link's own authority, not the owner's.
+ * - Revoke signs `tinycloud.delegation/revoke` over the delegation's own CID
+ *   and a Policy/v3 root revocation with the session key that issued them;
+ *   neither is a space capability.
  */
 export const SHARE_PUBLISHING_MANIFEST = {
   app_id: "xyz.tinycloud.share",
@@ -26,13 +35,13 @@ export const SHARE_PUBLISHING_MANIFEST = {
       service: "tinycloud.kv",
       path: "xyz.tinycloud.share/shares/",
       skipPrefix: true,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list", "tinycloud.kv/del"],
+      actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
     },
     {
       service: "tinycloud.kv",
       path: "shares/",
       skipPrefix: true,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list", "tinycloud.kv/del"],
+      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
     },
   ],
 } as const;
