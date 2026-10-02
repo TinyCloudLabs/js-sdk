@@ -37,6 +37,11 @@
       "types": "./dist/delegations/index.d.ts",
       "import": "./dist/delegations/index.js",
       "require": "./dist/delegations/index.cjs"
+    },
+    "./account": {
+      "types": "./dist/account/index.d.ts",
+      "import": "./dist/account/index.js",
+      "require": "./dist/account/index.cjs"
     }
   },
   "files": [

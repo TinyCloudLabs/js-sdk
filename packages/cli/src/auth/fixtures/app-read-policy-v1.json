@@ -1,0 +1,743 @@
+{
+  "protocolVersion": 1,
+  "binding": {
+    "ownerDid": "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+    "host": "https://node.example.test",
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "cases": [
+    {
+      "name": "multi-space explicit SQL and KV read projection ignores writes secrets and defaults",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "guides",
+                "path": "knowledge/",
+                "actions": [
+                  "get",
+                  "list",
+                  "put"
+                ]
+              },
+              {
+                "service": "tinycloud.sql",
+                "space": "data",
+                "path": "sample.sqlite",
+                "actions": [
+                  "read",
+                  "write",
+                  "schema"
+                ],
+                "skipPrefix": true
+              }
+            ],
+            "includePublicSpace": true,
+            "secrets": {
+              "api_key": true
+            }
+          }
+        ]
+      },
+      "expectedPermissions": [
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:data",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:guides",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.kv",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account",
+          "path": "applications/",
+          "actions": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/list"
+          ]
+        },
+        {
+          "service": "tinycloud.kv",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:guides",
+          "path": "sample.app/knowledge/",
+          "actions": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/list"
+          ]
+        },
+        {
+          "service": "tinycloud.sql",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:data",
+          "path": "sample.sqlite",
+          "actions": [
+            "tinycloud.sql/read"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate resources merge and sort read actions",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get",
+                  "put"
+                ]
+              },
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "list",
+                  "metadata",
+                  "get"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "expectedPermissions": [
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:data",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.kv",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account",
+          "path": "applications/",
+          "actions": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/list"
+          ]
+        },
+        {
+          "service": "tinycloud.kv",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:data",
+          "path": "sample.app/records/",
+          "actions": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/list",
+            "tinycloud.kv/metadata"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "foreign service actions never become selected service reads",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.sql",
+                "space": "data",
+                "path": "db",
+                "actions": [
+                  "tinycloud.sql/read",
+                  "tinycloud.kv/get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "expectedPermissions": [
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.capabilities",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:data",
+          "path": "",
+          "actions": [
+            "tinycloud.capabilities/read"
+          ]
+        },
+        {
+          "service": "tinycloud.kv",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account",
+          "path": "applications/",
+          "actions": [
+            "tinycloud.kv/get",
+            "tinycloud.kv/list"
+          ]
+        },
+        {
+          "service": "tinycloud.sql",
+          "space": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:data",
+          "path": "db",
+          "actions": [
+            "tinycloud.sql/read"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no explicit resources do not become default authority",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample"
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "write only resources have no supported read scope",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "put"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "unsupported service only has no supported read scope",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.duckdb",
+                "space": "data",
+                "path": "db",
+                "actions": [
+                  "read"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "manifest identity mismatch",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "another.app",
+            "name": "Other",
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_identity_mismatch"
+    },
+    {
+      "name": "foreign owner resources rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.sql",
+                "space": "tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:data",
+                "path": "db",
+                "actions": [
+                  "read"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_foreign_owner"
+    },
+    {
+      "name": "root paths rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "/",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "empty paths rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "wildcard paths rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/*",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "parent traversal paths rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/../private",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "current traversal paths rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/./private",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "null byte paths rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/\u0000private",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "reserved account app resource rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "account",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "reserved public app resource rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "public",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "reserved secrets app resource rejected",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "secrets",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "restrictions caveats rejected before SDK resolution",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ],
+                "caveats": [
+                  {}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "restrictions constraints rejected before SDK resolution",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ],
+                "constraints": {}
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "restrictions conditions rejected before SDK resolution",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ],
+                "conditions": {}
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "restrictions expiry rejected before SDK resolution",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ],
+                "expiry": "1d"
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "restrictions notBefore rejected before SDK resolution",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "records/",
+                "actions": [
+                  "get"
+                ],
+                "notBefore": "2030-01-01T00:00:00Z"
+              }
+            ]
+          }
+        ]
+      },
+      "errorCode": "app_read_scope_unsupported"
+    },
+    {
+      "name": "oversized paths rejected before approval",
+      "application": {
+        "appId": "sample.app",
+        "manifestHash": "fixture-hash",
+        "manifests": [
+          {
+            "app_id": "sample.app",
+            "name": "Sample",
+            "defaults": false,
+            "permissions": [
+              {
+                "service": "tinycloud.kv",
+                "space": "data",
+                "path": "oversized",
+                "actions": [
+                  "get"
+                ],
+                "skipPrefix": true
+              }
+            ]
+          }
+        ]
+      },
+      "pathRepeat": 4097,
+      "errorCode": "app_read_scope_unsupported"
+    }
+  ]
+}

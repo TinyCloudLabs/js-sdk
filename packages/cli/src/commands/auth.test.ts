@@ -1572,3 +1572,28 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     expect(persisted.jwk.d).toBe("openkey-returned-private");
   });
 });
+
+describe("raw scoped login arguments", () => {
+  beforeEach(() => resetState());
+  test("permissions files cannot be combined with a manifest", async () => {
+    await runAuthCommand(["auth", "login", "--permissions", "synthetic.json", "--manifest", "synthetic.manifest.json"]);
+    expect(recorded.errors[0]).toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(recorded.startAuthFlows).toHaveLength(0);
+  });
+  test("permissions files cannot select local full-owner authentication", async () => {
+    await runAuthCommand(["auth", "login", "--permissions", "synthetic.json", "--method", "local"]);
+    expect(recorded.errors[0]).toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(recorded.localSignIns).toHaveLength(0);
+  });
+});
+
+describe("manifest capability coverage", () => {
+  beforeEach(() => resetState());
+  test.each([false, true])("checks an installed manifest with the restored session (covered=%s)", async (covered) => {
+    authNodeHasRuntimePermissions = covered;
+    await runAuthCommand(["auth", "caps", "--manifest", "installed.manifest.json"]);
+    expect(recorded.errors).toHaveLength(0);
+    expect(recorded.outputs[0]).toMatchObject({ covered, changed: !covered, requested: [] });
+    expect(recorded.startAuthFlows).toHaveLength(0);
+  });
+});

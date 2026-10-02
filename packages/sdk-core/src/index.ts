@@ -379,6 +379,9 @@ export type { SignInOptions } from "./userAuthorization";
 // Main TinyCloud class
 export { TinyCloud, TinyCloudConfig } from "./TinyCloud";
 
+export { prepareLegacyApplicationRecord, decodeApplicationRecord, hashApplicationManifests, listAccountApplications } from "./account";
+export type { AccountApplicationIssue, AccountApplicationListing, AccountApplicationDiscoveryOptions } from "./account";
+
 // Account-level app registry, delegation, and materialized index helpers
 export { AccountService } from "./account/AccountService";
 export type {

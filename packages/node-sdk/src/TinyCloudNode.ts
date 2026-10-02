@@ -1111,9 +1111,12 @@ export class TinyCloudNode {
     const grantedOperation = grant?.operations.find((candidate) =>
       this.operationCovers(candidate, operation),
     );
+    // Grant selection already checked this exact target. Preserve its proof and
+    // signing key while addressing the caller's space, which can differ from a
+    // multi-space grant's primary space.
     const invocationSession = !grant || grant.provenance === "primary"
       ? session
-      : grant.session;
+      : { ...grant.session, spaceId: session.spaceId };
 
     // The legacy single-capability binding has no caveat parameter.  Calling
     // it for a restored caveated grant would silently broaden the authority,

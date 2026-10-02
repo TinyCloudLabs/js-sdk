@@ -1,3 +1,5 @@
+import { APP_READ_PROTOCOL_VERSION } from "./app-read-policy.js";
+import { CLIError } from "../output/errors.js";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isInteractive } from "../output/formatter.js";
@@ -61,6 +63,36 @@ export function publicJwkForDelegation(jwk: object): object {
   return publicJwk;
 }
 
+/** Require the web approval deployment to prove its configured API supports this protocol. */
+export async function assertAppReadDiscoveryAvailable(
+  openkeyHost: string,
+  requestFetch: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    const timeout = AbortSignal.timeout(10_000);
+    const response = await requestFetch(`${openkeyHost.replace(/\/$/, "")}/.well-known/tinycloud-app-read.json`, {
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      redirect: "error",
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error("Capability marker unavailable");
+    const marker: unknown = await response.json();
+    if (!marker || typeof marker !== "object" || Array.isArray(marker)) throw new Error("Invalid capability marker");
+    const capability = marker as Record<string, unknown>;
+    if (capability.schemaVersion !== 1 || capability.protocolVersion !== APP_READ_PROTOCOL_VERSION ||
+        capability.implementationVersion !== "1" || capability.apiBacked !== true || capability.discovery !== "app-read" ||
+        capability.scope !== "registry-and-selected-app" || capability.transport !== "paste") {
+      throw new Error("Unsupported discovery capability");
+    }
+  } catch {
+    throw new CLIError(
+      "OPENKEY_DEPLOYMENT_INCOMPATIBLE",
+      "The OpenKey web/API deployment did not confirm app-read protocol revision 1. Deploy compatible OpenKey web and API releases, or select a compatible OpenKey host, before starting authorization.",
+    );
+  }
+}
+
 /**
  * Start the browser auth flow.
  * Mode 1 (default): local HTTP callback server
@@ -70,6 +102,7 @@ export async function startAuthFlow(
   did: string,
   options: AuthFlowOptions = {}
 ): Promise<DelegationData> {
+  if (options.discoverAppRead) await assertAppReadDiscoveryAvailable(options.openkeyHost ?? DEFAULT_OPENKEY_HOST);
   if (options.paste) {
     return pasteFlow(did, options);
   }
@@ -103,7 +136,12 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
     params.set("host", options.host);
   }
   const reason = typeof options.reason === "string" ? options.reason.trim() : "";
-  if (options.permissions?.length) {
+  if (options.discoverAppRead) {
+    params.set("discovery", "app-read");
+    params.set("discoveryProtocolVersion", String(APP_READ_PROTOCOL_VERSION));
+    if (options.expectedOwner) params.set("owner", options.expectedOwner);
+  }
+  if (options.permissions?.length && !options.discoverAppRead) {
     params.set(
       "permissions",
       Buffer.from(JSON.stringify({

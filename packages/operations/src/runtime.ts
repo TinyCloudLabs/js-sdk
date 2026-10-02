@@ -5,6 +5,7 @@ import type {
   TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import * as nodeSdk from "@tinycloud/node-sdk";
+import { activateStoredRuntimeDelegation } from "./delegations.js";
 
 import type {
   InvocationTarget,
@@ -47,6 +48,7 @@ interface StoredSession extends Record<string, unknown> {
 
 interface StoredAdditionalDelegation extends Record<string, unknown> {
   readonly delegation?: unknown;
+  readonly sessionProof?: unknown;
 }
 
 /**
@@ -96,7 +98,6 @@ export async function createInvocationRuntime(
     // Keep the value import namespace-shaped so projection modules remain
     // compatible with lightweight node-sdk test doubles.
     const {
-      activateValidatedRuntimeDelegation,
       TinyCloudNode: TinyCloudNodeConstructor,
     } = nodeSdk;
     const explicitPrivateKeyOverride = typeof target.privateKey === "string";
@@ -180,8 +181,9 @@ export async function createInvocationRuntime(
       const delegation = normalizeStoredDelegation(entry);
       if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) continue;
       try {
-        const activated = await activateValidatedRuntimeDelegation(node as unknown as RuntimeDelegationActivator, delegation, {
+        const activated = await activateStoredRuntimeDelegation(node as unknown as RuntimeDelegationActivator, { delegation, sessionProof: entry.sessionProof }, {
           host: summary.host,
+          jwk: activeSession?.jwk,
         });
         if (!seenCids.has(activated.cid)) {
           seenCids.add(activated.cid);

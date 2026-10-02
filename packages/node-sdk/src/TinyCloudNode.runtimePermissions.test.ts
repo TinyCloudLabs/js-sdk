@@ -221,6 +221,33 @@ async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> 
 }
 
 describe("TinyCloudNode runtime permission delegations", () => {
+  test.each([false, true])("multi-space delegated reads preserve the requested target and verified proof (caveated=%s)", async caveated => {
+    const invoke = mock((session: any) => ({ Authorization: session.delegationHeader.Authorization })) as any;
+    const node = makeNode(invoke);
+    const primary = (node as any).auth.tinyCloudSession;
+    const account = primary.spaceId.replace(/:default$/, ":account");
+    const app = primary.spaceId.replace(/:default$/, ":applications");
+    const caveats = caveated ? [{ limit: 1 }] : undefined;
+    await withActivatedDelegations(async () => node.useRuntimeDelegation({
+      cid: "multi-space-cid", delegationHeader: { Authorization: "multi-space-proof" }, spaceId: account,
+      delegateDID: primary.verificationMethod, ownerAddress: primary.address, chainId: 1,
+      host: "https://tinycloud.test", expiry: new Date(Date.now() + 3600000), path: "applications/", actions: ["tinycloud.kv/get"],
+      resources: [
+        { service: "kv", space: account, path: "applications/", actions: ["tinycloud.kv/get"] },
+        { service: "kv", space: app, path: "agents/demo/", actions: ["tinycloud.kv/get"], ...(caveats ? { caveats } : {}) },
+      ],
+    }));
+    const scoped = { ...primary, spaceId: app };
+    (node as any).invokeWithRuntimePermissions(scoped, "kv", "agents/demo/profile", "tinycloud.kv/get");
+    const calls = caveated ? (node as any).wasmBindings.invokeAny.mock.calls : invoke.mock.calls;
+    expect(calls[0][0]).toMatchObject({ spaceId: app, delegationCid: "multi-space-cid", delegationHeader: { Authorization: "multi-space-proof" }, jwk: primary.jwk });
+    if (caveated) expect(calls[0][1]).toEqual([{ spaceId: app, service: "kv", path: "agents/demo/profile", action: "tinycloud.kv/get", caveats }]);
+    expect((node as any).runtimePermissionGrants[0].session.spaceId).toBe(account);
+    // An undeclared target never selects the multi-space proof.
+    (node as any).invokeWithRuntimePermissions({ ...scoped, spaceId: app.replace(/:applications$/, ":other") }, "kv", "agents/demo/profile", "tinycloud.kv/get");
+    expect(invoke.mock.calls.at(-1)[0].delegationCid).toBe("base-cid");
+  });
+
   test("routes an explicit secret read through activated KV and decrypt delegations", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

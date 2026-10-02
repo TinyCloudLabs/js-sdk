@@ -182,7 +182,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "0.9.0",
+      "version": "0.10.1-lean-auth.1",
       "bin": {
         "tc": "./bin/tc",
       },

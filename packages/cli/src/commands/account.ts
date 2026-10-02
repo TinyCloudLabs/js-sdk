@@ -33,28 +33,30 @@ export function registerAccountCommand(program: Command): void {
   apps
     .command("list")
     .description("List applications registered under account/applications")
-    .option("--live", "Read canonical account KV records instead of the SQLite index")
+    .option("--live", "Read canonical account KV records (the default)")
     .action(async (_options, cmd) => {
       try {
-        const options = _options as { live?: boolean };
         const node = await authenticatedNode(cmd);
-        const result = options.live
-          ? await node.account.applications.list()
-          : await node.account.applications.list({ preferIndex: true });
+        const result = await node.account.applications.listDetailed();
         assertOk(result);
-        const payload = { applications: result.data, count: result.data.length };
+        const { applications, issues, complete } = result.data;
+        const payload = { applications, issues, complete, count: applications.length };
         if (shouldOutputJson()) {
           outputJson(payload);
           return;
         }
-        if (result.data.length === 0) {
-          process.stdout.write(theme.muted("No account applications registered.") + "\n");
+        if (!complete) {
+          process.stdout.write(theme.warn("Application discovery is incomplete; absence cannot be inferred.") + "\n");
+          for (const issue of issues) process.stdout.write(`${issue.key}: ${issue.code} (${issue.field})\n`);
+        }
+        if (applications.length === 0) {
+          if (complete) process.stdout.write(theme.muted("No account applications registered.") + "\n");
           return;
         }
         process.stdout.write(
           formatTable(
             ["App ID", "Name", "Manifests", "Updated"],
-            result.data.map((app) => [
+            applications.map((app) => [
               app.appId,
               app.name ?? "—",
               String(app.manifests.length),
@@ -183,6 +185,35 @@ export function registerAccountCommand(program: Command): void {
         const result = await node.account.applications.get(appId);
         assertOk(result);
         outputJson(result.data);
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  apps
+    .command("read-scope <app-id>")
+    .description("Read a canonical application and project its supported app-scoped KV/SQL read permissions")
+    .action(async (appId: string, _options, cmd) => {
+      try {
+        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+        const node = await ensureAuthenticated(ctx);
+        const result = await node.account.applications.get(appId);
+        assertOk(result);
+        const { appReadSelection } = await import("../auth/app-read-policy.js");
+        const key = await ProfileManager.getKey(ctx.profile);
+        if (!key) throw new CLIError("NO_KEY", "The selected profile has no session key.", ExitCode.AUTH_REQUIRED);
+        let selection;
+        try {
+          selection = appReadSelection(result.data, { ownerDid: node.did, host: ctx.host, jwk: { kty: key.kty, crv: key.crv, x: key.x } });
+        } catch (cause) {
+          throw new CLIError("APP_READ_SCOPE_UNSUPPORTED", "The canonical application does not declare a supported, complete app read scope. Update its registration with explicit narrow KV/SQL read resources before approval.", ExitCode.PERMISSION_DENIED);
+        }
+        const permissions = selection.permissions;
+        outputJson({ application: result.data, permissions, appReadSelection: selection, manifest: {
+          app_id: result.data.appId, name: result.data.name ?? result.data.manifests[0]!.name,
+          defaults: false, includePublicSpace: false,
+          permissions: permissions.map(permission => ({ ...permission, skipPrefix: true })),
+        } });
       } catch (error) {
         handleError(error);
       }

@@ -27,19 +27,28 @@ import type {
 import type { DelegationManager } from "../delegations/DelegationManager";
 import type { ISpaceService } from "../spaces/SpaceService";
 
+import {
+  decodeApplicationRecord,
+  hashApplicationManifests as hashJson,
+  applicationRecordError,
+  type AccountApplication,
+  type AccountApplicationListing,
+} from "./applicationRecords";
+import {
+  listAccountApplications,
+  type AccountApplicationDiscoveryOptions,
+} from "./applicationDiscovery";
+export type {
+  AccountApplication,
+  AccountApplicationListing,
+  AccountApplicationIssue,
+} from "./applicationRecords";
+export type { AccountApplicationDiscoveryOptions } from "./applicationDiscovery";
+
 const SERVICE_NAME = "account";
 const ACCOUNT_INDEX_DB = "account";
 const ACCOUNT_INDEX_NAMESPACE = "tinycloud.account.index";
 const ACCOUNT_SPACES_PATH = "spaces/";
-
-export interface AccountApplication {
-  appId: string;
-  manifests: Manifest[];
-  updatedAt?: string;
-  name?: string;
-  description?: string;
-  manifestHash?: string;
-}
 
 export interface AccountSpace {
   spaceId: string;
@@ -104,7 +113,9 @@ export interface AccountIndexedReadOptions {
   refreshIndex?: boolean;
 }
 
-export type AccountApplicationListOptions = AccountIndexedReadOptions;
+/** Application discovery is canonical and read-only. Legacy index flags are accepted but ignored;
+ * use `account.index.applications.list()` for an explicitly indexed view. */
+export type AccountApplicationListOptions = AccountIndexedReadOptions & AccountApplicationDiscoveryOptions;
 
 export interface AccountApplicationRegisterOptions {
   /**
@@ -189,44 +200,27 @@ export class AccountService {
   }
 
   readonly applications = {
-    list: async (options: AccountApplicationListOptions = {}): Promise<Result<AccountApplication[]>> => {
-      if (options.preferIndex) {
-        const indexed = await this.index.applications.list();
-        if (indexed.ok && indexed.data.length > 0) return indexed;
-        if (!indexed.ok && !isMissingIndexError(indexed.error)) return indexed;
-
-        const canonical = await this.applications.list();
-        if (canonical.ok && options.refreshIndex !== false) {
-          await this.replaceApplicationsIndexQuietly(canonical.data);
-        }
-        return canonical;
-      }
-
+    listDetailed: async (options: AccountApplicationDiscoveryOptions = {}): Promise<Result<AccountApplicationListing>> => {
       const kvResult = this.accountKV();
       if (!kvResult.ok) return kvResult;
+      return listAccountApplications(kvResult.data, options);
+    },
 
-      const listed = await kvResult.data.list({ prefix: ACCOUNT_REGISTRY_PATH });
-      if (!listed.ok) return accountErr(listed.error);
-
-      const applications: AccountApplication[] = [];
-      for (const key of listed.data.keys) {
-        const loaded = await kvResult.data.get<StoredApplicationRecord>(key);
-        if (!loaded.ok) return accountErr(loaded.error);
-        applications.push(applicationFromRecord(key, loaded.data.data));
-      }
-
-      applications.sort((a, b) => a.appId.localeCompare(b.appId));
-      return ok(applications);
+    // Retain the strict return shape; discovery always uses canonical read-only KV.
+    list: async (options: AccountApplicationListOptions = {}): Promise<Result<AccountApplication[]>> => {
+      const listed = await this.applications.listDetailed(options);
+      if (!listed.ok) return listed;
+      if (!listed.data.complete) return err(applicationRecordError(listed.data.issues[0]!));
+      return ok(listed.data.applications);
     },
 
     get: async (appId: string): Promise<Result<AccountApplication>> => {
       const kvResult = this.accountKV();
       if (!kvResult.ok) return kvResult;
-
       const key = applicationKey(appId);
-      const loaded = await kvResult.data.get<StoredApplicationRecord>(key);
+      const loaded = await kvResult.data.get<unknown>(key, { raw: true, maxResponseBytes: 1024 * 1024 });
       if (!loaded.ok) return accountErr(loaded.error);
-      return ok(applicationFromRecord(key, loaded.data.data));
+      return decodeApplicationRecord(key, loaded.data.data);
     },
 
     register: async (
@@ -275,7 +269,9 @@ export class AccountService {
         };
       const written = await kvResult.data.put(record.key, stored);
       if (!written.ok) return accountErr(written.error);
-      registered = applicationFromRecord(record.key, stored);
+      const decoded = decodeApplicationRecord(record.key, stored);
+      if (!decoded.ok) return decoded;
+      registered = decoded.data;
       await this.upsertApplicationIndexQuietly(registered);
       }
 
@@ -948,41 +944,6 @@ export class AccountService {
     return ok(found);
   }
 
-  private async replaceApplicationsIndexQuietly(applications: AccountApplication[]): Promise<void> {
-    await ignoreIndexFailure(async () => {
-      const dbResult = this.accountDb();
-      if (!dbResult.ok) return;
-      const syncedAt = new Date().toISOString();
-      const schema = await this.ensureAccountIndex(dbResult.data);
-      if (!schema.ok) return;
-
-      await dbResult.data.batch([
-        { sql: "DELETE FROM applications" },
-        { sql: "DELETE FROM application_state" },
-        ...applications.map((app) => ({
-          sql:
-            "INSERT OR REPLACE INTO applications (app_id, name, description, updated_at, manifest_json) VALUES (?, ?, ?, ?, ?)",
-          params: [
-            app.appId,
-            app.name ?? null,
-            app.description ?? null,
-            app.updatedAt ?? syncedAt,
-            JSON.stringify(app.manifests),
-          ],
-        })),
-        ...applications.map((app) => ({
-          sql:
-            "INSERT OR REPLACE INTO application_state (app_id, manifest_hash, indexed_at) VALUES (?, ?, ?)",
-          params: [app.appId, app.manifestHash ?? hashJson(app.manifests), syncedAt],
-        })),
-        {
-          sql: "INSERT OR REPLACE INTO sync_state (source, synced_at, count) VALUES (?, ?, ?)",
-          params: ["applications", syncedAt, applications.length],
-        },
-      ]);
-    });
-  }
-
   private async replaceSpacesIndexQuietly(spaces: AccountSpace[]): Promise<void> {
     await ignoreIndexFailure(async () => {
       const dbResult = this.accountDb();
@@ -1109,35 +1070,8 @@ export class AccountService {
   }
 }
 
-interface StoredApplicationRecord {
-  app_id?: string;
-  appId?: string;
-  manifests?: Manifest[];
-  manifest_hash?: string;
-  manifestHash?: string;
-  updated_at?: string;
-  updatedAt?: string;
-}
-
 function applicationKey(appId: string): string {
   return `${ACCOUNT_REGISTRY_PATH}${appId}`;
-}
-
-function appIdFromKey(key: string): string {
-  return key.startsWith(ACCOUNT_REGISTRY_PATH) ? key.slice(ACCOUNT_REGISTRY_PATH.length) : key;
-}
-
-function applicationFromRecord(key: string, record: StoredApplicationRecord): AccountApplication {
-  const manifests = Array.isArray(record.manifests) ? record.manifests : [];
-  const first = manifests[0];
-  return {
-    appId: record.app_id ?? record.appId ?? first?.app_id ?? appIdFromKey(key),
-    manifests,
-    updatedAt: record.updated_at ?? record.updatedAt,
-    name: first?.name,
-    description: first?.description,
-    manifestHash: record.manifest_hash ?? record.manifestHash ?? hashJson(manifests),
-  };
 }
 
 type IndexedApplicationRow = [string, string | null, string | null, string | null, string, string | null];
@@ -1240,31 +1174,6 @@ function indexedSpaceFromRow(row: IndexedSpaceRow): AccountSpace {
     updatedAt,
     expiresAt: expiresAt ? new Date(expiresAt) : undefined,
   };
-}
-
-function hashJson(value: unknown): string {
-  const input = stableJson(value);
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= BigInt(input.charCodeAt(index));
-    hash = BigInt.asUintN(64, hash * prime);
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  const object = value as Record<string, unknown>;
-  return `{${Object.keys(object)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
-    .join(",")}}`;
 }
 
 export interface AccountIndexStatus {

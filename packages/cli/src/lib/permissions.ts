@@ -1,3 +1,4 @@
+import type { StoredSessionProof } from "@tinycloud/operations/delegations";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -74,6 +75,8 @@ function isNodeSdkAuthRequestArtifact(value: unknown): value is AuthRequestArtif
 export interface StoredAdditionalDelegation {
   delegation: PortableDelegation;
   permissions: PermissionEntry[];
+  /** Public signed proof retained for verified CACAO replay; never contains a JWK. */
+  sessionProof?: StoredSessionProof;
 }
 
 export interface GrantHistoryEntry {
@@ -225,6 +228,9 @@ export async function replayAdditionalDelegations(
   profile: string,
 ): Promise<void> {
   const entries = await loadAdditionalDelegations(profile);
+  if (entries.length === 0) return;
+  const { activateStoredRuntimeDelegation } = await import("@tinycloud/operations/delegations");
+  const key = await ProfileManager.getKey(profile);
   for (const entry of entries) {
     // Skip expired delegations rather than letting useRuntimeDelegation throw.
     const expiry = entry.delegation.expiry instanceof Date
@@ -232,7 +238,9 @@ export async function replayAdditionalDelegations(
       : new Date(entry.delegation.expiry as unknown as string);
     if (expiry.getTime() <= Date.now()) continue;
     try {
-      await node.useRuntimeDelegation({ ...entry.delegation, expiry });
+      await activateStoredRuntimeDelegation(node, {
+        ...entry, delegation: { ...entry.delegation, expiry },
+      }, { host: node.hosts[0]!, ...(key ? { jwk: key } : {}) });
     } catch (err) {
       // A stored delegation can be invalid for several benign reasons (host
       // unreachable, key rotated). Don't fail the whole CLI invocation —
@@ -334,13 +342,14 @@ export async function loadPermissionRequest(
 export async function loadManifestPermissions(
   source: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
 
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
-    return resolvePermissionSpaces(resolved.resources, profile);
+    return resolvePermissionSpaces(resolved.resources, profile, options);
   }
 
   if (typeof manifest.app_id === "string") {
@@ -355,7 +364,7 @@ export async function loadManifestPermissions(
           : prefixAppManifestPath(path, manifest.app_id as string);
         return {
           service,
-          space: String(manifest.space ?? "applications"),
+          space: String(entry.space ?? manifest.space ?? "applications"),
           path: resolvedPath,
           actions: expandActionShortNames(
             service,
@@ -366,7 +375,7 @@ export async function loadManifestPermissions(
         };
       });
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
-    return resolvePermissionSpaces(permissions, profile);
+    return resolvePermissionSpaces(permissions, profile, options);
   }
 
   throw new CLIError(
@@ -468,9 +477,10 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
-  const allowLogicalSpaces = resolveProfilePosture(profileConfig) === "delegate-session";
+  const allowLogicalSpaces = options.allowLogicalSpaces || resolveProfilePosture(profileConfig) === "delegate-session";
   const resolved: PermissionEntry[] = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);

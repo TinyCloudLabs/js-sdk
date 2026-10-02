@@ -805,6 +805,7 @@ export async function createHermeticEncryptedNode(
     delegateSignStrategy?: SignStrategy;
     secretPayloadValue?: string;
     secretPresent?: boolean;
+    accountKvEntries?: Readonly<Record<string, unknown>>;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
@@ -851,6 +852,7 @@ export async function createHermeticEncryptedNode(
       manifests: [{ name: "Agent Demo" }],
       name: "Agent Demo",
     },
+    ...options.accountKvEntries,
   });
   transport.configureKv(applicationsSpaceId, {
     "agents/demo/profile": { name: "Ada", role: "operator" },

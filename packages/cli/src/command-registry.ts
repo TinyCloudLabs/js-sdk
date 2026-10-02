@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { registerAccountCommand } from "./commands/account.js";
 import { registerAuthCommand } from "./commands/auth.js";
 import { registerCompletionCommand } from "./commands/completion.js";
+import { registerContextCommand } from "./commands/context.js";
 import { registerDelegationCommand } from "./commands/delegation.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerDuckdbCommand } from "./commands/duckdb.js";
@@ -23,6 +24,7 @@ import { registerVarsCommand } from "./commands/vars.js";
 /** Register the complete Commander projection without parsing argv. */
 export function registerTinyCloudCommands(program: Command): void {
   registerInitCommand(program);
+  registerContextCommand(program);
   registerAuthCommand(program);
   registerKvCommand(program);
   registerSpaceCommand(program);

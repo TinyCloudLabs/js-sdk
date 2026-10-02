@@ -1,3 +1,5 @@
+import { installVerifiedSession, installVerifiedAdditionalDelegation, recoverVerifiedSessionInstall } from "../auth/session-install.js";
+import { AuthStateError } from "../auth/private-storage.js";
 import { Command } from "commander";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
@@ -32,6 +34,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { validateLoginPermissions, loadLoginPermissionsFile, verifyScopedLogin } from "../auth/scoped-login.js";
 import {
   generateLocalIdentity,
   deriveAddress,
@@ -104,12 +107,47 @@ export function registerAuthCommand(program: Command): void {
     .command("login")
     .description("Authenticate with TinyCloud")
     .option("--paste", "Use manual paste mode instead of browser callback")
+    .option("--additional", "Add one scoped OpenKey grant while preserving the primary session (requires --paste)")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
+    .option("--manifest <fileOrBase64>", "Request only this manifest's permissions during OpenKey login")
+    .option("--permissions <file>", "Request exact permissions from a JSON array (one approval with --paste)")
+    .option("--app-read-selection <file>", "Verify this locally selected canonical app again before saving a fixed scoped approval (requires --paste --manifest)")
+    .option("--discover-app-read", "Select an app in OpenKey and approve registry plus exact app reads together (requires --paste --manifest)")
+    .option("--reason <text>", "Original task shown in the OpenKey approval")
+    .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d")
+    .option("--owner <did>", "Require this existing primary DID for scoped login")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+
+        if ((options.manifest || options.permissions || options.expiry || options.owner || options.additional || options.discoverAppRead || options.appReadSelection || options.reason) && options.method === "local") {
+          throw new CLIError("INVALID_ARGUMENT", "--manifest, --permissions, --expiry and --owner require OpenKey login.", ExitCode.USAGE_ERROR);
+        }
+        if (options.permissions && options.manifest) throw new CLIError("INVALID_ARGUMENT", "Use either --permissions or --manifest.", ExitCode.USAGE_ERROR);
+        if (options.discoverAppRead && (!options.paste || !options.manifest)) {
+          throw new CLIError("INVALID_ARGUMENT", "--discover-app-read requires --paste and the exact registry-read --manifest.", ExitCode.USAGE_ERROR);
+        }
+        if (options.appReadSelection && (!options.paste || !options.manifest || options.discoverAppRead)) {
+          throw new CLIError("INVALID_ARGUMENT", "--app-read-selection requires --paste --manifest and cannot be combined with --discover-app-read.", ExitCode.USAGE_ERROR);
+        }
+        let appReadSelection: Record<string, unknown> | undefined;
+        if (options.appReadSelection) {
+          try {
+            appReadSelection = JSON.parse(await readFile(options.appReadSelection, "utf8"));
+            if (!appReadSelection || typeof appReadSelection !== "object" || Array.isArray(appReadSelection)) throw new Error();
+          } catch { throw new CLIError("INVALID_LOGIN_SCOPE", "The selected app receipt file is missing or invalid. Run setup again with the selected account.", ExitCode.USAGE_ERROR); }
+        }
+        if (options.additional && (!options.paste || !(options.manifest || options.permissions))) {
+          throw new CLIError("INVALID_ARGUMENT", "--additional requires --paste and one scoped --manifest or --permissions file.", ExitCode.USAGE_ERROR);
+        }
+        if (options.owner && !(options.manifest || options.permissions)) {
+          throw new CLIError("INVALID_ARGUMENT", "--owner requires --manifest or --permissions so the signed identity is verified.", ExitCode.USAGE_ERROR);
+        }
+        const permissions = options.permissions ? await loadLoginPermissionsFile(options.permissions) : options.manifest
+          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true })
+          : undefined;
 
         // Determine auth method
         let method: AuthMethod;
@@ -123,7 +161,7 @@ export function registerAuthCommand(program: Command): void {
           }
           method = options.method;
         } else {
-          method = await promptAuthMethod();
+          method = options.manifest || options.permissions || options.expiry || options.reason ? "openkey" : await promptAuthMethod();
         }
 
         if (method === "local") {
@@ -131,7 +169,14 @@ export function registerAuthCommand(program: Command): void {
         } else {
           await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
+            additional: options.additional,
+            discoverAppRead: options.discoverAppRead,
+            appReadSelection,
+            reason: options.reason,
             noPopup: options.popup === false,
+            permissions,
+            expiry: parseExpiryOption(options.expiry),
+            expectedOwner: options.owner,
           });
         }
       } catch (error) {
@@ -587,12 +632,16 @@ export function registerAuthCommand(program: Command): void {
     .command("caps")
     .description("Show granted capabilities for the active session")
     .option("--diff <spec>", "Show missing capabilities for a spec")
+    .option("--manifest <fileOrBase64>", "Check whether the installed manifest's exact permissions are covered")
     .option("--history", "Show recent permission grants")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
 
+        if (options.manifest && (options.diff || options.history)) {
+          throw new CLIError("INVALID_ARGUMENT", "Use --manifest separately from --diff or --history.", ExitCode.USAGE_ERROR);
+        }
         if (options.history) {
           const history = (await readGrantHistory(ctx.profile)).slice(-20);
           if (shouldOutputJson()) {
@@ -621,8 +670,10 @@ export function registerAuthCommand(program: Command): void {
         // is the trusted answer for "is this covered?".
         const granted = runtimeDelegations.flatMap(permissionsFromDelegation);
 
-        if (options.diff) {
-          const requested = [await parseCapSpec(options.diff, ctx.profile)];
+        if (options.diff || options.manifest) {
+          const requested = options.manifest
+            ? await loadManifestPermissions(options.manifest, ctx.profile)
+            : [await parseCapSpec(options.diff, ctx.profile)];
           const covered = node.hasRuntimePermissions(requested);
           outputJson({
             requested,
@@ -1232,6 +1283,7 @@ export function portableFromOpenKeyDelegation(
   data: Record<string, unknown>,
   permissions: PermissionEntry[],
   host: string,
+  options: { verifiedMultipleSpaces?: boolean } = {},
 ): PortableDelegation {
   const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
   const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
@@ -1242,8 +1294,8 @@ export function portableFromOpenKeyDelegation(
       .filter((permission) => !isRawPermission(permission))
       .map((permission) => normalizeSpaceForCompare(permission.space ?? "")),
   );
-  const matchesExpectedSpace = expectedSpaces.size === 1 &&
-    returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
+  const matchesExpectedSpace = (expectedSpaces.size === 1 || options.verifiedMultipleSpaces === true) &&
+    [...expectedSpaces].some(space => returnedSpaceMatchesExpected(returnedSpace, space));
   if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
     throw new CLIError(
       "OPENKEY_SCOPE_MISMATCH",
@@ -1309,7 +1361,7 @@ export function portableFromOpenKeyDelegation(
       actions: [],
     })
       ? permSpace
-      : returnedSpace;
+      : options.verifiedMultipleSpaces ? permSpace : returnedSpace;
     return {
       service,
       space: resolvedSpace,
@@ -1598,16 +1650,19 @@ async function handleLocalAuth(
 async function handleOpenKeyAuth(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<void> {
   const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
 
   outputJson({
     authenticated: true,
+    ...(options.additional ? { additional: true } : {}),
+    ...((options.discoverAppRead || options.appReadSelection) ? { appReadSelection: delegationData.appReadSelection } : {}),
     profile: profileName,
     did: profile.did,
     spaceId: delegationData.spaceId,
     authMethod: "openkey",
+    ...(options.permissions ? { scoped: true, ownerDid: profile.ownerDid, host, permissions: delegationData.permissions, expiresAt: delegationData.expiresAt, activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified" } : {}),
   });
 }
 
@@ -1650,58 +1705,81 @@ export function mergePrivateJwkIntoSession(
   };
 }
 
+interface OpenKeyLoginOptions {
+  additional?: boolean;
+  discoverAppRead?: boolean;
+  appReadSelection?: Record<string, unknown>;
+  reason?: string;
+  paste?: boolean;
+  noPopup?: boolean;
+  permissions?: PermissionEntry[];
+  expiry?: string | number;
+  expectedOwner?: string;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}
+
+/** Verify one scoped approval before installing or appending its exact authority. */
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean; openKeyAcquisition?: OpenKeyAcquisition } = {},
+  options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
+  if (options.permissions) await recoverVerifiedSessionInstall(profileName);
   const key = await ProfileManager.getKey(profileName);
-  if (!key) {
-    throw new CLIError(
-      "NO_KEY",
-      `No key found for profile "${profileName}". Run \`tc init\` first.`,
-      ExitCode.AUTH_REQUIRED,
-    );
-  }
-
-  // Get DID from profile
+  if (!key) throw new CLIError("NO_KEY", "Initialize the selected profile before scoped login.", ExitCode.AUTH_REQUIRED);
   const profile = await ProfileManager.getProfile(profileName);
-
-  // Start browser auth flow
-  const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
-  const delegationData = await acquireOpenKey(profile.did, {
-    paste: options.paste,
-    noPopup: options.noPopup,
-    jwk: key,
-    host,
-    openkeyHost: resolveOpenKeyHost(profile),
-  });
-
-  // Defensive: OpenKey only ever receives the public JWK (see
-  // browser-auth.ts `publicJwkForDelegation`), so any JWK it echoes back is
-  // public-only. Persisting that verbatim shadows the full keypair in
-  // key.json and breaks anything that needs the WASM signer (kv/sql). Merge
-  // the private parameter from key.json back in before writing session.json.
-  const sanitizedSession = mergePrivateJwkIntoSession(delegationData, key);
-
-  // Store session
-  await ProfileManager.setSession(profileName, sanitizedSession);
-
-  // Update profile with owner DID if present
-  const updatedProfile = {
-    ...profile,
-    sessionDid: profile.sessionDid ?? profile.did,
-    posture: profile.posture ?? "owner-openkey",
-    operatorType: profile.operatorType ?? "human",
-    authMethod: "openkey" as const,
-  };
-
-  if (sanitizedSession.spaceId) {
-    updatedProfile.spaceId = sanitizedSession.spaceId as string;
-    updatedProfile.ownerDid = sanitizedSession.ownerDid as string | undefined;
+  if (options.permissions !== undefined) validateLoginPermissions(options.permissions, options.paste === true);
+  if (options.additional) {
+    if (!options.paste || !options.permissions) throw new CLIError("INVALID_ARGUMENT", "--additional requires --paste and explicit scoped permissions.", ExitCode.USAGE_ERROR);
+    if (!profile.ownerDid || !await ProfileManager.getSession(profileName)) throw new CLIError("AUTH_REQUIRED", "An additional grant requires an existing primary login on the selected profile.", ExitCode.AUTH_REQUIRED);
+    if (profile.host !== host) throw new AuthStateError("AUTH_CONTEXT_CHANGED", "An additional grant must use the primary session's host.");
+    if (options.expectedOwner && !principalDidEquals(options.expectedOwner, profile.ownerDid)) throw new CLIError("OPENKEY_OWNER_MISMATCH", "An additional grant must use the selected primary owner.", ExitCode.PERMISSION_DENIED);
   }
-
-  await ProfileManager.setProfile(profileName, updatedProfile);
-
+  const expectedOwner = options.expectedOwner ?? profile.ownerDid;
+  if (options.discoverAppRead && (!options.paste || !options.permissions)) throw new CLIError("INVALID_ARGUMENT", "App-read discovery requires scoped paste authentication.", ExitCode.USAGE_ERROR);
+  let registryPermissions: PermissionEntry[] | undefined;
+  if (options.discoverAppRead || options.appReadSelection) {
+    const discovery = await import("../auth/app-read-discovery.js");
+    if (options.appReadSelection) {
+      if (!options.paste || !options.permissions || options.discoverAppRead) throw new CLIError("INVALID_ARGUMENT", "A fixed app selection requires scoped paste authentication without discovery.", ExitCode.USAGE_ERROR);
+      registryPermissions = discovery.validateFixedAppReadSelection(options.appReadSelection, key, options.permissions, host, expectedOwner);
+    } else discovery.validateAppReadRegistryPermissions(options.permissions!, expectedOwner);
+    discovery.appReadExpiryLimit(options.expiry);
+  }
+  const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
+  const data = await acquireOpenKey(profile.did, {
+    paste: options.paste, noPopup: options.noPopup, jwk: key, host,
+    discoverAppRead: options.discoverAppRead, expectedOwner,
+    openkeyHost: resolveOpenKeyHost(profile), permissions: options.permissions, expiry: options.expiry,
+    ...(options.reason ? { reason: options.reason } : options.permissions ? { reason: "Allow this local TinyCloud profile to use the permissions in the installed application manifest." } : {}),
+  });
+  const requireComplete = options.additional === true || (options.paste === true && new Set(options.permissions?.map(p => p.space)).size > 1);
+  const sanitizedSession = options.discoverAppRead || options.appReadSelection
+    ? await (await import("../auth/app-read-discovery.js")).verifyDiscoveredAppLogin(options.appReadSelection ? { ...data, appReadSelection: options.appReadSelection } : data, key, profile.sessionDid ?? profile.did, registryPermissions ?? options.permissions!, host, expectedOwner, { requestedExpiry: options.expiry })
+    : options.permissions ? await verifyScopedLogin(data, key, profile.sessionDid ?? profile.did, options.permissions, expectedOwner, requireComplete)
+    : mergePrivateJwkIntoSession(data, key);
+  const updatedProfile: ProfileConfig = options.additional ? profile : {
+    ...profile, host, sessionDid: profile.sessionDid ?? profile.did,
+    posture: profile.posture ?? "owner-openkey", operatorType: profile.operatorType ?? "human", authMethod: "openkey",
+    ...(sanitizedSession.spaceId ? { spaceId: sanitizedSession.spaceId as string, ownerDid: sanitizedSession.ownerDid as string | undefined } : {}),
+  };
+  if (options.additional) {
+    const effective = sanitizedSession.permissions as PermissionEntry[];
+    const delegation = portableFromOpenKeyDelegation(sanitizedSession, effective, host, { verifiedMultipleSpaces: true });
+    await installVerifiedAdditionalDelegation(profileName, profile, key, {
+      ...storedAdditionalDelegation(delegation, effective),
+      sessionProof: {
+        delegationHeader: delegation.delegationHeader, delegationCid: delegation.cid,
+        spaceId: delegation.spaceId, verificationMethod: String(sanitizedSession.verificationMethod),
+        address: String(sanitizedSession.address), chainId: Number(sanitizedSession.chainId),
+        siwe: String(sanitizedSession.siwe), signature: String(sanitizedSession.signature),
+        expiresAt: String(sanitizedSession.expiresAt),
+      },
+    });
+  } else if (options.permissions) await installVerifiedSession(profileName, profile, key, updatedProfile, sanitizedSession);
+  else {
+    await ProfileManager.setSession(profileName, sanitizedSession);
+    await ProfileManager.setProfile(profileName, updatedProfile);
+  }
   return { profile: updatedProfile, delegationData: sanitizedSession };
 }

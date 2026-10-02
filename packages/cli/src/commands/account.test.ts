@@ -21,7 +21,13 @@ function resetState(): void {
   recorded.removedSpaces = [];
 }
 
+const readOwner = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
+const readManifests = [{ app_id: "com.listen.app", name: "Listen", description: "Audio meeting notes", knowledge: true, defaults: false, permissions: [
+  { service: "tinycloud.kv", space: "notes", path: "knowledge/", actions: ["get", "list"] },
+  { service: "tinycloud.sql", space: "notes", path: "notes.sqlite", skipPrefix: true, actions: ["read", "write"] },
+] }];
 const node = {
+  did: readOwner,
   account: {
     status: async () => ({
       ok: true,
@@ -37,32 +43,20 @@ const node = {
       },
     }),
     applications: {
-      list: async (options?: { preferIndex?: boolean }) => ({
+      listDetailed: async () => ({
         ok: true,
-        data: options?.preferIndex
-          ? [
-              {
-                appId: "com.indexed.app",
-                name: "Indexed",
-                manifests: [{ app_id: "com.indexed.app", name: "Indexed" }],
-                updatedAt: "2026-06-20T00:00:00.000Z",
-              },
-            ]
-          : [
-              {
-                appId: "com.listen.app",
-                name: "Listen",
-                manifests: [{ app_id: "com.listen.app", name: "Listen" }],
-                updatedAt: "2026-06-20T00:00:00.000Z",
-              },
-            ],
+        data: {
+          applications: [{ appId: "com.listen.app", name: "Listen", manifests: [{ app_id: "com.listen.app", name: "Listen" }], updatedAt: "2026-06-20T00:00:00.000Z" }],
+          issues: [{ key: "applications/legacy", code: "LEGACY_APPLICATION_RECORD", category: "legacy", field: "manifest" }],
+          complete: false,
+        },
       }),
       get: async (appId: string) => ({
         ok: true,
         data: {
           appId,
           name: "Listen",
-          manifests: [{ app_id: appId, name: "Listen" }],
+          manifests: appId === "com.listen.app" ? readManifests : [{ app_id: appId, name: "Unsupported", defaults: true }],
         },
       }),
       register: async (manifest: unknown) => {
@@ -272,6 +266,7 @@ const node = {
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "cli-test", host: "https://node.tinycloud.xyz" }),
+    getKey: async () => ({ kty: "OKP", crv: "Ed25519", x: "A".repeat(43), d: "private-not-output" }),
   },
 }));
 
@@ -334,7 +329,9 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 
+const actualFs = await import("node:fs/promises");
 mock.module("node:fs/promises", () => ({
+  ...actualFs,
   readFile: async () => JSON.stringify({ app_id: "com.notes.app", name: "Notes", defaults: false }),
 }));
 
@@ -347,7 +344,7 @@ mock.module("open", () => ({
 const { registerAccountCommand } = await import("./account.js");
 
 async function runAccount(args: string[]): Promise<void> {
-  const program = new Command();
+  const program = new Command().exitOverride();
   registerAccountCommand(program);
   await program.parseAsync(["node", "tc", "account", ...args], { from: "node" });
 }
@@ -374,8 +371,33 @@ describe("tc account", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.outputs[0]).toMatchObject({
       count: 1,
-      applications: [{ appId: "com.indexed.app", name: "Indexed" }],
+      applications: [{ appId: "com.listen.app", name: "Listen" }],
+      complete: false,
+      issues: [{ code: "LEGACY_APPLICATION_RECORD" }],
     });
+  });
+
+  test("projects canonical app reads and preserves guidance metadata without writes", async () => {
+    await runAccount(["apps", "read-scope", "com.listen.app"]);
+    expect(recorded.errors).toEqual([]);
+    const scope = recorded.outputs[0] as any;
+    expect(scope.application).toMatchObject({ appId: "com.listen.app", manifests: readManifests });
+    expect(scope.permissions).toEqual(expect.arrayContaining([
+      { service: "tinycloud.kv", space: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:account", path: "applications/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.sql", space: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:notes", path: "notes.sqlite", actions: ["tinycloud.sql/read"] },
+    ]));
+    expect(scope.permissions.some((p: any) => p.actions.includes("tinycloud.sql/write"))).toBe(false);
+    expect(scope.appReadSelection).toMatchObject({ protocolVersion: 1, appId: "com.listen.app", ownerDid: readOwner, host: "https://node.tinycloud.xyz", permissions: scope.permissions });
+    expect(JSON.stringify(scope)).not.toContain("private-not-output");
+    expect(scope.manifest).toEqual({ app_id: "com.listen.app", name: "Listen", defaults: false, includePublicSpace: false,
+      permissions: scope.permissions.map((entry: any) => ({ ...entry, skipPrefix: true })) });
+    expect(recorded.registered).toEqual([]);
+  });
+
+  test("returns precise unsupported scope without synthesizing default app access", async () => {
+    await runAccount(["apps", "read-scope", "unsupported.app"]);
+    expect(recorded.errors).toMatchObject([{ code: "APP_READ_SCOPE_UNSUPPORTED" }]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("lists live account applications", async () => {

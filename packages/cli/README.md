@@ -10,6 +10,31 @@ npm install -g @tinycloud/cli
 
 Requires Node.js >= 20.
 
+## App-read setup candidate
+
+The unpublished `0.10.1-lean-auth.1` candidate supports an agent setup helper that
+discovers canonical account applications, checks existing authority, and asks for
+one exact registry-and-app read approval only when needed.
+
+- `tc context --json` reports the selected local identity and session state.
+- `tc account apps list --json` reads canonical registrations without refreshing
+  an index; incomplete discovery remains explicit.
+- `tc account apps read-scope <app-id> --json` returns the supported read manifest
+  and a selection receipt bound to the owner, host, registration and local key.
+- `tc auth caps --manifest <file> --json` checks the restored session's authority.
+- `tc auth login --paste --manifest <file> --discover-app-read` negotiates app-read
+  protocol revision 1 with a compatible OpenKey web/API deployment before opening
+  approval. The signed response is checked against the current canonical record
+  before persistence.
+- A helper can pass `--app-read-selection <file>` for an already selected app and
+  `--additional` to append verified authority while preserving the primary session.
+
+This source change does not publish an installable release. A complete pinned
+runtime must include the matching SDK-core, NodeSDK and operations changes; an
+older npm dependency with the same version label is not the reviewed artifact.
+Build a new bundle from the final reviewed sources and bind it with immutable
+artifact hashes before distributing the quickstart.
+
 ## Operations coverage
 
 The migrated `tc secrets get` path is owned by `@tinycloud/operations` and
