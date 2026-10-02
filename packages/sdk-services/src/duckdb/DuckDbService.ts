@@ -127,12 +127,13 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "query", sql, params: params ?? [] },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -143,6 +144,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -158,12 +161,13 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "query", sql, params: params ?? [] },
-          options?.signal,
+          request.signal,
           { Accept: "application/vnd.apache.arrow.stream" }
         );
 
@@ -175,6 +179,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(buffer);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -190,6 +196,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body: Record<string, unknown> = {
           action: "execute",
@@ -204,7 +211,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           dbName,
           DuckDbAction.WRITE,
           body,
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -215,6 +222,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -229,6 +238,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body: Record<string, unknown> = {
           action: "batch",
@@ -242,7 +252,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           dbName,
           DuckDbAction.WRITE,
           body,
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -253,6 +263,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -268,6 +280,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         // TC-114: mint the dispatchable ability, not the literal method name.
         // The node has no `tinycloud.duckdb/execute` capability — it routes an
@@ -281,7 +294,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           dbName,
           DuckDbAction.WRITE,
           { action: "executeStatement", name, params: params ?? [] },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -294,6 +307,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -307,6 +322,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         // TC-114: mint the dispatchable ability, not the literal method name.
         // The node has no `tinycloud.duckdb/describe` capability — it routes a
@@ -317,7 +333,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           dbName,
           DuckDbAction.READ,
           { action: "describe" },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -328,6 +344,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -341,12 +359,13 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.EXPORT,
           { action: "export" },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -357,6 +376,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(blob);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -371,6 +392,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const session = this.context.session!;
         const headers = this.context.invoke(
@@ -387,7 +409,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
             "Content-Type": "application/x-duckdb",
           },
           body: new Blob([data]),
-          signal: this.combineSignals(options?.signal),
+          signal: request.signal,
         });
 
         if (!response.ok) {
@@ -397,6 +419,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ok(undefined);
       } catch (error) {
         return err(wrapError("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -407,7 +431,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     dbName: string,
     action: string,
     body: Record<string, unknown>,
-    signal?: AbortSignal,
+    signal: AbortSignal,
     extraHeaders?: Record<string, string>
   ): Promise<FetchResponse> {
     const session = this.context.session!;
@@ -421,7 +445,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         ...extraHeaders,
       },
       body: JSON.stringify(body),
-      signal: this.combineSignals(signal),
+      signal,
     });
   }
 

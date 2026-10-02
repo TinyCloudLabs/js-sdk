@@ -44,5 +44,22 @@ export interface BaseServiceOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A per-request abort signal and the cleanup that releases it.
+ * Created by `BaseService.createRequestSignal()`.
+ */
+export interface RequestSignal {
+  /**
+   * Aborts on service sign-out, context abort, the caller's signal, or when
+   * the request timeout elapses (reason: a `TimeoutError`).
+   */
+  readonly signal: AbortSignal;
+  /**
+   * Clear the timeout and detach from the parent signals. Call once the
+   * response has been consumed. Idempotent.
+   */
+  dispose(): void;
+}
+
 // Re-export common types for convenience
 export type { IService, IServiceContext, ServiceSession };

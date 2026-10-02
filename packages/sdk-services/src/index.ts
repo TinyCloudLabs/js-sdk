@@ -174,6 +174,7 @@ export type {
   ServiceConstructor,
   ServiceRegistration,
   BaseServiceOptions,
+  RequestSignal,
 } from "./base/index";
 
 // KV service

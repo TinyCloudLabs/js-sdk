@@ -157,6 +157,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body: Record<string, unknown> = {
           action: "query",
@@ -171,7 +172,7 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           action,
           body,
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -182,6 +183,8 @@ export class SQLService extends BaseService implements ISQLService {
         return ok(data);
       } catch (error) {
         return err(wrapError("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -197,6 +200,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body: Record<string, unknown> = {
           action: "execute",
@@ -218,7 +222,7 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           requestedActions,
           body,
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -229,6 +233,8 @@ export class SQLService extends BaseService implements ISQLService {
         return ok(data);
       } catch (error) {
         return err(wrapError("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -243,13 +249,14 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         const requestedActions = this.actionsForSqlBatch(statements);
         const response = await this.invokeSQL(
           dbName,
           requestedActions,
           { action: "batch", statements },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -260,6 +267,8 @@ export class SQLService extends BaseService implements ISQLService {
         return ok(data);
       } catch (error) {
         return err(wrapError("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -275,6 +284,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         // TC-114: mint the dispatchable ability, not the literal method name.
         // The node has no `tinycloud.sql/execute` capability — it routes an
@@ -290,7 +300,7 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           SQLAction.WRITE,
           { action: "execute_statement", name, params: params ?? [] },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -303,6 +313,8 @@ export class SQLService extends BaseService implements ISQLService {
         return ok(data);
       } catch (error) {
         return err(wrapError("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -316,6 +328,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const request = this.createRequestSignal(options?.signal);
       try {
         // TC-114: mint the dispatchable ability, not the literal method name.
         // The node has no `tinycloud.sql/export` capability — it routes an
@@ -326,7 +339,7 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           SQLAction.READ,
           { action: "export" },
-          options?.signal
+          request.signal
         );
 
         if (!response.ok) {
@@ -345,6 +358,8 @@ export class SQLService extends BaseService implements ISQLService {
         return ok(text as unknown as Blob);
       } catch (error) {
         return err(wrapError("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -461,7 +476,7 @@ export class SQLService extends BaseService implements ISQLService {
     dbName: string,
     actions: string | string[],
     body: Record<string, unknown>,
-    signal?: AbortSignal
+    signal: AbortSignal
   ): Promise<FetchResponse> {
     const session = this.context.session!;
     const actionList = Array.isArray(actions) ? actions : [actions];
@@ -477,7 +492,7 @@ export class SQLService extends BaseService implements ISQLService {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body) as any,
-      signal: this.combineSignals(signal),
+      signal,
     });
   }
 
