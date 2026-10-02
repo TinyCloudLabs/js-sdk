@@ -19,6 +19,7 @@ let nodeSpaceId: string | undefined = "tinycloud:test-space";
 let restoredSpaceId: string | undefined = "tinycloud:test-space";
 let nativeSpaceId = "tinycloud:test-space";
 const uploadedSpaces: string[] = [];
+const uploadedPaths: string[] = [];
 const encryptionSpaces: string[] = [];
 let sessionOnly = true;
 let uploadErrorCode: string | undefined;
@@ -71,12 +72,13 @@ const node = {
     }),
   },
   kvForSpace: (spaceId: string) => ({
-    put: async () => {
+    put: async (path: string) => {
       publishEvents.push("upload");
       uploadedSpaces.push(spaceId);
+      uploadedPaths.push(path);
       return uploadErrorCode === undefined
         ? { ok: true as const }
-        : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: { status: 403, requiredAction: "tinycloud.kv/put" } } };
+        : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: { status: uploadErrorCode === "STORAGE_QUOTA_EXCEEDED" ? 402 : 503, usedBytes: 387_382_794, limitBytes: 8_119_195, requiredAction: "tinycloud.kv/put" } } };
     },
   }),
   sharing: {
@@ -151,6 +153,7 @@ afterEach(() => {
   nodeSpaceId = "tinycloud:test-space";
   restoredSpaceId = "tinycloud:test-space";
   nativeSpaceId = "tinycloud:test-space";
+  uploadedPaths.length = 0;
   sessionOnly = true;
   uploadErrorCode = undefined;
   uploadedSpaces.length = 0;
@@ -206,6 +209,38 @@ describe("TinyCloud share authority adapter", () => {
     })).rejects.toMatchObject({ failure: { kind: "origin-mismatch" } });
     expect(uploadedSpaces).toEqual([restoredSpaceId]);
   });
+  it("publishes special filenames at a reversible safe path and preserves display metadata", async () => {
+    const { targetAdapter } = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async () => Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      })) as unknown as typeof globalThis.fetch,
+    });
+    const filenames = ["Edge test (A) - read.md", "Résumé 東京.md", "question?#percent%.md"];
+    for (const filename of filenames) {
+      for (const target of [{ kind: "bearer" as const }, { kind: "email" as const, address: "alice@example.com" }]) {
+        const published = await targetAdapter.publish({
+          source: new TextEncoder().encode("filename round trip"),
+          filename,
+          target,
+          expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+          origin: "https://share.example",
+        });
+        expect("state" in published).toBe(false);
+        if ("state" in published) throw new Error("expected publication");
+        expect(published.metadata.display.filename).toBe(filename);
+        const path = published.metadata.resource.path;
+        expect(path).toMatch(/^(?:xyz\.tinycloud\.share\/)?shares?\/[a-f0-9]+\/file-[A-Za-z0-9_-]+$/);
+        expect(Buffer.from(path.split("/").at(-1)!.slice(5), "base64url").toString("utf8")).toBe(filename);
+        expect(uploadedPaths.at(-1)).toBe(path);
+      }
+    }
+  });
+
   it("clamps implicit lifetime to signed session expiry and rejects explicit overrun", async () => {
     const { targetAdapter } = createShareAuthorityAdapters({
       origin: "https://share.example",
@@ -285,6 +320,35 @@ describe("TinyCloud share authority adapter", () => {
     })).rejects.toMatchObject({ failure: { kind: "lifetime-exceeds-session", reason: "below-minimum" } });
   });
 
+
+  it("classifies quota and other KV upload failures for bearer and addressed shares", async () => {
+    for (const target of [{ kind: "bearer" as const }, { kind: "email" as const, address: "alice@example.com" }]) {
+      for (const code of ["STORAGE_QUOTA_EXCEEDED", "UNAVAILABLE"]) {
+        uploadErrorCode = code;
+        const { targetAdapter } = createShareAuthorityAdapters({
+          origin: "https://share.example",
+          profileName: async () => "test",
+          fetchFn: (async () => Response.json({
+            version: "tinycloud.share/config-v2",
+            shareOrigin: "https://share.example",
+            registryOrigin: "https://registry.example",
+            credentialsOrigin: "https://credentials.example",
+          })) as unknown as typeof globalThis.fetch,
+        });
+        await expect(targetAdapter.publish({
+          source: new TextEncoder().encode("failed source"),
+          filename: "report.md",
+          target,
+          expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+          origin: "https://share.example",
+        })).rejects.toMatchObject({
+          failure: code === "STORAGE_QUOTA_EXCEEDED"
+            ? { kind: "storage-quota-exceeded", usedBytes: 387_382_794, limitBytes: 8_119_195 }
+            : { kind: "upload-failed" },
+        });
+      }
+    }
+  });
 
   it("types KV upload authorization failures without exposing server text", async () => {
     uploadErrorCode = "AUTH_UNAUTHORIZED";

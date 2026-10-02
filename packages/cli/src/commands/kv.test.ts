@@ -49,6 +49,9 @@ function errorFor(key: string) {
   if (key.startsWith("MISSING:")) {
     return { ok: false, error: { code: "KV_NOT_FOUND", message: "Key not found: " + key } };
   }
+  if (key.startsWith("QUOTA:")) {
+    return { ok: false, error: { code: "STORAGE_QUOTA_EXCEEDED", message: "server quota text", service: "kv", meta: { status: 402, usedBytes: 387_382_794, limitBytes: 8_119_195 } } };
+  }
   return null;
 }
 
@@ -111,7 +114,7 @@ mock.module("../output/formatter.js", () => ({
   withSpinner: async (_message: string, fn: () => unknown) => await fn(),
   shouldOutputJson: () => true,
   formatTable: () => "",
-  formatBytes: () => "",
+  formatBytes: (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`,
   formatTimeAgo: () => "",
 }));
 
@@ -183,6 +186,18 @@ describe("CLI kv put --space", () => {
       { handle: "primary", key: "note", value: "hello" },
     ]);
   });
+  test("rejects keys containing spaces before resolving authentication", async () => {
+    await runKv(["put", "with space.txt", "hello"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: "KV keys cannot contain spaces; use a URL-safe key",
+    });
+    expect(recorded.resolveSpace).toEqual([]);
+    expect(recorded.puts).toEqual([]);
+  });
+
 
   test("routes through kvForSpace when --space is provided", async () => {
     await runKv(["put", "note", "hello", "--space", "applications"]);
@@ -202,6 +217,17 @@ describe("CLI kv put --space", () => {
       },
     ]);
   });
+  test("reports quota exhaustion with used and limit sizes", async () => {
+    await runKv(["put", "QUOTA:report", "hello"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 4,
+      message: "storage quota exceeded (369.4 MB used of 7.7 MB limit); nothing was written",
+    });
+  });
+
 });
 
 describe("CLI kv delete --space", () => {

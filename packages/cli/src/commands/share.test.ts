@@ -60,7 +60,23 @@ describe("tc share command contract", () => {
     }));
     expect(openKeyScope.code).toBe("PERMISSION_DENIED");
     expect(openKeyScope.message).toContain("builtin:share-publishing scope");
+    expect(openKeyScope.message).toContain("verify the session includes");
     expect(openKeyScope.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
+    const quota = shareCliError(new SharePublishAuthorityError({
+      kind: "storage-quota-exceeded",
+      usedBytes: 387_382_794,
+      limitBytes: 8_119_195,
+    }));
+    expect(quota).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 4,
+    });
+    expect(quota.message).toContain("369.4 MB used of 7.7 MB limit");
+    expect(quota.message).toContain("nothing was shared");
+
+    const upload = shareCliError(new SharePublishAuthorityError({ kind: "upload-failed" }));
+    expect(upload).toMatchObject({ code: "UPLOAD_FAILED", exitCode: 4 });
+    expect(upload.message).toContain("nothing was shared");
 
     const beyondSession = shareCliError(new SharePublishAuthorityError({
       kind: "lifetime-exceeds-session",

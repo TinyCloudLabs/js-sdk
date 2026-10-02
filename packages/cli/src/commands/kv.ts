@@ -26,6 +26,14 @@ async function throwKvError(
   throw new CLIError(error.code, error.message, ExitCode.ERROR);
 }
 
+function storageQuotaError(error: { code: string; meta?: unknown }): CLIError | undefined {
+  if (error.code !== "STORAGE_QUOTA_EXCEEDED" || typeof error.meta !== "object" || error.meta === null) return undefined;
+  const { usedBytes, limitBytes } = error.meta as { usedBytes?: unknown; limitBytes?: unknown };
+  if (typeof usedBytes !== "number" || !Number.isSafeInteger(usedBytes) || usedBytes < 0
+    || typeof limitBytes !== "number" || !Number.isSafeInteger(limitBytes) || limitBytes < 0) return undefined;
+  return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded (${formatBytes(usedBytes)} used of ${formatBytes(limitBytes)} limit); nothing was written`, 4);
+}
+
 /**
  * Read all data from stdin.
  */
@@ -135,6 +143,9 @@ export function registerKvCommand(program: Command): void {
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, value: string | undefined, options, cmd) => {
       try {
+        if (key.includes(" ")) {
+          throw new CLIError("INVALID_ARGUMENT", "KV keys cannot contain spaces; use a URL-safe key", ExitCode.USAGE_ERROR);
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
@@ -167,6 +178,8 @@ export function registerKvCommand(program: Command): void {
         const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue)) as any;
 
         if (!result.ok) {
+          const quota = storageQuotaError(result.error);
+          if (quota) throw quota;
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 

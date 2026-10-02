@@ -31,7 +31,38 @@ function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get
   const action = meta.requiredAction;
   return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
 }
+function throwKvUploadFailure(error: unknown): never {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED" && "meta" in error) {
+    const meta = error.meta;
+    if (typeof meta === "object" && meta !== null && "usedBytes" in meta && "limitBytes" in meta) {
+      const usedBytes = meta.usedBytes;
+      const limitBytes = meta.limitBytes;
+      if (typeof usedBytes === "number" && Number.isSafeInteger(usedBytes) && usedBytes >= 0
+        && typeof limitBytes === "number" && Number.isSafeInteger(limitBytes) && limitBytes >= 0) {
+        throw new SharePublishAuthorityError({ kind: "storage-quota-exceeded", usedBytes, limitBytes });
+      }
+    }
+  }
+  throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+function safeStorageFilename(filename: string): string {
+  return `file-${Buffer.from(filename, "utf8").toString("base64url")}`;
+}
+
+function displayFilenameFromStoragePath(path: string): string {
+  const segment = path.split("/").at(-1) ?? "";
+  if (!segment.startsWith("file-")) return segment || "share.md";
+  try {
+    const encoded = segment.slice(5);
+    const filename = Buffer.from(encoded, "base64url").toString("utf8");
+    if (Buffer.from(filename, "utf8").toString("base64url") === encoded) return filename;
+  } catch {
+    // Unrecognized storage segments are not valid encoded filenames.
+  }
+  return segment || "share.md";
+}
+
 
 export class ShareAuthorityError extends Error {
   readonly code: "AUTH_REQUIRED" | "UNAVAILABLE";
@@ -283,11 +314,11 @@ export function createShareAuthorityAdapters(input: {
     if (targetInput.target.kind === "bearer") {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file = files[0]!;
-      const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${targetInput.filename}`;
+      const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
         contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
       });
-      if (!written.ok) {
+      if (written.ok === false) {
         const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
         if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
           const requiredAction = requiredKvAction(written.error.meta);
@@ -299,7 +330,7 @@ export function createShareAuthorityAdapters(input: {
             profileName: activeProfileName,
           });
         }
-        throw new Error("native bearer source upload failed");
+        throwKvUploadFailure(written.error);
       }
       let native: NativeShareResult;
       try {
@@ -350,7 +381,7 @@ export function createShareAuthorityAdapters(input: {
     // need a shared key the envelope does not carry.
     if (resourceKind !== "exact" || files.length !== 1) throw new Error("addressed publication requires a single exact source file");
     const file = files[0]!;
-    const resourcePath = `shares/${shareId}/${targetInput.filename}`;
+    const resourcePath = `shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
     const byteLength = file.bytes.byteLength;
     if (!Number.isSafeInteger(byteLength) || byteLength > 100 * 1024 * 1024) throw new Error("addressed publication exceeds the combined byte limit");
     const mediaType = targetInput.mediaType ?? file.mediaType ?? "application/octet-stream";
@@ -383,7 +414,7 @@ export function createShareAuthorityAdapters(input: {
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
     const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
-    if (!stored.ok) {
+    if (stored.ok === false) {
       const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
       if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
         const requiredAction = requiredKvAction(stored.error.meta);
@@ -395,7 +426,7 @@ export function createShareAuthorityAdapters(input: {
           profileName: activeProfileName,
         });
       }
-      throw new Error("addressed source upload failed");
+      throwKvUploadFailure(stored.error);
     }
     const contentSource = {
       shareId,
@@ -509,7 +540,7 @@ export function createShareAuthorityAdapters(input: {
     if (!received.ok) throw new Error("native share could not be verified");
     const value = await received.data.kv.get<Uint8Array>("", { binary: true });
     if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
-    return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
+    return { bytes: value.data.data.slice(), filename: displayFilenameFromStoragePath(received.data.path) };
   };
   return {
     targetAdapter,
