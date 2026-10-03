@@ -28,6 +28,7 @@ let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
 let registryError: unknown;
 let sharingPreflight: "ok" | "caveated" | "not-covered" = "ok";
+let nodeContract: "1.17.2" | "1.17.3" = "1.17.2";
 const preflightRequests: Array<{ readonly path: string; readonly actions?: string[]; readonly expiry?: Date }> = [];
 
 /** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
@@ -48,26 +49,38 @@ function nodeDeliveryEmail(value: unknown): string | undefined {
   return `${local.toLowerCase()}@${domain.toLowerCase()}`;
 }
 /**
- * The recipient, display, action and credential checks tinycloud-node applies
- * to a Policy/v3 envelope before signing a delivery receipt
- * (`v3_envelope_delivery_projection` and `authorize_delivery` in
- * tinycloud-node-server/src/policy_v3.rs, v1.17.1). Any mismatch is a
- * `403 delivery-authorization-invalid`; registration binding is not mirrored.
+ * The Node delivery contract the fake node enforces before it signs a receipt:
+ * the recipient, pin, display, action and credential checks of
+ * `v3_envelope_delivery_projection` and `authorize_delivery` in
+ * tinycloud-node-server/src/policy_v3.rs. Registration binding is not
+ * mirrored. Any mismatch is a `403 delivery-authorization-invalid`.
+ *
+ * - "1.17.2": node 1.17.1/1.17.2 (`60c3ab8`, identical policy_v3.rs). The
+ *   envelope must pin `deliveryEmail` byte-equal to the request (TC-571),
+ *   the matcher must be `exactEmail`, and actions must be exactly `read`.
+ * - "1.17.3": node `05c6a93`. The pin is optional but byte-equal when present;
+ *   any action set that includes `read` is accepted. (It also admits
+ *   owner-key `emailDomain` delivery, which this fake does not model.)
  */
 function nodeRefusesDelivery(input: Record<string, unknown>): boolean {
   const envelope = input.envelope as Record<string, unknown> | undefined;
   const matcher = envelope?.recipientMatcher as Record<string, unknown> | undefined;
   const display = envelope?.display as Record<string, unknown> | undefined;
   const policy = envelope?.policy as { readonly credentialRequirement?: { readonly credentialType?: { readonly id?: unknown } } } | undefined;
+  const actions = Array.isArray(envelope?.actions) ? envelope.actions : [];
   const expected = nodeDeliveryEmail(matcher?.value);
+  const pinRefused = nodeContract === "1.17.2"
+    ? envelope?.deliveryEmail !== input.recipientEmail
+    : envelope?.deliveryEmail !== undefined && envelope.deliveryEmail !== input.recipientEmail;
+  const actionsRefused = nodeContract === "1.17.2" ? JSON.stringify(actions) !== JSON.stringify(["read"]) : !actions.includes("read");
   return matcher === undefined
     || Object.keys(matcher).length !== 2
     || matcher.kind !== "exactEmail"
     || expected === undefined
     || expected !== nodeDeliveryEmail(input.recipientEmail)
-    || envelope?.deliveryEmail !== input.recipientEmail
+    || pinRefused
     || display?.filename !== input.documentName
-    || JSON.stringify(envelope?.actions) !== JSON.stringify(["read"])
+    || actionsRefused
     || policy?.credentialRequirement?.credentialType?.id !== "opencredentials.email/v1"
     || typeof envelope?.expiry !== "string";
 }
@@ -212,6 +225,7 @@ afterEach(() => {
   authenticationError = undefined;
   registryError = undefined;
   sharingPreflight = "ok";
+  nodeContract = "1.17.2";
   preflightRequests.length = 0;
 });
 
@@ -788,7 +802,8 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
-  it("publishes an email share whose --notify invitation the Node authorizes and delivers (TC-571)", async () => {
+  /** Real adapters whose credentials service accepts and records every invitation. */
+  const deliveringAdapters = () => {
     const invitations: string[] = [];
     const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
@@ -803,7 +818,12 @@ describe("TinyCloud share authority adapter", () => {
         credentialsOrigin: "https://credentials.example",
       });
     }) as unknown as typeof globalThis.fetch;
-    const adapters = createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn });
+    return { invitations, ...createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn }) };
+  };
+
+  it("publishes an email share whose --notify invitation the Node authorizes and delivers (TC-571)", async () => {
+    const adapters = deliveringAdapters();
+    const { invitations } = adapters;
 
     const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address: "Alice@Example.COM" }));
     if ("state" in published) throw new Error("expected addressed publication");
@@ -820,6 +840,31 @@ describe("TinyCloud share authority adapter", () => {
     expect(deliveryAuthorizationInputs).toHaveLength(1);
     expect(deliveryAuthorizationInputs[0]).toMatchObject({ recipientEmail: "alice@example.com", documentName: "note.md" });
     expect(invitations).toHaveLength(1);
+  });
+
+  it("publishes mailboxes the envelope cannot pin unpinned; node 1.17.3 still delivers them", async () => {
+    for (const address of ["a/b@example.com", "alice@example.xn--p1ai"]) {
+      const uploadsBefore = uploadedPaths.length;
+      const policiesBefore = registeredPolicies.length;
+      const adapters = deliveringAdapters();
+      const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address }));
+      if ("state" in published) throw new Error("expected addressed publication");
+      // One upload, one registration, and both belong to a published share.
+      expect(uploadedPaths.length - uploadsBefore).toBe(1);
+      expect(registeredPolicies.length - policiesBefore).toBe(1);
+      const record = historyRecordForPublishedShare(published);
+      expect(record.deliveryMaterial?.envelope).toMatchObject({ recipientMatcher: { kind: "exactEmail", value: address } });
+      expect(record.deliveryMaterial?.envelope).not.toHaveProperty("deliveryEmail");
+
+      // 1.17.2 requires the pin, so these rare mailboxes cannot be emailed there.
+      nodeContract = "1.17.2";
+      await expect(notifyShare({ shareId: record.shareId, recipient: address, record, adapter: adapters.delivery, maxAttempts: 1 }))
+        .resolves.toMatchObject({ state: "partial-failure" });
+      nodeContract = "1.17.3";
+      await expect(notifyShare({ shareId: record.shareId, recipient: address, record, adapter: adapters.delivery }))
+        .resolves.toMatchObject({ state: "delivered", attempts: 1 });
+      expect(adapters.invitations).toHaveLength(1);
+    }
   });
 
 });

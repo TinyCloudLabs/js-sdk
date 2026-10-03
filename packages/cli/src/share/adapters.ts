@@ -22,7 +22,7 @@ import {
   type TargetPublishInput,
   deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
-import { canonicalize } from "@tinycloud/share-envelope";
+import { canonicalize, isEnvelopeDeliveryEmail } from "@tinycloud/share-envelope";
 import { LocationRecordValidationError, LocationRegistryHttpError, revokePolicyRootV3 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 
@@ -469,10 +469,12 @@ export function createShareAuthorityAdapters(input: {
       policyActions,
       contentSource,
       ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
-      // The Node signs a delivery receipt only for the envelope's own signed
-      // delivery address, so an exact-email share names its canonical mailbox
-      // here; `--notify` and a later `tc share notify` both depend on it.
-      ...(prepared.target.kind === "email" ? { deliveryEmail: prepared.target.address } : {}),
+      // tinycloud-node 1.17.2 signs a delivery receipt only for the envelope's
+      // own signed delivery address (1.17.3 accepts it and no longer requires
+      // it), so an exact-email share pins its canonical mailbox for `--notify`
+      // and `tc share notify`. A mailbox the envelope's `deliveryEmail` rule
+      // rejects (deployed viewers validate with it) is published unpinned.
+      ...(prepared.target.kind === "email" && isEnvelopeDeliveryEmail(prepared.target.address) ? { deliveryEmail: prepared.target.address } : {}),
       filename: targetInput.filename,
       mediaType,
       byteLength,
