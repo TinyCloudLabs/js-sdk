@@ -147,7 +147,7 @@ export class KVService extends BaseService implements IKVService {
       return err(
         storageQuotaExceededError(
           "kv",
-          `Storage quota exceeded for key "${key}": ${errorText}`,
+          `Storage quota exceeded for key ${JSON.stringify(key)}: ${errorText}`,
           {
             status: response.status,
             ...(quotaInfo
@@ -163,7 +163,7 @@ export class KVService extends BaseService implements IKVService {
       return err(
         storageLimitReachedError(
           "kv",
-          `Storage limit reached for key "${key}": ${errorText}`,
+          `Storage limit reached for key ${JSON.stringify(key)}: ${errorText}`,
           {
             status: response.status,
             ...(quotaInfo
@@ -680,7 +680,7 @@ export class KVService extends BaseService implements IKVService {
 
     if (response.status === 401 || response.status === 403) {
       return this.authorizationFailure(
-        `Failed to create signed read URL for key "${key}"`,
+        `Failed to create signed read URL for key ${JSON.stringify(key)}`,
         response,
         errorText
       );
@@ -691,7 +691,7 @@ export class KVService extends BaseService implements IKVService {
     return err(
       serviceError(
         code,
-        `Failed to create signed read URL for key "${key}": ${response.status} - ${errorText}`,
+        `Failed to create signed read URL for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       )
@@ -788,7 +788,7 @@ export class KVService extends BaseService implements IKVService {
             const errorText = await response.text();
             const permissionHint = parsePermissionHintFromErrorText(errorText);
             return this.authorizationFailure(
-              `Failed to get key "${key}"`,
+              `Failed to get key ${JSON.stringify(key)}`,
               response,
               errorText,
               permissionHint === undefined ? {} : { permissionHint }
@@ -803,7 +803,7 @@ export class KVService extends BaseService implements IKVService {
           if (response.status === 413) {
             return err(serviceError(
               ErrorCodes.KV_RESPONSE_TOO_LARGE,
-              `KV value at key "${key}" exceeds the requested response limit`,
+              `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -811,7 +811,7 @@ export class KVService extends BaseService implements IKVService {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to get key "${key}": ${response.status} - ${errorText}`,
+              `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -884,7 +884,7 @@ export class KVService extends BaseService implements IKVService {
 
         if (response.status === 401 || response.status === 403) {
           return this.authorizationFailure(
-            `Failed to put key "${key}"`,
+            `Failed to put key ${JSON.stringify(key)}`,
             response,
             await response.text()
           );
@@ -896,7 +896,7 @@ export class KVService extends BaseService implements IKVService {
           if (response.status === 412) {
             return err(serviceError(
               ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key "${key}"`,
+              `KV precondition failed for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -908,7 +908,7 @@ export class KVService extends BaseService implements IKVService {
           ) {
             return err(serviceError(
               ErrorCodes.KV_CONFLICT,
-              `Concurrent KV update conflicted for key "${key}"`,
+              `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -927,7 +927,7 @@ export class KVService extends BaseService implements IKVService {
           return err(
             serviceError(
               ErrorCodes.KV_WRITE_FAILED,
-              `Failed to put key "${key}": ${response.status} - ${errorText}`,
+              `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -1310,7 +1310,7 @@ export class KVService extends BaseService implements IKVService {
         if (!response.ok) {
           if (response.status === 401) {
             return this.authorizationFailure(
-              `Failed to delete key "${key}"`,
+              `Failed to delete key ${JSON.stringify(key)}`,
               response,
               await response.text()
             );
@@ -1324,7 +1324,7 @@ export class KVService extends BaseService implements IKVService {
           if (response.status === 412) {
             return err(serviceError(
               ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key "${key}"`,
+              `KV precondition failed for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -1332,7 +1332,7 @@ export class KVService extends BaseService implements IKVService {
           if (response.status === 503 && options?.ifMatch !== undefined) {
             return err(serviceError(
               ErrorCodes.KV_CONFLICT,
-              `Concurrent KV delete conflicted for key "${key}"`,
+              `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -1340,7 +1340,7 @@ export class KVService extends BaseService implements IKVService {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to delete key "${key}": ${response.status} - ${errorText}`,
+              `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -1382,7 +1382,7 @@ export class KVService extends BaseService implements IKVService {
         if (!response.ok) {
           if (response.status === 401) {
             return this.authorizationFailure(
-              `Failed to get metadata for key "${key}"`,
+              `Failed to get metadata for key ${JSON.stringify(key)}`,
               response,
               await response.text()
             );
@@ -1396,7 +1396,7 @@ export class KVService extends BaseService implements IKVService {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to get metadata for key "${key}": ${response.status} - ${errorText}`,
+              `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )

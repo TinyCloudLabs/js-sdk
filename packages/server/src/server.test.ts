@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   CapabilityKeyRegistry,
+  HooksService,
   KVService,
   ServiceContext,
   SharingService,
@@ -43,6 +44,8 @@ const AUTH_BODIES = [
   "Unauthorized Action: tinycloud:test-space/kv/shared / tinycloud.kv/get",
   "Forbidden",
   "session expired",
+  'upstream said "session expired"',
+  'upstream said "Forbidden"',
 ];
 const RETHROW_STYLES = ["error", "cause", "message"] as const;
 type RethrowStyle = (typeof RETHROW_STYLES)[number];
@@ -155,10 +158,10 @@ describe("@tinycloud/server sharing session refresh", () => {
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
 
-  // Keys with a parenthesised status that disagrees with the real one: the
-  // quoted key must never decide.
+  // Keys whose status-like text or stray quotes disagree with the real status:
+  // the (JSON-escaped) key must never decide or hide the status.
   const KV_CASES = AUTH_CASES.flatMap((authCase) =>
-    ["shared/item", "report(401)", "report(403)"].map((key) => ({ ...authCase, key })),
+    ["shared/item", "report(401)", "report(403)", 'report"', 'report"HTTP 401"x'].map((key) => ({ ...authCase, key })),
   );
 
   test.each(KV_CASES)("kv.put key=$key $status body=$body rethrown with $rethrow", async ({ key, status, body, rethrow }) => {
@@ -198,61 +201,137 @@ describe("@tinycloud/server sharing session refresh", () => {
     } else {
       // The message keeps the HTTP status and the server text for diagnostics.
       expect(String(failure?.message)).toBe(
-        `Failed to put key "${key}": 403 - ${body || "authorization failed"}`,
+        `Failed to put key ${JSON.stringify(key)}: 403 - ${body || "authorization failed"}`,
       );
     }
     expect(fetchCalls).toBe(status === 401 ? 2 : 1);
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
 
-  test.each([
-    ["typed 401 with a non-session body", Object.assign(new Error("Forbidden"), { status: 401 }), true],
-    ["typed 403 with a session body", Object.assign(new Error("session expired"), { meta: { status: 403 } }), false],
-    ["typed non-auth status with a 401 body", Object.assign(new Error("401 Unauthorized"), { status: 502 }), false],
-    ["AUTH_UNAUTHORIZED without status", { code: "AUTH_UNAUTHORIZED", message: "Unauthorized Action: x / y" }, false],
-    ["untyped status after a colon", new Error("request failed: 401"), true],
-    ["untyped KV-format 401", new Error('Failed to put key "k": 401 - Forbidden'), true],
-    ["untyped KV-format 403 with session text", new Error('Failed to put key "k": 403 - session expired'), false],
-    ["untyped HTTP 401", new Error("HTTP 401 from upstream"), true],
-    ["untyped parenthesised 401", new Error("upstream service returned an HTML error page (401)."), true],
-    ["untyped leading 403 Unauthorized Action", new Error("403 Unauthorized Action: x / y"), false],
-    ["untyped session wording", new Error("session expired"), true],
-    ["session wording with 403 in a path", new Error("session expired while reading /vault/403/item"), true],
-    ["session wording with 403 in an id", new Error("session expired for request req-403"), true],
-    ["session wording with 403 as a port", new Error("session expired at https://node.example:403/invoke"), true],
-    ["session wording with a 403 byte count", new Error("session expired after 403 bytes"), true],
-    ["401 as a port", new Error("connect ECONNREFUSED 127.0.0.1:401"), false],
-    ["401 as a byte count", new Error("wrote 401 bytes"), false],
-    ["401 in an expectation", new Error("expected 401, got 500"), false],
-    ["403 in a quoted key over a real 401", new Error('Failed to put key "report(403)": 401 - Forbidden'), true],
-    ["401 in a quoted key over a real 403", new Error('Failed to put key "report(401)": 403 - Forbidden'), false],
-    ["`: 401 ` inside a quoted key over a real 500", new Error('Failed to put key "a: 401 b": 500 - boom'), false],
-    ["`: 401 ` inside a quoted key, no status", new Error('Failed to put key "a: 401 b"'), false],
-    ["requester `returned 401`", new Error("owner node delegation import returned 401"), true],
-    ["requester `returned 403`", new Error("owner node delegation import returned 403"), false],
-    ["real 502 with a 401 in the body", new Error('Failed to put key "k": 502 - upstream said: 401 Unauthorized'), false],
-    ["leading byte count then session wording", new Error("403 bytes written; session expired"), true],
-    ["`rejected (401)`", new Error("Share service rejected (401): session refused"), true],
-    ["trailing `(403)` despite session wording", new Error("session refused by Share (403)"), false],
-    ["sharing format with an empty body", new Error("Failed to register delegation with server: 401 "), true],
-    ["owned-space activation with an empty body", new Error("Failed to check owned space x: 401"), true],
-  ])("withSessionRefresh: %s", async (_name, failure, refreshes) => {
+  /** Run `failure` through `withSessionRefresh`; report whether it signed in and retried. */
+  async function refreshed(failure: unknown): Promise<boolean> {
     let calls = 0;
     let signInCalls = 0;
     const node = { signIn: async () => { signInCalls += 1; } } as unknown as TinyCloudNode;
-    const run = withSessionRefresh(node, async () => {
+    const outcome = await rejectionOf(withSessionRefresh(node, async () => {
       calls += 1;
       if (calls === 1) throw failure;
       return "ok";
-    });
+    }));
+    if (signInCalls === 0) expect(outcome).toBe(failure as { message?: unknown });
+    expect(calls).toBe(signInCalls + 1);
+    return signInCalls === 1;
+  }
 
-    if (refreshes) {
-      await expect(run).resolves.toBe("ok");
-    } else {
-      await expect(run).rejects.toBe(failure);
+  test.each([
+    ["typed 401 with a non-session body", Object.assign(new Error("Forbidden"), { status: 401 }), true],
+    ["typed 403 with a session body", Object.assign(new Error("session expired"), { meta: { status: 403 } }), false],
+    ["typed 502 with a 401 body", Object.assign(new Error("failed: 401 Unauthorized"), { status: 502 }), false],
+    ["AUTH_UNAUTHORIZED without status", { code: "AUTH_UNAUTHORIZED", message: "session expired" }, false],
+  ])("withSessionRefresh typed: %s", async (_name, failure, refreshes) => {
+    expect(await refreshed(failure)).toBe(refreshes);
+  });
+
+  // Every known message shape, message-only (no typed status). `{s}` formats
+  // are SDK producers: they refresh with 401 and never with 403 or 502.
+  const STATUS_FORMATS = [
+    'Failed to put key "k": {s} - Forbidden',
+    'Failed to put key "k": {s} - authorization failed',
+    "Failed to create delegation with server: {s}",
+    "Failed to register delegation with server: {s} ",
+    "Failed to register delegation with server: {s} Unauthorized Action: x / y",
+    "SQL query failed: {s} - x",
+    "SQL query failed: upstream service returned an HTML error page ({s}).",
+    "Share service rejected ({s}): session refused",
+    "HTTP {s} from upstream",
+    "owner node delegation import returned {s}",
+    "Failed to check owned space x: {s}",
+    "failed to register webhook: {s} hook ticket expired",
+    "failed to list webhooks: {s} Forbidden",
+    "V3 share delivery authorization failed: {s}",
+    "Failed to get peer ID: {s} - ",
+    "upstream returned 200 then failed: {s} - x",
+    'Failed to put key "report(403)": {s} - Forbidden',
+    'Failed to put key "report(401)": {s} - Forbidden',
+    'Failed to put key "report\\"": {s} - upstream said "session expired"',
+    'Failed to put key "report\\"HTTP 401\\"x": {s} - Forbidden',
+  ];
+  const MESSAGE_TABLE: Array<[message: string, refreshes: boolean]> = [
+    ...STATUS_FORMATS.flatMap((format): Array<[string, boolean]> => [
+      [format.replace("{s}", "401"), true],
+      [format.replace("{s}", "403"), false],
+      [format.replace("{s}", "502"), false],
+    ]),
+    // No status: session wording on the unstripped message decides.
+    ["session expired while reading /vault/403/item", true],
+    ["session expired for request req-403", true],
+    ["session expired at https://node.example:403/invoke", true],
+    ["session expired after 403 bytes", true],
+    ["403 bytes written; session expired", true],
+    ["403 records processed; session expired", true],
+    ["200 rows fetched; session expired", true],
+    ['request failed {"error":"session expired"}', true],
+    // Neither a diagnostic status nor session wording, or a status that wins.
+    ["Owner delegation import failed: 403 Unauthorized Action", false],
+    ["failed to list webhooks: 502 Unauthorized Action", false],
+    ['Failed to put key "k": 502 - upstream said: 401 Unauthorized', false],
+    ['"vault/401": 500', false],
+    ["connect ECONNREFUSED 127.0.0.1:401", false],
+    ["wrote 401 bytes", false],
+    ["id 401.5", false],
+    ["expected 401, got 500", false],
+    ["401 records processed; socket hang up", false],
+    ["error: 403\nsession expired", false],
+    ["session refused by Share (403)", false],
+  ];
+
+  test.each(MESSAGE_TABLE)("withSessionRefresh message %j refreshes=%p", async (message, refreshes) => {
+    expect(await refreshed(new Error(message))).toBe(refreshes);
+  });
+
+  test.each(
+    [401, 403].flatMap((status) =>
+      ["hook ticket expired", "Unauthorized Action: x / y"].flatMap((body) =>
+        RETHROW_STYLES.map((rethrow) => ({ status, body, rethrow })),
+      ),
+    ),
+  )("hooks.list $status body=$body rethrown with $rethrow", async ({ status, body, rethrow }) => {
+    let fetchCalls = 0;
+    let signedIn = false;
+    const hooks = new HooksService({ host: "https://node.example" });
+    hooks.initialize(new ServiceContext({
+      hosts: ["https://node.example"],
+      session: {
+        delegationHeader: { Authorization: "Bearer session" },
+        delegationCid: "bafy-session",
+        spaceId: "tinycloud:test-space",
+        verificationMethod: "did:key:zSession#zSession",
+        jwk: {},
+      },
+      invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+      fetch: async () => {
+        fetchCalls += 1;
+        return signedIn ? Response.json({ webhooks: [] }) : new Response(body, { status });
+      },
+    }));
+    let signInCalls = 0;
+    const node = {
+      signIn: async () => {
+        signInCalls += 1;
+        signedIn = true;
+      },
+    } as unknown as TinyCloudNode;
+
+    const failure = await rejectionOf(withSessionRefresh(node, async () => {
+      const result = await hooks.list();
+      if (!result.ok) throw rethrown(result.error, rethrow);
+    }));
+
+    if (status === 403) {
+      expect(String(failure?.message)).toBe(`failed to list webhooks: 403 ${body}`);
     }
-    expect(signInCalls).toBe(refreshes ? 1 : 0);
-    expect(calls).toBe(refreshes ? 2 : 1);
+    expect(fetchCalls).toBe(status === 401 ? 2 : 1);
+    expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
 });
 

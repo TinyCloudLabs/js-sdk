@@ -84,31 +84,31 @@ export async function createServerIdentity(
 
 // Message heuristics, for untyped errors only.
 //
-// Quoted text (`"…"`) is dropped first: the SDK quotes caller-chosen names such
-// as KV keys (`Failed to put key "report(401)": 403 - …`), and a number inside
-// one is never the status.
-//
-// A status is then a number only in the positions the SDK's own messages use:
-//   - `: NNN -` and a trailing `: NNN`   (`…key "k": 403 - text`, `…failed: 401`)
-//   - `server: NNN`                      (`…delegation with server: 403 text`)
-//   - `HTTP NNN`, `returned NNN`         (`…delegation import returned 401`)
-//   - `rejected (NNN)` and a trailing `(NNN)` or `(NNN).`
-//   - a leading `NNN` followed by a word other than `bytes`, or alone
-// The first such number in 100-599 decides, whatever its value: only a 401
-// refreshes, so a real 502 is not overridden by a `401` quoted in its body.
-// Paths, ids, ports, byte counts and `expected 401, got 500` are not statuses.
-// Session wording decides only when no status is found.
-const QUOTED_TEXT_PATTERN = /"[^"]*"/g;
+// 1. Double-quoted strings are dropped (escape-aware). The SDK writes
+//    caller-chosen names such as KV keys with `JSON.stringify`, so a status-like
+//    number or quote inside a key can never be read as, or hide, the status.
+// 2. The first number in 400-599 in one of the SDK's diagnostic positions is
+//    the status:
+//      - `: NNN` followed by whitespace or the end — KV `…key "k": 403 - text`,
+//        hooks `…webhook: 401 hook ticket expired`, `…with server: 403`,
+//        `…failed: 401`
+//      - `HTTP NNN`, `returned NNN`, `rejected (NNN)`
+//      - a trailing `(NNN)` or `(NNN).`
+//    Only a 401 refreshes, so a real 502 or 403 is never overridden by a `401`
+//    later in its body.
+// 3. With no status, session wording on the unstripped message decides.
+const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"/g;
 const DIAGNOSTIC_STATUS_PATTERN =
-  /^(\d{3})(?:\s+(?!bytes\b)[a-z]|$)|:\s(\d{3})(?:\s-|$)|\bserver:\s(\d{3})\b|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
+  /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 const SESSION_ERROR_PATTERN =
   /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
 
-/** The first HTTP status in a diagnostic position of `message` (quotes dropped). */
+/** The first HTTP error status in a diagnostic position, ignoring quoted strings. */
 function diagnosticStatusOf(message: string): number | undefined {
-  for (const match of message.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
+  const unquoted = message.replace(QUOTED_STRING_PATTERN, '""');
+  for (const match of unquoted.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
     const status = Number(match.slice(1).find((group) => group !== undefined));
-    if (status >= 100 && status <= 599) return status;
+    if (status >= 400 && status <= 599) return status;
   }
   return undefined;
 }
@@ -124,8 +124,7 @@ export function isTinyCloudSessionError(error: unknown): boolean {
   if (verdict !== undefined) {
     return verdict === "unauthenticated";
   }
-  const message = (error instanceof Error ? error.message : String(error))
-    .replace(QUOTED_TEXT_PATTERN, '""');
+  const message = error instanceof Error ? error.message : String(error);
   const status = diagnosticStatusOf(message);
   if (status !== undefined) {
     return status === 401;

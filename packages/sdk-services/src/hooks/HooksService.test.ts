@@ -67,3 +67,19 @@ describe("HooksService.register", () => {
     expect(fetchCalls).toBe(0);
   });
 });
+
+describe("HooksService error responses", () => {
+  test.each([401, 403, 502])("list %i keeps the status typed and in the message", async (status) => {
+    const service = new HooksService({ host: "https://node.tinycloud.xyz" });
+    service.initialize(
+      createContext(async () => new Response("hook ticket expired", { status })),
+    );
+
+    const result = await service.list();
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.meta?.status).toBe(status);
+    expect(result.error.message).toBe(`failed to list webhooks: ${status} hook ticket expired`);
+  });
+});

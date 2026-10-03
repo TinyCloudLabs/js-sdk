@@ -4382,7 +4382,10 @@ export class TinyCloudNode {
     const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
     assertOwnerGraphActive();
     if (!activation.success) {
-      throw new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim());
+      throw Object.assign(
+        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
+        { cause: activation },
+      );
     }
     const delegation: Delegation = {
       cid: delegationSession.delegationCid,

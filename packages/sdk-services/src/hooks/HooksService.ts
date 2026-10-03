@@ -626,10 +626,15 @@ async function responseError(
   } catch {
     // Ignore secondary body read failure.
   }
-  return wrapError(
+  const error = wrapError(
     service,
     new Error(`${message}: ${response.status} ${detail}`),
   );
+  // Typed status so callers never have to read it back out of the message.
+  return {
+    ...error,
+    meta: { ...error.meta, status: response.status, statusText: response.statusText },
+  };
 }
 
 function isAbortError(error: unknown): boolean {
