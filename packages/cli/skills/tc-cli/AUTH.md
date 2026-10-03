@@ -51,7 +51,7 @@ Before saving anything the CLI checks that the approval is bound to this transac
 
 The owner may uncheck capabilities. The JSON result lists `permissions` (approved) and `declined` (unchecked); the CLI also prints declined capabilities to stderr. A declined capability makes the commands that need it fail with a permission error.
 
-Errors: `SCOPE_REJECTED` means OpenKey refuses that capability over device login (the message names it); remove it from the manifest. `DEVICE_AUTH_DENIED` means the owner declined. `DEVICE_AUTH_EXPIRED` means nobody approved in time; run the command again.
+Errors: `SCOPE_REJECTED` means OpenKey refuses that capability over device login (the message names it); remove it from the manifest. `DEVICE_AUTH_DENIED` means the owner declined. `DEVICE_AUTH_EXPIRED` means nobody approved in time; run the command again. `DEVICE_AUTH_RATE_LIMITED` means OpenKey received 5 device sign-in requests from this network within 10 minutes; wait before retrying. If OpenKey sends `Retry-After`, the CLI includes that wait in the error hint.
 
 ## Browser login with a manifest
 

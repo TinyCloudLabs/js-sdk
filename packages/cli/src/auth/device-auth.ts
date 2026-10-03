@@ -184,6 +184,39 @@ function errorDescription(value: Record<string, unknown> | undefined): string | 
   return typeof description === "string" && description.length > 0 ? description : undefined;
 }
 
+function retryAfterSeconds(response: Response): number | undefined {
+  const value = response.headers.get("retry-after");
+  if (!value) return undefined;
+
+  let seconds: number;
+  if (/^\d+$/.test(value)) {
+    seconds = Number(value);
+    if (!Number.isSafeInteger(seconds)) return undefined;
+  } else {
+    if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/.test(value)) {
+      return undefined;
+    }
+    const retryAt = Date.parse(value);
+    if (!Number.isFinite(retryAt) || new Date(retryAt).toUTCString() !== value) return undefined;
+    seconds = Math.ceil((retryAt - Date.now()) / 1000);
+  }
+
+  return seconds > 0 && seconds <= 600 ? seconds : undefined;
+}
+
+function deviceAuthRateLimit(response: Response): CLIError {
+  const retrySeconds = retryAfterSeconds(response);
+  return new CLIError(
+    "DEVICE_AUTH_RATE_LIMITED",
+    "OpenKey rate limited device sign-in requests from this network",
+    ExitCode.ERROR,
+    {
+      hint: `OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait up to 10 minutes, then retry once. The limit is shared by every agent on this network.${retrySeconds !== undefined ? ` Retry after ${retrySeconds} seconds.` : ""}`,
+    },
+  );
+}
+
+
 function publicSessionJwk(value: object): object {
   const publicJwk = publicJwkForDelegation(value);
   const record = publicJwk as Record<string, unknown>;
@@ -435,6 +468,9 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   if (!startResponse.ok) {
     const code = errorCode(startValue);
     const description = errorDescription(startValue);
+    if (startResponse.status === 429 && code === "rate_limited") {
+      throw deviceAuthRateLimit(startResponse);
+    }
     if (code === "invalid_scope") {
       throw new CLIError(
         "SCOPE_REJECTED",
