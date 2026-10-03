@@ -12,11 +12,6 @@ export async function ownerDid(privateKey: string): Promise<string> {
   return `did:pkh:eip155:${await signer.getChainId()}:${await signer.getAddress()}`;
 }
 
-export async function ownerSpace(privateKey: string, name: string): Promise<string> {
-  const signer = new PrivateKeySigner(privateKey);
-  return new NodeWasmBindings().makeSpaceId(await signer.getAddress(), await signer.getChainId(), name);
-}
-
 /**
  * The JSON body OpenKey's `/delegate` page posts to the hosted callback: a SIWE
  * session for the tenant's hosted delegate key, signed by `privateKey`.
@@ -60,6 +55,37 @@ export async function openKeyCallbackBody(options: {
     signature,
     expiry,
   };
+}
+
+/**
+ * Approve an OpenKey `/delegate` redirect the way OpenKey does: sign exactly
+ * the requested permissions, all in one space, which OpenKey re-derives from
+ * the signer's address and the space name.
+ */
+export async function openKeyApprovalBody(options: {
+  readonly redirect: URL;
+  readonly tenantStateRoot: string;
+  readonly privateKey: string;
+}): Promise<Record<string, unknown>> {
+  const encoded = options.redirect.searchParams.get("permissions");
+  if (encoded === null) throw new Error("OpenKey redirect has no permissions.");
+  const { permissions } = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+    permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
+  };
+  const spaces = new Set(permissions.map((permission) => permission.space.split(":").at(-1)!));
+  if (spaces.size !== 1) throw new Error("OpenKey signs one space per delegation.");
+  const abilities: Record<string, Record<string, string[]>> = {};
+  for (const permission of permissions) {
+    const service = permission.service.replace(/^tinycloud\./, "");
+    const paths = abilities[service] ??= {};
+    paths[permission.path] = [...new Set([...(paths[permission.path] ?? []), ...permission.actions])];
+  }
+  return openKeyCallbackBody({
+    tenantStateRoot: options.tenantStateRoot,
+    privateKey: options.privateKey,
+    space: [...spaces][0]!,
+    abilities,
+  });
 }
 
 export function callbackRequest(body: Record<string, unknown>): Request {

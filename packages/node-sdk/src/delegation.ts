@@ -136,11 +136,11 @@ export interface ValidatedRuntimeDelegation {
   readonly cid: string;
   /** The authority object installed by the node runtime. */
   readonly delegation: PortableDelegation;
-  /** Capabilities read from the signed compact UCAN attenuation. */
+  /** Capabilities read from the signed compact UCAN attenuation or SIWE ReCap. */
   readonly effectivePermissions: readonly PermissionEntry[];
-  /** Expiry read from the signed compact UCAN payload. */
+  /** Expiry read from the signed compact UCAN payload or SIWE. */
   readonly expiry: Date;
-  /** Audience read from the signed compact UCAN payload. */
+  /** Audience read from the signed compact UCAN payload or SIWE. */
   readonly audience: string;
   /** Host selected for, and used by, the runtime activation. */
   readonly host: string;
@@ -501,7 +501,7 @@ function comparableSpace(space: string): string {
  */
 function signedAuthorityFromSessionGrant(
   node: RuntimeDelegationActivator,
-  delegation: PortableDelegation,
+  delegation: Pick<PortableDelegation, "siweProof" | "spaceId" | "ownerAddress" | "chainId">,
   authorization: string,
   cid: string,
 ): SignedRuntimeAuthority {
@@ -817,15 +817,65 @@ export async function activateCompactRuntimeDelegation(
     throw new Error("Compact runtime delegation CID does not match authorization bytes.");
   }
   const signed = signedAuthorityFromCompactUcan(authorization);
+  return activateValidatedRuntimeDelegation(
+    node,
+    portableFromSignedAuthority(cid, authorization, signed, input),
+    { host: input.host },
+  );
+}
+
+/**
+ * Project an OpenKey signed-login delegation from the same verified CACAO
+ * authority used when the runtime activates and replays it.
+ */
+export function siweRuntimeDelegation(
+  node: RuntimeDelegationActivator,
+  input: {
+    readonly authorization: string;
+    readonly cid: string;
+    readonly spaceId: string;
+    readonly ownerAddress: string;
+    readonly chainId: number;
+    readonly siwe: string;
+    readonly signature: string;
+    readonly host: string;
+  },
+): PortableDelegation {
+  const cid = node.computeDelegationCid(input.authorization);
+  if (cid !== input.cid) {
+    throw new Error("SIWE runtime delegation CID does not match authorization bytes.");
+  }
+  const proof = { siwe: input.siwe, signature: input.signature };
+  const signed = signedAuthorityFromSessionGrant(
+    node,
+    { siweProof: proof, spaceId: input.spaceId, ownerAddress: input.ownerAddress, chainId: input.chainId },
+    input.authorization,
+    cid,
+  );
+  if (signed.expiry.getTime() <= Date.now()) {
+    reject("expired", "Runtime delegation is expired.");
+  }
+  return {
+    ...portableFromSignedAuthority(cid, input.authorization, signed, input),
+    siweProof: proof,
+  };
+}
+
+function portableFromSignedAuthority(
+  cid: string,
+  authorization: string,
+  signed: SignedRuntimeAuthority,
+  transport: { readonly ownerAddress: string; readonly chainId: number; readonly host: string },
+): PortableDelegation {
   const primary = signed.resources[0]!;
   const signedSpace = signed.permissions.find(
     (permission) => permission.service !== "tinycloud.encryption",
   )?.space;
-  const delegation: PortableDelegation = {
+  return {
     cid,
     delegationHeader: { Authorization: authorization },
-    ownerAddress: input.ownerAddress,
-    chainId: input.chainId,
+    ownerAddress: transport.ownerAddress,
+    chainId: transport.chainId,
     delegatorDID: signed.issuer,
     authHeader: authorization,
     spaceId: signedSpace ?? primary.space,
@@ -838,11 +888,8 @@ export async function activateCompactRuntimeDelegation(
     })),
     expiry: new Date(signed.expiry),
     delegateDID: signed.audience,
-    host: normalizedHost(input.host),
+    host: normalizedHost(transport.host),
   };
-  return activateValidatedRuntimeDelegation(node, delegation, {
-    host: input.host,
-  });
 }
 
 /**
