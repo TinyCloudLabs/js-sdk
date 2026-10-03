@@ -9,14 +9,14 @@ const ORIGINAL_HOME = process.env.HOME;
 process.env.HOME = TEST_HOME;
 
 const SECRET_VALUE_CANARY = "tc-191-owner-secret-value-canary";
-const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkOwner:default";
+const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
 
 const profile = {
   name: "default",
   host: "https://node.tinycloud.test",
   chainId: 1,
   spaceName: "default",
-  did: "did:pkh:eip155:1:0xOwner",
+  did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
   createdAt: "2026-07-14T12:00:00.000Z",
   authMethod: "openkey" as const,
   posture: "owner-openkey" as const,
@@ -176,14 +176,18 @@ afterAll(async () => {
 });
 
 describe("owner secrets get OpenKey retry", () => {
-  // The browser approval retry runs only for a person at a terminal.
-  const isTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  // The person sees prompts on stderr even when stdout is piped or redirected.
+  const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
   beforeEach(() => {
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
   });
   afterEach(() => {
-    if (isTTY) Object.defineProperty(process.stdout, "isTTY", isTTY);
+    if (stdoutTTY) Object.defineProperty(process.stdout, "isTTY", stdoutTTY);
     else Reflect.deleteProperty(process.stdout, "isTTY");
+    if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
+    else Reflect.deleteProperty(process.stderr, "isTTY");
   });
 
   test("acquires once and retries the secret exactly once through the real owner path", async () => {
@@ -207,6 +211,8 @@ describe("owner secrets get OpenKey retry", () => {
         acquisitions += 1;
         return {
           delegationHeader: { Authorization: "Bearer openkey-owner" },
+          address: "0x0000000000000000000000000000000000000001",
+          chainId: 1,
           delegationCid: "bafy-owner-openkey",
           spaceId: "secrets",
           verificationMethod: "did:key:z6MkOwner",
@@ -249,6 +255,8 @@ describe("owner secrets get OpenKey retry", () => {
         delegationCid: `bafy-owner-openkey-${acquisitions}`,
         spaceId: "secrets",
         verificationMethod: "did:key:z6MkOwner",
+        address: "0x0000000000000000000000000000000000000001",
+        chainId: 1,
         expiresAt: "2099-01-01T00:00:00.000Z",
         expiry: "2099-01-01T00:00:00.000Z",
       };

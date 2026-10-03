@@ -370,7 +370,11 @@ describe("TinyCloudNode runtime permission delegations", () => {
     }
   });
 
-  test("classifies a plain-text decrypt 401 as missing decrypt authority on the requested network", async () => {
+  test.each([
+    { label: "plain-text 401", status: 401, hint: "none" },
+    { label: "structured 403 naming another network", status: 403, hint: "other-network" },
+    { label: "structured 401 naming a KV read", status: 401, hint: "kv-read" },
+  ] as const)("classifies a decrypt $label as missing decrypt authority on the requested network", async ({ status, hint }) => {
     const node = makeNode(mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
     })) as any);
@@ -398,8 +402,29 @@ describe("TinyCloudNode runtime permission delegations", () => {
       const method = (init?.method ?? "GET").toUpperCase();
       if (method === "GET" && url === networkUrl) return Response.json({ descriptor });
       if (method === "POST" && url === `${networkUrl}/decrypt`) {
-        // What production nodes answer: plain text, no structured hint.
-        return new Response(`Unauthorized Action: ${networkId} / tinycloud.encryption/decrypt`, { status: 401 });
+        if (hint === "other-network") {
+          return Response.json({
+            permissionHint: {
+              service: "tinycloud.encryption",
+              path: "urn:tinycloud:encryption:did:key:z6MkOther:default",
+              actions: ["tinycloud.encryption/decrypt"],
+            },
+          }, { status });
+        }
+        if (hint === "kv-read") {
+          return Response.json({
+            error: {
+              permissionHint: {
+                service: "tinycloud.kv",
+                space: secretsSpaceId,
+                path: "vault/secrets/OPENAI_API_KEY",
+                actions: ["tinycloud.kv/get"],
+              },
+            },
+          }, { status });
+        }
+        // Production nodes may deny with plain text and no structured hint.
+        return new Response(`Unauthorized Action: ${networkId} / tinycloud.encryption/decrypt`, { status });
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     }) as typeof fetch;

@@ -5,7 +5,7 @@ import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
-import { isRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission, rawEncryptionOwnerMatches } from "../lib/raw-encryption.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -143,9 +143,9 @@ export function permissionTuples(permissions: readonly PermissionEntry[], ownerD
 
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-  // Raw network entries stay in the `encryption` pseudo-space; the owner
-  // address inside the URN compares case-insensitively like a space id.
-  const raw = isRawEncryptionPermission(permission);
+  // Only a top-level network entry is a raw grant. A legacy OpenKey signed
+  // decrypt nested under the owner space must remain a distinct resource.
+  const raw = isVerifiedRawEncryptionPermission(permission);
   const space = raw ? ENCRYPTION_MANIFEST_SPACE : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
   const path = raw ? normalizePkhIdentifier(permission.path) : permission.path;
   return permission.actions.map((action) =>
@@ -372,9 +372,27 @@ export function verifyScopedLogin(
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
     }
   }
+  // Old OpenKey signs requested decrypt inside the session space rather than
+  // as a top-level network resource. It cannot decrypt on the node: retain the
+  // verified resource, but do not treat it as approved or reject the whole
+  // login solely because of this known, unusable nesting.
+  const legacyNested = (permission: PermissionEntry): boolean =>
+    isRawEncryptionPermission(permission) && !isVerifiedRawEncryptionPermission(permission) &&
+    normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) === normalizePkhIdentifier(spaceId) &&
+    rawEncryptionOwnerMatches(permission.path, signed.ownerDid) &&
+    permission.actions.every((action) => action === "tinycloud.encryption/decrypt") &&
+    requested.some((entry) => isRawEncryptionPermission(entry) &&
+      normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path) &&
+      permission.actions.every((action) => entry.actions.includes(action)));
+  for (const permission of signed.permissions) {
+    if (isVerifiedRawEncryptionPermission(permission) &&
+      !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "OpenKey signed decrypt for a network not owned by the approving identity. No session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+  }
   // A signed action is inside the request when a requested one covers it: the
   // same action, unrestricted or with the same caveats (OpenKey may narrow).
-  if (!scopeCovers(requested, signed.permissions, signed.ownerDid)) {
+  if (!scopeCovers(requested, signed.permissions.filter((permission) => !legacyNested(permission)), signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
   }
   // Keep signed proof intact; unsigned callback identity/expiry/permissions

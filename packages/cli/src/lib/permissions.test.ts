@@ -380,6 +380,35 @@ describe("loadManifestPermissions", () => {
     );
   });
 
+  test("checksums recorded and explicit lowercase owners in the default secrets network", async () => {
+    const source = manifestSource({
+      app_id: "xyz.tinycloud.agent",
+      secrets: { OPENAI_API_KEY: true },
+    });
+    activeProfile.ownerDid = `did:pkh:eip155:1:${OWNER_ADDRESS}`;
+    const recorded = await loadManifestPermissions(source, "default", { allowLogicalSpaces: true });
+    expect(recorded.find((permission) => permission.service === "tinycloud.encryption")?.path)
+      .toBe(`urn:tinycloud:encryption:${OWNER_DID}:default`);
+
+    delete activeProfile.ownerDid;
+    const explicit = await loadManifestPermissions(source, "default", {
+      allowLogicalSpaces: true,
+      ownerDid: `did:pkh:eip155:1:${OWNER_ADDRESS}`,
+    });
+    expect(explicit.find((permission) => permission.service === "tinycloud.encryption")?.path)
+      .toBe(`urn:tinycloud:encryption:${OWNER_DID}:default`);
+  });
+
+  test("device manifest with secrets is rejected before resolving an unknown owner", async () => {
+    activeProfile = {
+      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
+      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const source = manifestSource({ app_id: "xyz.tinycloud.agent", space: "secrets", secrets: { OPENAI_API_KEY: true } });
+    await expect(loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true }))
+      .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+  });
+
   test("does not add decrypt permission for write-only secrets", async () => {
     const permissions = await loadManifestPermissions(
       manifestSource({

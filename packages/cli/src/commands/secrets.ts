@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import { open, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, open, readFile, rename, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import {
   type PermissionEntry,
@@ -14,7 +15,7 @@ import {
 } from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 import { ProfileManager } from "../config/profiles.js";
-import { formatCheck, formatSection, isInteractive, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
+import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -219,6 +220,14 @@ async function ensureSecretsNode(
   if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
     const session = await ProfileManager.getSession(ctx.profile);
     if (!session || isStoredSessionExpired(session)) {
+      if (!process.stdin.isTTY && !process.stderr.isTTY) {
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
+          ExitCode.AUTH_REQUIRED,
+          { hint: scopedSecretLoginHint(ctx.profile) },
+        );
+      }
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
         () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition }),
@@ -281,33 +290,46 @@ function secretPermissionReason(action: SecretAction, name?: string): string {
   return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 
-/**
- * An OpenKey profile asks the owner for a missing grant through the browser
- * callback flow. With no terminal nobody can complete it, so the command
- * would wait silently; fail with the scoped login an agent can use instead.
- */
+/** Browser approval is possible when the person can see stderr or answer on stdin. */
 function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string): void {
-  if (profile.authMethod !== "openkey" || isInteractive()) return;
+  if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
   const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
     `Profile "${profileName}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
     ExitCode.PERMISSION_DENIED,
     {
-      hint: `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`,
+      hint: scopedSecretLoginHint(profileName),
     },
   );
 }
 
-/** Write a secret value to a file only its owner can read, whether or not it existed. */
+function scopedSecretLoginHint(profileName: string): string {
+  return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+
+/** Replace only regular destination files with a fresh owner-only inode. */
 async function writeSecretFile(path: string, value: string): Promise<void> {
-  const handle = await open(path, "w", PRIVATE_FILE_MODE);
   try {
-    // `open` applies the mode only when it creates the file.
-    await handle.chmod(PRIVATE_FILE_MODE);
-    await handle.writeFile(value);
-  } finally {
-    await handle.close();
+    const destination = await lstat(path);
+    if (!destination.isFile()) {
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink or device.`, ExitCode.USAGE_ERROR);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  const handle = await open(temp, "wx", PRIVATE_FILE_MODE);
+  try {
+    try {
+      await handle.writeFile(value);
+    } finally {
+      await handle.close();
+    }
+    await rename(temp, path);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
   }
 }
 

@@ -1,5 +1,6 @@
 import { appendFile, chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact,
@@ -342,13 +343,30 @@ export async function loadManifestPermissions(
     allowLogicalSpaces?: boolean;
     /** `--owner`: names the secrets owner when the profile has not recorded one. */
     ownerDid?: string;
+    /** Reject device-ineligible secrets before an owner network is resolved. */
+    device?: boolean;
   } = {},
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
+  if (options.device && typeof manifest.app_id === "string" &&
+    (manifest.secrets !== undefined ||
+      manifest.space === "secrets" ||
+      (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")) ||
+      (Array.isArray(manifest.permissions) && manifest.permissions.some((entry: unknown) =>
+        entry !== null && typeof entry === "object" &&
+        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption")))) {
+    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+  }
 
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
+    if (options.device && resolved.resources.some((entry) =>
+      entry.service === "tinycloud.encryption" ||
+      entry.space === "secrets" ||
+      entry.space?.endsWith(":secrets"))) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
 
@@ -444,14 +462,15 @@ async function defaultSecretsNetworkId(profileName: string, requestedOwner: stri
       ExitCode.AUTH_REQUIRED,
     );
   }
-  if (!/^did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}$/.test(owner)) {
+  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(owner);
+  if (!match) {
     throw new CLIError(
       "INVALID_ARGUMENT",
       `Secrets owner "${owner}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`,
       ExitCode.USAGE_ERROR,
     );
   }
-  return `urn:tinycloud:encryption:${owner}:default`;
+  return `urn:tinycloud:encryption:did:pkh:eip155:${match[1]}:${ensureEip55(match[2]!)}:default`;
 }
 
 export function diffPermissions(

@@ -51,7 +51,7 @@ import {
   withoutTrustFields,
   withVerifiedAuthority,
 } from "../auth/scoped-login.js";
-import { isRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission, rawEncryptionOwnerMatches } from "../lib/raw-encryption.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
@@ -158,7 +158,7 @@ export function registerAuthCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
-          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner })
+          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
           : undefined;
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
@@ -1211,6 +1211,7 @@ async function collectRequestedPermissions(
     cap?: string[];
     permission?: string;
     manifest?: string;
+    device?: boolean;
   },
   profile: string,
 ): Promise<PermissionEntry[]> {
@@ -1222,7 +1223,7 @@ async function collectRequestedPermissions(
     permissions.push(...await loadPermissionRequest(options.permission, profile));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
   }
   return permissions;
 }
@@ -1383,7 +1384,13 @@ export function portableFromOpenKeyDelegation(
       ? permission.service
       : `tinycloud.${service}`;
     const permSpace = permission.space ?? "";
-    const raw = isRawEncryptionPermission({ service: rawService, path: permission.path });
+    const raw = isVerifiedRawEncryptionPermission({ service: rawService, space: permission.space, path: permission.path });
+    if (raw && (typeof data.address !== "string" || !rawEncryptionOwnerMatches(
+      permission.path,
+      `did:pkh:eip155:${typeof data.chainId === "number" ? data.chainId : DEFAULT_CHAIN_ID}:${data.address}`,
+    ))) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "OpenKey relayed decrypt for a network not owned by the approving identity.", ExitCode.PERMISSION_DENIED);
+    }
     // Cross-check: every returned (service, space, path, action) must
     // appear in the requested set.
     if (returnedPermissions) {
@@ -1399,7 +1406,7 @@ export function portableFromOpenKeyDelegation(
         }
       }
     }
-    const resolvedSpace: string = raw ? "encryption" : returnedSpace;
+    const resolvedSpace: string = raw ? "encryption" : returnedPermissions && permSpace ? permSpace : returnedSpace;
     // Signed ReCap caveats restrict the resource; dropping them would make
     // consumers treat a caveated grant as unrestricted.
     const caveats = Array.isArray(permission.caveats) && permission.caveats.length > 0
@@ -1706,7 +1713,7 @@ async function handleOpenKeyAuth(
 ): Promise<void> {
   const { profile, delegationData, declined } = await refreshOpenKeySession(profileName, host, options);
 
-  reportDeclined(declined);
+  reportDeclined(declined, delegationData.permissions as PermissionEntry[] | undefined);
   outputJson({
     authenticated: true,
     profile: profileName,
@@ -1727,12 +1734,18 @@ async function handleOpenKeyAuth(
   });
 }
 
-/** Tell the operator which requested capabilities the owner unchecked. */
-function reportDeclined(declined: PermissionEntry[]): void {
+/** Tell the operator which requested capabilities the owner unchecked or OpenKey signed incorrectly. */
+function reportDeclined(declined: PermissionEntry[], signed?: PermissionEntry[]): void {
   if (declined.length === 0) return;
   process.stderr.write(
-    `${theme.warn("The owner did not approve:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
+    `${theme.warn("Not granted in this session:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
   );
+  if (declined.some((permission) => isRawEncryptionPermission(permission) &&
+    signed?.some((entry) => isRawEncryptionPermission(entry) &&
+      !isVerifiedRawEncryptionPermission(entry) &&
+      normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path)))) {
+    process.stderr.write(`${theme.warn("OpenKey signed decrypt inside the space; the TinyCloud node refuses that. The OpenKey deployment is too old for agent secret reads.")}\n`);
+  }
 }
 
 interface OpenKeyLoginOptions {

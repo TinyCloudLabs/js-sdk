@@ -122,7 +122,7 @@ tc secrets network grant did:pkh:eip155:1:0xRecipient...
 
 tc secrets put ANTHROPIC_API_KEY "sk-..."
 tc secrets get ANTHROPIC_API_KEY
-tc secrets get ANTHROPIC_API_KEY -o key.txt   # file created owner-only (0600)
+tc secrets get ANTHROPIC_API_KEY -o key.txt   # atomic owner-only (0600) replacement
 tc secrets list
 tc secrets delete ANTHROPIC_API_KEY
 ```
@@ -140,9 +140,9 @@ printf '%s\n' "$CODE" | tc --profile agent auth login --method openkey --paste -
 tc --profile agent secrets get OPENAI_API_KEY --raw
 ```
 
-`secrets: { NAME: true }` requests, in the owner's `secrets` space, `kv/get` on `vault/secrets/NAME` and `capabilities/read` on `""`, plus the raw network entry `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`. The owner DID comes from the profile's recorded owner, else `--owner`; with neither the login fails with `OWNER_DID_UNKNOWN`. The JSON result lists approved `permissions` and owner-unchecked `declined` entries, including the decrypt entry.
+`secrets: { NAME: true }` requests, in the owner's `secrets` space, `kv/get` on `vault/secrets/NAME` and `capabilities/read` on `""`, plus the raw network entry `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`. The owner DID comes from the profile's recorded owner, else `--owner`, and its address is EIP-55 checksummed in the URN; with neither the login fails with `OWNER_DID_UNKNOWN`. The JSON result lists approved `permissions` and `declined` entries. A nested decrypt grant from an older OpenKey deployment is declined, not usable.
 
-Without a terminal, `secrets get|list|put|delete` on an OpenKey profile that lacks the grant fails with `PERMISSION_DENIED` (exit 5) and a hint naming the scoped paste login, instead of waiting on a browser approval. A node that refuses decrypt (HTTP 401/403) is reported as missing authority, not as an undecryptable secret.
+When neither stdin nor stderr is a terminal, `secrets get|list|put|delete` on an OpenKey profile that lacks the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. Missing or expired sessions instead fail with `AUTH_REQUIRED` (exit 3) before any browser refresh. Redirected stdout alone does not disable an owner's browser prompt. `secrets get -o` replaces an existing regular file atomically with a fresh 0600 inode; it refuses symlinks and non-regular destinations (`INVALID_ARGUMENT`), including `/dev/null` and `/dev/stdout`. A node that refuses decrypt (HTTP 401/403) is reported as missing authority on the invoked network, not as an undecryptable secret.
 
 ## Node Health
 

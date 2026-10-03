@@ -109,6 +109,52 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
     expect(portable.resources).toContainEqual({ service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] });
   });
 
+  test("does not promote a nested relayed decrypt into a requested raw grant", () => {
+    const network = `urn:tinycloud:encryption:did:pkh:eip155:1:${ADDR_CHECKSUM}:default`;
+    const requested = [
+      cap("tinycloud.kv", SPACE_CHECKSUM, "vault/secrets/KEY", ["tinycloud.kv/get"]),
+      cap("tinycloud.encryption", "encryption", network, ["tinycloud.encryption/decrypt"]),
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyNESTED",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      expiry: new Date(Date.now() + 3600_000).toISOString(),
+      permissions: [
+        { service: "kv", space: SPACE_CHECKSUM, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] },
+        { service: "encryption", space: SPACE_CHECKSUM, path: network, actions: ["tinycloud.encryption/decrypt"] },
+      ],
+    };
+    expect(() => portableFromOpenKeyDelegation(data, requested, "https://host"))
+      .toThrow(expect.objectContaining({ code: "OPENKEY_GRANT_BROADENED" }));
+  });
+
+  test("refuses a relayed raw grant owned by a different signer", () => {
+    const network = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
+    const requested = [
+      cap("tinycloud.kv", SPACE_CHECKSUM, "vault/secrets/KEY", ["tinycloud.kv/get"]),
+      cap("tinycloud.encryption", "encryption", network, ["tinycloud.encryption/decrypt"]),
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyFOREIGN",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      expiry: new Date(Date.now() + 3600_000).toISOString(),
+      permissions: [
+        { service: "kv", space: SPACE_CHECKSUM, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] },
+        { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+      ],
+    };
+    expect(() => portableFromOpenKeyDelegation(data, requested, "https://host"))
+      .toThrow(expect.objectContaining({ code: "OPENKEY_SCOPE_MISMATCH" }));
+  });
+
   test("uses OpenKey expirationTime when expiry aliases are absent", () => {
     const expirationTime = "2099-01-01T00:00:00.000Z";
     const permissions = [

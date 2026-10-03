@@ -421,6 +421,16 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   validateLoginPermissions(input.permissions);
+  if (input.permissions.some((permission) =>
+    permission.service === "tinycloud.encryption" ||
+    permission.space === "secrets" ||
+    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+    throw new CLIError(
+      "DEVICE_AUTH_UNSUPPORTED_SCOPE",
+      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
   const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1000 };
   const ttlSeconds = Math.floor(expiry.durationMs / 1000);
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {

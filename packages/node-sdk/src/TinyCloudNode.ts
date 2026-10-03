@@ -3882,30 +3882,15 @@ export class TinyCloudNode {
         );
         graph.assertActive();
         if (!response.ok) {
-          let permissionHint: PermissionHint | undefined;
-          if (response.status === 401 || response.status === 403) {
-            try {
-              const body: unknown = await response.json();
-              const record = typeof body === "object" && body !== null
-                ? body as Record<string, unknown>
-                : undefined;
-              const nested = typeof record?.error === "object" && record.error !== null
-                ? record.error as Record<string, unknown>
-                : undefined;
-              permissionHint = parsePermissionHint(record?.permissionHint) ??
-                parsePermissionHint(nested?.permissionHint);
-            } catch {
-              // Production nodes deny with plain text; handled below.
-            }
-            // The node refused this decrypt invocation, so the session lacks
-            // decrypt on the network it named. The hint comes from the request
-            // itself, never from the response body.
-            permissionHint ??= parsePermissionHint({
+          // A decrypt denial identifies the attempted authority, not a permission
+          // named by the response body, which may describe another operation.
+          const permissionHint = response.status === 401 || response.status === 403
+            ? parsePermissionHint({
               service: "tinycloud.encryption",
               path: networkId,
               actions: ["tinycloud.encryption/decrypt"],
-            });
-          }
+            })
+            : undefined;
           throw new DecryptTransportResponseError(response.status, permissionHint);
         }
         return (await response.json()) as DecryptResponseBody;

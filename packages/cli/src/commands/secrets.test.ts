@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { link, lstat, mkdir, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -125,6 +125,8 @@ let canonicalResultOverride: unknown | null = null;
 let currentNode: FakeNode;
 let outputJsonRequested = false;
 let interactive = true;
+const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
 let currentSession: object | null = {
   expiresAt: "2099-01-01T00:00:00.000Z",
   address: "0x0000000000000000000000000000000000000001",
@@ -575,6 +577,14 @@ beforeEach(() => {
     posture: "owner-openkey",
     operatorType: "human",
   };
+  Object.defineProperty(process.stdin, "isTTY", { configurable: true, get: () => interactive });
+  Object.defineProperty(process.stderr, "isTTY", { configurable: true, get: () => interactive });
+});
+afterEach(() => {
+  if (stdinTTY) Object.defineProperty(process.stdin, "isTTY", stdinTTY);
+  else Reflect.deleteProperty(process.stdin, "isTTY");
+  if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
+  else Reflect.deleteProperty(process.stderr, "isTTY");
 });
 
 describe("CLI secrets commands", () => {
@@ -1343,6 +1353,78 @@ describe("CLI secrets commands", () => {
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("atomically replaces an output inode without exposing secret bytes to existing readers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-atomic-"));
+    try {
+      const destination = join(dir, "key");
+      const oldReader = join(dir, "old-reader");
+      await writeFile(destination, "old-public-value", { mode: 0o644 });
+      await link(destination, oldReader);
+      const original = await open(destination, "r");
+      try {
+        await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", destination]);
+        expect(recorded.errors).toEqual([]);
+        expect(await original.readFile({ encoding: "utf8" })).toBe("old-public-value");
+        expect(await readFile(oldReader, "utf8")).toBe("old-public-value");
+        expect(await readFile(destination, "utf8")).toBe("stored-value");
+        expect((await stat(destination)).mode & 0o777).toBe(0o600);
+      } finally {
+        await original.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses symlink and device outputs without changing their target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-unsafe-output-"));
+    try {
+      const target = join(dir, "target");
+      const shortcut = join(dir, "shortcut");
+      await writeFile(target, "public", { mode: 0o644 });
+      await symlink(target, shortcut);
+      for (const destination of [shortcut, "/dev/null", "/dev/stdout"]) {
+        resetRecorded();
+        await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", destination]);
+        expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_ARGUMENT" })]);
+      }
+      expect(await readFile(target, "utf8")).toBe("public");
+      expect((await stat(target)).mode & 0o777).toBe(0o644);
+      expect((await lstat(shortcut)).isSymbolicLink()).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or expired OpenKey session fails headlessly before any unscoped browser refresh", async () => {
+    interactive = false;
+    const expired = { expiresAt: "2000-01-01T00:00:00.000Z" };
+    for (const session of [null, expired]) {
+      for (const args of [
+        ["secrets", "list"],
+        ["secrets", "put", "KEY", "value"],
+        ["secrets", "delete", "KEY"],
+        ["secrets", "get", "KEY", "--raw"],
+      ]) {
+        resetRecorded();
+        currentSession = session;
+        canonicalResultOverride = {
+          status: "error",
+          operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+          context: { profile: "default", host: "https://tinycloud.test", posture: "owner-openkey" },
+          error: { code: "SESSION_NOT_FOUND", message: "Session not found", retryable: false },
+        };
+        await runSecretsCommand(args);
+        expect(recorded.sessionRefreshes).toEqual([]);
+        expect(recorded.errors).toEqual([expect.objectContaining({
+          code: "AUTH_REQUIRED",
+          exitCode: 3,
+          metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
+        })]);
+      }
     }
   });
 
