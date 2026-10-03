@@ -1401,6 +1401,29 @@ describe("CLI secrets commands", () => {
     }
   });
 
+  test("keeps a successfully replaced secret when directory sync is unsupported", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-dir-sync-"));
+    const destination = join(dir, "key");
+    const probe = await open(join(dir, "probe"), "wx");
+    const originalSync = probe.sync;
+    const sync = spyOn(Object.getPrototypeOf(probe), "sync").mockImplementation(async function (this: typeof probe) {
+      if ((await this.stat()).isDirectory()) {
+        throw Object.assign(new Error("directory sync unsupported"), { code: "ENOTSUP" });
+      }
+      await originalSync.call(this);
+    });
+    try {
+      await probe.close();
+      await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+      expect(recorded.errors).toEqual([]);
+      expect(await readFile(destination, "utf8")).toBe("stored-value");
+    } finally {
+      sync.mockRestore();
+      await probe.close().catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("reports only the destination and cleans up temporary secret bytes when rename is refused", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tc-secrets-rename-"));
     const destination = join(dir, "key");
@@ -1599,7 +1622,7 @@ describe("CLI secrets commands", () => {
       })]);
     }
   });
-  test("explains missing decrypt authority for headless OpenKey get while retaining other action wording", async () => {
+  test("names decrypt only when it is the sole missing headless read capability", async () => {
     interactive = false;
     const denied = { ok: false as const, error: { code: "PERMISSION_DENIED", service: "secrets", message: "Cannot autosign tinycloud.kv/get for KEY" } };
     currentNode = makeFakeNode({ getResult: denied, listResult: denied });
@@ -1611,9 +1634,10 @@ describe("CLI secrets commands", () => {
       exitCode: 5,
       metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
     });
-    expect(getError.message).toContain("tinycloud.encryption/decrypt");
+    expect(getError.message).toContain("read or decrypt grant");
     expect(getError.message).toContain('secret "KEY"');
     expect(getError.message).not.toContain("holds no grant");
+    expect(getError.message).not.toContain("lacks the scoped decrypt authority");
 
     resetRecorded();
     canonicalResultOverride = {
@@ -1624,6 +1648,16 @@ describe("CLI secrets commands", () => {
     await runSecretsCommand(["secrets", "get", "KEY", "--raw"]);
     expect((recorded.errors[0] as CLIErrorLike).message).toContain("read or decrypt grant");
     expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("lacks the scoped decrypt authority");
+
+    resetRecorded();
+    canonicalResultOverride = {
+      status: "authority_required",
+      context: { posture: "owner-openkey" },
+      missing: [{ service: "tinycloud.encryption", actions: ["tinycloud.encryption/decrypt"] }],
+    };
+    await runSecretsCommand(["secrets", "get", "KEY", "--raw"]);
+    expect((recorded.errors[0] as CLIErrorLike).message).toContain("lacks the scoped decrypt authority (tinycloud.encryption/decrypt)");
+    expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("read or decrypt grant");
 
     resetRecorded();
     await runSecretsCommand(["secrets", "list"]);

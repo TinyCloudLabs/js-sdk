@@ -1356,6 +1356,7 @@ export function portableFromOpenKeyDelegation(
   const { session, legacyNested } = verifyScopedLogin(data, proof.key, proof.sessionDid, requested, {
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
+    purpose: "grant",
   });
   if (legacyNested.length > 0) {
     throw new CLIError(

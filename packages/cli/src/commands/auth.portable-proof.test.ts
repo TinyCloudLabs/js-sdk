@@ -146,7 +146,10 @@ describe("signed portable OpenKey grants", () => {
   });
 
   test("rejects broader signed KV and network authority hidden by callback permissions", async () => {
-    await expect(escalate(await signedProof({ broad: true }))).rejects.toMatchObject({ code: "OPENKEY_GRANT_BROADENED" });
+    await expect(escalate(await signedProof({ broad: true }))).rejects.toMatchObject({
+      code: "OPENKEY_GRANT_BROADENED",
+      message: expect.stringContaining("beyond the requested grant. No grant was stored."),
+    });
     expect(activated).toEqual([]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
   });
@@ -227,6 +230,22 @@ describe("signed portable OpenKey grants", () => {
       .toThrow(expect.objectContaining({ code: "OPENKEY_SCOPE_MISMATCH" }));
   });
 
+  test("matches the owner address without folding the grant space name", async () => {
+    const proof = await signedProof();
+    const verification = { key: jwk, sessionDid: did, expectedOwner: ownerDid };
+    const lowercaseAddress = spaceId.replace(address, address.toLowerCase());
+    expect(portableFromOpenKeyDelegation(proof,
+      [{ ...requested[0]!, space: lowercaseAddress }, requested[1]!], host, verification).spaceId).toBe(spaceId);
+
+    const differentlyCasedName = `${spaceId.slice(0, -"secrets".length)}Secrets`;
+    expect(() => portableFromOpenKeyDelegation(proof,
+      [{ ...requested[0]!, space: differentlyCasedName }, requested[1]!], host, verification))
+      .toThrow(expect.objectContaining({
+        code: "OPENKEY_SCOPE_MISMATCH",
+        message: expect.stringContaining("No grant was stored."),
+      }));
+  });
+
   test("refuses a signed raw network not owned by the signer", async () => {
     const foreign = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
     const proof = await signedProof({ rawNetwork: foreign });
@@ -243,7 +262,10 @@ describe("signed portable OpenKey grants", () => {
     registerAuthCommand(program);
     await program.parseAsync(["node", "tc", "--profile", profileName, "auth", "request", "--grant",
       "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get"], { from: "node" });
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_GRANT_BROADENED" })]);
+    expect(recordedErrors).toEqual([expect.objectContaining({
+      code: "OPENKEY_GRANT_BROADENED",
+      message: expect.stringContaining("beyond the requested grant. No grant was stored."),
+    })]);
     expect(activated).toEqual([]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
   });

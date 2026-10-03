@@ -303,6 +303,8 @@ export interface SignedSessionExpectations {
   expectedOwner?: string;
   /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
   expiry?: RequestedExpiry;
+  /** Grant escalation stores a portable delegation, not a login session. */
+  purpose?: "grant";
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -328,6 +330,7 @@ export function verifySignedSession(
   sessionDid: string,
   expected: SignedSessionExpectations = {},
 ): SignedSession {
+  const notStored = expected.purpose === "grant" ? "No grant was stored." : "No session was saved.";
   let permissions: PermissionEntry[];
   let expiresAt: string;
   try {
@@ -355,20 +358,20 @@ export function verifySignedSession(
     expiresAt = proof.expiresAt;
   } catch (error) {
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
-      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
+      throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
     }
-    throw new CLIError("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete, verifiable session proof. No session was saved.", ExitCode.AUTH_REQUIRED);
+    throw new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
   const signedExpiry = Date.parse(expiresAt);
   if (signedExpiry <= Date.now()) {
-    throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
+    throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
   if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", "The signed session outlives the requested --expiry. No session was saved.", ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
-    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from this profile's owner. No session was saved. Use a new profile for another account.", ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", `The approved signing identity differs from this profile's owner. ${notStored} Use a new profile for another account.`, ExitCode.PERMISSION_DENIED);
   }
   return { ownerDid, permissions, expiresAt };
 }
@@ -381,12 +384,13 @@ export function verifyScopedLogin(
   requested: PermissionEntry[],
   expected: SignedSessionExpectations = {},
 ): { session: Record<string, unknown> & SignedSession; legacyNested: PermissionEntry[] } {
+  const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
   const signed = verifySignedSession(data, key, sessionDid, expected);
   const spaceId = data.spaceId as string;
   for (const permission of requested) {
     if (isRawEncryptionPermission(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   // Old OpenKey signs requested decrypt inside the session space rather than
@@ -400,13 +404,13 @@ export function verifyScopedLogin(
   for (const permission of signed.permissions) {
     if (isVerifiedRawEncryptionPermission(permission) &&
       !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "OpenKey signed decrypt for a network not owned by the approving identity. No session was saved.", ExitCode.PERMISSION_DENIED);
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   // A signed action is inside the request when a requested one covers it: the
   // same action, unrestricted or with the same caveats (OpenKey may narrow).
   if (!scopeCovers(requested, approved, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   // The SIWE proof stays intact for validation/diagnostics. Only effective,
   // requested authority is recorded as approved and compared on renewals.

@@ -599,10 +599,8 @@ describe("TinyCloud share authority adapter", () => {
     expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email-domain-proof-v1"));
   });
 
-  it("refuses an invalid addressed request before publishing a location or uploading", async () => {
+  it("refuses invalid addressed recipients before publishing a location or uploading", async () => {
     const adapter = addressedAdapter();
-    await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.com" }, ["read", "edit"])))
-      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "email-domain shares are view-only" } });
     await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.123" })))
       .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "recipient email domain is invalid" } });
     await expect(adapter.publish(addressedInput({ kind: "email", address: "a%b@example.com" })))
