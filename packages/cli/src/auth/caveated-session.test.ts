@@ -58,9 +58,10 @@ async function login(caveat?: Record<string, unknown>): Promise<void> {
 }
 
 /** A TinyCloud node and Share service double: KV and sharing calls succeed. */
-function nodeAndShareDouble(): typeof globalThis.fetch {
+function nodeAndShareDouble(requests?: string[]): typeof globalThis.fetch {
   return Object.assign(async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    requests?.push(url.pathname);
     if (url.pathname === "/.well-known/tinycloud-share/config.json") {
       return Response.json({ version: "tinycloud.share/config-v2", shareOrigin, registryOrigin: shareOrigin, credentialsOrigin: shareOrigin });
     }
@@ -102,10 +103,11 @@ describe("a scoped session with signed caveats", () => {
     const read = await node.kv.get("xyz.tinycloud.share/shares/existing");
     expect(read.ok).toBe(true);
 
-    // The publish path restores and uploads; SharingService then fails closed
-    // on caveated authority, since it cannot reproduce the caveats on a child
-    // delegation (sdk-core SharingService.findSuitableKeyForDelegation).
-    await expect(publishBearer(nodeAndShareDouble())).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "sharing delegation" } });
+    // A caveated session cannot mint the child delegation. The publish
+    // adapter must reject it before the KV upload request is made.
+    const requests: string[] = [];
+    await expect(publishBearer(nodeAndShareDouble(requests))).rejects.toMatchObject({ failure: { kind: "caveated-session", profileName: "publisher" } });
+    expect(requests.some((path) => path.includes("/shares/"))).toBe(false);
   });
 
   test("an unrestricted OpenKey session restored without a signer publishes a bearer share", async () => {

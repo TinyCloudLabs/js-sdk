@@ -274,6 +274,15 @@ export function createShareAuthorityAdapters(input: {
     ) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
+    // SharingService cannot forward signed ReCap caveats into a child
+    // delegation. Refuse before storage, otherwise a failed publish orphans
+    // the uploaded resource.
+    const hasCaveatedAuthority = node.getVerifiedSessionCapabilities().some((permission) =>
+      (permission.caveats?.length ?? 0) > 0
+    );
+    if (hasCaveatedAuthority) {
+      throw new SharePublishAuthorityError({ kind: "caveated-session", profileName: activeProfileName });
+    }
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     if (node.isSessionOnly && sessionExpiresAt !== undefined) {
       const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1000) * 1000);

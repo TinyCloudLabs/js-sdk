@@ -79,6 +79,14 @@ export function shareCliError(error: unknown): CLIError {
     const loginHint = localKey
       ? `\`tc ${profileHint}auth login --method local\``
       : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+    if (failure.kind === "caveated-session") {
+      const profile = profileName ?? "publisher";
+      return new CLIError(
+        "PERMISSION_DENIED",
+        `Share publishing cannot use a caveated session; re-approve the builtin:share-publishing scope without restrictions on a dedicated profile, for example \`tc --profile ${profile} auth login --device --manifest builtin:share-publishing\``,
+        5,
+      );
+    }
     if (failure.kind === "owner-space-unresolved") {
       return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
     }

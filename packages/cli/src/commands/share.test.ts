@@ -62,6 +62,15 @@ describe("tc share command contract", () => {
     expect(openKeyScope.message).toContain("builtin:share-publishing scope");
     expect(openKeyScope.message).toContain("verify the session includes");
     expect(openKeyScope.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
+    const caveated = shareCliError(new SharePublishAuthorityError({
+      kind: "caveated-session",
+      profileName: "publisher",
+    }));
+    expect(caveated).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(caveated.message).toContain("without restrictions");
+    expect(caveated.message).toContain("dedicated profile");
+    expect(caveated.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
+    expect(caveated.message).not.toContain("request it with");
     const quota = shareCliError(new SharePublishAuthorityError({
       kind: "storage-quota-exceeded",
       usedBytes: 387_382_794,

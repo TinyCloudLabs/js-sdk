@@ -48,6 +48,7 @@ const node = {
       signature: "signed-proof",
     };
   },
+  getVerifiedSessionCapabilities: () => [],
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid }),
   publishActiveNodeLocation: async (registryUrl: string) => {
     if (registryError !== undefined) throw registryError;
