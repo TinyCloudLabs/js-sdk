@@ -703,6 +703,25 @@ describe("CLI auth login command", () => {
     expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
   });
 
+  test("browser login remains available when only stdout is redirected", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", key);
+    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session" };
+    const oldStderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+    try {
+      await runAuthCommand(["auth", "login", "--method", "openkey"]);
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows).toEqual([
+        { did: "did:key:openkey-session", options: expect.objectContaining({ jwk: key }) },
+      ]);
+    } finally {
+      if (oldStderrTTY) Object.defineProperty(process.stderr, "isTTY", oldStderrTTY);
+      else Reflect.deleteProperty(process.stderr, "isTTY");
+    }
+  });
+
   test("non-interactive login with no flags fails fast instead of waiting on a browser", async () => {
     profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
     keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });

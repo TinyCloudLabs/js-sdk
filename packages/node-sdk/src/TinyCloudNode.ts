@@ -159,7 +159,6 @@ import {
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
-  type PermissionHint,
 } from "@tinycloud/sdk-services";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
@@ -1529,18 +1528,29 @@ export class TinyCloudNode {
    */
   getVerifiedSessionCapabilities(): PermissionEntry[] {
     const session = this.currentTinyCloudSession();
-    if (!session || !session.siwe) return [];
-    return parseRecapCapabilities(
-      (siwe: string) => this.parseRecapWithCaveats(siwe),
-      session.siwe,
-    ).map((entry) => entry.service === "tinycloud.encryption"
-      ? {
-        service: entry.service,
-        path: entry.path,
-        actions: [...entry.actions],
-        ...(entry.caveats === undefined ? {} : { caveats: entry.caveats }),
+    return session?.siwe ? this.projectSignedRecapCapabilities(session.siwe) : [];
+  }
+
+  /** Normalize signed capabilities without collapsing nested encryption into raw authority. */
+  private projectSignedRecapCapabilities(siwe: string): PermissionEntry[] {
+    const projected = this.parseRecapWithCaveats(siwe).map((entry) => {
+      const normalized = parseRecapCapabilities(() => [entry], siwe)[0]!;
+      if (normalized.service !== "tinycloud.encryption") return normalized;
+      if (!this.isEncryptionNetworkOperation("encryption", entry.path, entry.space)) {
+        return { ...normalized, space: entry.space };
       }
-      : entry);
+      return {
+        service: normalized.service,
+        path: normalized.path,
+        actions: normalized.actions,
+        ...(normalized.caveats === undefined ? {} : { caveats: normalized.caveats }),
+      };
+    });
+    return projected.sort((left, right) =>
+      (left.space ?? "").localeCompare(right.space ?? "") ||
+      left.service.localeCompare(right.service) ||
+      left.path.localeCompare(right.path)
+    );
   }
 
   /**
@@ -2126,9 +2136,9 @@ export class TinyCloudNode {
    * We must keep the full owner-scoped URI so a synthetic primary grant can
    * never cover an operation on a different owner's space.
    *
-   * Mirrors {@link operationsFromDelegation}'s op shape: encryption network
-   * entries (`urn:tinycloud:encryption:` paths) become `resource` ops; every
-   * other entry becomes a `spaceId` op carrying the raw recap `space` URI.
+   * Only top-level encryption network entries (`space: "encryption"` or
+   * absent) become `resource` ops. A network-shaped path nested under a
+   * data space remains a `spaceId` op, not raw network authority.
    * One op per action.
    *
    * Returns `[]` for session-only / restored-without-siwe modes and for any
@@ -2151,7 +2161,7 @@ export class TinyCloudNode {
         operations = entries.flatMap((entry) => {
           const service = this.invocationServiceName(entry.service);
           return entry.actions.map((action) => ({
-            ...(this.isEncryptionNetworkOperation(service, entry.path)
+            ...(this.isEncryptionNetworkOperation(service, entry.path, entry.space)
               ? { resource: entry.path }
               : { spaceId: entry.space }),
             service,
@@ -2937,7 +2947,7 @@ export class TinyCloudNode {
     operations = recap.flatMap((entry) => {
       const service = this.invocationServiceName(entry.service);
       return entry.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, entry.path) ? { resource: entry.path } : { spaceId: entry.space }),
+        ...(this.isEncryptionNetworkOperation(service, entry.path, entry.space) ? { resource: entry.path } : { spaceId: entry.space }),
         service,
         path: entry.path,
         action,
@@ -4991,7 +5001,7 @@ export class TinyCloudNode {
         }
 
         let space: string | undefined;
-        if (service !== "tinycloud.encryption") {
+        if (service !== "tinycloud.encryption" || operation.resource === undefined) {
           if (typeof operation.spaceId !== "string") continue;
           try {
             space = this.resolvePermissionSpace(operation.spaceId, session);
@@ -5662,11 +5672,8 @@ export class TinyCloudNode {
     //    If the runtime binding hasn't been updated, this call will
     //    surface a clear TypeError rather than silently falling
     //    through.
-    const granted = parseRecapCapabilities(
-      (siwe: string) => this.parseRecapWithCaveats(siwe),
-      session.siwe,
-    );
-    const { subset, missing } = isCapabilitySubset(expandedEntries, granted);
+    const granted = this.projectSignedRecapCapabilities(session.siwe);
+    const { subset, missing } = this.signedCapabilitySubset(expandedEntries, granted);
 
     if (!subset) {
       // This branch only runs when the session recap is NOT a superset of the
@@ -6096,7 +6103,7 @@ export class TinyCloudNode {
 
   private isEncryptionPermissionEntry(entry: PermissionEntry): boolean {
     return entry.service === ENCRYPTION_PERMISSION_SERVICE &&
-      entry.path.startsWith("urn:tinycloud:encryption:");
+      this.isEncryptionNetworkOperation("encryption", entry.path, entry.space);
   }
 
   private permissionsToRawAbilities(
@@ -6127,7 +6134,7 @@ export class TinyCloudNode {
     return entries.flatMap((entry) => {
       const service = this.shortServiceName(entry.service);
       return entry.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, entry.path)
+        ...(this.isEncryptionNetworkOperation(service, entry.path, entry.space)
           ? { resource: entry.path }
           : { spaceId }),
         service,
@@ -6138,16 +6145,29 @@ export class TinyCloudNode {
     });
   }
 
+  /** Raw network authority cannot be covered by a nested encryption space. */
+  private signedCapabilitySubset(
+    requested: PermissionEntry[],
+    granted: PermissionEntry[],
+  ): { subset: boolean; missing: PermissionEntry[] } {
+    const rawGranted = granted.filter((entry) => this.isEncryptionPermissionEntry(entry))
+      .map((entry) => ({ ...entry, space: "encryption" }));
+    const spaceGranted = granted.filter((entry) => !this.isEncryptionPermissionEntry(entry));
+    const missing = requested.filter((entry) => {
+      const raw = this.isEncryptionPermissionEntry(entry);
+      const comparable = raw ? { ...entry, space: "encryption" } : entry;
+      return !isCapabilitySubset([comparable], raw ? rawGranted : spaceGranted).subset;
+    });
+    return { subset: missing.length === 0, missing };
+  }
+
   private sessionCoversPermissionEntries(
     session: TinyCloudSession,
     entries: PermissionEntry[],
   ): boolean {
     try {
-      const granted = parseRecapCapabilities(
-        (siwe: string) => this.parseRecapWithCaveats(siwe),
-        session.siwe,
-      );
-      return isCapabilitySubset(entries, granted).subset;
+      const granted = this.projectSignedRecapCapabilities(session.siwe);
+      return this.signedCapabilitySubset(entries, granted).subset;
     } catch {
       return false;
     }
@@ -6161,7 +6181,7 @@ export class TinyCloudNode {
       const spaceId = this.resolvePermissionSpace(entry.space, session);
       const service = this.shortServiceName(entry.service);
       return entry.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, entry.path)
+        ...(this.isEncryptionNetworkOperation(service, entry.path, entry.space)
           ? { resource: entry.path }
           : { spaceId }),
         service,
@@ -6294,7 +6314,7 @@ export class TinyCloudNode {
     return resources.flatMap((resource) => {
       const service = this.invocationServiceName(resource.service);
       return resource.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, resource.path)
+        ...(this.isEncryptionNetworkOperation(service, resource.path, resource.space)
           ? { resource: resource.path }
           : { spaceId: resource.space }),
         service,
@@ -6369,7 +6389,7 @@ export class TinyCloudNode {
 
     for (const resource of resources) {
       const service = this.invocationServiceName(resource.service);
-      if (this.isEncryptionNetworkOperation(service, resource.path)) {
+      if (this.isEncryptionNetworkOperation(service, resource.path, resource.space)) {
         rawAbilities[resource.path] ??= [];
         addActions(rawAbilities[resource.path], resource.actions);
         continue;
@@ -6528,8 +6548,9 @@ export class TinyCloudNode {
       : verifierRecapEntries(verified);
   }
 
-  private isEncryptionNetworkOperation(service: string, path: string): boolean {
+  private isEncryptionNetworkOperation(service: string, path: string, space?: string): boolean {
     return service === "encryption" &&
+      (space === undefined || space === "encryption") &&
       path.startsWith("urn:tinycloud:encryption:");
   }
 
@@ -6551,7 +6572,7 @@ export class TinyCloudNode {
         ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
       };
     }
-    if (this.isEncryptionNetworkOperation(service, entry.path)) {
+    if (entry.spaceId === undefined && this.isEncryptionNetworkOperation(service, entry.path)) {
       return {
         resource: entry.path,
         service,

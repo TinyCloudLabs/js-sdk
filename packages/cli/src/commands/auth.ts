@@ -40,18 +40,19 @@ import {
 } from "../auth/device-auth.js";
 import {
   declinedPermissions,
-  canonicalOwnerDid,
   expectedOwnerFor,
   parseRequestedExpiry,
   pinnedOwner,
   scopedLoginPermissions,
+  validateLoginPermissions,
   verifyScopedLogin,
   verifySignedSession,
   openKeyExpiryParam,
   withoutTrustFields,
   withVerifiedAuthority,
 } from "../auth/scoped-login.js";
-import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission, rawEncryptionOwnerMatches } from "../lib/raw-encryption.js";
+import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
@@ -209,7 +210,8 @@ export function registerAuthCommand(program: Command): void {
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
-        if (method === "openkey" && !options.paste && options.popup !== false && !isInteractive()) {
+        if (method === "openkey" && !options.paste && options.popup !== false &&
+          !process.stdin.isTTY && !process.stderr.isTTY) {
           throw new CLIError(
             "INTERACTIVE_LOGIN_REQUIRED",
             `Browser login needs a browser on this machine and would wait silently. Use \`tc auth login --device --manifest ${SHARE_PUBLISHING_MANIFEST_REF}\` (or your app's manifest) to approve on a phone, or \`--paste\` to paste a return code.`,
@@ -1398,6 +1400,14 @@ export function portableFromOpenKeyDelegation(
       for (const action of permission.actions) {
         const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
         if (!requestedPairs.has(key)) {
+          if (!raw && isRawEncryptionPermission({ service: rawService, path: permission.path }) &&
+            requestedPairs.has(`${rawService}|encryption|${permission.path}|${action}`)) {
+            throw new CLIError(
+              "OPENKEY_GRANT_BROADENED",
+              "OpenKey signed decrypt inside the space instead of on the raw network. The OpenKey deployment is too old for agent secret reads.",
+              ExitCode.PERMISSION_DENIED,
+            );
+          }
           throw new CLIError(
             "OPENKEY_GRANT_BROADENED",
             `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
@@ -1406,7 +1416,7 @@ export function portableFromOpenKeyDelegation(
         }
       }
     }
-    const resolvedSpace: string = raw ? "encryption" : returnedPermissions && permSpace ? permSpace : returnedSpace;
+    const resolvedSpace: string = raw ? "encryption" : returnedSpace;
     // Signed ReCap caveats restrict the resource; dropping them would make
     // consumers treat a caveated grant as unrestricted.
     const caveats = Array.isArray(permission.caveats) && permission.caveats.length > 0
@@ -1711,9 +1721,9 @@ async function handleOpenKeyAuth(
   host: string,
   options: OpenKeyLoginOptions = {},
 ): Promise<void> {
-  const { profile, delegationData, declined } = await refreshOpenKeySession(profileName, host, options);
+  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
-  reportDeclined(declined, delegationData.permissions as PermissionEntry[] | undefined);
+  reportDeclined(declined, legacyNested);
   outputJson({
     authenticated: true,
     profile: profileName,
@@ -1766,7 +1776,7 @@ export async function refreshOpenKeySession(
   profileName: string,
   host: string,
   options: OpenKeyLoginOptions = {},
-): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[] }> {
+): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   const snapshot = await readProfileSnapshot(profileName);
   const key = snapshot.key;
   if (!key) {
@@ -1778,6 +1788,7 @@ export async function refreshOpenKeySession(
   }
   const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
   // The requested scope: the manifest plus the capability read OpenKey needs to sign it.
+  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
   const permissions = options.permissions === undefined ? undefined : scopedLoginPermissions(options.permissions);
   if (permissions !== undefined) {
     assertNotLocalOwner(profileName, profile, "Scoped browser login");
@@ -1817,8 +1828,11 @@ export async function refreshOpenKeySession(
   let sanitizedSession: Record<string, unknown>;
   let verifiedOwner: string | undefined;
   let declined: PermissionEntry[] = [];
+  let legacyNested: PermissionEntry[] = [];
   if (permissions) {
-    sanitizedSession = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+    sanitizedSession = verified.session;
+    legacyNested = verified.legacyNested;
     verifiedOwner = sanitizedSession.ownerDid as string;
     declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
@@ -1857,5 +1871,5 @@ export async function refreshOpenKeySession(
       : {}),
   });
 
-  return { profile: updatedProfile, delegationData: sanitizedSession, declined };
+  return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }

@@ -1,6 +1,5 @@
 import { appendFile, chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact,
@@ -36,6 +35,7 @@ import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
+import { canonicalOwnerDid } from "./owner-did.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
@@ -462,15 +462,7 @@ async function defaultSecretsNetworkId(profileName: string, requestedOwner: stri
       ExitCode.AUTH_REQUIRED,
     );
   }
-  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(owner);
-  if (!match) {
-    throw new CLIError(
-      "INVALID_ARGUMENT",
-      `Secrets owner "${owner}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`,
-      ExitCode.USAGE_ERROR,
-    );
-  }
-  return `urn:tinycloud:encryption:did:pkh:eip155:${match[1]}:${ensureEip55(match[2]!)}:default`;
+  return `urn:tinycloud:encryption:${canonicalOwnerDid(owner, "Secrets owner")}:default`;
 }
 
 export function diffPermissions(

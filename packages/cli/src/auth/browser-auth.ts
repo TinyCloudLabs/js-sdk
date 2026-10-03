@@ -1,6 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { isInteractive } from "../output/formatter.js";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -79,7 +78,7 @@ export async function startAuthFlow(
     return await callbackFlow(did, options);
   } catch {
     // Fallback to paste if browser can't open
-    if (isInteractive()) {
+    if (process.stdin.isTTY) {
       console.error("Could not open browser. Falling back to manual paste mode.");
       return pasteFlow(did, options);
     }
@@ -278,11 +277,12 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       const callbackUrl = `http://127.0.0.1:${port}/callback`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
+      const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
 
-      if (openBrowser && isInteractive()) {
+      if (openBrowser && hasTerminal) {
         console.error(`Opening browser for authentication...`);
         console.error(`If the browser doesn't open, visit: ${authUrl}`);
-      } else if (!openBrowser || isInteractive()) {
+      } else if (!openBrowser || hasTerminal) {
         console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
       }
 
@@ -291,13 +291,13 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
           const open = (await import("open")).default;
           await open(authUrl);
         } catch {
-          server.close();
-          throw new Error("Failed to open browser");
+          settle({ error: new Error("Failed to open browser") });
+          return;
         }
       }
 
       // In interactive mode, also accept paste input while waiting for callback
-      if (isInteractive()) {
+      if (process.stdin.isTTY) {
         console.error(`\nIf the browser can't connect back, paste the delegation code here:`);
         rl = createInterface({
           input: process.stdin,

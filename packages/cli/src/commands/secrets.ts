@@ -308,21 +308,36 @@ function scopedSecretLoginHint(profileName: string): string {
   return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
 
-/** Replace only regular destination files with a fresh owner-only inode. */
-async function writeSecretFile(path: string, value: string): Promise<void> {
+/** Refuse non-regular outputs and invalid parents before fetching any secret bytes. */
+async function validateSecretOutput(path: string): Promise<void> {
   try {
     const destination = await lstat(path);
     if (!destination.isFile()) {
-      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink or device.`, ExitCode.USAGE_ERROR);
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (!isMissingFileError(error)) throw error;
   }
+  try {
+    const parent = await lstat(dirname(path));
+    if (!parent.isDirectory()) {
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
+    }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+    throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
+  }
+}
+
+/** Replace only regular destination files with a fresh owner-only inode. */
+async function writeSecretFile(path: string, value: string): Promise<void> {
+  await validateSecretOutput(path);
   const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   const handle = await open(temp, "wx", PRIVATE_FILE_MODE);
   try {
     try {
       await handle.writeFile(value);
+      await handle.sync();
     } finally {
       await handle.close();
     }
@@ -358,6 +373,15 @@ async function invokeCanonicalSecretGet(params: {
 }): Promise<CanonicalSecretGetResult> {
   const auth = authOptions(params.options);
   let ownerNode: TinyCloudNode | undefined;
+  if (!auth?.privateKey) {
+    const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
+    if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+      const session = await ProfileManager.getSession(params.ctx.profile);
+      if (!session || isStoredSessionExpired(session)) {
+        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+      }
+    }
+  }
   const target = {
     profile: params.ctx.profile,
     host: params.ctx.host,
@@ -1244,6 +1268,7 @@ export function registerSecretsCommand(
         const scopeOptions = resolveSecretScope(options);
         const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
+        if (options.output) await validateSecretOutput(options.output);
 
         if (options.delegation) {
           const delegated = await resolveDelegatedSecretSource(

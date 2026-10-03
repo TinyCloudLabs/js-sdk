@@ -376,7 +376,7 @@ async function verifyApproval(input: {
 
   // Signed authority: owner, space, session key, lifetime, and a recap that
   // stays inside the request.
-  const session = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
+  const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry,
   });

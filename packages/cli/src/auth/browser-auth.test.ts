@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { Readable } from "node:stream";
+import { describe, expect, spyOn, test } from "bun:test";
+import { once } from "node:events";
+import { Server } from "node:http";
+import { PassThrough, Readable } from "node:stream";
 import {
   buildAuthUrl,
   publicJwkForDelegation,
@@ -133,5 +135,74 @@ describe("paste login", () => {
     const approvalUrl = String(failure.metadata?.approvalUrl);
     expect(approvalUrl).toStartWith("https://openkey.test/delegate?");
     expect(failure.message).toContain(approvalUrl);
+  });
+});
+
+describe("browser callback login", () => {
+  test("shows the URL on stderr and accepts paste when stdout is redirected", async () => {
+    const code = {
+      delegationHeader: { Authorization: "Bearer pasted" },
+      delegationCid: "bafy-pasted",
+      spaceId: "tinycloud:pkh:eip155:1:0xabc:secrets",
+    };
+    const callbackCode = { ...code, delegationCid: "bafy-callback" };
+    const input = new PassThrough();
+    Object.defineProperty(input, "isTTY", { value: true });
+    const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+    const originalStdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const originalStderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    const messages: string[] = [];
+    let callbackServer: Server | undefined;
+    const originalListen = Server.prototype.listen;
+    const listen = spyOn(Server.prototype, "listen").mockImplementation(function (this: Server, ...args: unknown[]) {
+      callbackServer = this;
+      return Reflect.apply(originalListen, this, args);
+    });
+    const error = spyOn(console, "error").mockImplementation((...args) => {
+      messages.push(args.join(" "));
+    });
+    Object.defineProperty(process, "stdin", { configurable: true, value: input });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+    try {
+      const flow = startAuthFlow("did:key:z6MkDelegate", {
+        noPopup: true,
+        openkeyHost: "https://openkey.test",
+      });
+      if (!callbackServer) throw new Error("Callback server did not start");
+      await once(callbackServer, "listening");
+      // Let the listen callback install the paste reader before providing input.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      let result: typeof code;
+      if (messages.some((message) => message.includes("paste the delegation code here"))) {
+        input.end(`${JSON.stringify(code)}\n`);
+        result = await flow;
+      } else {
+        // The pre-fix flow never offers paste. Complete its actual HTTP callback
+        // so the test fails promptly rather than leaving a five-minute timer.
+        const addr = callbackServer.address();
+        if (!addr || typeof addr === "string") throw new Error("Callback server did not start");
+        const response = await fetch(`http://127.0.0.1:${addr.port}/callback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(callbackCode),
+        });
+        expect(response.ok).toBe(true);
+        result = await flow;
+      }
+      expect(messages.join("\n")).toContain("https://openkey.test/delegate?");
+      expect(messages.join("\n")).toContain("paste the delegation code here");
+      expect(result).toEqual(code);
+      expect(callbackServer.listening).toBe(false);
+    } finally {
+      listen.mockRestore();
+      error.mockRestore();
+      input.destroy();
+      if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
+      if (originalStdoutTTY) Object.defineProperty(process.stdout, "isTTY", originalStdoutTTY);
+      else Reflect.deleteProperty(process.stdout, "isTTY");
+      if (originalStderrTTY) Object.defineProperty(process.stderr, "isTTY", originalStderrTTY);
+      else Reflect.deleteProperty(process.stderr, "isTTY");
+    }
   });
 });

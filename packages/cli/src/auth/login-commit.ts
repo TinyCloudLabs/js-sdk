@@ -6,7 +6,7 @@ import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { keyToDID } from "./local-key.js";
-import { canonicalJson, CLOCK_SKEW_MS, isLocalOwnerProfile, scopeCovers, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
+import { canonicalJson, CLOCK_SKEW_MS, isLegacyNestedDecrypt, isLocalOwnerProfile, scopeCovers, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
 
 /** Scoped and device logins never turn a local-owner-key profile into a mixed OpenKey profile. */
 export function assertNotLocalOwner(profileName: string, profile: ProfileConfig | null, flow: string): void {
@@ -91,8 +91,11 @@ export function assertSessionReplaceable(
   if (session === null) return;
   const expiresAt = sessionExpiresAt(session);
   if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
-  const keepsScope = ownerDid !== undefined && session.permissionsSource === SIGNED_RECAP && Array.isArray(session.permissions) &&
-    scopeCovers(scope, session.permissions as PermissionEntry[], ownerDid);
+  const held = Array.isArray(session.permissions) ? (session.permissions as PermissionEntry[]).filter((permission) =>
+    ownerDid === undefined || typeof session.spaceId !== "string" ||
+    !isLegacyNestedDecrypt(permission, scope, ownerDid, session.spaceId)) : undefined;
+  const keepsScope = ownerDid !== undefined && session.permissionsSource === SIGNED_RECAP && held !== undefined &&
+    scopeCovers(scope, held, ownerDid);
   const shortens = newExpiresAt !== undefined && expiresAt !== null && Date.parse(newExpiresAt) < Date.parse(expiresAt) - CLOCK_SKEW_MS;
   if (keepsScope && !shortens) return;
   const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";

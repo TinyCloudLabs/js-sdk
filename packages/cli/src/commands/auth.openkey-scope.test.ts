@@ -129,7 +129,26 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
       ],
     };
     expect(() => portableFromOpenKeyDelegation(data, requested, "https://host"))
-      .toThrow(expect.objectContaining({ code: "OPENKEY_GRANT_BROADENED" }));
+      .toThrow(expect.objectContaining({
+        code: "OPENKEY_GRANT_BROADENED",
+        message: expect.stringContaining("inside the space"),
+      }));
+  });
+
+  test("resolves a reported logical non-raw space to the returned signed space", () => {
+    const requested = [cap("tinycloud.kv", "applications", "example/", ["tinycloud.kv/get"])];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyLOGICAL",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      expiry: new Date(Date.now() + 3600_000).toISOString(),
+      permissions: [{ service: "kv", space: "applications", path: "example/", actions: ["tinycloud.kv/get"] }],
+    };
+    expect(portableFromOpenKeyDelegation(data, requested, "https://host").resources)
+      .toContainEqual({ service: "kv", space: SPACE_CHECKSUM, path: "example/", actions: ["tinycloud.kv/get"] });
   });
 
   test("refuses a relayed raw grant owned by a different signer", () => {
