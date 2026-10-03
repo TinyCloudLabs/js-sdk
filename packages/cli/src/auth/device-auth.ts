@@ -184,6 +184,32 @@ function errorDescription(value: Record<string, unknown> | undefined): string | 
   return typeof description === "string" && description.length > 0 ? description : undefined;
 }
 
+function retryAfterSeconds(response: Response): number | undefined {
+  const value = response.headers.get("retry-after");
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value);
+    return Number.isSafeInteger(seconds) ? seconds : undefined;
+  }
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) return undefined;
+  const seconds = Math.ceil((retryAt - Date.now()) / 1000);
+  return seconds > 0 ? seconds : undefined;
+}
+
+function deviceAuthRateLimit(response: Response): CLIError {
+  const retrySeconds = retryAfterSeconds(response);
+  return new CLIError(
+    "DEVICE_AUTH_RATE_LIMITED",
+    "OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry.",
+    ExitCode.ERROR,
+    {
+      hint: `OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry.${retrySeconds !== undefined ? ` Retry after ${retrySeconds} seconds.` : ""}`,
+    },
+  );
+}
+
+
 function publicSessionJwk(value: object): object {
   const publicJwk = publicJwkForDelegation(value);
   const record = publicJwk as Record<string, unknown>;
@@ -435,6 +461,9 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   if (!startResponse.ok) {
     const code = errorCode(startValue);
     const description = errorDescription(startValue);
+    if (startResponse.status === 429 && code === "rate_limited") {
+      throw deviceAuthRateLimit(startResponse);
+    }
     if (code === "invalid_scope") {
       throw new CLIError(
         "SCOPE_REJECTED",
