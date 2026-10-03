@@ -54,6 +54,7 @@
     "tc-540-device-login-manifest",
     "tc-540-node-sdk-verified-caveats",
     "tc-556-addressed-links",
+    "tc-575-device-rate-limit",
     "tc-577-safe-share-filenames",
     "tidy-cats-share"
   ]
