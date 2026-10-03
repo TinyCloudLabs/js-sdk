@@ -76,6 +76,10 @@ export function evaluateAuthority(
  * Evaluate operation capabilities without allowing two owners' same-named
  * spaces to compare equal. Path and action containment still come from the
  * SDK primitive; only the operation space identity is made owner-exact.
+ *
+ * Each requirement is judged against every grant in its owner-exact space
+ * together: a verified SIWE ReCap reports one entry per signed action, so
+ * `get` and `list` on one path arrive as two grants.
  */
 export function evaluateOperationAuthority(
   granted: readonly PermissionEntry[],
@@ -87,12 +91,11 @@ export function evaluateOperationAuthority(
   const missing: CanonicalPermissionEntry[] = [];
 
   for (const requested of canonicalRequired) {
-    const covered = canonicalGranted.some((candidate) =>
+    const sameScope = canonicalGranted.filter((candidate) =>
       candidate.service === requested.service &&
-      operationSpacesEqual(candidate.space, requested.space) &&
-      isCapabilitySubset([requested], [candidate]).subset,
+      operationSpacesEqual(candidate.space, requested.space)
     );
-    if (!covered) missing.push(requested);
+    if (!isCapabilitySubset([requested], sameScope).subset) missing.push(requested);
   }
 
   return {

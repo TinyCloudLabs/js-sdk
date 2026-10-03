@@ -166,7 +166,11 @@ import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
-import { PortableDelegation } from "./delegation";
+import type {
+  PortableDelegation,
+  SiweDelegationVerificationInput,
+  VerifiedSiweDelegation,
+} from "./delegation";
 import { DelegatedAccess } from "./DelegatedAccess";
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 import {
@@ -5514,6 +5518,46 @@ export class TinyCloudNode {
         : decodeAuthorizationBytes(authorization),
       0x55n,
     );
+  }
+
+  /**
+   * Verify a SIWE/ReCap (CACAO) delegation addressed to this session key,
+   * such as an OpenKey signed-login approval. Uses the same WASM verifier as
+   * {@link restoreSession}: it checks the wallet signature, that the SIWE
+   * addresses this node's session key, its validity window, the ReCap
+   * binding, and that `authorization` and `cid` are exactly the CACAO built
+   * from the SIWE. Throws when any check fails.
+   */
+  verifySiweDelegation(input: SiweDelegationVerificationInput): VerifiedSiweDelegation {
+    if (typeof this.wasmBindings.validatePersistedSession !== "function") {
+      throw new Error("SIWE delegation verification is unavailable");
+    }
+    const address = canonicalizeAddress(input.address);
+    const verified = this.wasmBindings.validatePersistedSession({
+      delegationHeader: { Authorization: input.authorization },
+      delegationCid: input.cid,
+      spaceId: input.spaceId,
+      jwk: this.sessionKeyJwk,
+      address,
+      chainId: input.chainId,
+      siwe: input.siwe,
+      signature: input.signature,
+    });
+    if (!Array.isArray(verified.verifiedRecap)) {
+      throw new Error("SIWE delegation verification cannot preserve ReCap caveats");
+    }
+    return {
+      issuer: pkhDid(address, input.chainId),
+      audience: this.sessionDid,
+      ...(verified.expiresAt === undefined ? {} : { expiry: new Date(verified.expiresAt) }),
+      recap: verifierRecapEntries(verified.verifiedRecap).map((entry) => ({
+        service: entry.service,
+        space: entry.space,
+        path: entry.path,
+        actions: [...entry.actions],
+        caveats: cloneRecapCaveats(entry.caveats),
+      })),
+    };
   }
 
   /**

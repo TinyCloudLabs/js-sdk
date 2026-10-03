@@ -2,15 +2,50 @@ import { describe, expect, test } from "bun:test";
 
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
-import { activateValidatedRuntimeDelegation } from "./delegation";
+import { activateValidatedRuntimeDelegation, siweRuntimeDelegation } from "./delegation";
 import type { PortableDelegation } from "./delegation";
 import {
   activateValidatedRuntimeDelegation as publicActivateValidatedRuntimeDelegation,
 } from "./index";
+import { NodeWasmBindings } from "./NodeWasmBindings";
+import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import {
   createHermeticEncryptedNode,
   type HermeticEncryptedNode,
 } from "./test-support/hermetic-encrypted-node";
+
+/** An OpenKey-style signed-login (CACAO) delegation to `jwk`'s session key. */
+async function signedLoginDelegation(
+  ownerPrivateKey: string,
+  jwk: object,
+  abilities: Record<string, Record<string, string[]>>,
+) {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(ownerPrivateKey);
+  const address = await signer.getAddress();
+  const issuedAt = new Date();
+  const prepared = wasm.prepareSession({
+    abilities,
+    address,
+    chainId: 1,
+    domain: "openkey.test",
+    issuedAt: issuedAt.toISOString(),
+    expirationTime: new Date(issuedAt.getTime() + 60 * 60_000).toISOString(),
+    spaceId: wasm.makeSpaceId(address, 1, "applications"),
+    jwk,
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  return {
+    authorization: session.delegationHeader.Authorization,
+    cid: session.delegationCid,
+    spaceId: prepared.spaceId,
+    ownerAddress: address,
+    chainId: 1,
+    siwe: prepared.siwe,
+    signature,
+  };
+}
 
 function cloneDelegation(
   delegation: Awaited<ReturnType<HermeticEncryptedNode["mintDelegation"]>>,
@@ -369,6 +404,85 @@ describe("activateValidatedRuntimeDelegation", () => {
           host: fixture.host,
         }),
       ).rejects.toThrow(/different authorization is already installed/);
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  test("activates a signed-login (CACAO) delegation from its verified SIWE and replays it after restore", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    try {
+      const signed = await signedLoginDelegation(
+        fixture.ownerPrivateKey,
+        fixture.restorableSession.jwk,
+        { kv: { "agents/demo/": ["tinycloud.kv/get", "tinycloud.kv/list"] } },
+      );
+      const delegation = siweRuntimeDelegation(fixture.delegate, { ...signed, host: fixture.host });
+      const activated = await activateValidatedRuntimeDelegation(fixture.delegate, delegation, {
+        host: fixture.host,
+      });
+      // The verifier's per-action entries come back as one grouped grant.
+      expect(activated.effectivePermissions).toEqual([{
+        service: "tinycloud.kv",
+        space: signed.spaceId,
+        path: "agents/demo/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
+      }]);
+      expect(activated.audience).toBe(fixture.delegate.sessionDid);
+      expect(activated.delegation.delegatorDID).toBe(`did:pkh:eip155:1:${signed.ownerAddress}`);
+      expect(activated.expiry.toISOString()).toBe(delegation.expiry.toISOString());
+
+      // Runtime replay: the persisted record activates again on a fresh restore.
+      const persisted = JSON.parse(JSON.stringify(activated.delegation)) as PortableDelegation;
+      const restored = fixture.createRestoredDelegate();
+      await restored.restoreSession(fixture.restorableSession);
+      const replayed = await activateValidatedRuntimeDelegation(
+        restored,
+        { ...persisted, expiry: new Date(persisted.expiry) },
+        { host: fixture.host },
+      );
+      expect(replayed.effectivePermissions).toEqual(activated.effectivePermissions);
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  test("refuses signed-login delegations that are not exactly what the owner signed for this key", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    try {
+      const abilities = { kv: { "agents/demo/profile": ["tinycloud.kv/get"] } };
+      const signed = await signedLoginDelegation(fixture.ownerPrivateKey, fixture.restorableSession.jwk, abilities);
+      const delegation = siweRuntimeDelegation(fixture.delegate, { ...signed, host: fixture.host });
+      const activate = (candidate: PortableDelegation) =>
+        activateValidatedRuntimeDelegation(fixture.delegate, candidate, { host: fixture.host });
+
+      // Addressed to a different session key.
+      const elsewhere = await signedLoginDelegation(
+        fixture.ownerPrivateKey,
+        JSON.parse(new NodeWasmBindings().createSessionManager().jwk("default")!),
+        abilities,
+      );
+      expect(() => siweRuntimeDelegation(fixture.delegate, { ...elsewhere, host: fixture.host })).toThrow();
+      // Declared resources broader than the signed ReCap.
+      await expect(activate({
+        ...delegation,
+        resources: delegation.resources!.map((resource) => ({ ...resource, path: "agents/" })),
+      })).rejects.toThrow(/resources do not match/);
+      // A proof that is not the SIWE behind these CACAO bytes.
+      const other = await signedLoginDelegation(fixture.ownerPrivateKey, fixture.restorableSession.jwk, abilities);
+      await expect(activate({
+        ...delegation,
+        siweProof: { siwe: other.siwe, signature: other.signature },
+      })).rejects.toThrow();
+      // A claimed owner other than the signer.
+      await expect(activate({
+        ...delegation,
+        ownerAddress: await new PrivateKeySigner("4".padStart(64, "0")).getAddress(),
+      })).rejects.toThrow();
+      // Without its proof the CACAO is still refused, as before.
+      await expect(activate({ ...delegation, siweProof: undefined }))
+        .rejects.toThrow(/compact UCAN/);
+      expect(fixture.delegate.getRuntimePermissionDelegations()).toEqual([]);
     } finally {
       fixture.stop();
     }

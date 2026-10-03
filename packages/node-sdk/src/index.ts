@@ -237,6 +237,7 @@ export {
   grantAuthRequest,
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
+  siweRuntimeDelegation,
 } from "./delegation";
 export type {
   PortableDelegation,
@@ -246,6 +247,12 @@ export type {
   CompactRuntimeDelegationInput,
   RuntimeDelegationActivator,
   ValidatedRuntimeDelegation,
+  SiweDelegationProof,
+  SiweDelegationVerificationInput,
+  SiweDelegationVerifier,
+  SiweRuntimeDelegationInput,
+  VerifiedSiweDelegation,
+  VerifiedSiweRecapEntry,
 } from "./delegation";
 
 // Re-export KV service values

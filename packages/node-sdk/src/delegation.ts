@@ -51,6 +51,20 @@ export interface PortableDelegation extends Omit<Delegation, "isRevoked"> {
    * fields are authoritative (legacy single-resource shape).
    */
   resources?: DelegatedResource[];
+
+  /**
+   * Signed-login proof for a SIWE/ReCap (CACAO) delegation. Present only
+   * when `delegationHeader` carries that CACAO instead of a compact UCAN;
+   * {@link activateValidatedRuntimeDelegation} re-verifies it in WASM and
+   * derives the authority from it.
+   */
+  siweProof?: SiweDelegationProof;
+}
+
+/** The signed SIWE message and wallet signature behind a CACAO delegation. */
+export interface SiweDelegationProof {
+  readonly siwe: string;
+  readonly signature: string;
 }
 
 /**
@@ -114,6 +128,61 @@ export interface RuntimeDelegationActivator {
   useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
   useDelegation?(delegation: PortableDelegation): Promise<unknown>;
   getRuntimePermissionDelegations(): PortableDelegation[];
+  /**
+   * Verify a SIWE/ReCap (CACAO) delegation addressed to this session key.
+   * Only delegations that carry {@link PortableDelegation.siweProof} need it.
+   */
+  verifySiweDelegation?(input: SiweDelegationVerificationInput): VerifiedSiweDelegation;
+}
+
+/** The transport fields a SIWE/ReCap (CACAO) delegation is verified against. */
+export interface SiweDelegationVerificationInput {
+  readonly authorization: string;
+  readonly cid: string;
+  /** Primary space of the SIWE session; the signed ReCap must include it. */
+  readonly spaceId: string;
+  readonly address: string;
+  readonly chainId: number;
+  readonly siwe: string;
+  readonly signature: string;
+}
+
+/** Authority read from a SIWE/ReCap delegation after WASM verification. */
+export interface VerifiedSiweDelegation {
+  /** `did:pkh` of the wallet that signed the SIWE. */
+  readonly issuer: string;
+  /** The session key the SIWE addresses, which is the verifying node's key. */
+  readonly audience: string;
+  /** Signed `Expiration Time`, when the SIWE has one. */
+  readonly expiry?: Date;
+  /** One verified ReCap entry per signed action (short service names, full space IDs). */
+  readonly recap: readonly VerifiedSiweRecapEntry[];
+}
+
+export interface VerifiedSiweRecapEntry {
+  readonly service: string;
+  readonly space: string;
+  readonly path: string;
+  readonly actions: readonly string[];
+  readonly caveats: readonly Record<string, unknown>[];
+}
+
+/** Input for {@link siweRuntimeDelegation}. */
+export interface SiweRuntimeDelegationInput {
+  readonly authorization: string;
+  readonly cid: string;
+  readonly spaceId: string;
+  readonly ownerAddress: string;
+  readonly chainId: number;
+  readonly siwe: string;
+  readonly signature: string;
+  readonly host: string;
+}
+
+/** The node surface {@link siweRuntimeDelegation} needs to verify a CACAO. */
+export interface SiweDelegationVerifier {
+  computeDelegationCid(authorization: string): string;
+  verifySiweDelegation(input: SiweDelegationVerificationInput): VerifiedSiweDelegation;
 }
 
 /** The installed authority returned by {@link activateValidatedRuntimeDelegation}. */
@@ -122,11 +191,11 @@ export interface ValidatedRuntimeDelegation {
   readonly cid: string;
   /** The authority object installed by the node runtime. */
   readonly delegation: PortableDelegation;
-  /** Capabilities read from the signed compact UCAN attenuation. */
+  /** Capabilities read from the signed compact UCAN attenuation or SIWE ReCap. */
   readonly effectivePermissions: readonly PermissionEntry[];
-  /** Expiry read from the signed compact UCAN payload. */
+  /** Expiry read from the signed compact UCAN payload or SIWE. */
   readonly expiry: Date;
-  /** Audience read from the signed compact UCAN payload. */
+  /** Audience read from the signed compact UCAN payload or SIWE. */
   readonly audience: string;
   /** Host selected for, and used by, the runtime activation. */
   readonly host: string;
@@ -334,6 +403,81 @@ function signedAuthorityFromCompactUcan(
     ));
   }
 
+  return signedRuntimeAuthority({
+    issuer: payload.iss,
+    audience: payload.aud,
+    expiry,
+    proofs: [...payload.prf],
+    ...(remainingRedelegationDepth === undefined
+      ? {}
+      : { remainingRedelegationDepth: remainingRedelegationDepth as number }),
+  }, permissions);
+}
+
+/**
+ * Derive the authority of a SIWE/ReCap (CACAO) delegation. The node verifies
+ * the wallet signature, that the SIWE addresses its own session key, its
+ * validity window, the ReCap binding, and that the authorization bytes and
+ * CID are exactly the CACAO built from that SIWE.
+ */
+function signedAuthorityFromSiweDelegation(
+  node: Pick<RuntimeDelegationActivator, "verifySiweDelegation">,
+  input: SiweDelegationVerificationInput,
+): SignedRuntimeAuthority {
+  if (typeof input.siwe !== "string" || typeof input.signature !== "string") {
+    throw new Error("Validated runtime delegation has a malformed SIWE proof.");
+  }
+  if (typeof node.verifySiweDelegation !== "function") {
+    throw new Error("This runtime cannot verify a SIWE delegation.");
+  }
+  const verified = node.verifySiweDelegation(input);
+  if (!(verified.expiry instanceof Date) || Number.isNaN(verified.expiry.getTime())) {
+    throw new Error("Validated runtime delegation is missing a signed expiry.");
+  }
+
+  // The verifier emits one entry per action; regroup them per resource so
+  // actions sharing a caveat set form one entry, as on the compact path.
+  const resources = new Map<string, {
+    service: string;
+    space: string | undefined;
+    path: string;
+    abilities: Record<string, unknown>;
+  }>();
+  for (const entry of verified.recap) {
+    const service = entry.service === "encryption"
+      ? "tinycloud.encryption"
+      : SERVICE_BY_SHORT_NAME[entry.service];
+    if (service === undefined) {
+      throw new Error(
+        `Validated runtime delegation has an unsupported signed service '${entry.service}'.`,
+      );
+    }
+    const space = service === "tinycloud.encryption" ? undefined : entry.space;
+    const key = JSON.stringify([service, space ?? null, entry.path]);
+    const resource = resources.get(key) ?? { service, space, path: entry.path, abilities: {} };
+    for (const action of entry.actions) {
+      if (Object.prototype.hasOwnProperty.call(resource.abilities, action)) {
+        throw new Error("Validated runtime delegation repeats a signed capability.");
+      }
+      resource.abilities[action] = [...entry.caveats];
+    }
+    resources.set(key, resource);
+  }
+  const permissions = [...resources.values()].flatMap((resource) =>
+    groupedSignedEntries(resource.service, resource.space, resource.path, resource.abilities)
+  );
+  return signedRuntimeAuthority({
+    issuer: verified.issuer,
+    audience: verified.audience,
+    expiry: verified.expiry,
+    proofs: [],
+  }, permissions);
+}
+
+function signedRuntimeAuthority(
+  signed: Omit<SignedRuntimeAuthority, "permissions" | "resources">,
+  permissions: PermissionEntry[],
+): SignedRuntimeAuthority {
   if (permissions.length === 0) {
     throw new Error("Validated runtime delegation has no signed capabilities.");
   }
@@ -351,17 +495,7 @@ function signedAuthorityFromCompactUcan(
     actions: [...permission.actions],
     ...(permission.caveats === undefined ? {} : { caveats: permission.caveats }),
   }));
-  return {
-    issuer: payload.iss,
-    audience: payload.aud,
-    expiry,
-    proofs: [...payload.prf],
-    ...(remainingRedelegationDepth === undefined
-      ? {}
-      : { remainingRedelegationDepth: remainingRedelegationDepth as number }),
-    permissions: canonicalPermissions,
-    resources: canonicalResources,
-  };
+  return { ...signed, permissions: canonicalPermissions, resources: canonicalResources };
 }
 
 function canonicalResourcesFromPortableDelegation(
@@ -413,11 +547,13 @@ function resourcesMatch(
 }
 
 /**
- * CID-bind and activate one compact runtime delegation.
+ * CID-bind and activate one runtime delegation.
  *
- * The helper derives audience, expiry, and effective permissions from the
- * compact UCAN's signed payload, verifies the transport fields agree, then
- * invokes {@link TinyCloudNode.useRuntimeDelegation}. The node activation call
+ * The helper derives audience, expiry, and effective permissions from signed
+ * bytes: the compact UCAN's payload, or, for a delegation carrying a
+ * {@link PortableDelegation.siweProof}, the WASM-verified SIWE behind its
+ * CACAO. It verifies the transport fields agree, then invokes
+ * {@link TinyCloudNode.useRuntimeDelegation}. The node activation call
  * remains the authority and delegation-chain validation boundary.
  */
 export async function activateValidatedRuntimeDelegation(
@@ -447,7 +583,18 @@ export async function activateValidatedRuntimeDelegation(
     throw new Error("Runtime delegation CID does not match authorization bytes.");
   }
 
-  const signed = signedAuthorityFromCompactUcan(authorization);
+  const siweProof = delegation.siweProof;
+  const signed = siweProof === undefined
+    ? signedAuthorityFromCompactUcan(authorization)
+    : signedAuthorityFromSiweDelegation(node, {
+      authorization,
+      cid,
+      spaceId: delegation.spaceId,
+      address: delegation.ownerAddress,
+      chainId: delegation.chainId,
+      siwe: siweProof.siwe,
+      signature: siweProof.signature,
+    });
   if (signed.expiry.getTime() <= Date.now()) {
     throw new Error("Runtime delegation is expired.");
   }
@@ -507,6 +654,9 @@ export async function activateValidatedRuntimeDelegation(
     expiry: new Date(signed.expiry),
     delegateDID: signed.audience,
     host,
+    ...(siweProof === undefined
+      ? {}
+      : { siweProof: { siwe: siweProof.siwe, signature: siweProof.signature } }),
   };
 
   if (
@@ -565,15 +715,58 @@ export async function activateCompactRuntimeDelegation(
     throw new Error("Compact runtime delegation CID does not match authorization bytes.");
   }
   const signed = signedAuthorityFromCompactUcan(authorization);
+  return activateValidatedRuntimeDelegation(
+    node,
+    portableFromSignedAuthority(cid, authorization, signed, input),
+    { host: input.host },
+  );
+}
+
+/**
+ * Project a SIWE/ReCap (CACAO) delegation addressed to this node's session
+ * key, such as an OpenKey signed-login approval, into a
+ * {@link PortableDelegation}. Every projected field comes from the
+ * WASM-verified SIWE, and {@link activateValidatedRuntimeDelegation}
+ * verifies it again before installing it.
+ */
+export function siweRuntimeDelegation(
+  node: SiweDelegationVerifier,
+  input: SiweRuntimeDelegationInput,
+): PortableDelegation {
+  const cid = node.computeDelegationCid(input.authorization);
+  if (cid !== input.cid) {
+    throw new Error("SIWE runtime delegation CID does not match authorization bytes.");
+  }
+  const proof = { siwe: input.siwe, signature: input.signature };
+  const signed = signedAuthorityFromSiweDelegation(node, {
+    ...proof,
+    authorization: input.authorization,
+    cid,
+    spaceId: input.spaceId,
+    address: input.ownerAddress,
+    chainId: input.chainId,
+  });
+  return {
+    ...portableFromSignedAuthority(cid, input.authorization, signed, input),
+    siweProof: proof,
+  };
+}
+
+function portableFromSignedAuthority(
+  cid: string,
+  authorization: string,
+  signed: SignedRuntimeAuthority,
+  transport: { readonly ownerAddress: string; readonly chainId: number; readonly host: string },
+): PortableDelegation {
   const primary = signed.resources[0]!;
   const signedSpace = signed.permissions.find(
     (permission) => permission.service !== "tinycloud.encryption",
   )?.space;
-  const delegation: PortableDelegation = {
+  return {
     cid,
     delegationHeader: { Authorization: authorization },
-    ownerAddress: input.ownerAddress,
-    chainId: input.chainId,
+    ownerAddress: transport.ownerAddress,
+    chainId: transport.chainId,
     delegatorDID: signed.issuer,
     authHeader: authorization,
     spaceId: signedSpace ?? primary.space,
@@ -586,11 +779,8 @@ export async function activateCompactRuntimeDelegation(
     })),
     expiry: new Date(signed.expiry),
     delegateDID: signed.audience,
-    host: normalizedHost(input.host),
+    host: normalizedHost(transport.host),
   };
-  return activateValidatedRuntimeDelegation(node, delegation, {
-    host: input.host,
-  });
 }
 
 /**
