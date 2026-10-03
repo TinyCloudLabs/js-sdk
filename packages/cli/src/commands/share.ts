@@ -80,10 +80,10 @@ export function shareCliError(error: unknown): CLIError {
       ? `\`tc ${profileHint}auth login --method local\``
       : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
-      const profile = profileName ?? "publisher";
+      const holder = profileName === undefined ? "this session" : `profile ${profileName}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `Share publishing cannot use a caveated session; re-approve the builtin:share-publishing scope without restrictions on a dedicated profile, for example \`tc --profile ${profile} auth login --device --manifest builtin:share-publishing\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
         5,
       );
     }

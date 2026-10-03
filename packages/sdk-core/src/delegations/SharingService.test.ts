@@ -112,7 +112,7 @@ describe("SharingService authority space comparison", () => {
         getDelegationsForKey: () => typeof matching[];
         isDelegationValid: () => boolean;
       };
-      findSuitableKeyForDelegation: (path: string, actions: string[], expiry: Date) => boolean;
+      classifyDelegationAuthority: (path: string, actions: string[], expiry: Date) => string;
     };
     internal.session = { spaceId: SPACE };
     internal.registry = {
@@ -121,13 +121,13 @@ describe("SharingService authority space comparison", () => {
       isDelegationValid: () => true,
     };
 
-    expect(internal.findSuitableKeyForDelegation("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe(true);
+    expect(internal.classifyDelegationAuthority("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe("ok");
     for (const spaceId of [
       `${matching.spaceId}:other`,
       matching.spaceId.replace("eip155:1:", "eip155:2:"),
     ]) {
       internal.registry.getDelegationsForKey = () => [{ ...matching, spaceId }];
-      expect(internal.findSuitableKeyForDelegation("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe(false);
+      expect(internal.classifyDelegationAuthority("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe("not-covered");
     }
   });
 });
@@ -804,5 +804,56 @@ describe("SharingService.generate root-delegation signing failures", () => {
     expect(result.error.message).toContain(
       "The active session ReCap does not authorize",
     );
+  });
+
+  describe("preflightGenerate", () => {
+    const SHARE_PATH = "xyz.tinycloud.share/shares/abc/report.md";
+    function registryWith(entries: Array<{ path: string; actions: string[]; caveats?: Record<string, unknown>[] }>): CapabilityKeyRegistry {
+      const registry = new CapabilityKeyRegistry();
+      registry.registerKey({ id: "session-key", did: "did:key:z6MkSession", type: "session", priority: 0 }, entries.map((entry, index) => ({
+        cid: `bafy-session-${index}`,
+        delegateDID: "did:key:z6MkSession",
+        spaceId: SPACE,
+        expiry: PARENT_EXPIRY,
+        isRevoked: false,
+        allowSubDelegation: true,
+        ...entry,
+      })));
+      return registry;
+    }
+    const request = { path: SHARE_PATH, actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY };
+
+    test("is ok when an uncaveated entry covers the share, even beside caveated ones", async () => {
+      const service = makeGeneratingService(async () => undefined, undefined, registryWith([
+        { path: "", actions: ["tinycloud.capabilities/read"], caveats: [{ tenant: "alpha" }] },
+        { path: "shares/", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+        { path: "xyz.tinycloud.share/shares/", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] },
+      ]));
+      expect(service.preflightGenerate(request)).toBe("ok");
+      expect((await service.generate(request)).ok).toBe(true);
+    });
+
+    test("is caveated when only caveated entries cover the share, matching generate's refusal", async () => {
+      const service = makeGeneratingService(async () => undefined, undefined, registryWith([
+        { path: "xyz.tinycloud.share/shares/", actions: ["tinycloud.kv/get", "tinycloud.kv/put"], caveats: [{ tenant: "alpha" }] },
+      ]));
+      expect(service.preflightGenerate(request)).toBe("caveated");
+      const generated = await service.generate(request);
+      expect(generated.ok).toBe(false);
+      if (generated.ok) return;
+      expect(generated.error.code).toBe("PERMISSION_DENIED");
+    });
+
+    test("is not-covered when no entry grants the path, action or lifetime", () => {
+      const caveatedElsewhere = makeGeneratingService(async () => undefined, undefined, registryWith([
+        { path: "shares/", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+        { path: "xyz.tinycloud.share/shares/", actions: ["tinycloud.kv/put"] },
+      ]));
+      expect(caveatedElsewhere.preflightGenerate(request)).toBe("not-covered");
+      const covering = makeGeneratingService(async () => undefined, undefined, registryWith([
+        { path: "xyz.tinycloud.share/shares/", actions: ["tinycloud.kv/get"] },
+      ]));
+      expect(covering.preflightGenerate({ ...request, expiry: new Date(PARENT_EXPIRY.getTime() + 1000) })).toBe("not-covered");
+    });
   });
 });
