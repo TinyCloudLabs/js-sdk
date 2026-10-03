@@ -82,17 +82,36 @@ export async function createServerIdentity(
   };
 }
 
-// Message heuristics for untyped errors only. A 401/403 counts as a status
-// only in the contexts the SDK's own messages put it: after `: ` (`…key "k":
-// 403 - text`, `…with server: 403 text`, `…failed: 401`), after `HTTP `, inside
-// `(403)`, or leading the message (`403 Unauthorized Action: …`); and only
-// when followed by whitespace, `)` or the end. Paths, ids, ports, byte counts
-// and `expected 401, got 500` are not statuses. An explicit status decides
-// before the session-wording pattern, so a 403 whose body reads
-// `Unauthorized Action: …` never triggers a refresh.
-const HTTP_AUTH_STATUS_PATTERN = /(?:^|\bHTTP\s+|:\s|\()(401|403)(?=[\s)]|$)/;
+// Message heuristics, for untyped errors only.
+//
+// Quoted text (`"…"`) is dropped first: the SDK quotes caller-chosen names such
+// as KV keys (`Failed to put key "report(401)": 403 - …`), and a number inside
+// one is never the status.
+//
+// A status is then a number only in the positions the SDK's own messages use:
+//   - `: NNN -` and a trailing `: NNN`   (`…key "k": 403 - text`, `…failed: 401`)
+//   - `server: NNN`                      (`…delegation with server: 403 text`)
+//   - `HTTP NNN`, `returned NNN`         (`…delegation import returned 401`)
+//   - `rejected (NNN)` and a trailing `(NNN)` or `(NNN).`
+//   - a leading `NNN` followed by a word other than `bytes`, or alone
+// The first such number in 100-599 decides, whatever its value: only a 401
+// refreshes, so a real 502 is not overridden by a `401` quoted in its body.
+// Paths, ids, ports, byte counts and `expected 401, got 500` are not statuses.
+// Session wording decides only when no status is found.
+const QUOTED_TEXT_PATTERN = /"[^"]*"/g;
+const DIAGNOSTIC_STATUS_PATTERN =
+  /^(\d{3})(?:\s+(?!bytes\b)[a-z]|$)|:\s(\d{3})(?:\s-|$)|\bserver:\s(\d{3})\b|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 const SESSION_ERROR_PATTERN =
   /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
+
+/** The first HTTP status in a diagnostic position of `message` (quotes dropped). */
+function diagnosticStatusOf(message: string): number | undefined {
+  for (const match of message.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
+    const status = Number(match.slice(1).find((group) => group !== undefined));
+    if (status >= 100 && status <= 599) return status;
+  }
+  return undefined;
+}
 
 /**
  * Whether re-signing in can fix `error`. Typed errors (HTTP `status`,
@@ -105,10 +124,11 @@ export function isTinyCloudSessionError(error: unknown): boolean {
   if (verdict !== undefined) {
     return verdict === "unauthenticated";
   }
-  const message = error instanceof Error ? error.message : String(error);
-  const status = HTTP_AUTH_STATUS_PATTERN.exec(message)?.[1];
+  const message = (error instanceof Error ? error.message : String(error))
+    .replace(QUOTED_TEXT_PATTERN, '""');
+  const status = diagnosticStatusOf(message);
   if (status !== undefined) {
-    return status === "401";
+    return status === 401;
   }
   return SESSION_ERROR_PATTERN.test(message);
 }

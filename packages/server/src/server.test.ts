@@ -155,7 +155,13 @@ describe("@tinycloud/server sharing session refresh", () => {
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
 
-  test.each(AUTH_CASES)("kv.put $status body=$body rethrown with $rethrow", async ({ status, body, rethrow }) => {
+  // Keys with a parenthesised status that disagrees with the real one: the
+  // quoted key must never decide.
+  const KV_CASES = AUTH_CASES.flatMap((authCase) =>
+    ["shared/item", "report(401)", "report(403)"].map((key) => ({ ...authCase, key })),
+  );
+
+  test.each(KV_CASES)("kv.put key=$key $status body=$body rethrown with $rethrow", async ({ key, status, body, rethrow }) => {
     let fetchCalls = 0;
     let signedIn = false;
     const kv = new KVService({});
@@ -183,7 +189,7 @@ describe("@tinycloud/server sharing session refresh", () => {
     } as unknown as TinyCloudNode;
 
     const failure = await rejectionOf(withSessionRefresh(node, async () => {
-      const result = await kv.put("shared/item", "value");
+      const result = await kv.put(key, "value");
       if (!result.ok) throw rethrown(result.error, rethrow);
     }));
 
@@ -192,7 +198,7 @@ describe("@tinycloud/server sharing session refresh", () => {
     } else {
       // The message keeps the HTTP status and the server text for diagnostics.
       expect(String(failure?.message)).toBe(
-        `Failed to put key "shared/item": 403 - ${body || "authorization failed"}`,
+        `Failed to put key "${key}": 403 - ${body || "authorization failed"}`,
       );
     }
     expect(fetchCalls).toBe(status === 401 ? 2 : 1);
@@ -218,6 +224,18 @@ describe("@tinycloud/server sharing session refresh", () => {
     ["401 as a port", new Error("connect ECONNREFUSED 127.0.0.1:401"), false],
     ["401 as a byte count", new Error("wrote 401 bytes"), false],
     ["401 in an expectation", new Error("expected 401, got 500"), false],
+    ["403 in a quoted key over a real 401", new Error('Failed to put key "report(403)": 401 - Forbidden'), true],
+    ["401 in a quoted key over a real 403", new Error('Failed to put key "report(401)": 403 - Forbidden'), false],
+    ["`: 401 ` inside a quoted key over a real 500", new Error('Failed to put key "a: 401 b": 500 - boom'), false],
+    ["`: 401 ` inside a quoted key, no status", new Error('Failed to put key "a: 401 b"'), false],
+    ["requester `returned 401`", new Error("owner node delegation import returned 401"), true],
+    ["requester `returned 403`", new Error("owner node delegation import returned 403"), false],
+    ["real 502 with a 401 in the body", new Error('Failed to put key "k": 502 - upstream said: 401 Unauthorized'), false],
+    ["leading byte count then session wording", new Error("403 bytes written; session expired"), true],
+    ["`rejected (401)`", new Error("Share service rejected (401): session refused"), true],
+    ["trailing `(403)` despite session wording", new Error("session refused by Share (403)"), false],
+    ["sharing format with an empty body", new Error("Failed to register delegation with server: 401 "), true],
+    ["owned-space activation with an empty body", new Error("Failed to check owned space x: 401"), true],
   ])("withSessionRefresh: %s", async (_name, failure, refreshes) => {
     let calls = 0;
     let signInCalls = 0;
