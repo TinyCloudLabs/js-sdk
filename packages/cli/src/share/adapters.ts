@@ -320,6 +320,19 @@ export function createShareAuthorityAdapters(input: {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file = files[0]!;
       const resourcePath = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+      // A session-only profile can mint the link's delegation only from its
+      // own uncaveated authority (no signer to fall back on). Check before
+      // storing, so a refusal leaves no orphaned file. The request matches
+      // createNativeShare's: kv/get on the exact path, until `expiresAt`.
+      if (node.isSessionOnly) {
+        const authority = node.sharing.preflightGenerate({ path: resourcePath, actions: ["tinycloud.kv/get"], expiry: expiresAt });
+        if (authority === "caveated") {
+          throw new SharePublishAuthorityError({ kind: "caveated-session", profileName: activeProfileName });
+        }
+        if (authority === "not-covered") {
+          throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "sharing delegation", localKey, profileName: activeProfileName });
+        }
+      }
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
         contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
       });
