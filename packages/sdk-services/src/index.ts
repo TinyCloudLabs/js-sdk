@@ -155,6 +155,8 @@ export {
   storageLimitReachedError,
   parseAuthError,
   authUnauthorizedError,
+  authorizationVerdictOf,
+  type AuthorizationVerdict,
   parsePermissionHint,
   parsePermissionHintFromErrorText,
 } from "./errors";

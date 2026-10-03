@@ -36,8 +36,20 @@ function siweMessage(address: string, nonce: string): string {
   ].join("\n");
 }
 
+const AUTH_BODIES = [
+  "",
+  "Unauthorized Action: tinycloud:test-space/kv/shared / tinycloud.kv/get",
+  "Forbidden",
+  "session expired",
+];
+const AUTH_CASES = [401, 403].flatMap((status) =>
+  AUTH_BODIES.flatMap((body) =>
+    (["cause", "message"] as const).map((rethrow) => ({ status, body, rethrow })),
+  ),
+);
+
 describe("@tinycloud/server sharing session refresh", () => {
-  test.each([401, 403])("wraps node.sharing.generate with status %i", async (status) => {
+  test.each(AUTH_CASES)("node.sharing.generate $status body=$body rethrown with $rethrow", async ({ status, body, rethrow }) => {
     const registry = new CapabilityKeyRegistry();
     registry.registerKey({
       id: "parent-key",
@@ -69,7 +81,7 @@ describe("@tinycloud/server sharing session refresh", () => {
         fetchCalls += 1;
         return signedIn
           ? new Response(null, { status: 200 })
-          : new Response("authorization denied", { status });
+          : new Response(body, { status });
       },
       keyProvider: {
         createSessionKey: () => "share-key",
@@ -110,19 +122,52 @@ describe("@tinycloud/server sharing session refresh", () => {
         path: "shared",
         actions: ["tinycloud.kv/get"],
       });
-      if (!result.ok) throw new Error(result.error.message);
+      if (!result.ok) {
+        throw rethrow === "cause"
+          ? new Error(result.error.message, { cause: result.error })
+          : new Error(result.error.message);
+      }
       return result.data;
     });
 
     if (status === 401) {
       await expect(generate()).resolves.toBeDefined();
     } else {
-      await expect(generate()).rejects.toThrow(/403/);
+      await expect(generate()).rejects.toThrow(
+        `Failed to register delegation with server: 403 ${body}`,
+      );
     }
     expect(generateCalls).toBe(status === 401 ? 2 : 1);
     expect(fetchCalls).toBe(status === 401 ? 2 : 1);
-    expect(signedIn).toBe(status === 401);
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
+  });
+
+  test.each([
+    ["typed 401 with a non-session body", Object.assign(new Error("Forbidden"), { status: 401 }), true],
+    ["typed 403 with a session body", Object.assign(new Error("session expired"), { meta: { status: 403 } }), false],
+    ["typed non-auth status with a 401 body", Object.assign(new Error("401 Unauthorized"), { status: 502 }), false],
+    ["AUTH_UNAUTHORIZED without status", { code: "AUTH_UNAUTHORIZED", message: "Unauthorized Action: x / y" }, false],
+    ["untyped 401 text", new Error("request failed: 401"), true],
+    ["untyped 403 Unauthorized Action text", new Error("403 Unauthorized Action: x / y"), false],
+    ["untyped session wording", new Error("session expired"), true],
+    ["untyped generic failure", new Error("socket hang up"), false],
+  ])("withSessionRefresh: %s", async (_name, failure, refreshes) => {
+    let calls = 0;
+    let signInCalls = 0;
+    const node = { signIn: async () => { signInCalls += 1; } } as unknown as TinyCloudNode;
+    const run = withSessionRefresh(node, async () => {
+      calls += 1;
+      if (calls === 1) throw failure;
+      return "ok";
+    });
+
+    if (refreshes) {
+      await expect(run).resolves.toBe("ok");
+    } else {
+      await expect(run).rejects.toBe(failure);
+    }
+    expect(signInCalls).toBe(refreshes ? 1 : 0);
+    expect(calls).toBe(refreshes ? 2 : 1);
   });
 });
 

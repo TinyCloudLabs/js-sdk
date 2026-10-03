@@ -35,6 +35,7 @@ import {
   TinyCloud,
   TinyCloudSession,
   activateSessionWithHost,
+  authorizationVerdictOf,
   KVService,
   IKVService,
   SQLService,
@@ -2252,8 +2253,9 @@ export class TinyCloudNode {
 
     const result = await this.account.applications.register(request.manifests);
     if (!result.ok) {
-      throw new Error(
-        `Failed to write manifest registry records: ${result.error.message}`,
+      throw Object.assign(
+        new Error(`Failed to write manifest registry records: ${result.error.message}`),
+        { cause: result.error },
       );
     }
   }
@@ -2284,7 +2286,10 @@ export class TinyCloudNode {
         if (this.currentSessionCanListSpaces()) {
           const spaces = await this.account.spaces.syncAccessible();
           if (!spaces.ok) {
-            throw new Error(`Failed to sync account spaces: ${spaces.error.message}`);
+            throw Object.assign(
+              new Error(`Failed to sync account spaces: ${spaces.error.message}`),
+              { cause: spaces.error },
+            );
           }
         }
         // Else: the current session carries a recap that does not grant
@@ -2358,12 +2363,17 @@ export class TinyCloudNode {
         await task();
         return;
       } catch (error) {
-        // Authorization verdicts are deterministic, not transient: retrying an
-        // `Unauthorized Action` / 401 only re-emits the doomed request (the
-        // 2026-07-03 recap-storm incident). Warn once and stop; generic errors
-        // still get the full retry budget below.
+        // Authorization verdicts are deterministic, not transient: retrying a
+        // 401/403 only re-emits the doomed request (the 2026-07-03 recap-storm
+        // incident). The typed status/code decides whatever the body says;
+        // the message pattern is only a fallback for untyped errors. Warn once
+        // and stop; generic errors still get the full retry budget below.
+        const verdict = authorizationVerdictOf(error);
         const message = error instanceof Error ? error.message : String(error);
-        if (/Unauthorized Action|\b(?:401|403)\b/.test(message)) {
+        const isAuthorizationVerdict = verdict === undefined
+          ? /Unauthorized Action|\b(?:401|403)\b/.test(message)
+          : verdict !== "other";
+        if (isAuthorizationVerdict) {
           console.warn(
             "TinyCloud account registry sync stopped: authorization verdict is not retryable",
             error,
@@ -2458,8 +2468,9 @@ export class TinyCloudNode {
     }
 
     if (!activation.success && activation.status !== 404) {
-      throw new Error(
-        `Failed to check owned space ${spaceId}: ${activation.error ?? activation.status}`,
+      throw Object.assign(
+        new Error(`Failed to check owned space ${spaceId}: ${activation.error ?? activation.status}`),
+        { cause: activation },
       );
     }
 

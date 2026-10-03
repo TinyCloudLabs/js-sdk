@@ -1,6 +1,7 @@
 import { keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { TinyCloudNode, type Manifest, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
+import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 
 const DEFAULT_HOST = "https://node.tinycloud.xyz";
 
@@ -81,14 +82,38 @@ export async function createServerIdentity(
   };
 }
 
+// Message heuristics for untyped errors only. An explicit 401/403 in the text
+// decides before the session-wording pattern, so a 403 whose body reads
+// `Unauthorized Action: …` never triggers a refresh.
+const HTTP_AUTH_STATUS_PATTERN = /\b(401|403)\b(?![\d-])/;
 const SESSION_ERROR_PATTERN =
-  /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b|\b401\b(?![\d-])/i;
+  /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
 
+/**
+ * Whether re-signing in can fix `error`. Typed errors (HTTP `status`,
+ * `statusCode` or `meta.status`, or `AUTH_UNAUTHORIZED`, including through the
+ * `cause` chain) decide from their structure: only a 401 refreshes, so a 403
+ * never does whatever its body says. Untyped errors fall back to the message.
+ */
 export function isTinyCloudSessionError(error: unknown): boolean {
+  const verdict = authorizationVerdictOf(error);
+  if (verdict !== undefined) {
+    return verdict === "unauthenticated";
+  }
   const message = error instanceof Error ? error.message : String(error);
+  const status = HTTP_AUTH_STATUS_PATTERN.exec(message)?.[1];
+  if (status !== undefined) {
+    return status === "401";
+  }
   return SESSION_ERROR_PATTERN.test(message);
 }
 
+/**
+ * Run `fn`, re-signing in and retrying once when it fails with a session
+ * error (see {@link isTinyCloudSessionError}). To keep the typed status when
+ * unwrapping a `Result`, throw the `ServiceError` itself or an `Error` whose
+ * `cause` is the `ServiceError`.
+ */
 export async function withSessionRefresh<T>(
   node: TinyCloudNode,
   fn: () => Promise<T>,

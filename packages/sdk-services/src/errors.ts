@@ -171,6 +171,69 @@ export function authUnauthorizedError(
 }
 
 /**
+ * Authorization verdict read from an error's structure, never its message:
+ * - `"unauthenticated"`: HTTP 401 — the session is missing or stale.
+ * - `"forbidden"`: HTTP 403, or `AUTH_UNAUTHORIZED` without a status — the
+ *   session is valid but lacks the capability.
+ * - `"other"`: a non-authorization HTTP status.
+ */
+export type AuthorizationVerdict = "unauthenticated" | "forbidden" | "other";
+
+const MAX_CAUSE_DEPTH = 8;
+
+function httpStatusOf(node: Record<string, unknown>): number | undefined {
+  const meta = node.meta;
+  const candidates = [
+    node.status,
+    node.statusCode,
+    typeof meta === "object" && meta !== null
+      ? (meta as Record<string, unknown>).status
+      : undefined,
+  ];
+  for (const candidate of candidates) {
+    if (
+      typeof candidate === "number" &&
+      Number.isInteger(candidate) &&
+      candidate >= 100 &&
+      candidate <= 599
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Classify an error from its typed HTTP status (`status`, `statusCode`, or
+ * `meta.status`) and `AUTH_UNAUTHORIZED` code, following the `cause` chain
+ * outward-in so wrappers that rethrow with `cause` keep the verdict. The
+ * first HTTP status found decides. Returns `undefined` for untyped errors;
+ * only then may callers fall back to message heuristics.
+ */
+export function authorizationVerdictOf(
+  error: unknown,
+): AuthorizationVerdict | undefined {
+  const seen = new Set<unknown>();
+  let sawUnauthorizedCode = false;
+  let node: unknown = error;
+  for (
+    let depth = 0;
+    depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null && !seen.has(node);
+    depth += 1
+  ) {
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+    const status = httpStatusOf(record);
+    if (status === 401) return "unauthenticated";
+    if (status === 403) return "forbidden";
+    if (status !== undefined) return "other";
+    if (record.code === ErrorCodes.AUTH_UNAUTHORIZED) sawUnauthorizedCode = true;
+    node = record.cause;
+  }
+  return sawUnauthorizedCode ? "forbidden" : undefined;
+}
+
+/**
  * Create a service error for storage quota exceeded (402 Payment Required).
  */
 export function storageQuotaExceededError(

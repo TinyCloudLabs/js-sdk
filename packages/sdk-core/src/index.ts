@@ -462,6 +462,8 @@ export {
   ErrorCodes,
   type ErrorCode,
   type ServiceError,
+  authorizationVerdictOf,
+  type AuthorizationVerdict,
   // Session
   type ServiceSession,
   // Platform dependencies
