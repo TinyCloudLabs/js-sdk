@@ -16,7 +16,7 @@ const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed2
 const nodeSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 33);
 const nodeDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(nodeSeed)]))}`;
 
-async function fixture(onDeliveryMaterial?: AddressedSharePublishOptions["onDeliveryMaterial"]) {
+async function fixture(onDeliveryMaterial?: AddressedSharePublishOptions["onDeliveryMaterial"], filename = "readme.md") {
   let registration: AddressedPolicyRegistrationInput | undefined;
   const published = await publishAddressedShare({
     shareId: "addressedroundtrip0001",
@@ -40,7 +40,7 @@ async function fixture(onDeliveryMaterial?: AddressedSharePublishOptions["onDeli
       initialCiphertextDigestHex: "2".repeat(64),
     },
     credentialRequirement: addressedCredentialRequirement({ kind: "email", address: "alice@example.com" }),
-    filename: "readme.md",
+    filename,
     mediaType: "text/markdown",
     byteLength: 8,
     expiresAt: new Date("2030-01-01T00:00:00.000Z"),
@@ -97,6 +97,13 @@ describe("canonical addressed publication", () => {
     expect(record.deliveryMaterial).toEqual(published.deliveryMaterial);
     expect(record.deliveryMaterial?.shareCid).toBe(published.link.cid);
     expect(record.deliveryMaterial?.envelope).toMatchObject({ version: 3, policyCid: published.metadata.policyCid });
+  });
+
+  it("carries the NFC filename in the envelope, result metadata and history", async () => {
+    const { published } = await fixture(undefined, "cafe\u0301.md");
+    expect(published.metadata.display.filename).toBe("caf\u00e9.md");
+    expect(historyRecordForPublishedShare(published).filename).toBe("caf\u00e9.md");
+    expect(published.deliveryMaterial?.envelope).toMatchObject({ display: { filename: "caf\u00e9.md" }, metadata: { filename: "caf\u00e9.md" } });
   });
 
   it("publishes sealed delivery material through the typed callback", async () => {
