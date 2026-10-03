@@ -1,5 +1,101 @@
 # @tinycloud/cli
 
+## 1.0.0
+
+### Major Changes
+
+- c690844: Complete the TC-498/TC-500 native-sharing beta cutover. The legacy
+  broker-backed Share APIs, link/transport compatibility paths, and retired CLI
+  Share flags are intentionally removed. Use owner-Node native bearer
+  delegations or signed Policy/v3 addressed shares; this release does not retain
+  a parallel legacy broker authority plane.
+- b852650: Seal Policy/v3 recipient metadata as the canonical AES-256-GCM
+  `version || nonce || ciphertext+tag` blob before constructing an addressed
+  share link. Delivery authorization now binds that sealed blob and its
+  fragment-only key, rather than accepting a plaintext `?tc2` envelope. Remove
+  the public plaintext Policy/v3 inline URL codec; only sealed fragment links
+  are accepted for addressed shares. Add the reusable app-neutral
+  OpenCredentials invitation client and bind notification retries to the signed
+  delivery JTI/nonce used by Node and OpenCredentials deduplication.
+
+### Minor Changes
+
+- 48eca36: TC-540: `tc auth login --device --manifest FILE [--expiry DUR] [--owner DID] [--replace-session]` and `tc auth request --manifest FILE --grant --device` request exactly a KV-scoped manifest's permissions through OpenKey device authorization (SQL stays on browser login). The signed SIWE ReCap is the authority: the CLI accepts an approval only when OpenKey's binding and relayed delegation state exactly the signed permissions, which must stay inside the request and match the session key, owner, origins and lifetime; `permissions`/`declined` are derived from the signed grant, and OpenKey `invalid_scope` surfaces as `SCOPE_REJECTED`. A profile that recorded an owner is pinned to it on scoped and device login (except local-owner-key profiles); device login refuses local-owner-key profiles (`LOCAL_OWNER_PROFILE`) and will not replace a live session with a different scope without `--replace-session` (`SESSION_IN_USE`). Device logins honor the profile's self-hosted `openkeyHost`, accept verification pages only on the OpenKey site, and name OpenKey when it is unreachable. Owner addresses compare case-insensitively (EIP-55 or lowercase) while chain id and space name compare exactly. `--device` requires `--manifest`; non-interactive `auth login` no longer switches to device mode or waits silently on a browser (`INTERACTIVE_LOGIN_REQUIRED`). The built-in `builtin:share-publishing` manifest requests only `tinycloud.capabilities/read` on `""` (OpenKey requires it to sign any delegation), KV get/put on `xyz.tinycloud.share/shares/` and get/metadata/put/list on `shares/`; `tc enable share` uses it.
+
+  `--expiry` is enforced against the signed session on every login path; OpenKey `--expiry` takes durations only (ISO dates are refused up front, since OpenKey signs approval time plus a lifetime). Logins commit under the profile lock after re-reading profile, key and session: a change while approval was pending refuses with `PROFILE_CHANGED_DURING_LOGIN`, and a live session is replaced only by an approved scope that keeps all of it (`SESSION_IN_USE` otherwise, for scoped browser and device login alike). Every login keeps the profile's recorded owner and records only a signature-verified owner. Browser `--expiry` reaches OpenKey as seconds. Login commits and the `ProfileManager` profile, key and session writers take the profile lock, and read-modify-write updates hold it for the whole transaction. A failed commit write restores the pre-commit state, attempting every restore write; if restoring fails too, or interrupted state is found (including a session naming an owner the profile does not record), it surfaces as `PROFILE_STATE_INCONSISTENT`. A profile lock timeout reaching the CLI error handler is reported as `PROFILE_LOCK_TIMEOUT` with a retry hint. Signed ReCap caveats (including JSON `null` values, which the WASM verifier returns as `undefined`) are recorded with the session's permissions, and a renewal that adds a caveat to an action the live session holds unrestricted counts as narrowing (`SESSION_IN_USE`). An unscoped login whose callback carries no complete proof saves no SIWE or signature, so an unsigned expiry is never read back. Session authority fields (owner, permissions, expiry, signed-scope marker) are set only from verified proofs; `tc init` uses the same verified commit. `withProfileLock` in operations is reentrant only for the acquiring call chain and lock path while the acquisition lasts, takes the lock with an exclusive `mkdir` (the primitive older releases use) and holds it only once it has `link`ed a fully written owner record into it (`link` never replaces; EEXIST or ENOENT means not acquired, and the attempt retries), never renames anything onto the lock or its owner record, and reclaims an ownerless lock directory older than the stale threshold only by `rmdir`, so only while it is empty; claim files left by a process killed mid-recovery are removed first (never `owner.json`), and owner files a crashed acquirer staged are removed once aged. Dead-holder recovery claims the owner record with a hard link instead of moving it, so a recoverer acting on an outdated observation can no longer move a live holder's record away and restore it after that holder released (which left the lock blocked until the stale threshold); release removes its own verified record. Recovery is fenced: a recoverer that took longer than half the stale threshold between its claim and removing the dead holder's record, or a cleanup between its age check and removing claims, abandons that step (dropping only its own claim) and retries, so a recoverer paused while cleanup and a new holder moved on can never remove that holder's record. Port manifest-scoped first login (`auth login --manifest/--owner/--expiry` with signed-proof verification), the `tc context` command, and the packaged core `tc-cli` skill (SKILL, AUTH, REFERENCE, INSTALL, release.json) from the 0.10 line. The default host is now `https://tee.node.tinycloud.xyz` in the CLI, operations and MCP HTTP CLI; only an explicit `--host` is stored on a profile. Profile state is written 0600 in 0700 directories, and directories or grant history created by older releases are tightened on the next write.
+
+  `tc share publish` authorization hints for OpenKey profiles now name `tc --profile <name> auth login --device --manifest builtin:share-publishing` (or `tc --profile <name> enable share`), and scope denials name the `builtin:share-publishing` scope; local-key profiles keep `auth login --method local`. The packaged `tc-cli` skill requires CLI `>=1.0.0-beta.17`, the first release with these commands. Device login validates that OpenKey's relay key is a P-256 point before deriving the relay secret. `tc auth request --grant --device` keeps signed ReCap caveats on the granted resources, in the stored delegation and in the reported grant, so a caveated grant is never replayed as unrestricted.
+
+### Patch Changes
+
+- aee2308: Add Share-first, end-to-end-encrypted OpenKey device authorization for first-time remote publishing, plus explicit `tc auth login --device` and `tc enable share` commands.
+- 9cc11ca: Honor Share subcommands' `--json` flag when the root CLI also defines that option, restoring machine-readable success output for inspect, receive, and lifecycle commands.
+- c690844: Reject addressed-share ciphertext whose exact owner-KV bytes do not match the
+  signed source digest before key unwrap or rendering. Revoke addressed shares
+  through the existing signed Policy/v3 root-revocation path, which cuts off
+  active sessions as well as fresh admission and delivery.
+- d8b122e: Bind restored-session share publication to the signed owner space, compare EIP-155 owner addresses without case sensitivity, classify authority failures, and constrain implicit share expiry to session lifetime.
+- d8b122e: Preserve actionable sharing and KV authorization diagnostics while keeping CLI output safe and session expiry guidance prioritized.
+- d8b122e: Restore backwards-compatible auth codes and preserve typed session and authorization diagnostics across SDK boundaries.
+- d8b122e: Harden share publication expiry clamping and map restored-session and authorization failures to typed, safe errors.
+- d8b122e: Resolve Share publication's owner space from restored OpenKey sessions while retaining the configured Share-origin binding.
+- a132b77: `tc share publish` refuses a session whose authority for an anyone-with-link share carries signed restrictions (caveats) before storing anything, so a refused publish no longer leaves an orphaned file. It exits 5 with `PERMISSION_DENIED` and says to approve Share publishing without restrictions on a new, dedicated profile (`tc init --name publisher --key-only && tc --profile publisher enable share`). A caveat only on authority the link does not use (such as `tinycloud.capabilities/read` or the addressed `shares/` prefix) does not block publishing, and a session that lacks the link's authority altogether is also refused with `PERMISSION_DENIED` before upload. Addressed (`--to`) shares and signer-backed local-key profiles are unchanged.
+
+  `SharingService.preflightGenerate({ path, actions, expiry })` reports, without side effects, whether the session's own authority can issue the delegation `generate` would create: `"ok"`, `"caveated"` (only caveated entries cover it) or `"not-covered"`. It does not consult `onRootDelegationNeeded`.
+
+- 2e9db6e: Owner-only (email-addressed) Share links published by the CLI now open in the Share viewer, and CLI `--to domain:` shares now work. The CLI commits the recipient's mailbox credential in the policy (Policy/v2) and publishes the owner's node location record before publishing.
+  - `publishAddressedShare` refuses an exact-email share without a credential requirement bound to the address. Previously such a share was signed as Policy/v1, which no receiver accepts.
+  - The new `addressedCredentialRequirement(target)` builds the commitment for email and email-domain targets.
+  - The new `prepareAddressedShare(request)` runs every target, recipient, filename and action check, with no side effects. The CLI calls it before publishing the location record or uploading, so a refused share (for example `--to domain:… --action edit`) leaves nothing behind.
+  - `notifyShare` matches, keys and delivers on the canonical mailbox, so `tc share publish --to email:Foo@x.com --notify` and `tc share notify --to Foo@x.com` invite `foo@x.com`. The CLI canonicalizes `--to` mailboxes and domains up front, and an invalid one reports the specific reason.
+  - A location registry outage during `tc share publish` (network error, 5xx, 408 or 429) reports `UNAVAILABLE` (exit 4) with a retry hint. A registry rejection (any other 4xx, or an invalid record) reports `REGISTRY_REJECTED` (exit 6) and says that retrying will not help. sdk-core throws the new `LocationRegistryHttpError`, which carries the HTTP `status`, for registry HTTP failures; the message text is unchanged.
+  - `canonicalMailbox`, `canonicalEmailDomain`, `isCanonicalEmailDomain` and `mailboxBelongsToDomain` now live in `@tinycloud/share-envelope`. `@tinycloud/sdk-core` re-exports them unchanged.
+
+- c79f5f4: TC-575: Report OpenKey device sign-in rate limits as `DEVICE_AUTH_RATE_LIMITED` with a wait hint and any `Retry-After` window.
+- b3db51a: `tc share publish` no longer fails with `PERMISSION_DENIED` when a filename contains spaces. A name that has characters other than `A-Z a-z 0-9 . _ -`, starts with anything but a letter or digit, contains `..`, or is longer than 128 characters is stored under a readable URI-safe name (`Edge test (A).md` is stored as `Edge-test-A.md`). It keeps its extension when that is 1-16 ASCII letters or digits; a leading dot is dropped (`.env` becomes `share.env`), and a name without such an extension never gains one. Anyone-with-link pages and `tc share receive` show the stored name; addressed shares keep the original display filename. A full storage quota reports `STORAGE_QUOTA_EXCEEDED`, with used and limit sizes when the node includes them, and other upload failures report `UPLOAD_FAILED`, never server text. `tc kv get`, `put`, `head`, `delete` and `list --prefix` refuse keys with spaces or control characters (`USAGE_ERROR`) before authenticating, because the SDK sends keys unescaped in the node resource URI, and `tc kv put` reports a full quota as `STORAGE_QUOTA_EXCEEDED` (exit 1). Permission errors advise checking the existing scope before requesting it again.
+- bf6fbd1: Share publication now applies the share viewer's filename policy: names are NFC-normalized, and control, format (such as U+200B zero-width space and U+202E bidi override), surrogate, and U+2028/U+2029 code points are refused before any content is read or uploaded. share-sdk exports `canonicalShareFilename` and `hasUnsafeFilenameCodePoint`, and `publishTargetShare` reports "filename contains control or invisible characters". `tc share publish` refuses every such filename with `UNSAFE_FILENAME` (exit 8), and addressed shares display the NFC-normalized name.
+- 877097d: TC-599: Scoped OpenKey login can grant an agent read access to named secrets, and the secrets commands are safe to run headless.
+  - `auth login --manifest` keeps raw `tinycloud.encryption` network entries in the `encryption` pseudo-space (never in the manifest's space), so the Secret Manager `secrets: { NAME: true }` shape passes first-login validation; the decrypt network uses the EIP-55-checksummed recorded owner or `--owner` (`OWNER_DID_UNKNOWN` otherwise), never the session `did:key`.
+  - Every scoped login (browser, paste, device) requests `tinycloud.capabilities/read` on the space root when the manifest lacks it. A signed decrypt nested inside the owner's space is not raw authority: it is reported in `declined`, omitted from saved permissions so a later valid raw renewal is not blocked, and accompanied by an old-OpenKey warning. Foreign-owner decrypt grants are refused; device login refuses encryption and secrets-space manifests up front.
+  - Browser `auth request --grant` and secret-read permission escalation verify the owner's signed OpenKey proof against the profile session key, requested space, scope and expiry. Only signed effective permissions are activated and persisted; old nested decrypt, foreign-owner, broadened or missing proof is refused before storage, and activation failure leaves local grants unchanged.
+  - `auth login --paste` accepts a final code line without a newline and fails with `PASTE_CODE_MISSING` (exit 3, naming the approval URL) when stdin ends without a code.
+  - `secrets get -o FILE` validates the destination and its existing directory before fetching secret bytes, syncs a new 0600 inode, and atomically replaces the destination. A best-effort parent-directory sync follows replacement without turning a completed write into an error. Symlinks, non-regular destinations, and absent parents are refused without unsafe fallback; filesystem output failures identify the destination without leaking the temporary filename.
+  - With no TTY on stdin or stderr, `secrets get|list|put|delete` on an OpenKey profile lacking the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. A missing or real signed expired session fails with `AUTH_REQUIRED` (exit 3) before the canonical get operation or an unscoped browser refresh. Redirecting stdout alone still permits owner approval through stderr and terminal stdin.
+  - node-sdk: a decrypt refused with HTTP 401/403 is reported as missing decrypt authority on the invoked network, never on a response-supplied resource or action.
+  - node-sdk keeps an owner's space-nested encryption ReCap distinct from a raw network grant when restoring sessions, checking runtime permissions, and deriving further delegations.
+
+- 08f5bad: Route hosted Share device authorization through the canonical OpenKey API origin while preserving the browser approval origin and explicit self-hosted overrides.
+- Updated dependencies [46c83a7]
+- Updated dependencies [036ce34]
+- Updated dependencies [ce34dc1]
+- Updated dependencies [4b60562]
+- Updated dependencies [b0069f7]
+- Updated dependencies [dc92402]
+- Updated dependencies [cc27c3a]
+- Updated dependencies [657c1ff]
+- Updated dependencies [12e5c4d]
+- Updated dependencies [c690844]
+- Updated dependencies [c690844]
+- Updated dependencies [31043b5]
+- Updated dependencies [b852650]
+- Updated dependencies [026bf15]
+- Updated dependencies [70e6c95]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [48eca36]
+- Updated dependencies [48eca36]
+- Updated dependencies [a132b77]
+- Updated dependencies [2e9db6e]
+- Updated dependencies [bf6fbd1]
+- Updated dependencies [877097d]
+  - @tinycloud/sdk-core@3.0.0
+  - @tinycloud/node-sdk@3.0.0
+  - @tinycloud/share-sdk@1.0.0
+  - @tinycloud/share-envelope@1.0.0
+  - @tinycloud/operations@0.3.3
+
 ## 1.0.0-beta.23
 
 ### Patch Changes

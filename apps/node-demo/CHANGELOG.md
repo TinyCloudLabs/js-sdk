@@ -1,5 +1,33 @@
 # @tinycloudlabs/node-demo
 
+## 0.0.31
+
+### Patch Changes
+
+- Updated dependencies [46c83a7]
+- Updated dependencies [036ce34]
+- Updated dependencies [ce34dc1]
+- Updated dependencies [4b60562]
+- Updated dependencies [b0069f7]
+- Updated dependencies [cc27c3a]
+- Updated dependencies [657c1ff]
+- Updated dependencies [12e5c4d]
+- Updated dependencies [c690844]
+- Updated dependencies [31043b5]
+- Updated dependencies [b852650]
+- Updated dependencies [70e6c95]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [48eca36]
+- Updated dependencies [a132b77]
+- Updated dependencies [2e9db6e]
+- Updated dependencies [877097d]
+  - @tinycloud/sdk-core@3.0.0
+  - @tinycloud/node-sdk@3.0.0
+  - @tinycloud/vfs@0.1.14
+
 ## 0.0.31-beta.18
 
 ### Patch Changes

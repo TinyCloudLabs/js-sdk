@@ -1,5 +1,99 @@
 # @tinycloudlabs/node-sdk
 
+## 3.0.0
+
+### Major Changes
+
+- c690844: Complete the TC-498/TC-500 native-sharing beta cutover. The legacy
+  broker-backed Share APIs, link/transport compatibility paths, and retired CLI
+  Share flags are intentionally removed. Use owner-Node native bearer
+  delegations or signed Policy/v3 addressed shares; this release does not retain
+  a parallel legacy broker authority plane.
+- b852650: Seal Policy/v3 recipient metadata as the canonical AES-256-GCM
+  `version || nonce || ciphertext+tag` blob before constructing an addressed
+  share link. Delivery authorization now binds that sealed blob and its
+  fragment-only key, rather than accepting a plaintext `?tc2` envelope. Remove
+  the public plaintext Policy/v3 inline URL codec; only sealed fragment links
+  are accepted for addressed shares. Add the reusable app-neutral
+  OpenCredentials invitation client and bind notification retries to the signed
+  delivery JTI/nonce used by Node and OpenCredentials deduplication.
+
+### Minor Changes
+
+- 70e6c95: Durable, re-delegatable share access (TC-531) and email delivery for
+  email-domain shares (TC-530).
+  - **Durable sessions.** Policy admission asks the Node for a session as long
+    as the share: `requestedExpiresAt`, which defaults to the policy's expiry
+    and can be set to `null` for the legacy minute. On Nodes before 1.17.3,
+    which reject the field with 422, it falls back to the 60-second session.
+    The request asks for the earlier of the envelope's and the policy's expiry.
+    Received sessions longer than 60 seconds are accepted:
+    `ShareRecipientClient` bounds them by the share's expiry, and
+    `parsePolicySessionUcan` by the 31-day root window.
+  - **Re-delegation.** `ReceivedShare.delegate({ to, expiresAt? })`
+    re-delegates a received share, decryption included, to another Ed25519
+    `did:key`, for example an account session key. It imports the new link into
+    the owner's Node and returns the whole chain. The delegate opens the share
+    with `share.receive(url, { delegation })` and needs no credential.
+    `ShareRecipientClient` verifies every link before use: issuer, the exact
+    parent proof, a strictly narrower window, inherited facts with one less
+    redelegation, and unchanged capabilities.
+  - `signCompactPolicyDescendant` signs a policy descendant with a
+    caller-owned, possibly non-extractable, key.
+  - **Default to the maximum.** These now default to the longest their parent
+    allows, instead of a minute or an hour:
+    - policy descendants;
+    - `createSubDelegation`;
+    - sessions activated from a received delegation.
+  - **Domain shares** may grant edit access and may be emailed, like exact-email
+    shares. Addressed publishing now refuses unknown policy actions for every
+    share kind.
+
+### Patch Changes
+
+- 46c83a7: Add `secrets.listAll()` to discover global and scoped secret names across the
+  canonical vault keyset without decrypting secret values.
+- 036ce34: Raise the default sign-in session lifetime (`EXPIRY.SESSION_MS`) from 7 days to 30 days. `TinyCloudNode`, `NodeUserAuthorization`, `TinyCloudWeb`, and the `delegateTo` default expiry inherit the new value when `sessionExpirationMs` / `expiry` is not set. Long-running backend services and agents now re-sign in less often; revocation remains the control for ending a session early, and delegations minted from a session stay bounded by the session's expiry. Share-link (`EXPIRY.SHARE_MS`, 7 days), app manifest, ephemeral, and signed-read-URL defaults are unchanged.
+- 31043b5: Finish the TC-500 production receiver path: authorize exact-email notifications
+  for Policy/v3 shares through a Node-signed, single-use delivery receipt, and let
+  the receiver use an enabled degraded acquisition profile while continuing to
+  reject disabled profiles.
+- d8b122e: Bind restored-session share publication to the signed owner space, compare EIP-155 owner addresses without case sensitivity, classify authority failures, and constrain implicit share expiry to session lifetime.
+- d8b122e: Preserve actionable sharing and KV authorization diagnostics while keeping CLI output safe and session expiry guidance prioritized.
+- d8b122e: Restore backwards-compatible auth codes and preserve typed session and authorization diagnostics across SDK boundaries.
+- d8b122e: Harden share publication expiry clamping and map restored-session and authorization failures to typed, safe errors.
+- 48eca36: TC-540: restoring a persisted session whose signed ReCap carries caveats no longer fails with "Verified persisted session ReCap contains invalid caveats". The WASM verifier returns caveat objects as `Map`s and JSON `null` as `undefined`; node-sdk now converts exactly those back to JSON (string-keyed `Map`s to plain objects, `undefined` to `null`, recursively) where verifier output enters the SDK (persisted-session restore and the caveat-preserving ReCap parser). Any other non-JSON caveat value is still rejected.
+- 877097d: TC-599: Scoped OpenKey login can grant an agent read access to named secrets, and the secrets commands are safe to run headless.
+  - `auth login --manifest` keeps raw `tinycloud.encryption` network entries in the `encryption` pseudo-space (never in the manifest's space), so the Secret Manager `secrets: { NAME: true }` shape passes first-login validation; the decrypt network uses the EIP-55-checksummed recorded owner or `--owner` (`OWNER_DID_UNKNOWN` otherwise), never the session `did:key`.
+  - Every scoped login (browser, paste, device) requests `tinycloud.capabilities/read` on the space root when the manifest lacks it. A signed decrypt nested inside the owner's space is not raw authority: it is reported in `declined`, omitted from saved permissions so a later valid raw renewal is not blocked, and accompanied by an old-OpenKey warning. Foreign-owner decrypt grants are refused; device login refuses encryption and secrets-space manifests up front.
+  - Browser `auth request --grant` and secret-read permission escalation verify the owner's signed OpenKey proof against the profile session key, requested space, scope and expiry. Only signed effective permissions are activated and persisted; old nested decrypt, foreign-owner, broadened or missing proof is refused before storage, and activation failure leaves local grants unchanged.
+  - `auth login --paste` accepts a final code line without a newline and fails with `PASTE_CODE_MISSING` (exit 3, naming the approval URL) when stdin ends without a code.
+  - `secrets get -o FILE` validates the destination and its existing directory before fetching secret bytes, syncs a new 0600 inode, and atomically replaces the destination. A best-effort parent-directory sync follows replacement without turning a completed write into an error. Symlinks, non-regular destinations, and absent parents are refused without unsafe fallback; filesystem output failures identify the destination without leaking the temporary filename.
+  - With no TTY on stdin or stderr, `secrets get|list|put|delete` on an OpenKey profile lacking the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. A missing or real signed expired session fails with `AUTH_REQUIRED` (exit 3) before the canonical get operation or an unscoped browser refresh. Redirecting stdout alone still permits owner approval through stderr and terminal stdin.
+  - node-sdk: a decrypt refused with HTTP 401/403 is reported as missing decrypt authority on the invoked network, never on a response-supplied resource or action.
+  - node-sdk keeps an owner's space-nested encryption ReCap distinct from a raw network grant when restoring sessions, checking runtime permissions, and deriving further delegations.
+
+- Updated dependencies [46c83a7]
+- Updated dependencies [036ce34]
+- Updated dependencies [ce34dc1]
+- Updated dependencies [4b60562]
+- Updated dependencies [b0069f7]
+- Updated dependencies [cc27c3a]
+- Updated dependencies [657c1ff]
+- Updated dependencies [12e5c4d]
+- Updated dependencies [c690844]
+- Updated dependencies [31043b5]
+- Updated dependencies [b852650]
+- Updated dependencies [70e6c95]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [a132b77]
+- Updated dependencies [2e9db6e]
+  - @tinycloud/sdk-services@3.0.0
+  - @tinycloud/sdk-core@3.0.0
+
 ## 3.0.0-beta.20
 
 ### Patch Changes

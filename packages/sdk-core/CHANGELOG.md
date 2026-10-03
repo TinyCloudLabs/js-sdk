@@ -1,5 +1,149 @@
 # @tinycloudlabs/sdk-core
 
+## 3.0.0
+
+### Major Changes
+
+- c690844: Complete the TC-498/TC-500 native-sharing beta cutover. The legacy
+  broker-backed Share APIs, link/transport compatibility paths, and retired CLI
+  Share flags are intentionally removed. Use owner-Node native bearer
+  delegations or signed Policy/v3 addressed shares; this release does not retain
+  a parallel legacy broker authority plane.
+- b852650: Seal Policy/v3 recipient metadata as the canonical AES-256-GCM
+  `version || nonce || ciphertext+tag` blob before constructing an addressed
+  share link. Delivery authorization now binds that sealed blob and its
+  fragment-only key, rather than accepting a plaintext `?tc2` envelope. Remove
+  the public plaintext Policy/v3 inline URL codec; only sealed fragment links
+  are accepted for addressed shares. Add the reusable app-neutral
+  OpenCredentials invitation client and bind notification retries to the signed
+  delivery JTI/nonce used by Node and OpenCredentials deduplication.
+
+### Minor Changes
+
+- 4b60562: Add the OAuth `tinycloud:manage-key` canonical-key signer and the public web
+  SDK session helper. The signer preserves the exact SIWE/ReCap bytes, uses a
+  cookie-free client token only, validates the canonical identity and signature,
+  and exposes terminal OAuth policy errors.
+- b0069f7: Add first-class accountless share receiving with session-key credential binding, strict PolicyCredentialPresentation/v4 admission, ordinary delegation invocation, and post-render private import into `files-for-you`.
+- cc27c3a: Receive email-domain shares. `createEmailDomainCredentialRequirement` builds
+  a `{ emailDomain }` requirement for the OpenCredentials
+  `tinycloud.email-domain-proof/v1` profile (300-second freshness), and
+  `canonicalEmailDomain` / `canonicalMailbox` / `mailboxBelongsToDomain` define
+  the single canonical ASCII form (no Unicode or U-labels; `xn--` A-labels
+  verbatim) with exact, non-suffix membership. Credential acquisition now keeps
+  recipient-entered inputs separate from requirement claims: when a
+  requirement does not carry every descriptor input, the inline surface's new
+  `requestInputs` collects them (the SDK view asks for a mailbox at the invited
+  domain), the SDK checks exact domain membership before creating the request,
+  and the issuer derives the signed `emailDomain` itself. `share.receive`
+  accepts `emailDomain` matchers bound to the signed policy commitment,
+  `ReceivedShare.recipient` gains `{ kind: "emailDomain", domain }`, and the
+  completed credential-acquisition progress event reports the verified
+  `mailbox`. Claim names may be camelCase. Mailboxes are lowercase RFC 5322
+  dot-atoms without `%` or `!` (matching the issuer), inputs that a requirement
+  already names must equal it, an issuer `RATE_LIMITED` stop is a recoverable
+  `ISSUER_UNREADY` (`state: "rate_limited"`), and `share.receive` allows ten
+  minutes for a real mailbox round trip. `publishAddressedShare` refuses
+  `emailDomain` shares that grant edit/put, carry a delivery address, or whose
+  credential requirement is not exactly `{ emailDomain: domain }`. Exact-email
+  behavior and descriptor digests are unchanged.
+- 657c1ff: Route accountless credential policy admission to the embedded TinyCloud Node
+  runtime and activate the ordinary result through generic `/delegate`, with no
+  Share data-plane request.
+- 12e5c4d: Refine the SDK-owned inline credential view for exact-email share claims.
+  The view names the mailbox the code was sent to (taken from the digest-bound
+  credential requirement), collects the 8-digit mailbox code through one
+  accessible `one-time-code` field rendered as grouped slots, normalizes pasted
+  and full-width codes, and follows host light/dark tokens
+  (`--tinycloud-credential-*`, including a separate `-field-line` token for 3:1 field boundaries). A rejected code is re-entered against the same
+  challenge until the descriptor's attempt budget is spent, reported through the
+  new recoverable `PROOF_REJECTED` credential error, which never escapes the
+  interpreter: an exhausted budget surfaces as non-recoverable
+  `VERIFICATION_FAILED` (`state: "proof_attempts_exhausted"`), and an expired
+  challenge still ends the acquisition. `share.receive` now binds the
+  invitation's exact-email recipient to the owner-signed policy commitment before
+  returning and exposes it as `ReceivedShare.recipient`. Inline host proof
+  handlers (`InlineCredentialProofHandler`) still never receive requirement
+  values; only the SDK-owned view shows the mailbox.
+- 70e6c95: Durable, re-delegatable share access (TC-531) and email delivery for
+  email-domain shares (TC-530).
+  - **Durable sessions.** Policy admission asks the Node for a session as long
+    as the share: `requestedExpiresAt`, which defaults to the policy's expiry
+    and can be set to `null` for the legacy minute. On Nodes before 1.17.3,
+    which reject the field with 422, it falls back to the 60-second session.
+    The request asks for the earlier of the envelope's and the policy's expiry.
+    Received sessions longer than 60 seconds are accepted:
+    `ShareRecipientClient` bounds them by the share's expiry, and
+    `parsePolicySessionUcan` by the 31-day root window.
+  - **Re-delegation.** `ReceivedShare.delegate({ to, expiresAt? })`
+    re-delegates a received share, decryption included, to another Ed25519
+    `did:key`, for example an account session key. It imports the new link into
+    the owner's Node and returns the whole chain. The delegate opens the share
+    with `share.receive(url, { delegation })` and needs no credential.
+    `ShareRecipientClient` verifies every link before use: issuer, the exact
+    parent proof, a strictly narrower window, inherited facts with one less
+    redelegation, and unchanged capabilities.
+  - `signCompactPolicyDescendant` signs a policy descendant with a
+    caller-owned, possibly non-extractable, key.
+  - **Default to the maximum.** These now default to the longest their parent
+    allows, instead of a minute or an hour:
+    - policy descendants;
+    - `createSubDelegation`;
+    - sessions activated from a received delegation.
+  - **Domain shares** may grant edit access and may be emailed, like exact-email
+    shares. Addressed publishing now refuses unknown policy actions for every
+    share kind.
+
+- a132b77: `tc share publish` refuses a session whose authority for an anyone-with-link share carries signed restrictions (caveats) before storing anything, so a refused publish no longer leaves an orphaned file. It exits 5 with `PERMISSION_DENIED` and says to approve Share publishing without restrictions on a new, dedicated profile (`tc init --name publisher --key-only && tc --profile publisher enable share`). A caveat only on authority the link does not use (such as `tinycloud.capabilities/read` or the addressed `shares/` prefix) does not block publishing, and a session that lacks the link's authority altogether is also refused with `PERMISSION_DENIED` before upload. Addressed (`--to`) shares and signer-backed local-key profiles are unchanged.
+
+  `SharingService.preflightGenerate({ path, actions, expiry })` reports, without side effects, whether the session's own authority can issue the delegation `generate` would create: `"ok"`, `"caveated"` (only caveated entries cover it) or `"not-covered"`. It does not consult `onRootDelegationNeeded`.
+
+### Patch Changes
+
+- 46c83a7: Add `secrets.listAll()` to discover global and scoped secret names across the
+  canonical vault keyset without decrypting secret values.
+- 036ce34: Raise the default sign-in session lifetime (`EXPIRY.SESSION_MS`) from 7 days to 30 days. `TinyCloudNode`, `NodeUserAuthorization`, `TinyCloudWeb`, and the `delegateTo` default expiry inherit the new value when `sessionExpirationMs` / `expiry` is not set. Long-running backend services and agents now re-sign in less often; revocation remains the control for ending a session early, and delegations minted from a session stay bounded by the session's expiry. Share-link (`EXPIRY.SHARE_MS`, 7 days), app manifest, ephemeral, and signed-read-URL defaults are unchanged.
+- ce34dc1: Add the SDK-owned `<tinycloud-credential-acquisition>` element and controller
+  for first-party inline credential issuance. The Web SDK now renders the
+  descriptor-driven ceremony inside the caller's document, reuses the active
+  TinyCloud/OpenKey session for holder binding, and keeps OpenCredentials
+  transport, verification, durable storage, and proof submission SDK-owned.
+  Existing redirect and headless credential-acquisition behavior is unchanged.
+- 31043b5: Finish the TC-500 production receiver path: authorize exact-email notifications
+  for Policy/v3 shares through a Node-signed, single-use delivery receipt, and let
+  the receiver use an enabled degraded acquisition profile while continuing to
+  reject disabled profiles.
+- d8b122e: Bind restored-session share publication to the signed owner space, compare EIP-155 owner addresses without case sensitivity, classify authority failures, and constrain implicit share expiry to session lifetime.
+- d8b122e: Preserve actionable sharing and KV authorization diagnostics while keeping CLI output safe and session expiry guidance prioritized.
+- d8b122e: Restore backwards-compatible auth codes and preserve typed session and authorization diagnostics across SDK boundaries.
+- d8b122e: Harden share publication expiry clamping and map restored-session and authorization failures to typed, safe errors.
+- 2e9db6e: Owner-only (email-addressed) Share links published by the CLI now open in the Share viewer, and CLI `--to domain:` shares now work. The CLI commits the recipient's mailbox credential in the policy (Policy/v2) and publishes the owner's node location record before publishing.
+  - `publishAddressedShare` refuses an exact-email share without a credential requirement bound to the address. Previously such a share was signed as Policy/v1, which no receiver accepts.
+  - The new `addressedCredentialRequirement(target)` builds the commitment for email and email-domain targets.
+  - The new `prepareAddressedShare(request)` runs every target, recipient, filename and action check, with no side effects. The CLI calls it before publishing the location record or uploading, so a refused share (for example `--to domain:… --action edit`) leaves nothing behind.
+  - `notifyShare` matches, keys and delivers on the canonical mailbox, so `tc share publish --to email:Foo@x.com --notify` and `tc share notify --to Foo@x.com` invite `foo@x.com`. The CLI canonicalizes `--to` mailboxes and domains up front, and an invalid one reports the specific reason.
+  - A location registry outage during `tc share publish` (network error, 5xx, 408 or 429) reports `UNAVAILABLE` (exit 4) with a retry hint. A registry rejection (any other 4xx, or an invalid record) reports `REGISTRY_REJECTED` (exit 6) and says that retrying will not help. sdk-core throws the new `LocationRegistryHttpError`, which carries the HTTP `status`, for registry HTTP failures; the message text is unchanged.
+  - `canonicalMailbox`, `canonicalEmailDomain`, `isCanonicalEmailDomain` and `mailboxBelongsToDomain` now live in `@tinycloud/share-envelope`. `@tinycloud/sdk-core` re-exports them unchanged.
+
+- Updated dependencies [46c83a7]
+- Updated dependencies [b0069f7]
+- Updated dependencies [dc92402]
+- Updated dependencies [cc27c3a]
+- Updated dependencies [c690844]
+- Updated dependencies [c690844]
+- Updated dependencies [b852650]
+- Updated dependencies [026bf15]
+- Updated dependencies [70e6c95]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [d8b122e]
+- Updated dependencies [2e9db6e]
+- Updated dependencies [bf6fbd1]
+  - @tinycloud/sdk-services@3.0.0
+  - @tinycloud/share-sdk@1.0.0
+  - @tinycloud/share-envelope@1.0.0
+
 ## 3.0.0-beta.19
 
 ### Minor Changes
