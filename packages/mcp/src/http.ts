@@ -11,7 +11,7 @@ import {
 } from "@modelcontextprotocol/server";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
-import { RemoteTenantStore, type RemoteStoreConfig } from "./remote-store.js";
+import { ApprovalOwnerMismatchError, RemoteTenantStore, type RemoteStoreConfig } from "./remote-store.js";
 import { MCP_SERVER_NAME } from "./server.js";
 import { createJsonSchemaValidator, registerTinyCloudTools } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
@@ -110,8 +110,14 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
         try {
           await store.completeApproval(requiredState(url), request);
           return callbackCors(json({ success: true }), config.openkeyHost);
-        } catch {
-          return callbackCors(json({ error: "TinyCloud could not accept this delegation." }, 400), config.openkeyHost);
+        } catch (error) {
+          // Only fixed server-authored text reaches OpenKey; callback input is never echoed.
+          return callbackCors(
+            error instanceof ApprovalOwnerMismatchError
+              ? json({ error: error.message, code: "approval_owner_mismatch" }, 403)
+              : json({ error: "TinyCloud could not accept this delegation." }, 400),
+            config.openkeyHost,
+          );
         }
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
