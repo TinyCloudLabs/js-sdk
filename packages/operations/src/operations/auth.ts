@@ -9,7 +9,7 @@ import { z } from "zod";
 import {
   canonicalizeCapabilities,
   canonicalizeOperationCapabilities,
-  evaluateOperationAuthority,
+  delegationWithinRequest,
   evaluateAuthority,
   validateExactCapabilities,
 } from "../authority.js";
@@ -20,6 +20,7 @@ import {
   listPermissionRequests,
   PermissionEntrySchema,
   type DelegationImportArtifact,
+  type DelegationRequestBinding,
   type PermissionRequestArtifact,
 } from "../artifacts.js";
 import type {
@@ -369,11 +370,7 @@ async function importRequestBoundDelegation(
       context.runtime.node,
       context.summary.space,
     );
-    if (request.requested.length === 0 || !evaluateOperationAuthority(
-      request.requested,
-      effectivePermissions,
-      resolveSpace,
-    ).satisfied) {
+    if (!delegationWithinRequest(request.requested, effectivePermissions, resolveSpace)) {
       return operationFailure(
         "DELEGATION_REJECTED",
         "The delegation exceeds the stored authority request.",
@@ -406,17 +403,27 @@ async function importRequestBoundDelegation(
               ),
             };
           }
+          // Replay re-checks a SIWE delegation against this binding; the
+          // stored request itself may later be pruned.
+          const record = {
+            delegation: activated.delegation,
+            permissions: activated.effectivePermissions,
+            authorityRequest: {
+              requestId: request.requestId,
+              requested: request.requested,
+            } satisfies DelegationRequestBinding,
+          };
           const alreadyPresent = records.some((entry) => delegationCid(entry) === activated.cid);
+          // A SIWE record written by another route carries no binding, so
+          // replay would install nothing. This validated import supplies it.
+          // Compact UCAN records are left as they are.
+          const repairBinding = alreadyPresent && activated.delegation.siweProof !== undefined;
           return {
-            records: alreadyPresent
-              ? records
-              : [...records, {
-                delegation: activated.delegation,
-                permissions: activated.effectivePermissions,
-                // Replay re-checks a SIWE delegation against this binding;
-                // the stored request itself may later be pruned.
-                authorityRequest: { requestId: request.requestId, requested: request.requested },
-              }],
+            records: !alreadyPresent
+              ? [...records, record]
+              : repairBinding
+              ? records.map((entry) => delegationCid(entry) === activated.cid ? record : entry)
+              : records,
             result: {
               status: "ok",
               output: {

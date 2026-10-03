@@ -93,6 +93,16 @@ export const DelegationImportArtifactSchema = z.object({
   prompted: z.boolean().optional(),
 }).strict();
 
+/**
+ * The stored request an imported delegation was checked against, persisted
+ * with the delegation. Its fields are exactly the request artifact's, so
+ * replay accepts every binding import can write.
+ */
+export const DelegationRequestBindingSchema = PermissionRequestArtifactSchema
+  .pick({ requestId: true, requested: true })
+  .strict();
+export type DelegationRequestBinding = z.infer<typeof DelegationRequestBindingSchema>;
+
 export type PermissionRequestArtifact = z.infer<typeof PermissionRequestArtifactSchema>;
 export type DelegationImportArtifact = z.infer<typeof DelegationImportArtifactSchema>;
 /** The minimal public node-sdk request shape accepted by the legacy reader. */

@@ -13,11 +13,8 @@ import type {
   OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
-import {
-  canonicalizeCapabilities,
-  evaluateOperationAuthority,
-  validateExactCapabilities,
-} from "./authority.js";
+import { DelegationRequestBindingSchema } from "./artifacts.js";
+import { canonicalizeCapabilities, delegationWithinRequest } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { resolveInvocationProfile, resolvePosture } from "./profile.js";
 import { operationSpaceResolver } from "./secrets.js";
@@ -186,20 +183,23 @@ export async function createInvocationRuntime(
     for (const entry of additionalDelegations) {
       const delegation = normalizeStoredDelegation(entry);
       if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) continue;
-      // A SIWE delegation replays only within the stored request it was
-      // imported against; a record without that binding is refused.
-      const requested = delegation.siweProof === undefined
+      // The binding is local profile data. It keeps a SIWE delegation to the
+      // stored request it was imported against, so a record written by any
+      // other path (CLI import of an unbound artifact, a copied or pasted
+      // record) installs nothing. It does not stop someone who can write this
+      // profile directory, who already holds the key and the signed bytes.
+      const binding = delegation.siweProof === undefined
         ? undefined
-        : boundRequest(entry.authorityRequest);
-      if (delegation.siweProof !== undefined && requested === undefined) continue;
+        : DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
+      if (binding !== undefined && !binding.success) continue;
       try {
         const activated = await activateValidatedRuntimeDelegation(node as unknown as RuntimeDelegationActivator, delegation, {
           host: summary.host,
-          ...(requested === undefined
+          ...(binding === undefined
             ? {}
             : {
               authorize: (effective: readonly PermissionEntry[]) =>
-                evaluateOperationAuthority(requested, effective, resolveSpace).satisfied,
+                delegationWithinRequest(binding.data.requested, effective, resolveSpace),
             }),
         });
         if (!seenCids.has(activated.cid)) {
@@ -283,15 +283,6 @@ function normalizeSession(
       ? { tinycloudHosts: session.tinycloudHosts }
       : {}),
   };
-}
-
-/** The stored request an imported delegation was checked against, if well-formed. */
-function boundRequest(binding: unknown): PermissionEntry[] | undefined {
-  if (!isRecord(binding) || typeof binding.requestId !== "string" || binding.requestId.length === 0) {
-    return undefined;
-  }
-  const requested = validateExactCapabilities(binding.requested);
-  return requested === undefined || requested.length === 0 ? undefined : requested;
 }
 
 function normalizeStoredDelegation(

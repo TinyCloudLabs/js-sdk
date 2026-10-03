@@ -20,8 +20,16 @@ OAuth. The hosted server adds `tinycloud_connect` to the canonical tools and
 omits `tinycloud_auth_import`. `tinycloud_connect` returns a short-lived browser
 approval URL on first use. Later `authority_required` results include the same
 one-click approval flow for the exact requested operation; approved
-delegations arrive only through that flow, which binds them to the requesting
-OpenKey account and the stored request.
+delegations arrive only through that flow, which accepts only the OpenKey
+account that requested the approval and only authority inside the stored
+request.
+
+Each approved delegation is stored with the request it was checked against.
+That binding is local profile data: it makes a stored signed-login delegation
+replay only within that request, so a record written by any other path (a CLI
+import of an unbound artifact, a copied or pasted record) grants nothing. It
+does not protect against someone who can write the tenant's state directory,
+who already holds the delegate key and the signed delegation.
 
 Run the service with an encrypted persistent volume:
 
