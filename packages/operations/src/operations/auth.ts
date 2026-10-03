@@ -413,6 +413,9 @@ async function importRequestBoundDelegation(
               : [...records, {
                 delegation: activated.delegation,
                 permissions: activated.effectivePermissions,
+                // Replay re-checks a SIWE delegation against this binding;
+                // the stored request itself may later be pruned.
+                authorityRequest: { requestId: request.requestId, requested: request.requested },
               }],
             result: {
               status: "ok",

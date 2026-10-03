@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import {
+  NodeWasmBindings,
+  PrivateKeySigner,
+  TinyCloudNode,
+  siweRuntimeDelegation,
+  type PortableDelegation,
+} from "@tinycloud/node-sdk";
 
 /** Wallets used as OpenKey principals in hosted MCP tests. */
 export const REQUESTER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
@@ -10,6 +16,56 @@ export const OTHER_OWNER_KEY = "6c875bfb4f247fcbcd37fd56f564fca0cfaf6458cd5e8878
 export async function ownerDid(privateKey: string): Promise<string> {
   const signer = new PrivateKeySigner(privateKey);
   return `did:pkh:eip155:${await signer.getChainId()}:${await signer.getAddress()}`;
+}
+
+export async function ownerSpace(privateKey: string, name: string): Promise<string> {
+  const signer = new PrivateKeySigner(privateKey);
+  return new NodeWasmBindings().makeSpaceId(await signer.getAddress(), await signer.getChainId(), name);
+}
+
+/**
+ * Project a callback body into the portable delegation an importer would
+ * build, verified against the tenant's key, without going through the store.
+ */
+export async function siweDelegationFromCallback(
+  body: Record<string, unknown>,
+  tenantStateRoot: string,
+  host: string,
+): Promise<PortableDelegation> {
+  const header = body.delegationHeader;
+  if (typeof header !== "object" || header === null || !("Authorization" in header) ||
+    typeof header.Authorization !== "string" || typeof body.delegationCid !== "string" ||
+    typeof body.spaceId !== "string" || typeof body.verificationMethod !== "string" ||
+    typeof body.address !== "string" || typeof body.chainId !== "number" ||
+    typeof body.siwe !== "string" || typeof body.signature !== "string") {
+    throw new Error("Callback body is incomplete.");
+  }
+  const jwk = JSON.parse(await readFile(
+    join(tenantStateRoot, ".tinycloud/profiles/agent/key.json"),
+    "utf8",
+  )) as Record<string, unknown>;
+  const node = new TinyCloudNode({ host });
+  await node.restoreSession({
+    delegationHeader: { Authorization: header.Authorization },
+    delegationCid: body.delegationCid,
+    spaceId: body.spaceId,
+    jwk,
+    verificationMethod: body.verificationMethod,
+    address: body.address,
+    chainId: body.chainId,
+    siwe: body.siwe,
+    signature: body.signature,
+  });
+  return siweRuntimeDelegation(node, {
+    authorization: header.Authorization,
+    cid: body.delegationCid,
+    spaceId: body.spaceId,
+    ownerAddress: body.address,
+    chainId: body.chainId,
+    siwe: body.siwe,
+    signature: body.signature,
+    host,
+  });
 }
 
 /**

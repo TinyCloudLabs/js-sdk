@@ -149,6 +149,27 @@ test("operation authority keeps full space owner identity exact while resolving 
   )).toEqual({ satisfied: true, missing: [] });
 });
 
+test("operation authority judges a requirement against every grant in its space together", () => {
+  const ownerA = "tinycloud:pkh:eip155:1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:account";
+  const ownerB = "tinycloud:pkh:eip155:1:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:account";
+  const resolveOwnerA = (space: string) => space === "account" ? ownerA : space;
+  const required = [{ service: "tinycloud.kv", space: ownerA, path: "spaces/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }];
+  // A verified SIWE ReCap reports one entry per signed action.
+  const perAction = (space: string) => [
+    { service: "tinycloud.kv", space, path: "spaces/", actions: ["tinycloud.kv/get"] },
+    { service: "tinycloud.kv", space, path: "spaces/", actions: ["tinycloud.kv/list"] },
+  ];
+
+  expect(evaluateOperationAuthority(perAction("account"), required, resolveOwnerA))
+    .toEqual({ satisfied: true, missing: [] });
+  // The union never spans owners: one action from each owner covers nothing.
+  expect(evaluateOperationAuthority(
+    [perAction("account")[0]!, perAction(ownerB)[1]!],
+    required,
+    resolveOwnerA,
+  ).satisfied).toBe(false);
+});
+
 test("operation authority treats PKH checksum casing as equivalent but preserves DID text", () => {
   const checksum = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:secrets";
   const lower = "tinycloud:pkh:eip155:1:0x71c7656ec7ab88b098defb751b7401b5f6d8976f:secrets";

@@ -147,13 +147,24 @@ export interface SiweDelegationVerificationInput {
   readonly signature: string;
 }
 
-/** Authority read from a SIWE/ReCap delegation after WASM verification. */
+/**
+ * Authority read from a SIWE/ReCap delegation after WASM verification.
+ *
+ * Not guaranteed:
+ * - `recap` spaces are what the issuer signed, not proof that the issuer owns
+ *   or controls them. The TinyCloud node enforces that on activation and
+ *   invocation; a caller that needs an owner binding must compare each space
+ *   owner to `issuer` itself.
+ * - `expiry` is `undefined` when the SIWE has no `Expiration Time`. Callers
+ *   must refuse or bound such a delegation;
+ *   {@link activateValidatedRuntimeDelegation} refuses it.
+ */
 export interface VerifiedSiweDelegation {
   /** `did:pkh` of the wallet that signed the SIWE. */
   readonly issuer: string;
   /** The session key the SIWE addresses, which is the verifying node's key. */
   readonly audience: string;
-  /** Signed `Expiration Time`, when the SIWE has one. */
+  /** Signed `Expiration Time`; `undefined` when the SIWE has none. */
   readonly expiry?: Date;
   /** One verified ReCap entry per signed action (short service names, full space IDs). */
   readonly recap: readonly VerifiedSiweRecapEntry[];
@@ -446,7 +457,9 @@ function signedAuthorityFromSiweDelegation(
   for (const entry of verified.recap) {
     const service = entry.service === "encryption"
       ? "tinycloud.encryption"
-      : SERVICE_BY_SHORT_NAME[entry.service];
+      : Object.prototype.hasOwnProperty.call(SERVICE_BY_SHORT_NAME, entry.service)
+      ? SERVICE_BY_SHORT_NAME[entry.service]
+      : undefined;
     if (service === undefined) {
       throw new Error(
         `Validated runtime delegation has an unsupported signed service '${entry.service}'.`,
@@ -454,7 +467,8 @@ function signedAuthorityFromSiweDelegation(
     }
     const space = service === "tinycloud.encryption" ? undefined : entry.space;
     const key = JSON.stringify([service, space ?? null, entry.path]);
-    const resource = resources.get(key) ?? { service, space, path: entry.path, abilities: {} };
+    const resource = resources.get(key) ??
+      { service, space, path: entry.path, abilities: Object.create(null) as Record<string, unknown> };
     for (const action of entry.actions) {
       if (Object.prototype.hasOwnProperty.call(resource.abilities, action)) {
         throw new Error("Validated runtime delegation repeats a signed capability.");
@@ -555,11 +569,18 @@ function resourcesMatch(
  * CACAO. It verifies the transport fields agree, then invokes
  * {@link TinyCloudNode.useRuntimeDelegation}. The node activation call
  * remains the authority and delegation-chain validation boundary.
+ *
+ * `options.authorize`, when given, sees the signed capabilities before
+ * anything is activated or installed; returning `false` refuses the
+ * delegation.
  */
 export async function activateValidatedRuntimeDelegation(
   node: RuntimeDelegationActivator,
   delegation: PortableDelegation,
-  options: { host: string },
+  options: {
+    host: string;
+    authorize?: (effectivePermissions: readonly PermissionEntry[]) => boolean;
+  },
 ): Promise<ValidatedRuntimeDelegation> {
   const host = normalizedHost(options.host);
   if (delegation.host !== undefined && normalizedHost(delegation.host) !== host) {
@@ -613,6 +634,9 @@ export async function activateValidatedRuntimeDelegation(
   const declaredResources = canonicalResourcesFromPortableDelegation(delegation);
   if (!resourcesMatch(declaredResources, signed.resources)) {
     throw new Error("Runtime delegation resources do not match signed authority.");
+  }
+  if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
+    throw new Error("Runtime delegation is not authorized for this runtime.");
   }
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()

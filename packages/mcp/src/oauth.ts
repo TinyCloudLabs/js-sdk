@@ -5,7 +5,7 @@ import {
   type OAuthMetadata,
   type OAuthTokenVerifier,
 } from "@modelcontextprotocol/server";
-import { principalDid } from "@tinycloud/node-sdk";
+import { pkhDid } from "@tinycloud/node-sdk";
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
 
 const OWNER_DIDS_CLAIM = "https://tinycloud.xyz/owner_dids";
@@ -92,16 +92,21 @@ function authInfo(
 }
 
 /**
- * Only canonical principal DIDs reach owner comparison and the approval
- * text. One malformed value refuses the whole claim rather than being skipped.
+ * OpenKey issues owner DIDs as `did:pkh:eip155:<chain>:<address>`. Only that
+ * exact syntax is accepted, canonicalised, and passed on to owner comparison
+ * and the approval text. One malformed value refuses the whole claim rather
+ * than being skipped.
  */
+const OWNER_DID = /^did:pkh:eip155:([1-9][0-9]{0,15}):(0x[0-9a-fA-F]{40})$/;
+
 function canonicalOwnerDids(claim: unknown): string[] | undefined {
   if (!Array.isArray(claim) || claim.length === 0) return undefined;
   const ownerDids: string[] = [];
   for (const value of claim) {
-    if (typeof value !== "string") return undefined;
+    const match = typeof value === "string" ? OWNER_DID.exec(value) : null;
+    if (match === null) return undefined;
     try {
-      ownerDids.push(principalDid(value));
+      ownerDids.push(pkhDid(match[2]!, Number(match[1])));
     } catch {
       return undefined;
     }

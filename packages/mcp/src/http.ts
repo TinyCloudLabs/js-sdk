@@ -63,6 +63,10 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       allowOwnerProfile: false,
       stateRoot,
       transformOperationResult: (result) => store.decorateAuthorityResult(subject, ownerDids, result),
+      // Hosted delegations arrive only through the OpenKey callback, which
+      // binds the signer to the requesting owner and the pending request. A
+      // caller-supplied artifact has neither binding, so it is not accepted.
+      excludeTools: ["tinycloud_auth_import"],
     }, validator);
     registerConnectTool(server, validator, store, identity);
     return server;

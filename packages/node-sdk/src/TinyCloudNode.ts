@@ -5527,6 +5527,10 @@ export class TinyCloudNode {
    * addresses this node's session key, its validity window, the ReCap
    * binding, and that `authorization` and `cid` are exactly the CACAO built
    * from the SIWE. Throws when any check fails.
+   *
+   * It does not prove that the issuer owns the spaces in `recap`, and
+   * `expiry` is `undefined` when the SIWE has no `Expiration Time`; see
+   * {@link VerifiedSiweDelegation}.
    */
   verifySiweDelegation(input: SiweDelegationVerificationInput): VerifiedSiweDelegation {
     if (typeof this.wasmBindings.validatePersistedSession !== "function") {

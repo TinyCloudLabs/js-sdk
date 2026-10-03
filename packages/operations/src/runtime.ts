@@ -13,9 +13,14 @@ import type {
   OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
-import { canonicalizeCapabilities } from "./authority.js";
+import {
+  canonicalizeCapabilities,
+  evaluateOperationAuthority,
+  validateExactCapabilities,
+} from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { resolveInvocationProfile, resolvePosture } from "./profile.js";
+import { operationSpaceResolver } from "./secrets.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -47,6 +52,7 @@ interface StoredSession extends Record<string, unknown> {
 
 interface StoredAdditionalDelegation extends Record<string, unknown> {
   readonly delegation?: unknown;
+  readonly authorityRequest?: unknown;
 }
 
 /**
@@ -175,13 +181,26 @@ export async function createInvocationRuntime(
     // This API derives from the restored, verified base session rather than
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
+    const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
     const seenCids = new Set<string>();
     for (const entry of additionalDelegations) {
       const delegation = normalizeStoredDelegation(entry);
       if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) continue;
+      // A SIWE delegation replays only within the stored request it was
+      // imported against; a record without that binding is refused.
+      const requested = delegation.siweProof === undefined
+        ? undefined
+        : boundRequest(entry.authorityRequest);
+      if (delegation.siweProof !== undefined && requested === undefined) continue;
       try {
         const activated = await activateValidatedRuntimeDelegation(node as unknown as RuntimeDelegationActivator, delegation, {
           host: summary.host,
+          ...(requested === undefined
+            ? {}
+            : {
+              authorize: (effective: readonly PermissionEntry[]) =>
+                evaluateOperationAuthority(requested, effective, resolveSpace).satisfied,
+            }),
         });
         if (!seenCids.has(activated.cid)) {
           seenCids.add(activated.cid);
@@ -264,6 +283,15 @@ function normalizeSession(
       ? { tinycloudHosts: session.tinycloudHosts }
       : {}),
   };
+}
+
+/** The stored request an imported delegation was checked against, if well-formed. */
+function boundRequest(binding: unknown): PermissionEntry[] | undefined {
+  if (!isRecord(binding) || typeof binding.requestId !== "string" || binding.requestId.length === 0) {
+    return undefined;
+  }
+  const requested = validateExactCapabilities(binding.requested);
+  return requested === undefined || requested.length === 0 ? undefined : requested;
 }
 
 function normalizeStoredDelegation(

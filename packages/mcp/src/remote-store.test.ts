@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   callbackRequest,
   openKeyCallbackBody,
   ownerDid,
+  siweDelegationFromCallback,
 } from "./test-support/openkey-callback.js";
 
 const BOOTSTRAP_ABILITIES = {
@@ -173,13 +174,23 @@ test("delegation approvals from another owner are refused before anything is sto
   const stored = JSON.parse(await readFile(
     join(tenantRoot, ".tinycloud/profiles/agent/additional-delegations.json"),
     "utf8",
-  )) as Array<{ delegation: Record<string, unknown> }>;
+  )) as Array<Record<string, unknown>>;
   expect(stored).toHaveLength(1);
-  expect(stored[0]!.delegation).toMatchObject({
-    cid: ownApproval.delegationCid,
-    delegateDID: connect.sessionDid,
-    siweProof: { siwe: ownApproval.siwe, signature: ownApproval.signature },
+  expect(stored[0]).toMatchObject({
+    delegation: {
+      cid: ownApproval.delegationCid,
+      delegateDID: connect.sessionDid,
+      siweProof: { siwe: ownApproval.siwe, signature: ownApproval.signature },
+    },
+    authorityRequest: { requestId: record(record(authority).request).requestId },
   });
+  // A fresh runtime replays it within that request.
+  expect(await invokeOperation(
+    "tinycloud.kv.get",
+    1,
+    { profile: "agent", stateRoot: tenantRoot },
+    { space: "applications", key: "agents/demo/profile", representation: "json" },
+  )).toMatchObject({ status: "ok", output: { value: { name: "Ada", role: "operator" } } });
 });
 
 test("a delegation approval outside the stored request is not imported", async () => {
@@ -216,7 +227,26 @@ test("a delegation approval outside the stored request is not imported", async (
     callbackRequest(broader),
   )).rejects.toThrow("TinyCloud rejected the approved delegation.");
   expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);
+
+  // The same signed delegation planted in the store, with no binding or bound
+  // to the narrower request, grants nothing on replay.
+  const planted = await siweDelegationFromCallback(broader, tenantRoot, hermetic.host);
+  const request = record(record(authority).request);
+  const sibling = { space: "applications", key: "agents/demo/settings", representation: "json" };
+  for (const binding of [{}, { authorityRequest: { requestId: request.requestId, requested: request.requested } }]) {
+    await writeFile(
+      join(tenantRoot, ".tinycloud/profiles/agent/additional-delegations.json"),
+      JSON.stringify([{ delegation: planted, permissions: [], ...binding }]),
+    );
+    expect(await invokeOperation("tinycloud.kv.get", 1, { profile: "agent", stateRoot: tenantRoot }, sibling))
+      .toMatchObject({ status: "authority_required" });
+  }
 });
+
+function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected an object.");
+  return value as Record<string, unknown>;
+}
 
 async function createHermeticNode(): Promise<HermeticNode> {
   // The loopback node lives in node-sdk's test sources, outside this package's
