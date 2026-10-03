@@ -2,7 +2,7 @@ import { TinyCloudNode, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
-import { ExitCode } from "../config/constants.js";
+import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 
 /**
@@ -231,7 +231,9 @@ export async function bootstrapDelegatedSession(
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
       return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
-    });
+    }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) =>
+      // The lock or a read failed: the import's error stays the one reported.
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${error instanceof Error ? error.message : String(error)}); check \`tc --profile ${ctx.profile} context\`.`);
     throw annotate(cause, note);
   };
 

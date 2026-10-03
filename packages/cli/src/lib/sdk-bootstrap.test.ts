@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CLIError as CLIErrorInstance } from "../output/errors.js";
@@ -26,6 +26,7 @@ mock.module("./permissions.js", () => ({
 
 // Imported after TC_HOME and the module mocks above are in place.
 const { ProfileManager } = await import("../config/profiles.js");
+const { PROFILES_DIR } = await import("../config/constants.js");
 const { CLIError } = await import("../output/errors.js");
 const { bootstrapDelegatedSession } = await import("./sdk.js");
 
@@ -149,6 +150,19 @@ describe("bootstrapDelegatedSession under the profile lock", () => {
     expect(error.message).toContain("its newer state was kept");
     expect(await ProfileManager.getSession(PROFILE)).toEqual(newerSession);
     expect(await ProfileManager.getProfile(PROFILE)).toEqual(newerProfile);
+  });
+
+  test("a rollback that cannot run still reports the import's error, with a note", async () => {
+    const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+    const provisional = await ProfileManager.getSession(PROFILE);
+    await writeFile(join(PROFILES_DIR, PROFILE, "profile.json"), "{ not json");
+
+    const error = await bootstrap.abandon(new CLIError("DELEGATION_REJECTED", "The delegation exceeds the stored authority request.", 1))
+      .catch((cause: unknown) => cause as CLIErrorInstance);
+    expect(error).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
+    expect(error.message).toContain("The delegation exceeds the stored authority request.");
+    expect(error.message).toContain("could not run");
+    expect(await ProfileManager.getSession(PROFILE)).toEqual(provisional);
   });
 
   test("a session that cannot be restored is rolled back by the bootstrap itself", async () => {

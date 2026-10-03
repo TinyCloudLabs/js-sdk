@@ -1,6 +1,6 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { ExitCode } from "../config/constants.js";
+import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
@@ -119,13 +119,6 @@ export interface LoginCommit {
 }
 
 /**
- * The commit happens after the owner approved, so wait out a crashed holder:
- * longer than the store's 30 s stale-lock threshold, after which a dead
- * holder's lock is reclaimed.
- */
-const COMMIT_LOCK_TIMEOUT_MS = 45_000;
-
-/**
  * Put back the state read under the lock; `null` removes the file. Every
  * write is attempted even if an earlier one fails; returns the failures.
  */
@@ -170,7 +163,7 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
     ) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
-        `Profile "${profileName}" changed while waiting for approval (another login, key rotation or logout). Nothing was saved; check \`tc --profile ${profileName} context\` and run the login again if it is still needed.`,
+        `Profile "${profileName}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`tc --profile ${profileName} context\` and run the login again if it is still needed.`,
         ExitCode.ERROR,
       );
     }
@@ -192,11 +185,11 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
         ExitCode.ERROR,
       );
     }
-  }, { timeoutMs: COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) => {
+  }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) => {
     if (!(error instanceof ProfileLockTimeoutError)) throw error;
     throw new CLIError(
       "PROFILE_LOCK_TIMEOUT",
-      `Another tc process kept profile "${profileName}" locked for ${COMMIT_LOCK_TIMEOUT_MS / 1000} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
+      `Another tc process kept profile "${profileName}" locked for ${PROFILE_COMMIT_LOCK_TIMEOUT_MS / 1000} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
       ExitCode.ERROR,
     );
   });
