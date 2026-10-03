@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { link, lstat, mkdir, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TCWSessionManager, completeSessionSetup, makeSpaceId, prepareSession, signEthereumMessage } from "@tinycloud/node-sdk-wasm";
@@ -1375,13 +1375,16 @@ describe("CLI secrets commands", () => {
     }
   });
 
-  test("syncs secret output before replacing the destination inode", async () => {
+  test("syncs secret output and its parent directory on either side of the atomic rename", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tc-secrets-sync-"));
     const destination = join(dir, "key");
     const probe = await open(join(dir, "probe"), "wx");
     const originalSync = probe.sync;
+    const stages: string[] = [];
     const sync = spyOn(Object.getPrototypeOf(probe), "sync").mockImplementation(async function (this: typeof probe) {
-      expect(await readFile(destination, "utf8")).toBe("old-value");
+      const stage = (await this.stat()).isDirectory() ? "directory" : "file";
+      stages.push(stage);
+      expect(await readFile(destination, "utf8")).toBe(stage === "file" ? "old-value" : "stored-value");
       await originalSync.call(this);
     });
     try {
@@ -1389,8 +1392,38 @@ describe("CLI secrets commands", () => {
       await writeFile(destination, "old-value");
       await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
       expect(recorded.errors).toEqual([]);
-      expect(sync).toHaveBeenCalledTimes(1);
+      expect(stages).toEqual(["file", "directory"]);
       expect(await readFile(destination, "utf8")).toBe("stored-value");
+    } finally {
+      sync.mockRestore();
+      await probe.close().catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports only the destination and cleans up temporary secret bytes when rename is refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-rename-"));
+    const destination = join(dir, "key");
+    const probe = await open(join(dir, "probe"), "wx");
+    const originalSync = probe.sync;
+    const sync = spyOn(Object.getPrototypeOf(probe), "sync").mockImplementation(async function (this: typeof probe) {
+      await originalSync.call(this);
+      if ((await this.stat()).isFile()) {
+        await mkdir(destination);
+        await writeFile(join(destination, "owner-data"), "unchanged");
+      }
+    });
+    try {
+      await probe.close();
+      await rm(join(dir, "probe"));
+      await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+      expect(recorded.errors).toHaveLength(1);
+      const error = recorded.errors[0] as CLIErrorLike;
+      expect(error.message).toContain(destination);
+      expect(error.message).not.toContain(".tmp");
+      expect(await readFile(join(destination, "owner-data"), "utf8")).toBe("unchanged");
+      expect(await readdir(dir)).toEqual(["key"]);
+      expect(recorded.outputs).toEqual([]);
     } finally {
       sync.mockRestore();
       await probe.close().catch(() => undefined);
@@ -1565,6 +1598,36 @@ describe("CLI secrets commands", () => {
         metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
       })]);
     }
+  });
+  test("explains missing decrypt authority for headless OpenKey get while retaining other action wording", async () => {
+    interactive = false;
+    const denied = { ok: false as const, error: { code: "PERMISSION_DENIED", service: "secrets", message: "Cannot autosign tinycloud.kv/get for KEY" } };
+    currentNode = makeFakeNode({ getResult: denied, listResult: denied });
+
+    await runSecretsCommand(["secrets", "get", "KEY", "--scope", "team", "--raw"]);
+    const getError = recorded.errors[0] as CLIErrorLike;
+    expect(getError).toMatchObject({
+      code: "PERMISSION_DENIED",
+      exitCode: 5,
+      metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
+    });
+    expect(getError.message).toContain("tinycloud.encryption/decrypt");
+    expect(getError.message).toContain('secret "KEY"');
+    expect(getError.message).not.toContain("holds no grant");
+
+    resetRecorded();
+    canonicalResultOverride = {
+      status: "authority_required",
+      context: { posture: "owner-openkey" },
+      missing: [{ actions: ["tinycloud.kv/get"] }],
+    };
+    await runSecretsCommand(["secrets", "get", "KEY", "--raw"]);
+    expect((recorded.errors[0] as CLIErrorLike).message).toContain("read or decrypt grant");
+    expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("lacks the scoped decrypt authority");
+
+    resetRecorded();
+    await runSecretsCommand(["secrets", "list"]);
+    expect((recorded.errors[0] as CLIErrorLike).message).toContain("holds no grant");
   });
 
   test("requests scoped put permission at secrets/scoped/<scope>/<name>", async () => {

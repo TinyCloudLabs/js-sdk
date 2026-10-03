@@ -291,12 +291,16 @@ function secretPermissionReason(action: SecretAction, name?: string): string {
 }
 
 /** Browser approval is possible when the person can see stderr or answer on stdin. */
-function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string): void {
+function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string, missingDecrypt = false): void {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
   const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
-    `Profile "${profileName}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
+    action === "get"
+      ? missingDecrypt
+        ? `Profile "${profileName}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.`
+        : `Profile "${profileName}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.`
+      : `Profile "${profileName}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
     ExitCode.PERMISSION_DENIED,
     {
       hint: scopedSecretLoginHint(profileName),
@@ -332,9 +336,13 @@ async function validateSecretOutput(path: string): Promise<void> {
 /** Replace only regular destination files with a fresh owner-only inode. */
 async function writeSecretFile(path: string, value: string): Promise<void> {
   await validateSecretOutput(path);
-  const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-  const handle = await open(temp, "wx", PRIVATE_FILE_MODE);
+  const parentPath = dirname(path);
+  const temp = join(parentPath, `.${basename(path)}.${randomUUID()}.tmp`);
+  let created = false;
+  let renamed = false;
   try {
+    const handle = await open(temp, "wx", PRIVATE_FILE_MODE);
+    created = true;
     try {
       await handle.writeFile(value);
       await handle.sync();
@@ -342,9 +350,21 @@ async function writeSecretFile(path: string, value: string): Promise<void> {
       await handle.close();
     }
     await rename(temp, path);
+    renamed = true;
+    const parent = await open(parentPath, "r");
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
   } catch (error) {
-    await rm(temp, { force: true }).catch(() => undefined);
-    throw error;
+    if (created && !renamed) {
+      await rm(temp, { force: true }).catch(() => undefined);
+    }
+    const code = error instanceof Error && "code" in error && typeof error.code === "string"
+      ? ` (${error.code})`
+      : "";
+    throw new CLIError("ERROR", `Could not write secret output "${path}"${code}.`, ExitCode.ERROR);
   }
 }
 
@@ -425,7 +445,8 @@ async function invokeCanonicalSecretGet(params: {
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
-  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name);
+  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name,
+    first.missing.some((permission) => Array.isArray(permission.actions) && permission.actions.includes(SECRET_DECRYPT_CAPABILITY)));
   const node = params.node ?? ownerNode ?? await ensureSecretsNode(
     params.ctx,
     params.options,

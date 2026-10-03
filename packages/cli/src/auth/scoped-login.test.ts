@@ -11,7 +11,7 @@ process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { loadManifestPermissions } = await import("../lib/permissions.js");
-const { permissionTuples, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
+const { declinedPermissions, permissionTuples, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
 const host = "https://node.example.test";
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -78,6 +78,16 @@ describe("scoped first login", () => {
     const path = join(home, "read.manifest.json");
     await writeFile(path, JSON.stringify({ app_id: "example", space: "applications", permissions: [{ service: "kv", path: "", actions: ["get"] }] }));
     expect(await loadManifestPermissions(path, "scoped", { allowLogicalSpaces: true })).toEqual(requested);
+  });
+
+  test("declined nonraw permissions preserve the requested checksummed owner space", () => {
+    const owner = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
+    const requestedSpace = `tinycloud:pkh:eip155:1:${owner.split(":").at(-1)}:secrets`;
+    const entry: PermissionEntry = {
+      service: "tinycloud.kv", space: requestedSpace,
+      path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"],
+    };
+    expect(declinedPermissions([entry], [], owner)).toEqual([entry]);
   });
 
   test("sends the scoped request and expiry, persists only verified proof with the local private key", async () => {

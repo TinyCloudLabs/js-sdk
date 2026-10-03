@@ -249,15 +249,18 @@ export function permissionsFromTuples(tuples: Iterable<string>): PermissionEntry
 export function declinedPermissions(requested: readonly PermissionEntry[], signed: readonly PermissionEntry[], ownerDid: string): PermissionEntry[] {
   const granted = permissionTuples(signed, ownerDid);
   const missing = [...permissionTuples(requested, ownerDid)].filter((tuple) => !granted.has(tuple));
-  const requestedRawPaths = new Map<string, string>();
+  const requestedScopes = new Map<string, { space: string; path: string }>();
   for (const entry of requested) {
-    if (!isRawEncryptionPermission(entry)) continue;
-    for (const tuple of actionTuples(entry, ownerDid)) requestedRawPaths.set(tuple, entry.path);
+    const space = isVerifiedRawEncryptionPermission(entry)
+      ? entry.space ?? ENCRYPTION_MANIFEST_SPACE
+      : ownerSpaceId(entry.space ?? "", ownerDid);
+    for (const tuple of actionTuples(entry, ownerDid)) {
+      requestedScopes.set(tuple, { space, path: entry.path });
+    }
   }
   return permissionsFromTuples(missing).map((entry) => {
-    if (!isVerifiedRawEncryptionPermission(entry)) return entry;
-    const original = requestedRawPaths.get(actionTuples(entry, ownerDid)[0]!);
-    return original === undefined ? entry : { ...entry, path: original };
+    const original = requestedScopes.get(actionTuples(entry, ownerDid)[0]!);
+    return original === undefined ? entry : { ...entry, ...original };
   });
 }
 

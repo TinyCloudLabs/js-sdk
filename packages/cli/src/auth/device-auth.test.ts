@@ -209,7 +209,7 @@ describe("OpenKey device authorization", () => {
     expect(result.approved.map((p) => `${p.service}:${p.path}`)).toEqual(["tinycloud.capabilities:", "tinycloud.kv:xyz.tinycloud.share/shares/"]);
     expect(result.declined).toEqual([{
       service: "tinycloud.kv",
-      space: spaceId.toLowerCase(),
+      space: spaceId,
       path: "shares/",
       actions: addressedPrefix.actions,
     }]);
@@ -457,6 +457,24 @@ describe("device login persistence", () => {
 
     expect(openkey.startBodies[0]!.permissions).toEqual(requested);
     expect(result.declined).toEqual([]);
+  });
+
+  test("rejects empty device permissions before approval without changing profile state", async () => {
+    const before = { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" };
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", before);
+    const openkey = fakeOpenKey(() => response({}));
+    let prompted = false;
+
+    await expect(loginWithDeviceAuthorization({
+      profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [],
+      fetchFn: openkey.fetchFn, emitInstructions: () => { prompted = true; },
+    })).rejects.toMatchObject({ name: "CLIError", code: "INVALID_LOGIN_SCOPE", exitCode: 2 });
+    expect(openkey.urls).toEqual([]);
+    expect(prompted).toBe(false);
+    expect(await ProfileManager.getProfile("agent")).toEqual(before);
+    expect(await ProfileManager.getKey("agent")).toEqual(key);
+    expect(await ProfileManager.getSession("agent")).toBeNull();
   });
 
   test("refuses a secrets manifest on the device login path without starting authorization", async () => {

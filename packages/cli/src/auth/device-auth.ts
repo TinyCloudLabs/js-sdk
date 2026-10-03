@@ -587,6 +587,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   assertNotLocalOwner(input.profileName, existing, "Device login");
   // Every profile that recorded an owner stays with that owner.
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
+  validateLoginPermissions(input.permissions);
   const permissions = scopedLoginPermissions(input.permissions);
   // Early refusal on the request; the commit re-checks the approved scope.
   if (input.replaceSession !== true) {
