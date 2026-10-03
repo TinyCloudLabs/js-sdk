@@ -64,6 +64,29 @@ export interface ConnectStatus {
   readonly expiresAt?: string;
 }
 
+interface CallbackSession {
+  readonly delegationHeader: { Authorization: string };
+  readonly delegationCid: string;
+  readonly spaceId: string;
+  readonly jwk: Record<string, unknown>;
+  readonly verificationMethod: string;
+  readonly address?: string;
+  readonly chainId?: number;
+  readonly siwe?: string;
+  readonly signature?: string;
+}
+
+/**
+ * The approving wallet is not the OpenKey principal whose MCP request created
+ * the approval link. The message is static so callers may show it verbatim.
+ */
+export class ApprovalOwnerMismatchError extends Error {
+  constructor() {
+    super("This approval link was requested by a different TinyCloud account, so the delegation was not stored.");
+    this.name = "ApprovalOwnerMismatchError";
+  }
+}
+
 export class RemoteTenantStore {
   readonly #config: RemoteStoreConfig;
   readonly #initializing = new Map<string, Promise<TenantProfile>>();
@@ -127,9 +150,16 @@ export class RemoteTenantStore {
       jwk: Buffer.from(JSON.stringify(publicJwk(tenant.jwk))).toString("base64url"),
       permissions: Buffer.from(JSON.stringify({
         permissions: pending.permissions,
-        reason: pending.kind === "bootstrap"
-          ? "Connect this TinyCloud account to the hosted MCP delegate."
-          : "Approve the exact capabilities requested by the TinyCloud MCP operation.",
+        reason: [
+          pending.kind === "bootstrap"
+            ? "Connect this TinyCloud account to the hosted MCP delegate."
+            : "Approve the exact capabilities requested by the TinyCloud MCP operation.",
+          // Owner DIDs come from the verified OpenKey access token of the MCP
+          // client that created this link, never from the link itself.
+          ...(pending.ownerDids.length === 0
+            ? []
+            : [`Requested by TinyCloud account ${pending.ownerDids.join(", ")}; approve only if that is you.`]),
+        ].join(" "),
       })).toString("base64url"),
       expiry: this.#config.delegationExpiry,
     });
@@ -164,14 +194,9 @@ export class RemoteTenantStore {
     pending: PendingApproval,
     data: Record<string, unknown>,
   ): Promise<void> {
-    const session = sessionFromCallback(data, tenant.jwk);
-    const node = new TinyCloudNode({ host: this.#config.nodeHost });
-    await node.restoreSession(session);
-    if (!samePrincipal(node.sessionDid, tenant.sessionDid)) {
-      throw new Error("The approved delegation targets a different session.");
-    }
+    const { node, session } = await this.#restoreApproval(tenant, data);
     if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
-      throw new Error("The approved delegation belongs to a different OpenKey user.");
+      throw new ApprovalOwnerMismatchError();
     }
     const granted = [...node.getVerifiedSessionCapabilities()];
     if (!permissionsCover(pending.permissions, granted)) {
@@ -195,6 +220,10 @@ export class RemoteTenantStore {
     data: Record<string, unknown>,
   ): Promise<void> {
     if (pending.requestId === undefined) throw new Error("Authority request is missing.");
+    // Unlike bootstrap there is no empty-list exemption: a delegation is only
+    // imported when its verified signer is the OAuth principal that asked.
+    const { node } = await this.#restoreApproval(tenant, data);
+    if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) throw new ApprovalOwnerMismatchError();
     const delegation = portableFromCallback(data, pending.permissions, this.#config.nodeHost);
     const result = await invokeOperation(
       "tinycloud.auth.import",
@@ -207,6 +236,24 @@ export class RemoteTenantStore {
       },
     );
     if (result.status !== "ok") throw new Error("TinyCloud rejected the approved delegation.");
+  }
+
+  /**
+   * Verify the OpenKey callback as a SIWE session for this tenant's key. The
+   * WASM verifier binds the authorization bytes and CID to the signed SIWE, so
+   * `node.did` is the wallet that signed exactly the delegation being stored.
+   */
+  async #restoreApproval(
+    tenant: TenantProfile,
+    data: Record<string, unknown>,
+  ): Promise<{ node: TinyCloudNode; session: CallbackSession }> {
+    const session = sessionFromCallback(data, tenant.jwk);
+    const node = new TinyCloudNode({ host: this.#config.nodeHost });
+    await node.restoreSession(session);
+    if (!samePrincipal(node.sessionDid, tenant.sessionDid)) {
+      throw new Error("The approved delegation targets a different session.");
+    }
+    return { node, session };
   }
 
   async #ensureTenant(subject: string): Promise<TenantProfile> {
@@ -404,7 +451,7 @@ function ensureWasm(): void {
   wasmInitialized = true;
 }
 
-function sessionFromCallback(data: Record<string, unknown>, privateJwk: Record<string, unknown>) {
+function sessionFromCallback(data: Record<string, unknown>, privateJwk: Record<string, unknown>): CallbackSession {
   const delegationHeader = data.delegationHeader;
   if (!isRecord(delegationHeader) || typeof delegationHeader.Authorization !== "string" ||
     typeof data.delegationCid !== "string" || typeof data.spaceId !== "string" ||
