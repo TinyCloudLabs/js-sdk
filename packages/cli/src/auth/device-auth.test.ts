@@ -272,30 +272,54 @@ describe("OpenKey device authorization", () => {
     expect(waits).toEqual([2000, 2000, 2000, 2000, 7000]);
   });
 
-  test("maps OpenKey rate limiting to its own error and retry hint", async () => {
-    const limited = fakeOpenKey(() => response({ error: "rate_limited" }, 429), {
-      start: response({ error: "rate_limited" }, 429),
-    });
-    await expect(acquire(limited)).rejects.toMatchObject({
-      code: "DEVICE_AUTH_RATE_LIMITED",
-      exitCode: 1,
-      message: "OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry.",
-      metadata: {
-        hint: "OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry.",
-      },
-    });
-
-    const retryWindow = new Response(JSON.stringify({ error: "rate_limited" }), {
-      status: 429,
-      headers: { "Retry-After": "120" },
-    });
-    await expect(acquire(fakeOpenKey(() => response({}), { start: retryWindow }))).rejects.toMatchObject({
-      code: "DEVICE_AUTH_RATE_LIMITED",
-      exitCode: 1,
-      metadata: {
-        hint: "OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry. Retry after 120 seconds.",
-      },
-    });
+  test("accepts only bounded integer or IMF-fixdate retry windows", async () => {
+    const initialTime = new Date("2026-10-03T00:00:00Z");
+    setSystemTime(initialTime);
+    try {
+      const cases: Array<{ value?: string; retryHint?: string }> = [
+        { value: "120", retryHint: "Retry after 120 seconds." },
+        { value: "Sat, 03 Oct 2026 00:05:00 GMT", retryHint: "Retry after 300 seconds." },
+        { value: "600", retryHint: "Retry after 600 seconds." },
+        { value: "Fri, 02 Oct 2026 23:59:00 GMT" },
+        { value: "0" },
+        { value: "-5" },
+        { value: "-3600" },
+        { value: "1.5" },
+        { value: "3600.5" },
+        { value: "601" },
+        { value: "not a date" },
+        {},
+      ];
+      for (const { value, retryHint } of cases) {
+        const headers = new Headers();
+        if (value !== undefined) headers.set("Retry-After", value);
+        const start = new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers });
+        let error: unknown;
+        try {
+          await acquire(fakeOpenKey(() => response({}), { start }));
+        } catch (caught) {
+          error = caught;
+        }
+        if (!(error instanceof Error) || !("metadata" in error)) {
+          throw new Error("Expected device-auth rate-limit CLIError");
+        }
+        expect(error).toMatchObject({
+          code: "DEVICE_AUTH_RATE_LIMITED",
+          exitCode: 1,
+          message: "OpenKey rate limited device sign-in requests from this network",
+        });
+        const metadata = error.metadata;
+        if (!metadata || typeof metadata !== "object" || !("hint" in metadata) || typeof metadata.hint !== "string") {
+          throw new Error("Expected a rate-limit error hint");
+        }
+        const hint = metadata.hint;
+        expect(hint).toContain("OpenKey allows 5 device sign-in requests per 10 minutes from this network");
+        if (retryHint) expect(hint).toContain(retryHint);
+        else expect(hint).not.toContain("Retry after");
+      }
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("leaves other device-start errors unchanged", async () => {

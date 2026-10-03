@@ -187,24 +187,31 @@ function errorDescription(value: Record<string, unknown> | undefined): string | 
 function retryAfterSeconds(response: Response): number | undefined {
   const value = response.headers.get("retry-after");
   if (!value) return undefined;
+
+  let seconds: number;
   if (/^\d+$/.test(value)) {
-    const seconds = Number(value);
-    return Number.isSafeInteger(seconds) ? seconds : undefined;
+    seconds = Number(value);
+    if (!Number.isSafeInteger(seconds)) return undefined;
+  } else {
+    if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/.test(value)) {
+      return undefined;
+    }
+    const retryAt = Date.parse(value);
+    if (!Number.isFinite(retryAt) || new Date(retryAt).toUTCString() !== value) return undefined;
+    seconds = Math.ceil((retryAt - Date.now()) / 1000);
   }
-  const retryAt = Date.parse(value);
-  if (!Number.isFinite(retryAt)) return undefined;
-  const seconds = Math.ceil((retryAt - Date.now()) / 1000);
-  return seconds > 0 ? seconds : undefined;
+
+  return seconds > 0 && seconds <= 600 ? seconds : undefined;
 }
 
 function deviceAuthRateLimit(response: Response): CLIError {
   const retrySeconds = retryAfterSeconds(response);
   return new CLIError(
     "DEVICE_AUTH_RATE_LIMITED",
-    "OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry.",
+    "OpenKey rate limited device sign-in requests from this network",
     ExitCode.ERROR,
     {
-      hint: `OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait and retry.${retrySeconds !== undefined ? ` Retry after ${retrySeconds} seconds.` : ""}`,
+      hint: `OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait up to 10 minutes, then retry once. The limit is shared by every agent on this network.${retrySeconds !== undefined ? ` Retry after ${retrySeconds} seconds.` : ""}`,
     },
   );
 }
