@@ -1,5 +1,12 @@
 # @tinycloud/vfs
 
+## 0.1.14-beta.18
+
+### Patch Changes
+
+- Updated dependencies [877097d]
+  - @tinycloud/node-sdk@3.0.0-beta.20
+
 ## 0.1.14-beta.17
 
 ### Patch Changes

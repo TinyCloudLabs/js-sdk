@@ -5590,6 +5590,23 @@ var init_zod = __esm({
   }
 });
 
+// src/lib/raw-encryption.ts
+var init_raw_encryption = __esm({
+  "src/lib/raw-encryption.ts"() {
+    "use strict";
+  }
+});
+
+// src/lib/owner-did.ts
+import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
+var init_owner_did = __esm({
+  "src/lib/owner-did.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+  }
+});
+
 // src/share/publishing-manifest.ts
 var init_publishing_manifest = __esm({
   "src/share/publishing-manifest.ts"() {
@@ -5641,6 +5658,8 @@ var init_permissions = __esm({
     init_errors();
     init_constants();
     init_space();
+    init_raw_encryption();
+    init_owner_did();
     init_publishing_manifest();
     init_types();
   }
