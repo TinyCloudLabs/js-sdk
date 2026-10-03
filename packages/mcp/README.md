@@ -23,6 +23,12 @@ the local-only `tinycloud_secrets_status` and `tinycloud_auth_import`.
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
+Each approved delegation is stored with the request it was checked against.
+Replay verifies both compact UCAN and signed-login authority against that
+binding. The binding is local profile data, not protection against someone who
+can write the tenant's state directory and already holds the session key and
+signed delegation.
+
 Run the service with an encrypted persistent volume:
 
 ```bash

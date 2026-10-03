@@ -13,11 +13,8 @@ import {
   type OperationRuntimeRequirement,
   type RuntimeOperationContext,
 } from "./contract.js";
-import {
-  canonicalizeCapabilities,
-  evaluateOperationAuthority,
-  validateExactCapabilities,
-} from "./authority.js";
+import { DelegationRequestBindingSchema } from "./artifacts.js";
+import { canonicalizeCapabilities, delegationWithinRequest } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { isLocalOwnerProfile, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
@@ -420,6 +417,7 @@ function normalizeSession(
       : {}),
   };
 }
+
 
 
 function hasPrivateParameter(value: unknown): value is Record<string, unknown> {
