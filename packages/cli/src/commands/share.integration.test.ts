@@ -62,4 +62,41 @@ describe("tc share command integration", () => {
     const [exitCode] = await once(child, "exit");
     expect(exitCode).toBe(0);
   });
+
+  test("refuses control and invisible filenames with UNSAFE_FILENAME before reading or publishing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-unsafe-name-"));
+    const input = join(root, "report.md");
+    await writeFile(input, "# unsafe name\n", "utf8");
+    let published = 0;
+    configureShareCommandServices({ targetAdapter: { publish: async () => { published += 1; throw new Error("must not publish"); } } });
+    // handleError ends the process; record its exit code and let the action return instead.
+    const refusal = async (args: readonly string[]): Promise<{ exitCode: number | undefined; stderr: string }> => {
+      const originalExit = process.exit;
+      let exitCode: number | undefined;
+      process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+      try {
+        const { stderr } = await runShareCaptured(args);
+        return { exitCode, stderr };
+      }
+      finally { process.exit = originalExit; }
+    };
+    for (const name of ["a\u0001.md", "a\u200B.md", "a\u202E.md", "a\u2028.md"]) {
+      const result = await refusal(["share", "publish", input, "--name", name, "--json"]);
+      expect(result.exitCode).toBe(8);
+      expect(result.stderr).toContain("UNSAFE_FILENAME");
+    }
+    const stdin = process.stdin as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<Buffer> };
+    const originalIterator = stdin[Symbol.asyncIterator];
+    let stdinRead = false;
+    stdin[Symbol.asyncIterator] = () => { stdinRead = true; throw new Error("stdin must not be read"); };
+    try {
+      const result = await refusal(["share", "publish", "-", "--name", "a\u200B.md", "--json"]);
+      expect(result.exitCode).toBe(8);
+      expect(result.stderr).toContain("UNSAFE_FILENAME");
+    } finally {
+      stdin[Symbol.asyncIterator] = originalIterator;
+    }
+    expect(stdinRead).toBe(false);
+    expect(published).toBe(0);
+  });
 });

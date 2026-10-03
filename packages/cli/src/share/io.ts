@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, stat, link, rename, rm, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { basename, join, resolve, sep } from "node:path";
+import { canonicalShareFilename } from "@tinycloud/share-sdk";
 
 export const MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 export const MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -37,19 +38,26 @@ export function markdownFilename(value: string): string {
   return filename;
 }
 
+/** Publish-side names follow the share viewer's rule; every refusal is `UNSAFE_FILENAME`. */
 export function shareFilename(value: string): string {
-  return safeFilename(value);
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new Error("UNSAFE_FILENAME");
+  }
+}
+
+/** The published name of one input (`--name`, `stdin.md`, or the path basename), validated without reading it. */
+export function shareInputFilename(input: string, name?: string): string {
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename(resolve(input))));
 }
 
 export async function readShareInput(input: string, name?: string, limit = MAX_SHARE_STDIN_BYTES): Promise<{ bytes: Uint8Array; filename: string }> {
-  if (input === "-") {
-    const bytes = await readBoundedStdin(limit);
-    return { bytes, filename: shareFilename(name ?? "stdin.md") };
-  }
+  const filename = shareInputFilename(input, name);
+  if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
   const path = resolve(input);
   const info = await stat(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const filename = shareFilename(name ?? basename(path));
   const bytes = new Uint8Array(await readFile(path));
   // The pre-read stat is only an optimization. A file can grow between stat
   // and readFile, so enforce the same bound on the bytes actually published.

@@ -27,7 +27,7 @@ describe("canonical share filenames", () => {
     };
     for (const filename of ["a\u200B.md", "a\u202E.md", "a\u2028.md"]) {
       await expect(publishTargetShare({ source, filename, target: { kind: "bearer" }, origin: "https://share.example", targetAdapter }))
-        .rejects.toMatchObject({ code: "invalid-argument" });
+        .rejects.toMatchObject({ code: "invalid-argument", message: "filename contains control or invisible characters" });
     }
     expect(consumed).toBe(false);
     expect(published).toBe(false);

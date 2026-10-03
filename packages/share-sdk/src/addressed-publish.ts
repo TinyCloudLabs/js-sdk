@@ -313,10 +313,11 @@ function assertMailboxCommitment(commitment: PolicyCredentialRequirementV1 | und
 }
 
 /** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
-export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
-  assertSafeInput(options);
-  const { target } = prepareAddressedShare(options);
-  const filename = canonicalShareFilename(options.filename);
+export async function publishAddressedShare(input: AddressedSharePublishOptions): Promise<PublishedShare> {
+  assertSafeInput(input);
+  const { target } = prepareAddressedShare(input);
+  // Envelope, result metadata and history all carry the viewer's NFC form.
+  const options = { ...input, filename: canonicalShareFilename(input.filename) };
   if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
@@ -347,11 +348,13 @@ export async function publishAddressedShare(options: AddressedSharePublishOption
     version: 3 as const, shareId: options.shareId, recipientMatcher: matcher,
     ...(options.deliveryEmail === undefined ? {} : { deliveryEmail: options.deliveryEmail }),
     actions: [...options.actions], resource: { ...options.resource },
+    target: { origin: options.nodeOrigin, nodeAudience: registration.attestedEnforcerBinding.enforcerDid, spaceId: options.spaceId },
+    policy: created.policy, policyCid: created.policyCid, policyRoot, enforcementRoot,
     attestedEnforcerBinding: registration.attestedEnforcerBinding, contentSource: options.contentSource,
     contentSourceDigestHex, encryptionNetwork: options.contentSource.encryptionNetwork, expiry,
-    display: { filename }, encrypted: true as const,
+    display: { filename: options.filename }, encrypted: true as const,
     metadata: {
-      mediaType: options.mediaType, byteLength: options.byteLength, filename,
+      mediaType: options.mediaType, byteLength: options.byteLength, filename: options.filename,
       ...(options.mediaType.startsWith("text/") ? { encoding: "utf-8" as const } : {}),
       ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
     },

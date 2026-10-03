@@ -3,8 +3,8 @@ import { authorizationMethodForTarget } from "./authorization.js";
 import { DEFAULT_SHARE_LIFETIME_MS, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 import { base58btc } from "multiformats/bases/base58";
 import { canonicalMailbox, isCanonicalEmailDomain } from "@tinycloud/share-envelope";
+import { canonicalShareFilename, hasUnsafeFilenameCodePoint } from "./filename-policy.js";
 
-import { canonicalShareFilename } from "./filename-policy.js";
 export type ShareTarget = SharePublishTarget;
 
 export interface TargetPublishInput {
@@ -74,6 +74,17 @@ export function targetAuthorizationMethod(target: ShareTarget): ShareAuthorizati
   return authorizationMethodForTarget(target);
 }
 
+/** The share viewer's filename rule, reported as a fixed `invalid-argument` reason. */
+function publishFilename(value: string): string {
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint(value)
+      ? "filename contains control or invisible characters"
+      : "filename must be one safe path segment");
+  }
+}
+
 /** Route every share through the authenticated TinyCloud authority adapter. */
 export async function publishTargetShare(input: SharePublishOptions & {
   readonly target: ShareTarget;
@@ -84,24 +95,8 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly actions?: readonly ("read" | "list" | "edit")[];
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
-  let filename: string;
-  try {
-    filename = canonicalShareFilename(input.filename);
-  } catch {
-    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-  }
-  let files: typeof input.files;
-  if (input.files !== undefined) {
-    files = input.files.map((file) => {
-      let fileName: string;
-      try {
-        fileName = canonicalShareFilename(file.filename);
-      } catch {
-        throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-      }
-      return { ...file, filename: fileName };
-    });
-  }
+  const filename = publishFilename(input.filename);
+  const files = input.files?.map((file) => ({ ...file, filename: publishFilename(file.filename) }));
   if (input.targetAdapter === undefined) {
     if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
