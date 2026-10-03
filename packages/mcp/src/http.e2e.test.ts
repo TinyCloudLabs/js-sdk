@@ -1,14 +1,20 @@
 import { afterEach, expect, test } from "bun:test";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
-import { OTHER_OWNER_KEY, openKeyApprovalBody, openKeyCallbackBody } from "./test-support/openkey-callback.js";
+import {
+  OTHER_OWNER_KEY,
+  openKeyApprovalBody,
+  openKeyCallbackBody,
+  ownerSpace,
+  siweDelegationFromCallback,
+} from "./test-support/openkey-callback.js";
 
 const resources: Array<() => Promise<void>> = [];
 
@@ -68,7 +74,7 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
-  expect(tools.tools).toHaveLength(17);
+  expect(tools.tools).toHaveLength(16);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
   // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
   // reauthorization path for a server-revoked session (TC-896).
@@ -77,6 +83,8 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
     .then((value) => JSON.stringify(value), (error: unknown) => String(error));
   expect(unknownTool).toMatch(/tinycloud_secrets_status not found|Unknown tool/i);
   expect(unknownTool).not.toContain("tinycloud.secrets.status");
+  // Delegations reach hosted tenants only through the owner-bound callback.
+  expect(tools.tools.map((tool) => tool.name)).not.toContain("tinycloud_auth_import");
 
   const result = await client.callTool({ name: "tinycloud_connect", arguments: {} });
   const structured = result.structuredContent;
@@ -164,6 +172,39 @@ test("a signed bootstrap and a signed delegation approval let a hosted tool use 
       status: 403,
       body: { code: "approval_owner_mismatch" },
     });
+
+    stage = "refuse a direct import of a foreign CACAO";
+    // The foreign owner's own space, so the delegation would satisfy the
+    // stored request: only the missing owner binding should stop it.
+    const foreignSpace = await ownerSpace(OTHER_OWNER_KEY, "applications");
+    const foreignRequired = record((await client.callTool({
+      name: "tinycloud_kv_get",
+      arguments: { ...kvGet, space: foreignSpace },
+    })).structuredContent);
+    expect(foreignRequired).toMatchObject({ status: "authority_required" });
+    const foreignCacao = await openKeyApprovalBody({
+      redirect: await openKeyRedirect(app, String(record(foreignRequired.approval).url)),
+      tenantStateRoot,
+      privateKey: OTHER_OWNER_KEY,
+    });
+    const foreignDelegation = await siweDelegationFromCallback(foreignCacao, tenantStateRoot, hermetic.host);
+    const directImport = await client.callTool({
+      name: "tinycloud_auth_import",
+      arguments: {
+        kind: "tinycloud.auth.delegation",
+        version: 1,
+        requestId: String(record(foreignRequired.request).requestId),
+        delegationCid: foreignDelegation.cid,
+        delegation: JSON.parse(JSON.stringify(foreignDelegation)),
+      },
+    }).then(() => undefined, (error: unknown) => error);
+    expect(directImport).toBeInstanceOf(Error);
+    expect(String(directImport)).toContain("Tool tinycloud_auth_import not found");
+    expect(await exists(join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);
+    expect(record((await client.callTool({
+      name: "tinycloud_kv_get",
+      arguments: { ...kvGet, space: foreignSpace },
+    })).structuredContent)).toMatchObject({ status: "authority_required" });
 
     stage = "store the signed delegation";
     const approval = await openKeyApprovalBody({ redirect, tenantStateRoot, privateKey: hermetic.ownerPrivateKey });
@@ -280,6 +321,10 @@ function record(value: unknown): Record<string, unknown> {
     throw new Error("Expected an object.");
   }
   return value as Record<string, unknown>;
+}
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(() => true, () => false);
 }
 
 async function hostedFetch(

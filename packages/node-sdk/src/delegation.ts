@@ -709,6 +709,9 @@ export async function activateValidatedRuntimeDelegation(
   if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
     throw new Error("Runtime delegation is not authorized for this runtime.");
   }
+  if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
+    throw new Error("Runtime delegation is not authorized for this runtime.");
+  }
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()
     .find((candidate) => candidate.cid === cid);

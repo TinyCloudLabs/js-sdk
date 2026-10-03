@@ -16,11 +16,12 @@ TinyCloud capabilities and never silently fall back to owner authority.
 ### Hosted Streamable HTTP
 
 Remote clients connect to one HTTPS endpoint and authenticate through OpenKey
-OAuth. The hosted server registers 17 tools: it adds `tinycloud_connect` and omits
-the local-only `tinycloud_secrets_status`.
-That tool returns a short-lived browser approval URL on first use. Later
+OAuth. The hosted server registers 16 tools: it adds `tinycloud_connect` and omits
+the local-only `tinycloud_secrets_status` and `tinycloud_auth_import`.
+`tinycloud_connect` returns a short-lived browser approval URL on first use. Later
 `authority_required` results include the same one-click approval flow for the
-exact requested operation.
+exact requested operation; approved delegations arrive only through that flow,
+which binds them to the requesting OpenKey account and stored request.
 
 Run the service with an encrypted persistent volume:
 
@@ -71,7 +72,7 @@ to select another profile.
 ## Tools
 
 The local server exposes 17 tools. Hosted mode adds `tinycloud_connect` and
-does not register `tinycloud_secrets_status` (local/stdio only):
+omits `tinycloud_secrets_status` (local/stdio only) and `tinycloud_auth_import`:
 
 - Local and authorization state: `tinycloud_status`,
   `tinycloud_auth_status`, `tinycloud_auth_capabilities`

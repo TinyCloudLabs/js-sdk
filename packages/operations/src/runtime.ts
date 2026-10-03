@@ -13,7 +13,11 @@ import {
   type OperationRuntimeRequirement,
   type RuntimeOperationContext,
 } from "./contract.js";
-import { canonicalizeCapabilities } from "./authority.js";
+import {
+  canonicalizeCapabilities,
+  evaluateOperationAuthority,
+  validateExactCapabilities,
+} from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { isLocalOwnerProfile, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
@@ -52,6 +56,7 @@ interface StoredSession extends Record<string, unknown> {
   readonly signature?: unknown;
   readonly tinycloudHosts?: unknown;
 }
+
 
 /**
  * Creates one authenticated runtime for an invocation. The selected profile
@@ -415,6 +420,7 @@ function normalizeSession(
       : {}),
   };
 }
+
 
 function hasPrivateParameter(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && typeof value.d === "string" && value.d.length > 0;

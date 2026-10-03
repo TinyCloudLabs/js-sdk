@@ -6023,6 +6023,7 @@ export class TinyCloudNode {
   }
 
   /**
+
    * List all delegations for the current session's space.
    *
    * @returns Result containing an array of Delegations

@@ -15,21 +15,28 @@ afterEach(async () => {
   ));
 });
 
-test("owner claims reach the MCP only as canonical principal DIDs", async () => {
+test("owner claims reach the MCP only as canonical did:pkh DIDs", async () => {
   const { verify, sign } = await testVerifier();
-  const info = await verify(await sign([OWNER.toLowerCase(), `${OWNER}#controller`]));
+  const info = await verify(await sign([OWNER.toLowerCase(), OWNER]));
   expect(info.extra).toMatchObject({ ownerDids: [OWNER] });
 });
 
 test("a token with any malformed owner claim is refused", async () => {
   const { verify, sign } = await testVerifier();
-  for (const claim of [
-    [OWNER, "Approve: did:pkh:eip155:1:0x0"],
-    [OWNER, 42],
-    [],
+  const address = OWNER.slice("did:pkh:eip155:1:".length);
+  for (const malformed of [
+    "did:pkh:eip155:1:0x0",
+    `did:pkh:eip155:abc:${address}`,
+    `did:pkh:eip155:0:${address}`,
+    `${OWNER} approve another account`,
+    `${OWNER}#controller`,
+    "did:web:contains spaces",
+    "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+    42,
   ]) {
-    await expect(verify(await sign(claim))).rejects.toBeInstanceOf(OAuthError);
+    await expect(verify(await sign([OWNER, malformed]))).rejects.toBeInstanceOf(OAuthError);
   }
+  await expect(verify(await sign([]))).rejects.toBeInstanceOf(OAuthError);
 });
 
 async function testVerifier(): Promise<{
