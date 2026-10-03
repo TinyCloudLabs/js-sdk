@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { withRecapCaveat } from "./test-support/recap-caveat.js";
 
+const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-scoped-login-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { loadManifestPermissions } = await import("../lib/permissions.js");
+const { declinedPermissions, permissionTuples, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
 const host = "https://node.example.test";
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -20,6 +22,10 @@ const manager = wasm.createSessionManager();
 const key = JSON.parse(manager.jwk("default")!);
 const did = manager.getDID("default");
 const requested: PermissionEntry[] = [{ service: "tinycloud.kv", space: "applications", path: "example/", actions: ["tinycloud.kv/get"] }];
+const capabilityRead: PermissionEntry = { service: "tinycloud.capabilities", space: "applications", path: "", actions: ["tinycloud.capabilities/read"] };
+const secretsSpaceId = wasm.makeSpaceId(address, 1, "secrets");
+const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+const secretsManifest = `base64:${Buffer.from(JSON.stringify({ app_id: "xyz.tinycloud.agent", space: "secrets", secrets: { OPENAI_API_KEY: true } })).toString("base64")}`;
 
 /** A real owner-signed session for kv `example/`; `caveat` is signed onto every action. */
 async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?: number; caveat?: Record<string, unknown> } = {}) {
@@ -37,13 +43,35 @@ async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?:
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
 }
 
+/** A real owner-signed session over the Secret Manager scope; `decrypt: false` is the owner unticking it. */
+async function secretsProof(options: { decrypt?: boolean; nestedDecrypt?: boolean; networkId?: string } = {}) {
+  const now = Date.now();
+  const decryptNetwork = options.networkId ?? network;
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { "vault/secrets/OPENAI_API_KEY": ["tinycloud.kv/get"] }, capabilities: { "": ["tinycloud.capabilities/read"] },
+      ...(options.nestedDecrypt ? { encryption: { [decryptNetwork]: ["tinycloud.encryption/decrypt"] } } : {}) },
+    ...(options.decrypt === false || options.nestedDecrypt ? {} : { rawAbilities: { [decryptNetwork]: ["tinycloud.encryption/decrypt"] } }),
+    address, chainId: 1, domain: "cli.example.test", spaceId: secretsSpaceId, jwk: key,
+    issuedAt: new Date(now - 60_000).toISOString(),
+    expirationTime: new Date(now + 3600_000).toISOString(),
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  return { ...session, jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did,
+    address, chainId: 1, spaceId: secretsSpaceId, ownerDid, siwe: prepared.siwe, signature };
+}
+
 beforeEach(async () => {
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setKey("scoped", key);
   await ProfileManager.setProfile("scoped", { name: "scoped", host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString() });
   await ProfileManager.clearSession("scoped");
 });
-afterAll(async () => { await rm(home, { recursive: true, force: true }); });
+afterAll(async () => {
+  if (originalTcHome === undefined) delete process.env.TC_HOME;
+  else process.env.TC_HOME = originalTcHome;
+  await rm(home, { recursive: true, force: true });
+});
 
 describe("scoped first login", () => {
   test("fresh owner profile loads a logical-space manifest without a prior owner login", async () => {
@@ -52,11 +80,21 @@ describe("scoped first login", () => {
     expect(await loadManifestPermissions(path, "scoped", { allowLogicalSpaces: true })).toEqual(requested);
   });
 
+  test("declined nonraw permissions preserve the requested checksummed owner space", () => {
+    const owner = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
+    const requestedSpace = `tinycloud:pkh:eip155:1:${owner.split(":").at(-1)}:secrets`;
+    const entry: PermissionEntry = {
+      service: "tinycloud.kv", space: requestedSpace,
+      path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"],
+    };
+    expect(declinedPermissions([entry], [], owner)).toEqual([entry]);
+  });
+
   test("sends the scoped request and expiry, persists only verified proof with the local private key", async () => {
     const received: unknown[] = [];
     const response = await proof();
     await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", expectedOwner: ownerDid.toLowerCase(), openKeyAcquisition: async (_did, options) => { received.push(options); return response; } });
-    expect(received[0]).toMatchObject({ permissions: requested, expiry: "3600s", host });
+    expect(received[0]).toMatchObject({ permissions: [capabilityRead, ...requested], expiry: "3600s", host });
     const saved = await ProfileManager.getSession("scoped") as any;
     expect(saved.jwk.d).toBe(key.d);
     expect(saved.permissions).toEqual([{ ...requested[0], space: spaceId }]);
@@ -314,5 +352,87 @@ describe("scoped first login", () => {
     await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => { calls++; return proof(); } }))
       .rejects.toMatchObject({ code: "PROFILE_STATE_INCONSISTENT" });
     expect(calls).toBe(0);
+  });
+
+  test("adds OpenKey's required capability read to the requested scope once", async () => {
+    const received: Array<{ permissions?: unknown }> = [];
+    const acquire = async (_did: string, options?: { permissions?: unknown }) => { received.push(options ?? {}); return proof(); };
+    await refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: acquire });
+    await refreshOpenKeySession("scoped", host, { permissions: [...requested, capabilityRead], replaceSession: true, openKeyAcquisition: acquire });
+    expect(received.map((options) => options.permissions)).toEqual([
+      [capabilityRead, ...requested],
+      [...requested, capabilityRead],
+    ]);
+  });
+
+  test("the Secret Manager `secrets:` shorthand passes first-login validation as one space plus a raw decrypt entry", async () => {
+    const permissions = await loadManifestPermissions(secretsManifest, "scoped", { allowLogicalSpaces: true, ownerDid });
+    expect(permissions).toEqual([
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/OPENAI_API_KEY", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+    ]);
+    expect(() => validateLoginPermissions(permissions)).not.toThrow();
+    // Raw entries alone are not a login space.
+    expect(() => validateLoginPermissions(permissions.slice(1))).toThrow(expect.objectContaining({ code: "INVALID_LOGIN_SCOPE" }));
+  });
+
+  test("verifies an approved raw decrypt entry and reports it declined when the owner unticks it", async () => {
+    const permissions = await loadManifestPermissions(secretsManifest, "scoped", { allowLogicalSpaces: true, ownerDid });
+    const sent: unknown[] = [];
+    const approved = await refreshOpenKeySession("scoped", host, { permissions, openKeyAcquisition: async (_did, options) => { sent.push(options?.permissions); return secretsProof(); } });
+    expect(sent[0]).toEqual([{ ...capabilityRead, space: "secrets" }, ...permissions]);
+    expect(approved.declined).toEqual([]);
+    const rawEntry = { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] };
+    expect((await ProfileManager.getSession("scoped") as Record<string, unknown>).permissions).toContainEqual(rawEntry);
+    expect([...permissionTuples([rawEntry], ownerDid)].map((tuple) => JSON.parse(tuple)[1])).toEqual(["encryption"]);
+
+    const unticked = await refreshOpenKeySession("scoped", host, { permissions, replaceSession: true, openKeyAcquisition: async () => secretsProof({ decrypt: false }) });
+    expect(unticked.declined).toEqual([rawEntry]);
+  });
+
+  test("a real nested signed decrypt remains declined, not a raw grant", async () => {
+    const permissions = await loadManifestPermissions(secretsManifest, "scoped", { allowLogicalSpaces: true, ownerDid });
+    const result = await refreshOpenKeySession("scoped", host, {
+      permissions,
+      openKeyAcquisition: async () => secretsProof({ nestedDecrypt: true }),
+    });
+    const saved = await ProfileManager.getSession("scoped") as Record<string, unknown>;
+    expect(result.declined).toContainEqual({ service: "tinycloud.encryption", space: "encryption",
+      path: network, actions: ["tinycloud.encryption/decrypt"] });
+    expect((saved.permissions as PermissionEntry[]).some((entry) =>
+      entry.service === "tinycloud.encryption")).toBe(false);
+    expect((result.delegationData.permissions as PermissionEntry[]).some((entry) =>
+      entry.service === "tinycloud.encryption")).toBe(false);
+    const renewed = await refreshOpenKeySession("scoped", host, {
+      permissions,
+      openKeyAcquisition: async () => secretsProof(),
+    });
+    expect(renewed.declined).toEqual([]);
+    expect((await ProfileManager.getSession("scoped") as Record<string, unknown>).permissions)
+      .toContainEqual({ service: "tinycloud.encryption", space: "encryption", path: network,
+        actions: ["tinycloud.encryption/decrypt"] });
+  });
+
+  test("a previous CLI's real signed nested session does not block a corrected raw renewal", async () => {
+    const permissions = await loadManifestPermissions(secretsManifest, "scoped", { allowLogicalSpaces: true, ownerDid });
+    const nestedProof = await secretsProof({ nestedDecrypt: true });
+    await refreshOpenKeySession("scoped", host, { permissions, openKeyAcquisition: async () => nestedProof });
+    const saved = await ProfileManager.getSession("scoped") as Record<string, unknown>;
+    await ProfileManager.setSession("scoped", {
+      ...saved,
+      permissions: verifySignedSession(nestedProof, key, did).permissions,
+    });
+    const renewed = await refreshOpenKeySession("scoped", host, { permissions, openKeyAcquisition: async () => secretsProof() });
+    expect(renewed.declined).toEqual([]);
+  });
+
+  test("refuses a signed raw decrypt grant naming another owner", async () => {
+    const otherNetwork = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
+    const permissions = (await loadManifestPermissions(secretsManifest, "scoped", { allowLogicalSpaces: true, ownerDid }))
+      .map((entry) => entry.service === "tinycloud.encryption" ? { ...entry, path: otherNetwork } : entry);
+    const response = await secretsProof({ networkId: otherNetwork });
+    await expect(refreshOpenKeySession("scoped", host, { permissions, openKeyAcquisition: async () => response }))
+      .rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { Command } from "commander";
-import { readFile } from "node:fs/promises";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, open, readFile, rename, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import {
   type PermissionEntry,
@@ -19,6 +19,7 @@ import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner }
 import { theme } from "../output/theme.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -219,6 +220,14 @@ async function ensureSecretsNode(
   if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
     const session = await ProfileManager.getSession(ctx.profile);
     if (!session || isStoredSessionExpired(session)) {
+      if (!process.stdin.isTTY && !process.stderr.isTTY) {
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
+          ExitCode.AUTH_REQUIRED,
+          { hint: scopedSecretLoginHint(ctx.profile) },
+        );
+      }
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
         () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition }),
@@ -250,6 +259,7 @@ async function runSecretOperation<T>(params: {
   if (!canRequestOwnerPermissions(profile)) {
     return first;
   }
+  assertOwnerApprovalPossible(params.ctx.profile, profile, params.action, params.name);
 
   const requested = secretPermissionEntries({
     action: params.action,
@@ -280,6 +290,93 @@ function secretPermissionReason(action: SecretAction, name?: string): string {
   return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 
+/** Browser approval is possible when the person can see stderr or answer on stdin. */
+function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string, missing: readonly Readonly<Record<string, unknown>>[] = []): void {
+  if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
+  const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  throw new CLIError(
+    "PERMISSION_DENIED",
+    action === "get"
+      ? missing.length > 0 && missing.every((permission) =>
+          permission.service === "tinycloud.encryption" &&
+          Array.isArray(permission.actions) &&
+          permission.actions.length > 0 &&
+          permission.actions.every((capability: string) => capability === SECRET_DECRYPT_CAPABILITY))
+        ? `Profile "${profileName}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.`
+        : `Profile "${profileName}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.`
+      : `Profile "${profileName}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
+    ExitCode.PERMISSION_DENIED,
+    {
+      hint: scopedSecretLoginHint(profileName),
+    },
+  );
+}
+
+function scopedSecretLoginHint(profileName: string): string {
+  return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+
+/** Refuse non-regular outputs and invalid parents before fetching any secret bytes. */
+async function validateSecretOutput(path: string): Promise<void> {
+  try {
+    const destination = await lstat(path);
+    if (!destination.isFile()) {
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
+    }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+  }
+  try {
+    const parent = await lstat(dirname(path));
+    if (!parent.isDirectory()) {
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
+    }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+    throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
+  }
+}
+
+/** Replace only regular destination files with a fresh owner-only inode. */
+async function writeSecretFile(path: string, value: string): Promise<void> {
+  await validateSecretOutput(path);
+  const parentPath = dirname(path);
+  const temp = join(parentPath, `.${basename(path)}.${randomUUID()}.tmp`);
+  let created = false;
+  try {
+    const handle = await open(temp, "wx", PRIVATE_FILE_MODE);
+    created = true;
+    try {
+      await handle.writeFile(value);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temp, path);
+  } catch (error) {
+    if (created) {
+      await rm(temp, { force: true }).catch(() => undefined);
+    }
+    const code = error instanceof Error && "code" in error && typeof error.code === "string"
+      ? ` (${error.code})`
+      : "";
+    throw new CLIError("ERROR", `Could not write secret output "${path}"${code}.`, ExitCode.ERROR);
+  }
+
+  // The destination is already replaced. Directory fsync is not supported on
+  // every filesystem, so a failure here must not report that the write failed.
+  try {
+    const parent = await open(parentPath, "r");
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
+  } catch {
+    // Best effort only after a successful atomic rename.
+  }
+}
+
 async function runSecretOperationAttempt<T>(
   label: string,
   operation: () => Promise<SecretResult<T>>,
@@ -305,6 +402,15 @@ async function invokeCanonicalSecretGet(params: {
 }): Promise<CanonicalSecretGetResult> {
   const auth = authOptions(params.options);
   let ownerNode: TinyCloudNode | undefined;
+  if (!auth?.privateKey) {
+    const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
+    if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+      const session = await ProfileManager.getSession(params.ctx.profile);
+      if (!session || isStoredSessionExpired(session)) {
+        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+      }
+    }
+  }
   const target = {
     profile: params.ctx.profile,
     host: params.ctx.host,
@@ -348,6 +454,7 @@ async function invokeCanonicalSecretGet(params: {
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
+  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
   const node = params.node ?? ownerNode ?? await ensureSecretsNode(
     params.ctx,
     params.options,
@@ -1190,6 +1297,7 @@ export function registerSecretsCommand(
         const scopeOptions = resolveSecretScope(options);
         const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
+        if (options.output) await validateSecretOutput(options.output);
 
         if (options.delegation) {
           const delegated = await resolveDelegatedSecretSource(
@@ -1214,7 +1322,7 @@ export function registerSecretsCommand(
           );
 
           if (options.output) {
-            await writeFile(options.output, value);
+            await writeSecretFile(options.output, value);
             outputJson({ name, written: options.output });
             return;
           }
@@ -1255,7 +1363,7 @@ export function registerSecretsCommand(
         const value = result.output.value;
 
         if (options.output) {
-          await writeFile(options.output, value);
+          await writeSecretFile(options.output, value);
           outputJson({ name, written: options.output });
           return;
         }

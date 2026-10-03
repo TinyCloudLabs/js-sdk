@@ -8,6 +8,7 @@ import { withRecapCaveat } from "./test-support/recap-caveat.js";
 import type { DeviceAuthorizationInput } from "./device-auth.js";
 
 // TC_HOME is read when the profile store loads, so import it afterwards.
+const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-device-auth-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
@@ -142,7 +143,11 @@ function acquire(openkey: FakeOpenKey, overrides: Partial<DeviceAuthorizationInp
 beforeEach(async () => {
   await rm(join(home, ".tinycloud"), { recursive: true, force: true });
 });
-afterAll(async () => { await rm(home, { recursive: true, force: true }); });
+afterAll(async () => {
+  if (originalTcHome === undefined) delete process.env.TC_HOME;
+  else process.env.TC_HOME = originalTcHome;
+  await rm(home, { recursive: true, force: true });
+});
 
 describe("OpenKey device authorization", () => {
   test("requests the manifest scope without private key material and returns the verified session", async () => {
@@ -174,13 +179,37 @@ describe("OpenKey device authorization", () => {
     expect(new Set(requested.map((permission) => permission.space))).toEqual(new Set(["default"]));
   });
 
+  test("refuses encryption or secrets-space device scopes before starting the device API", async () => {
+    const forbidden: PermissionEntry[][] = [
+      [...requested, { service: "tinycloud.encryption", space: "encryption", path: `urn:tinycloud:encryption:${ownerDid}:default`, actions: ["tinycloud.encryption/decrypt"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: `tinycloud:pkh:eip155:1:${address}:secrets`, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+    ];
+    for (const permissions of forbidden) {
+      const openkey = fakeOpenKey(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
+      await expect(acquire(openkey, { permissions })).rejects.toMatchObject({
+        code: "DEVICE_AUTH_UNSUPPORTED_SCOPE",
+        message: expect.stringContaining("--device"),
+      });
+      expect(openkey.urls).toEqual([]);
+    }
+  });
+
+  test("still starts device authorization for KV paths named secrets outside the secrets space", async () => {
+    const permissions: PermissionEntry[] = [capabilityRead, { service: "tinycloud.kv", space: "default", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }];
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: permissions }));
+    const result = await acquire(openkey, { permissions });
+    expect(openkey.startBodies[0]?.permissions).toEqual(permissions);
+    expect(result.approved).toContainEqual({ ...permissions[1], space: spaceId.toLowerCase() });
+  });
+
   test("reports capabilities the owner unchecked and keeps only the signed subset, including the required capability read", async () => {
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: bearerOnly }));
     const result = await acquire(openkey);
     expect(result.approved.map((p) => `${p.service}:${p.path}`)).toEqual(["tinycloud.capabilities:", "tinycloud.kv:xyz.tinycloud.share/shares/"]);
     expect(result.declined).toEqual([{
       service: "tinycloud.kv",
-      space: spaceId.toLowerCase(),
+      space: spaceId,
       path: "shares/",
       actions: addressedPrefix.actions,
     }]);
@@ -417,6 +446,45 @@ describe("device login persistence", () => {
 
     expect(new Set(openkey.urls.map((url) => new URL(url).origin))).toEqual(new Set(["https://openkey.example"]));
     expect((await ProfileManager.getProfile("agent")).openkeyHost).toBe("https://openkey.example");
+  });
+
+  test("adds the capability read OpenKey requires when the manifest omits it", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+
+    const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [bearerPrefix, addressedPrefix], fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+
+    expect(openkey.startBodies[0]!.permissions).toEqual(requested);
+    expect(result.declined).toEqual([]);
+  });
+
+  test("rejects empty device permissions before approval without changing profile state", async () => {
+    const before = { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" };
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", before);
+    const openkey = fakeOpenKey(() => response({}));
+    let prompted = false;
+
+    await expect(loginWithDeviceAuthorization({
+      profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [],
+      fetchFn: openkey.fetchFn, emitInstructions: () => { prompted = true; },
+    })).rejects.toMatchObject({ name: "CLIError", code: "INVALID_LOGIN_SCOPE", exitCode: 2 });
+    expect(openkey.urls).toEqual([]);
+    expect(prompted).toBe(false);
+    expect(await ProfileManager.getProfile("agent")).toEqual(before);
+    expect(await ProfileManager.getKey("agent")).toEqual(key);
+    expect(await ProfileManager.getSession("agent")).toBeNull();
+  });
+
+  test("refuses a secrets manifest on the device login path without starting authorization", async () => {
+    const openkey = fakeOpenKey(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
+    await expect(loginWithDeviceAuthorization({
+      profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE,
+      permissions: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      fetchFn: openkey.fetchFn,
+    })).rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+    expect(openkey.urls).toEqual([]);
   });
 
   const OTHER_OWNER = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";

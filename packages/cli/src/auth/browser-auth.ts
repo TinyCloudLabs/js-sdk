@@ -1,8 +1,8 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { isInteractive } from "../output/formatter.js";
 import { createInterface } from "node:readline";
-import { DEFAULT_OPENKEY_HOST } from "../config/constants.js";
+import { DEFAULT_OPENKEY_HOST, ExitCode } from "../config/constants.js";
+import { CLIError } from "../output/errors.js";
 
 interface DelegationData {
   delegationHeader: { Authorization: string };
@@ -78,7 +78,7 @@ export async function startAuthFlow(
     return await callbackFlow(did, options);
   } catch {
     // Fallback to paste if browser can't open
-    if (isInteractive()) {
+    if (process.stdin.isTTY) {
       console.error("Could not open browser. Falling back to manual paste mode.");
       return pasteFlow(did, options);
     }
@@ -277,11 +277,12 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       const callbackUrl = `http://127.0.0.1:${port}/callback`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
+      const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
 
-      if (openBrowser && isInteractive()) {
+      if (openBrowser && hasTerminal) {
         console.error(`Opening browser for authentication...`);
         console.error(`If the browser doesn't open, visit: ${authUrl}`);
-      } else if (!openBrowser || isInteractive()) {
+      } else if (!openBrowser || hasTerminal) {
         console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
       }
 
@@ -290,13 +291,13 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
           const open = (await import("open")).default;
           await open(authUrl);
         } catch {
-          server.close();
-          throw new Error("Failed to open browser");
+          settle({ error: new Error("Failed to open browser") });
+          return;
         }
       }
 
       // In interactive mode, also accept paste input while waiting for callback
-      if (isInteractive()) {
+      if (process.stdin.isTTY) {
         console.error(`\nIf the browser can't connect back, paste the delegation code here:`);
         rl = createInterface({
           input: process.stdin,
@@ -333,7 +334,12 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
   });
 
   return new Promise((resolve, reject) => {
-    rl.question("Paste delegation code: ", (input) => {
+    let answered = false;
+    // `line` also fires for a final line without a newline when stdin ends;
+    // `question` would drop it. Blank lines are not a code.
+    rl.on("line", (input) => {
+      if (answered || input.trim() === "") return;
+      answered = true;
       rl.close();
       let parsed: unknown;
       try {
@@ -354,5 +360,20 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
       }
       resolve(parsed as DelegationData);
     });
+    rl.on("close", () => {
+      if (answered) return;
+      answered = true;
+      reject(new CLIError(
+        "PASTE_CODE_MISSING",
+        `Stdin ended before a delegation code was pasted; no session was saved. Approve at ${authUrl} and pass the returned code on stdin.`,
+        ExitCode.AUTH_REQUIRED,
+        {
+          approvalUrl: authUrl,
+          hint: `Open ${authUrl}, approve, then pass the code on stdin followed by a newline.`,
+        },
+      ));
+    });
+    rl.setPrompt("Paste delegation code: ");
+    rl.prompt();
   });
 }

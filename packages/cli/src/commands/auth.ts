@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
@@ -40,15 +40,20 @@ import {
 } from "../auth/device-auth.js";
 import {
   expectedOwnerFor,
+  declinedPermissions,
   parseRequestedExpiry,
   pinnedOwner,
+  scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
   verifySignedSession,
+  type RequestedExpiry,
   openKeyExpiryParam,
   withoutTrustFields,
   withVerifiedAuthority,
 } from "../auth/scoped-login.js";
+import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
@@ -74,6 +79,7 @@ import {
   appendGrantHistory,
   compactPermission,
   loadAdditionalDelegations,
+  saveAdditionalDelegations,
   loadManifestPermissions,
   loadPermissionRequest,
   parseCapSpec,
@@ -124,13 +130,13 @@ export function registerAuthCommand(program: Command): void {
   auth
     .command("login")
     .description("Authenticate with TinyCloud")
-    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest that also requests tinycloud.capabilities/read on the space root (SQL needs browser login)")
+    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
-    .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
+    .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
-    .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login")
+    .option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login; names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .action(async (options, cmd) => {
       try {
@@ -153,8 +159,9 @@ export function registerAuthCommand(program: Command): void {
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
-          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true })
+          ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
           : undefined;
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
@@ -169,7 +176,7 @@ export function registerAuthCommand(program: Command): void {
             permissions: permissions!,
             ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
-            expectedOwner: options.owner,
+            expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
           });
@@ -205,10 +212,11 @@ export function registerAuthCommand(program: Command): void {
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
-        if (method === "openkey" && !options.paste && options.popup !== false && !isInteractive()) {
+        if (method === "openkey" && !options.paste && options.popup !== false &&
+          !process.stdin.isTTY && !process.stderr.isTTY) {
           throw new CLIError(
             "INTERACTIVE_LOGIN_REQUIRED",
-            `Browser login needs a browser on this machine and would wait silently. Use \`tc auth login --device --manifest ${SHARE_PUBLISHING_MANIFEST_REF}\` (or your app's manifest) to approve on a phone, or \`--paste\` to paste a return code.`,
+            "Browser login needs a visible approval URL and would wait silently here. Use `--paste` to print the URL and provide the owner's code on stdin.",
             ExitCode.USAGE_ERROR,
           );
         }
@@ -221,7 +229,7 @@ export function registerAuthCommand(program: Command): void {
             noPopup: options.popup === false,
             permissions,
             expiry: parseExpiryOption(options.expiry),
-            expectedOwner: options.owner,
+            expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
           });
@@ -386,13 +394,15 @@ export function registerAuthCommand(program: Command): void {
           if (!key) {
             throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc init\` first.`, ExitCode.AUTH_REQUIRED);
           }
-          const delegationCids: string[] = [];
-          let expiry: string | undefined;
           const openkeyHost = resolveOpenKeyHost(profile);
-          // Sol MAJOR-9: accumulate EFFECTIVE grants from each signed
-          // delegation so the CLI output reports what was actually
-          // conferred (never over-reports the originally-requested set).
-          const openkeyEffective: typeof requested = [];
+          const grants: StagedOpenKeyGrant[] = [];
+          const expiryCap = expiryOption === undefined ? undefined : parseRequestedExpiry(expiryOption);
+          const proof: PortableGrantProof = {
+            key,
+            sessionDid: profile.sessionDid ?? profile.did,
+            expectedOwner: pinnedOwner(profile),
+            expiry: expiryCap,
+          };
           const declined: PermissionEntry[] = [];
           for (const group of groupPermissionsBySpace(requested)) {
             const reason = permissionGrantReason(
@@ -421,33 +431,20 @@ export function registerAuthCommand(program: Command): void {
                 permissions: group,
                 reason,
                 openkeyHost,
-                expiry: expiryOption === undefined ? undefined : openKeyExpiryParam(parseRequestedExpiry(expiryOption)),
+                expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                 noPopup: options.popup === false,
               });
             }
-            const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host);
-            // Sol MAJOR-6: report EFFECTIVE grants (what the delegation
-            // actually confers) rather than the requested `group`. The
-            // user is allowed to narrow their grant in the OpenKey UI;
-            // storing the request would over-report authority.
-            const effective = permissionsFromDelegation(delegation);
-            openkeyEffective.push(...effective);
-            const stored = storedAdditionalDelegation(delegation, effective);
-            await appendAdditionalDelegation(ctx.profile, stored);
-            await node.useRuntimeDelegation(delegation);
-            delegationCids.push(delegation.cid);
-            expiry = delegation.expiry.toISOString();
-            await appendGrantHistory(ctx.profile, {
-              addedCaps: effective,
-              source: options.manifest ? "manifest" : "cli",
-              delegationCid: delegation.cid,
-              expiry,
-            });
+            const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host, proof);
+            grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
           }
+          await activateAndStoreOpenKeyGrants(ctx.profile, node, grants, options.manifest ? "manifest" : "cli");
+          const delegationCids = grants.map(({ delegation }) => delegation.cid);
+          const expiry = grants.at(-1)?.delegation.expiry.toISOString();
           reportDeclined(declined);
           outputJson({
             changed: delegationCids.length > 0,
-            added: openkeyEffective,
+            added: grants.flatMap(({ effective }) => effective),
             delegationCid: delegationCids[0],
             delegationCids,
             expiry,
@@ -1085,10 +1082,42 @@ function normalizePortableDelegation(delegation: PortableDelegation): PortableDe
   return { ...delegation, expiry };
 }
 
+interface StagedOpenKeyGrant {
+  delegation: PortableDelegation;
+  effective: PermissionEntry[];
+}
+
+/** Validate and activate the complete batch before committing any stored authority. */
+async function activateAndStoreOpenKeyGrants(
+  profileName: string,
+  node: TinyCloudNode,
+  grants: StagedOpenKeyGrant[],
+  source: "cli" | "manifest",
+): Promise<void> {
+  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
+  if (grants.length === 0) return;
+  await ProfileManager.withLock(profileName, async () => {
+    const existing = await loadAdditionalDelegations(profileName);
+    const replacing = new Set(grants.map(({ delegation }) => delegation.cid));
+    for (const { delegation, effective } of grants) {
+      await appendGrantHistory(profileName, {
+        addedCaps: effective,
+        source,
+        delegationCid: delegation.cid,
+        expiry: delegation.expiry.toISOString(),
+      });
+    }
+    await saveAdditionalDelegations(profileName, [
+      ...existing.filter(({ delegation }) => !replacing.has(delegation.cid)),
+      ...grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
+    ]);
+  });
+}
+
 export async function ensureDelegationAuthority(params: {
   ctx: { profile: string; host: string };
   profile: ProfileConfig;
-  node: Awaited<ReturnType<typeof ensureAuthenticated>>;
+  node: TinyCloudNode;
   requested: PermissionEntry[];
   expiryOption: string | number | undefined;
   reason: string;
@@ -1110,6 +1139,14 @@ export async function ensureDelegationAuthority(params: {
     }
     const openkeyHost = resolveOpenKeyHost(params.profile);
     const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
+    const expiryCap = params.expiryOption === undefined ? undefined : parseRequestedExpiry(params.expiryOption);
+    const proof: PortableGrantProof = {
+      key,
+      sessionDid: params.profile.sessionDid ?? params.profile.did,
+      expectedOwner: pinnedOwner(params.profile),
+      expiry: expiryCap,
+    };
+    const grants: StagedOpenKeyGrant[] = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
       const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key,
@@ -1117,23 +1154,12 @@ export async function ensureDelegationAuthority(params: {
         permissions: group,
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
-        expiry: params.expiryOption === undefined ? undefined : openKeyExpiryParam(parseRequestedExpiry(params.expiryOption)),
+        expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
       });
-      const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host);
-      // Sol MAJOR-6: report effective grants, not requested `group`.
-      const effective = permissionsFromDelegation(delegation);
-      await appendAdditionalDelegation(
-        params.ctx.profile,
-        storedAdditionalDelegation(delegation, effective),
-      );
-      await params.node.useRuntimeDelegation(delegation);
-      await appendGrantHistory(params.ctx.profile, {
-        addedCaps: effective,
-        source: "cli",
-        delegationCid: delegation.cid,
-        expiry: delegation.expiry.toISOString(),
-      });
+      const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host, proof);
+      grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
+    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.node, grants, "cli");
     return;
   }
 
@@ -1207,6 +1233,7 @@ async function collectRequestedPermissions(
     cap?: string[];
     permission?: string;
     manifest?: string;
+    device?: boolean;
   },
   profile: string,
 ): Promise<PermissionEntry[]> {
@@ -1218,7 +1245,7 @@ async function collectRequestedPermissions(
     permissions.push(...await loadPermissionRequest(options.permission, profile));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
   }
   return permissions;
 }
@@ -1291,7 +1318,7 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
   const groups = new Map<string, PermissionEntry[]>();
   const rawEntries: PermissionEntry[] = [];
   for (const permission of permissions) {
-    if (isRawPermission(permission)) {
+    if (isRawEncryptionPermission(permission)) {
       rawEntries.push(permission);
       continue;
     }
@@ -1312,167 +1339,56 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
   return grouped;
 }
 
-function isRawPermission(permission: PermissionEntry): boolean {
-  return permission.service === "tinycloud.encryption" &&
-    permission.path.startsWith("urn:tinycloud:encryption:");
+export interface PortableGrantProof {
+  key: object;
+  sessionDid: string;
+  expectedOwner?: string;
+  expiry?: RequestedExpiry;
 }
 
-export function returnedSpaceMatchesExpected(returnedSpace: string, expectedSpace: string): boolean {
-  if (normalizePkhIdentifier(returnedSpace) === normalizePkhIdentifier(expectedSpace)) {
-    return true;
-  }
-
-  if (!returnedSpace.startsWith("tinycloud:")) return false;
-  // expectedSpace may be a bare space NAME; the NAME is case-sensitive, so
-  // compare the returned URI's name segment byte-exact.
-  const returnedName = returnedSpace.slice(returnedSpace.lastIndexOf(":") + 1);
-  return returnedName === expectedSpace;
-}
-
+/** A portable grant contains only authority from the owner-signed ReCap. */
 export function portableFromOpenKeyDelegation(
   data: Record<string, unknown>,
-  permissions: PermissionEntry[],
+  requested: PermissionEntry[],
   host: string,
+  proof: PortableGrantProof,
 ): PortableDelegation {
-  const primary = permissions.find((permission) => !isRawPermission(permission)) ?? permissions[0];
-  const returnedSpace = String(data.spaceId ?? primary.space ?? "encryption");
-  // Normalize for the size check so that multiple caps on the same space that
-  // only differ by address checksum casing collapse to one expected space.
-  const expectedSpaces = new Set(
-    permissions
-      .filter((permission) => !isRawPermission(permission))
-      .map((permission) => normalizePkhIdentifier(permission.space ?? "")),
-  );
-  const matchesExpectedSpace = expectedSpaces.size === 1 &&
-    returnedSpaceMatchesExpected(returnedSpace, Array.from(expectedSpaces)[0]!);
-  if (expectedSpaces.size > 0 && !matchesExpectedSpace) {
+  const { session, legacyNested } = verifyScopedLogin(data, proof.key, proof.sessionDid, requested, {
+    expectedOwner: proof.expectedOwner,
+    expiry: proof.expiry,
+    purpose: "grant",
+  });
+  if (legacyNested.length > 0) {
     throw new CLIError(
-      "OPENKEY_SCOPE_MISMATCH",
-      `OpenKey returned delegation for ${returnedSpace}, expected ${Array.from(expectedSpaces).join(", ")}.`,
+      "OPENKEY_GRANT_BROADENED",
+      "OpenKey signed decrypt inside the space instead of on the raw network. The OpenKey deployment is too old for agent secret reads.",
       ExitCode.PERMISSION_DENIED,
     );
   }
-  const expiry = inferDelegationExpiry(data);
-  // Prefer the effective permissions the server returned. They are the
-  // grants the user actually signed for, which may be a narrowing of the
-  // requested set. If the server returned a broader grant than requested,
-  // refuse the delegation — the CLI should never store more authority
-  // than the caller asked for.
-  const requestedPairs = new Set(
-    permissions.flatMap((p) =>
-      isRawPermission(p)
-        ? p.actions.map((a) => `${p.service}|${p.space ?? ""}|${p.path}|${a}`)
-        : p.actions.map((a) => `${p.service}|${normalizePkhIdentifier(p.space ?? "")}|${p.path}|${a}`),
-    ),
-  );
-  const returnedPermissions = Array.isArray(data.permissions)
-    ? (data.permissions as Array<{
-        service: string;
-        space: string;
-        path: string;
-        actions: string[];
-        caveats?: Record<string, unknown>[];
-      }>)
-    : null;
-  const resources = (returnedPermissions ?? permissions).map((permission) => {
-    const service = permission.service.startsWith("tinycloud.")
-      ? permission.service.slice("tinycloud.".length)
-      : permission.service;
-    const rawService = permission.service.startsWith("tinycloud.")
-      ? permission.service
-      : `tinycloud.${service}`;
-    const permSpace = permission.space ?? "";
-    // Cross-check: every returned (service, space, path, action) must
-    // appear in the requested set (or be an inferred raw encryption entry).
-    if (returnedPermissions) {
-      const rawSpace = isRawPermission({
-        service: rawService,
-        space: permSpace,
-        path: permission.path,
-        actions: [],
-      })
-        ? permSpace
-        : normalizePkhIdentifier(permSpace);
-      for (const action of permission.actions) {
-        const key = `${rawService}|${rawSpace}|${permission.path}|${action}`;
-        if (!requestedPairs.has(key)) {
-          throw new CLIError(
-            "OPENKEY_GRANT_BROADENED",
-            `OpenKey returned grant ${rawService}/${action} on ${permSpace}/${permission.path} that was not requested.`,
-            ExitCode.PERMISSION_DENIED,
-          );
-        }
-      }
-    }
-    const resolvedSpace: string = isRawPermission({
-      service: rawService,
-      space: permSpace,
-      path: permission.path,
-      actions: [],
-    })
-      ? permSpace
-      : returnedSpace;
-    // Signed ReCap caveats restrict the resource; dropping them would make
-    // consumers treat a caveated grant as unrestricted.
-    const caveats = Array.isArray(permission.caveats) && permission.caveats.length > 0
-      ? permission.caveats.map((caveat) => structuredClone(caveat))
-      : undefined;
-    return {
-      service,
-      space: resolvedSpace,
-      path: permission.path,
-      actions: [...permission.actions],
-      ...(caveats === undefined ? {} : { caveats }),
-    };
-  });
-
+  const returnedSpace = data.spaceId as string; // Bound to the signed proof by verifyScopedLogin.
+  const effective = session.permissions;
+  const primary = effective.find((permission) => !isRawEncryptionPermission(permission)) ?? effective[0]!;
+  const resources = effective.map((permission) => ({
+    service: permission.service.slice("tinycloud.".length),
+    space: isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
+    path: permission.path,
+    actions: [...permission.actions],
+    ...(permission.caveats === undefined ? {} : { caveats: structuredClone(permission.caveats) }),
+  }));
+  const ownerParts = session.ownerDid.split(":");
   return {
-    cid: String(data.delegationCid),
+    cid: data.delegationCid as string,
     delegationHeader: data.delegationHeader as { Authorization: string },
     spaceId: returnedSpace,
     path: primary.path,
-    actions: primary.actions,
+    actions: [...primary.actions],
     resources,
-    expiry,
-    delegateDID: String(data.verificationMethod),
-    ownerAddress: String(data.address ?? ""),
-    chainId: typeof data.chainId === "number" ? data.chainId : DEFAULT_CHAIN_ID,
+    expiry: new Date(session.expiresAt),
+    delegateDID: data.verificationMethod as string,
+    ownerAddress: ownerParts[4]!,
+    chainId: Number(ownerParts[3]),
     host,
   };
-}
-
-function inferDelegationExpiry(data: Record<string, unknown>): Date {
-  for (const key of ["expiry", "expiresAt", "expirationTime"]) {
-    const parsed = parseDelegationExpiryField(data[key]);
-    if (parsed) return parsed;
-  }
-
-  if (typeof data.siwe === "string") {
-    const match = data.siwe.match(/^Expiration Time:\s*(.+)$/im);
-    const parsed = match ? parseDelegationExpiryField(match[1]?.trim()) : null;
-    if (parsed) return parsed;
-  }
-
-  throw new CLIError(
-    "OPENKEY_EXPIRY_MISSING",
-    "OpenKey delegation response did not include expiry, expiresAt, expirationTime, or a SIWE Expiration Time.",
-    ExitCode.ERROR,
-  );
-}
-
-function parseDelegationExpiryField(value: unknown): Date | null {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-  if (typeof value === "number") {
-    const parsed = new Date(value < 10_000_000_000 ? value * 1000 : value);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
-  if (typeof value === "string") {
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
-  return null;
 }
 
 async function rotateAuthKey(
@@ -1716,8 +1632,9 @@ async function handleOpenKeyAuth(
   host: string,
   options: OpenKeyLoginOptions = {},
 ): Promise<void> {
-  const { profile, delegationData } = await refreshOpenKeySession(profileName, host, options);
+  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
+  reportDeclined(declined, legacyNested);
   outputJson({
     authenticated: true,
     profile: profileName,
@@ -1730,6 +1647,7 @@ async function handleOpenKeyAuth(
           ownerDid: profile.ownerDid,
           host,
           permissions: delegationData.permissions,
+          declined,
           expiresAt: delegationData.expiresAt,
           activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified",
         }
@@ -1737,12 +1655,18 @@ async function handleOpenKeyAuth(
   });
 }
 
-/** Tell the operator which requested capabilities the owner unchecked. */
-function reportDeclined(declined: PermissionEntry[]): void {
+/** Tell the operator which requested capabilities the owner unchecked or OpenKey signed incorrectly. */
+function reportDeclined(declined: PermissionEntry[], signed?: PermissionEntry[]): void {
   if (declined.length === 0) return;
   process.stderr.write(
-    `${theme.warn("The owner did not approve:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
+    `${theme.warn("Not granted in this session:")}\n${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}\n`,
   );
+  if (declined.some((permission) => isRawEncryptionPermission(permission) &&
+    signed?.some((entry) => isRawEncryptionPermission(entry) &&
+      !isVerifiedRawEncryptionPermission(entry) &&
+      normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path)))) {
+    process.stderr.write(`${theme.warn("OpenKey signed decrypt inside the space; the TinyCloud node refuses that. The OpenKey deployment is too old for agent secret reads.")}\n`);
+  }
 }
 
 interface OpenKeyLoginOptions {
@@ -1763,7 +1687,7 @@ export async function refreshOpenKeySession(
   profileName: string,
   host: string,
   options: OpenKeyLoginOptions = {},
-): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown> }> {
+): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   const snapshot = await readProfileSnapshot(profileName);
   const key = snapshot.key;
   if (!key) {
@@ -1774,8 +1698,10 @@ export async function refreshOpenKeySession(
     );
   }
   const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
-  if (options.permissions !== undefined) {
-    validateLoginPermissions(options.permissions);
+  // The requested scope: the manifest plus the capability read OpenKey needs to sign it.
+  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
+  const permissions = options.permissions === undefined ? undefined : scopedLoginPermissions(options.permissions);
+  if (permissions !== undefined) {
     assertNotLocalOwner(profileName, profile, "Scoped browser login");
   }
   // Resolve before consent so an invalid --expiry, owner conflict or live
@@ -1783,9 +1709,9 @@ export async function refreshOpenKeySession(
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
   const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
   const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
-  if (options.permissions !== undefined && options.replaceSession !== true) {
+  if (permissions !== undefined && options.replaceSession !== true) {
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
-    assertSessionReplaceable(profileName, snapshot, expectedOwner, options.permissions, estimatedExpiry);
+    assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
 
   // Start browser auth flow
@@ -1796,9 +1722,9 @@ export async function refreshOpenKeySession(
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
-    permissions: options.permissions,
+    permissions,
     expiry: openKeyExpiry,
-    ...(options.permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
+    ...(permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
   // Scoped login persists only signed, verified authority. Every path checks
@@ -1812,9 +1738,14 @@ export async function refreshOpenKeySession(
   const sessionDid = profile.sessionDid ?? profile.did;
   let sanitizedSession: Record<string, unknown>;
   let verifiedOwner: string | undefined;
-  if (options.permissions) {
-    sanitizedSession = verifyScopedLogin(delegationData, key, sessionDid, options.permissions, { expectedOwner, expiry });
+  let declined: PermissionEntry[] = [];
+  let legacyNested: PermissionEntry[] = [];
+  if (permissions) {
+    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+    sanitizedSession = verified.session;
+    legacyNested = verified.legacyNested;
     verifiedOwner = sanitizedSession.ownerDid as string;
+    declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
     // Authority fields (owner, permissions, expiry, trust marker) come only
     // from a verified proof; an unverified callback contributes none of them.
@@ -1846,10 +1777,10 @@ export async function refreshOpenKeySession(
     key,
     session: sanitizedSession,
     profile: updatedProfile,
-    ...(options.permissions && verifiedOwner
+    ...(permissions && verifiedOwner
       ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
       : {}),
   });
 
-  return { profile: updatedProfile, delegationData: sanitizedSession };
+  return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }

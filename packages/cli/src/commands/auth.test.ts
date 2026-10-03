@@ -363,6 +363,7 @@ mock.module("../lib/permissions.js", () => ({
   appendGrantHistory: async () => {},
   compactPermission: () => "",
   loadAdditionalDelegations: async () => [],
+  saveAdditionalDelegations: async () => {},
   loadManifestPermissions: async () => [],
   loadPermissionRequest: async () => [],
   parseCapSpec: async () => ({
@@ -429,7 +430,6 @@ mock.module("../output/errors.js", () => ({
 }));
 
 const {
-  ensureDelegationAuthority,
   mergePrivateJwkIntoSession,
   readAuthArtifactSource,
   refreshOpenKeySession,
@@ -605,82 +605,6 @@ describe("CLI auth rotate command", () => {
     expect(error.message).toContain("Request or import a new owner delegation");
   });
 
-  test("accepts OpenKey full space URI for a requested logical space name", async () => {
-    const key = { kty: "OKP", crv: "Ed25519", x: "openkey-public", d: "openkey-private" };
-    profiles.set("default", makeProfile({
-      did: "did:key:openkey-session",
-      ownerDid: "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412",
-      authMethod: "openkey",
-      posture: "owner-openkey",
-      openkeyHost: "https://openkey.test",
-    }));
-    keys.set("default", key);
-    openKeyDelegation = {
-      delegationHeader: { Authorization: "Bearer scoped-secrets" },
-      delegationCid: "bafy-scoped-secrets",
-      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
-      ownerDid: "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412",
-      verificationMethod: "did:key:openkey-session",
-      expiry: "2099-01-01T00:00:00.000Z",
-    };
-    const node = {
-      hasRuntimePermissions: mock(() => false),
-      useRuntimeDelegation: mock(async () => undefined),
-    };
-
-    await ensureDelegationAuthority({
-      ctx: { profile: "default", host: activeHost },
-      profile: profiles.get("default")!,
-      node,
-      requested: [
-        {
-          service: "tinycloud.kv",
-          space: "secrets",
-          path: "vault/secrets/",
-          actions: ["tinycloud.kv/list"],
-          skipPrefix: true,
-        },
-      ],
-      expiryOption: undefined,
-      reason: "Test missing capability grant.",
-      yes: true,
-    });
-
-    expect(recorded.errors).toEqual([]);
-    expect(recorded.startAuthFlows).toHaveLength(1);
-    expect(recorded.startAuthFlows[0]).toEqual({
-      did: "did:key:openkey-session",
-      options: expect.objectContaining({
-        jwk: key,
-        host: activeHost,
-        openkeyHost: "https://openkey.test",
-        reason: expect.stringContaining("Test missing capability grant."),
-        permissions: [
-          {
-            service: "tinycloud.kv",
-            space: "secrets",
-            path: "vault/secrets/",
-            actions: ["tinycloud.kv/list"],
-            skipPrefix: true,
-          },
-        ],
-      }),
-    });
-    expect(node.useRuntimeDelegation).toHaveBeenCalledWith(expect.objectContaining({
-      cid: "bafy-scoped-secrets",
-      spaceId: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
-      path: "vault/secrets/",
-      actions: ["tinycloud.kv/list"],
-      resources: [
-        expect.objectContaining({
-          service: "kv",
-          space: "tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:secrets",
-          path: "vault/secrets/",
-          actions: ["tinycloud.kv/list"],
-        }),
-      ],
-    }));
-  });
 });
 
 describe("CLI auth login command", () => {
@@ -703,6 +627,25 @@ describe("CLI auth login command", () => {
     expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
   });
 
+  test("browser login remains available when only stdout is redirected", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", key);
+    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session" };
+    const oldStderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+    try {
+      await runAuthCommand(["auth", "login", "--method", "openkey"]);
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows).toEqual([
+        { did: "did:key:openkey-session", options: expect.objectContaining({ jwk: key }) },
+      ]);
+    } finally {
+      if (oldStderrTTY) Object.defineProperty(process.stderr, "isTTY", oldStderrTTY);
+      else Reflect.deleteProperty(process.stderr, "isTTY");
+    }
+  });
+
   test("non-interactive login with no flags fails fast instead of waiting on a browser", async () => {
     profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
     keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
@@ -711,8 +654,20 @@ describe("CLI auth login command", () => {
 
     expect(recorded.errors).toEqual([expect.objectContaining({
       code: "INTERACTIVE_LOGIN_REQUIRED",
-      message: expect.stringMatching(/--device --manifest.*--paste/s),
+      message: expect.stringContaining("--paste"),
     })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("--device");
+  });
+
+  test("headless secrets manifest recommends paste rather than unsupported device approval", async () => {
+    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
+    await runAuthCommand(["auth", "login", "--manifest", "secrets.json"]);
+    const error = recorded.errors[0] as CLIErrorLike;
+    expect(error.code).toBe("INTERACTIVE_LOGIN_REQUIRED");
+    expect(error.message).toContain("--paste");
+    expect(error.message).not.toContain("--device");
     expect(recorded.startAuthFlows).toEqual([]);
   });
 
@@ -1450,33 +1405,6 @@ describe("CLI auth artifact sources", () => {
       }
       await rm(directory, { recursive: true, force: true });
     }
-  });
-});
-
-describe("owner OpenKey acquisition seam", () => {
-  test("uses one explicit acquisition function without a live OpenKey service", async () => {
-    const profile = makeProfile({ did: "did:pkh:eip155:1:0xOwner", authMethod: "openkey", posture: "owner-openkey" });
-    profiles.set("default", profile);
-    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "owner", d: "private" });
-    authNodeHasRuntimePermissions = false;
-    let acquisitions = 0;
-
-    await ensureDelegationAuthority({
-      ctx: { profile: "default", host: activeHost },
-      profile,
-      node: importedNode,
-      requested: [{ service: "tinycloud.kv", space: "space-openkey-new", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] }],
-      expiryOption: undefined,
-      reason: "I0 seam test",
-      yes: true,
-      openKeyAcquisition: async () => {
-        acquisitions += 1;
-        return openKeyDelegation;
-      },
-    });
-
-    expect(acquisitions).toBe(1);
-    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-openkey-new" }]);
   });
 });
 

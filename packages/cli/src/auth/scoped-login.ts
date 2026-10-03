@@ -4,6 +4,12 @@ import { ExitCode } from "../config/constants.js";
 import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
+import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
+import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { rawEncryptionOwnerMatches } from "../lib/owner-did.js";
+
+/** OpenKey signs a scoped delegation only when it carries this read on the session space. */
+const CAPABILITIES_READ = "tinycloud.capabilities/read";
 
 /** Tolerated clock difference between OpenKey and this machine. */
 export const CLOCK_SKEW_MS = 30_000;
@@ -126,9 +132,29 @@ export function permissionTuples(permissions: readonly PermissionEntry[], ownerD
 
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-  const space = normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  // Only a top-level network entry is a raw grant. A legacy OpenKey signed
+  // decrypt nested under the owner space must remain a distinct resource.
+  const raw = isVerifiedRawEncryptionPermission(permission);
+  const space = raw ? ENCRYPTION_MANIFEST_SPACE : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  const path = raw ? normalizePkhIdentifier(permission.path) : permission.path;
   return permission.actions.map((action) =>
-    JSON.stringify([service, space, permission.path, action.includes("/") ? action : `${service}/${action}`]));
+    JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
+}
+
+/** Old OpenKey's signed space-prefixed decrypt is not a usable raw network grant. */
+export function isLegacyNestedDecrypt(
+  permission: PermissionEntry,
+  requested: readonly PermissionEntry[],
+  ownerDid: string,
+  spaceId: string,
+): boolean {
+  return isRawEncryptionPermission(permission) && !isVerifiedRawEncryptionPermission(permission) &&
+    normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) === normalizePkhIdentifier(spaceId) &&
+    rawEncryptionOwnerMatches(permission.path, ownerDid) &&
+    permission.actions.every((action) => action === "tinycloud.encryption/decrypt") &&
+    requested.some((entry) => isRawEncryptionPermission(entry) &&
+      normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path) &&
+      permission.actions.every((action) => entry.actions.includes(action)));
 }
 
 /** JSON with object keys sorted, so equal values serialize identically. */
@@ -219,15 +245,57 @@ export function permissionsFromTuples(tuples: Iterable<string>): PermissionEntry
   return [...grouped.values()];
 }
 
+/** Requested actions the signed grant does not carry: what the owner unchecked. */
+export function declinedPermissions(requested: readonly PermissionEntry[], signed: readonly PermissionEntry[], ownerDid: string): PermissionEntry[] {
+  const granted = permissionTuples(signed, ownerDid);
+  const missing = [...permissionTuples(requested, ownerDid)].filter((tuple) => !granted.has(tuple));
+  const requestedScopes = new Map<string, { space: string; path: string }>();
+  for (const entry of requested) {
+    const space = isVerifiedRawEncryptionPermission(entry)
+      ? entry.space ?? ENCRYPTION_MANIFEST_SPACE
+      : ownerSpaceId(entry.space ?? "", ownerDid);
+    for (const tuple of actionTuples(entry, ownerDid)) {
+      requestedScopes.set(tuple, { space, path: entry.path });
+    }
+  }
+  return permissionsFromTuples(missing).map((entry) => {
+    const original = requestedScopes.get(actionTuples(entry, ownerDid)[0]!);
+    return original === undefined ? entry : { ...entry, ...original };
+  });
+}
+
+/**
+ * A first-login scope: one TinyCloud space, plus optional raw encryption
+ * network entries (`space: "encryption"`), which are not a second space.
+ */
 export function validateLoginPermissions(permissions: PermissionEntry[]): void {
-  if (!permissions.length || permissions.some((p) =>
+  const spaced = permissions.filter((p) => !isRawEncryptionPermission(p));
+  if (!spaced.length || permissions.some((p) =>
     !p.service?.startsWith("tinycloud.") || !p.space ||
-    (!p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
+    (isRawEncryptionPermission(p)
+      ? p.space !== ENCRYPTION_MANIFEST_SPACE
+      : !p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
     typeof p.path !== "string" || !p.actions?.length ||
     p.actions.some((action) => !action.startsWith(`${p.service}/`)),
-  ) || new Set(permissions.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space. Request additional spaces after login.", ExitCode.USAGE_ERROR);
+  ) || new Set(spaced.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space (raw tinycloud.encryption network entries may accompany them). Request additional spaces after login.", ExitCode.USAGE_ERROR);
   }
+}
+
+/**
+ * The scope a scoped OpenKey login requests: the validated manifest plus
+ * `tinycloud.capabilities/read` on the space root, which OpenKey requires
+ * before it signs any delegation.
+ */
+export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
+  // Validation guarantees one non-raw entry with a non-empty space.
+  const space = permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "";
+  const hasRead = permissions.some((p) =>
+    p.service === "tinycloud.capabilities" && p.path === "" && p.actions.includes(CAPABILITIES_READ) &&
+    normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(space));
+  return hasRead
+    ? permissions
+    : [{ service: "tinycloud.capabilities", space, path: "", actions: [CAPABILITIES_READ] }, ...permissions];
 }
 
 export interface SignedSessionExpectations {
@@ -235,6 +303,8 @@ export interface SignedSessionExpectations {
   expectedOwner?: string;
   /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
   expiry?: RequestedExpiry;
+  /** Grant escalation stores a portable delegation, not a login session. */
+  purpose?: "grant";
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -260,6 +330,7 @@ export function verifySignedSession(
   sessionDid: string,
   expected: SignedSessionExpectations = {},
 ): SignedSession {
+  const notStored = expected.purpose === "grant" ? "No grant was stored." : "No session was saved.";
   let permissions: PermissionEntry[];
   let expiresAt: string;
   try {
@@ -287,20 +358,20 @@ export function verifySignedSession(
     expiresAt = proof.expiresAt;
   } catch (error) {
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
-      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
+      throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
     }
-    throw new CLIError("OPENKEY_PROOF_INVALID", "OpenKey did not return a complete, verifiable session proof. No session was saved.", ExitCode.AUTH_REQUIRED);
+    throw new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
   const signedExpiry = Date.parse(expiresAt);
   if (signedExpiry <= Date.now()) {
-    throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
+    throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
   if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", "The signed session outlives the requested --expiry. No session was saved.", ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
-    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The approved signing identity differs from this profile's owner. No session was saved. Use a new profile for another account.", ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", `The approved signing identity differs from this profile's owner. ${notStored} Use a new profile for another account.`, ExitCode.PERMISSION_DENIED);
   }
   return { ownerDid, permissions, expiresAt };
 }
@@ -312,22 +383,37 @@ export function verifyScopedLogin(
   sessionDid: string,
   requested: PermissionEntry[],
   expected: SignedSessionExpectations = {},
-): Record<string, unknown> & SignedSession {
+): { session: Record<string, unknown> & SignedSession; legacyNested: PermissionEntry[] } {
+  const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
   const signed = verifySignedSession(data, key, sessionDid, expected);
   const spaceId = data.spaceId as string;
   for (const permission of requested) {
+    if (isRawEncryptionPermission(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  }
+  // Old OpenKey signs requested decrypt inside the session space rather than
+  // as a top-level network resource. It cannot decrypt on the node: retain
+  // the proof, but omit the unusable nested resource from approved authority.
+  const legacyNested: PermissionEntry[] = [];
+  const approved: PermissionEntry[] = [];
+  for (const permission of signed.permissions) {
+    (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
+  }
+  for (const permission of signed.permissions) {
+    if (isVerifiedRawEncryptionPermission(permission) &&
+      !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   // A signed action is inside the request when a requested one covers it: the
   // same action, unrestricted or with the same caveats (OpenKey may narrow).
-  if (!scopeCovers(requested, signed.permissions, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested manifest. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
+  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+    throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  // Keep signed proof intact; unsigned callback identity/expiry/permissions
-  // cannot override the verified values. Never accept a returned private key.
-  // `permissionsSource` marks `permissions` as the signed recap, so a later
-  // login may rely on it to tell whether replacing this session drops authority.
-  return withVerifiedAuthority({ ...data, jwk: key }, signed);
+  // The SIWE proof stays intact for validation/diagnostics. Only effective,
+  // requested authority is recorded as approved and compared on renewals.
+  const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
+  return { session, legacyNested };
 }

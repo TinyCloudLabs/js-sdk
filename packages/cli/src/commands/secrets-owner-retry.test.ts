@@ -1,22 +1,34 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
+import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
 const TEST_HOME = await mkdtemp(join(tmpdir(), "tc-secrets-owner-retry-"));
 const ORIGINAL_HOME = process.env.HOME;
 process.env.HOME = TEST_HOME;
 
 const SECRET_VALUE_CANARY = "tc-191-owner-secret-value-canary";
-const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkOwner:default";
+const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
+const wasm = new NodeWasmBindings();
+const address = await signer.getAddress();
+const ownerDid = `did:pkh:eip155:1:${address}`;
+const spaceId = wasm.makeSpaceId(address, 1, "secrets");
+const manager = wasm.createSessionManager();
+const key = JSON.parse(manager.jwk("default")!);
+const sessionDid = manager.getDID("default");
+const NETWORK_ID = `urn:tinycloud:encryption:${ownerDid}:default`;
 
 const profile = {
   name: "default",
   host: "https://node.tinycloud.test",
   chainId: 1,
   spaceName: "default",
-  did: "did:pkh:eip155:1:0xOwner",
+  did: ownerDid,
+  sessionDid,
+  ownerDid,
+  spaceId,
   createdAt: "2026-07-14T12:00:00.000Z",
   authMethod: "openkey" as const,
   posture: "owner-openkey" as const,
@@ -56,29 +68,21 @@ const node = {
   },
 };
 
-mock.module("@tinycloud/node-sdk", () => ({
-  TinyCloudNode: class TinyCloudNode {},
-  NodeWasmBindings: class NodeWasmBindings {
-    parseRecapFromSiwe(): unknown[] {
-      return [];
-    }
-  },
-  grantAuthRequest: async () => ({}),
-  canonicalizeAddress: (address: string) => address.toLowerCase(),
-  makePkhSpaceId: (address: string, chainId: number, name: string) =>
-    `tinycloud:pkh:eip155:${chainId}:${address.toLowerCase()}:${name}`,
-  parsePkhDid: () => null,
-  parseSpaceUri: () => null,
-  activateValidatedRuntimeDelegation: async () => ({
-    cid: "bafy-owner-openkey",
-    effectivePermissions: [],
-    delegation: {},
-    expiry: new Date("2099-01-01T00:00:00.000Z"),
-    audience: "did:key:z6MkOwner",
-    host: profile.host,
-  }),
-  principalDidEquals: (a: string, b: string) => a === b,
-}));
+async function signedApproval() {
+  const now = Date.now();
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { "vault/secrets/ANTHROPIC_API_KEY": ["tinycloud.kv/get"] } },
+    rawAbilities: { [NETWORK_ID]: ["tinycloud.encryption/decrypt"] },
+    address, chainId: 1, domain: "cli.example.test", spaceId, jwk: key,
+    issuedAt: new Date(now - 60_000).toISOString(),
+    expirationTime: new Date(now + 3600_000).toISOString(),
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  return {
+    ...wasm.completeSessionSetup({ ...prepared, signature }),
+    address, chainId: 1, spaceId, verificationMethod: sessionDid, siwe: prepared.siwe, signature,
+  };
+}
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
@@ -97,12 +101,7 @@ mock.module("../config/profiles.js", () => ({
       await mkdir(directory, { recursive: true });
       return directory;
     },
-    getKey: async () => ({
-      kty: "OKP",
-      crv: "Ed25519",
-      x: "owner",
-      d: "private",
-    }),
+    getKey: async () => key,
   },
 }));
 
@@ -161,7 +160,7 @@ mock.module("../auth/local-key.js", () => ({
   addressToDID: () => profile.did,
   localKeySignIn: async () => ({}),
   generateKey: () => ({}),
-  keyToDID: () => profile.did,
+  keyToDID: () => sessionDid,
 }));
 
 const { registerSecretsCommand } = await import("./secrets.js");
@@ -176,11 +175,26 @@ afterAll(async () => {
 });
 
 describe("owner secrets get OpenKey retry", () => {
+  // The person sees prompts on stderr even when stdout is piped or redirected.
+  const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  beforeEach(() => {
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+  });
+  afterEach(() => {
+    if (stdoutTTY) Object.defineProperty(process.stdout, "isTTY", stdoutTTY);
+    else Reflect.deleteProperty(process.stdout, "isTTY");
+    if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
+    else Reflect.deleteProperty(process.stderr, "isTTY");
+  });
+
   test("acquires once and retries the secret exactly once through the real owner path", async () => {
     secretAttempts.length = 0;
     operationAttempts = 0;
     installedDelegations.length = 0;
     let acquisitions = 0;
+    let grantedCid = "";
     let stdout = "";
     const output = process.stdout as unknown as {
       write: (chunk: unknown) => boolean;
@@ -195,13 +209,9 @@ describe("owner secrets get OpenKey retry", () => {
       const program = new Command();
       registerSecretsCommand(program, async () => {
         acquisitions += 1;
-        return {
-          delegationHeader: { Authorization: "Bearer openkey-owner" },
-          delegationCid: "bafy-owner-openkey",
-          spaceId: "secrets",
-          verificationMethod: "did:key:z6MkOwner",
-          expiry: "2099-01-01T00:00:00.000Z",
-        };
+        const approval = await signedApproval();
+        grantedCid = approval.delegationCid;
+        return approval;
       });
       await program.parseAsync(
         ["node", "tc", "secrets", "get", "ANTHROPIC_API_KEY"],
@@ -213,7 +223,7 @@ describe("owner secrets get OpenKey retry", () => {
 
     expect(acquisitions).toBe(1);
     expect(operationAttempts).toBe(2);
-    expect(installedDelegations).toEqual(["bafy-owner-openkey"]);
+    expect(installedDelegations).toEqual([grantedCid]);
     expect(stdout).toBe(
       [
         "{",
@@ -234,14 +244,7 @@ describe("owner secrets get OpenKey retry", () => {
     const program = new Command();
     registerSecretsCommand(program, async () => {
       acquisitions += 1;
-      return {
-        delegationHeader: { Authorization: "Bearer openkey-owner" },
-        delegationCid: `bafy-owner-openkey-${acquisitions}`,
-        spaceId: "secrets",
-        verificationMethod: "did:key:z6MkOwner",
-        expiresAt: "2099-01-01T00:00:00.000Z",
-        expiry: "2099-01-01T00:00:00.000Z",
-      };
+      return signedApproval();
     });
 
     await program.parseAsync(

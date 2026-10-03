@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TCWSessionManager, completeSessionSetup, makeSpaceId, prepareSession, signEthereumMessage } from "@tinycloud/node-sdk-wasm";
 import { Command } from "commander";
+import { readSession, withTinyCloudStateRoot, writeSession } from "@tinycloud/operations/state";
 
 const DEFAULT_NETWORK_ID =
   "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
@@ -124,6 +126,9 @@ let canonicalResultOverride: unknown | null = null;
 
 let currentNode: FakeNode;
 let outputJsonRequested = false;
+let interactive = true;
+const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
 let currentSession: object | null = {
   expiresAt: "2099-01-01T00:00:00.000Z",
   address: "0x0000000000000000000000000000000000000001",
@@ -140,6 +145,7 @@ let currentProfile = {
   posture: "owner-openkey" as const,
   operatorType: "human" as const,
 };
+let useStoredSession = false;
 
 function resetRecorded(): void {
   recorded.outputs.length = 0;
@@ -160,6 +166,21 @@ function resetRecorded(): void {
   recorded.delegatedKvGets.length = 0;
   recorded.decryptEnvelopeCalls.length = 0;
   canonicalResultOverride = null;
+}
+
+async function expiredSignedSession() {
+  const privateKey = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
+  const address = "0xe8c2ab8468210C4b507C0563A10da60990eaa792";
+  const jwk = JSON.parse(new TCWSessionManager().jwk("default")!);
+  const prepared = prepareSession({
+    abilities: { kv: { "vault/secrets/KEY": ["tinycloud.kv/get"] } },
+    address, chainId: 1, domain: "tinycloud.test",
+    spaceId: makeSpaceId(address, 1, "secrets"), jwk,
+    issuedAt: "2026-06-02T17:00:00.000Z",
+    expirationTime: "2026-06-02T17:30:53.120Z",
+  });
+  const signature = `0x${signEthereumMessage(prepared.siwe, privateKey).replace(/^0x/, "")}`;
+  return { ...completeSessionSetup({ ...prepared, signature }), siwe: prepared.siwe, signature, jwk, address, chainId: 1 };
 }
 
 function makeDescriptor(
@@ -391,7 +412,7 @@ mock.module("../lib/permissions.js", () => ({
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
-    // Real logins commit under the profile lock; these mocks keep state in memory.
+    // Login state is normally in memory here; expiry coverage reads the real persisted session.
     withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     resolveContext: async (globalOpts: unknown) => {
       recorded.resolveContexts.push(globalOpts);
@@ -401,7 +422,7 @@ mock.module("../config/profiles.js", () => ({
       };
     },
     getProfile: async () => currentProfile,
-    getSession: async () => currentSession,
+    getSession: async () => useStoredSession ? readSession("default") : currentSession,
   },
 }));
 
@@ -508,6 +529,7 @@ mock.module("../output/formatter.js", () => ({
     recorded.outputs.push(payload);
   },
   shouldOutputJson: () => outputJsonRequested,
+  isInteractive: () => interactive,
   withSpinner: async (_message: string, fn: () => unknown) => {
     recorded.spinners.push(_message);
     return await fn();
@@ -555,6 +577,8 @@ async function runSecretsCommand(args: string[]): Promise<void> {
 beforeEach(() => {
   resetRecorded();
   outputJsonRequested = false;
+  useStoredSession = false;
+  interactive = true;
   currentNode = makeFakeNode();
   currentSession = {
     expiresAt: "2099-01-01T00:00:00.000Z",
@@ -572,6 +596,14 @@ beforeEach(() => {
     posture: "owner-openkey",
     operatorType: "human",
   };
+  Object.defineProperty(process.stdin, "isTTY", { configurable: true, get: () => interactive });
+  Object.defineProperty(process.stderr, "isTTY", { configurable: true, get: () => interactive });
+});
+afterEach(() => {
+  if (stdinTTY) Object.defineProperty(process.stdin, "isTTY", stdinTTY);
+  else Reflect.deleteProperty(process.stdin, "isTTY");
+  if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
+  else Reflect.deleteProperty(process.stderr, "isTTY");
 });
 
 describe("CLI secrets commands", () => {
@@ -1322,6 +1354,314 @@ describe("CLI secrets commands", () => {
     expect(recorded.outputs).toEqual([]);
     expect(recorded.getCalls).toHaveLength(2);
     expect(recorded.permissionRequests).toHaveLength(1);
+  });
+
+  test("writes `get -o` output owner-only, also over an existing world-readable file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-output-"));
+    try {
+      const created = join(dir, "created.txt");
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", created]);
+      const existing = join(dir, "existing.txt");
+      await writeFile(existing, "old", { mode: 0o644 });
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", existing]);
+
+      expect(recorded.errors).toEqual([]);
+      for (const path of [created, existing]) {
+        expect((await stat(path)).mode & 0o777).toBe(0o600);
+        expect(await Bun.file(path).text()).toBe("stored-value");
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("syncs secret output and its parent directory on either side of the atomic rename", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-sync-"));
+    const destination = join(dir, "key");
+    const probe = await open(join(dir, "probe"), "wx");
+    const originalSync = probe.sync;
+    const stages: string[] = [];
+    const sync = spyOn(Object.getPrototypeOf(probe), "sync").mockImplementation(async function (this: typeof probe) {
+      const stage = (await this.stat()).isDirectory() ? "directory" : "file";
+      stages.push(stage);
+      expect(await readFile(destination, "utf8")).toBe(stage === "file" ? "old-value" : "stored-value");
+      await originalSync.call(this);
+    });
+    try {
+      await probe.close();
+      await writeFile(destination, "old-value");
+      await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+      expect(recorded.errors).toEqual([]);
+      expect(stages).toEqual(["file", "directory"]);
+      expect(await readFile(destination, "utf8")).toBe("stored-value");
+    } finally {
+      sync.mockRestore();
+      await probe.close().catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a successfully replaced secret when directory sync is unsupported", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-dir-sync-"));
+    const destination = join(dir, "key");
+    const probe = await open(join(dir, "probe"), "wx");
+    const originalSync = probe.sync;
+    const sync = spyOn(Object.getPrototypeOf(probe), "sync").mockImplementation(async function (this: typeof probe) {
+      if ((await this.stat()).isDirectory()) {
+        throw Object.assign(new Error("directory sync unsupported"), { code: "ENOTSUP" });
+      }
+      await originalSync.call(this);
+    });
+    try {
+      await probe.close();
+      await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+      expect(recorded.errors).toEqual([]);
+      expect(await readFile(destination, "utf8")).toBe("stored-value");
+    } finally {
+      sync.mockRestore();
+      await probe.close().catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports only the destination and cleans up temporary secret bytes when rename is refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-rename-"));
+    const destination = join(dir, "key");
+    const probe = await open(join(dir, "probe"), "wx");
+    const originalSync = probe.sync;
+    const sync = spyOn(Object.getPrototypeOf(probe), "sync").mockImplementation(async function (this: typeof probe) {
+      await originalSync.call(this);
+      if ((await this.stat()).isFile()) {
+        await mkdir(destination);
+        await writeFile(join(destination, "owner-data"), "unchanged");
+      }
+    });
+    try {
+      await probe.close();
+      await rm(join(dir, "probe"));
+      await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+      expect(recorded.errors).toHaveLength(1);
+      const error = recorded.errors[0] as CLIErrorLike;
+      expect(error.message).toContain(destination);
+      expect(error.message).not.toContain(".tmp");
+      expect(await readFile(join(destination, "owner-data"), "utf8")).toBe("unchanged");
+      expect(await readdir(dir)).toEqual(["key"]);
+      expect(recorded.outputs).toEqual([]);
+    } finally {
+      sync.mockRestore();
+      await probe.close().catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("atomically replaces an output inode without exposing secret bytes to existing readers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-atomic-"));
+    try {
+      const destination = join(dir, "key");
+      const oldReader = join(dir, "old-reader");
+      await writeFile(destination, "old-public-value", { mode: 0o644 });
+      await link(destination, oldReader);
+      const original = await open(destination, "r");
+      try {
+        await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", destination]);
+        expect(recorded.errors).toEqual([]);
+        expect(await original.readFile({ encoding: "utf8" })).toBe("old-public-value");
+        expect(await readFile(oldReader, "utf8")).toBe("old-public-value");
+        expect(await readFile(destination, "utf8")).toBe("stored-value");
+        expect((await stat(destination)).mode & 0o777).toBe(0o600);
+      } finally {
+        await original.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unsafe output before canonical read or delegated decrypt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-predecrypt-"));
+    try {
+      const destination = join(dir, "unsafe");
+      await symlink(join(dir, "target"), destination);
+      await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_ARGUMENT" })]);
+      expect(recorded.getCalls).toEqual([]);
+
+      const source = join(dir, "delegation.json");
+      await writeFile(source, JSON.stringify({
+        delegation: {
+          cid: "bafy-delegated-output", spaceId: "secrets", path: "vault/secrets/KEY",
+          actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkDelegate",
+          ownerAddress: "0x0000000000000000000000000000000000000001", chainId: 1,
+          expiry: "2099-01-01T00:00:00.000Z",
+          delegationHeader: { Authorization: "Bearer delegated" },
+        },
+        permissions: [
+          { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] },
+          { service: "tinycloud.encryption", path: DEFAULT_NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] },
+        ],
+      }));
+      resetRecorded();
+      await runSecretsCommand(["secrets", "get", "KEY", "--delegation", source, "-o", destination]);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_ARGUMENT" })]);
+      expect(recorded.delegatedKvGets).toEqual([]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects directory and absent parent outputs without leaking temporary paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-output-parent-"));
+    try {
+      for (const destination of [dir, join(dir, "missing", "secret")]) {
+        resetRecorded();
+        await runSecretsCommand(["secrets", "get", "KEY", "-o", destination]);
+        expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_ARGUMENT" })]);
+        expect((recorded.errors[0] as Error).message).toContain(destination);
+        expect((recorded.errors[0] as Error).message).not.toContain(".tmp");
+        expect(recorded.getCalls).toEqual([]);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses symlink and device outputs without changing their target", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-unsafe-output-"));
+    try {
+      const target = join(dir, "target");
+      const shortcut = join(dir, "shortcut");
+      await writeFile(target, "public", { mode: 0o644 });
+      await symlink(target, shortcut);
+      for (const destination of [shortcut, "/dev/null", "/dev/stdout"]) {
+        resetRecorded();
+        await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", destination]);
+        expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_ARGUMENT" })]);
+      }
+      expect(await readFile(target, "utf8")).toBe("public");
+      expect((await stat(target)).mode & 0o777).toBe(0o644);
+      expect((await lstat(shortcut)).isSymbolicLink()).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or real stored signed expired OpenKey session fails headlessly before canonical invocation", async () => {
+    interactive = false;
+    const expired = await expiredSignedSession();
+    expect(expired.signature).toMatch(/^0x[0-9a-f]+$/i);
+    const home = await mkdtemp(join(tmpdir(), "tc-secrets-session-"));
+    try {
+      await withTinyCloudStateRoot(home, async () => {
+        useStoredSession = true;
+        for (const session of [null, expired]) {
+          if (session) await writeSession("default", session);
+          for (const args of [
+            ["secrets", "list"],
+            ["secrets", "put", "KEY", "value"],
+            ["secrets", "delete", "KEY"],
+            ["secrets", "get", "KEY", "--raw"],
+          ]) {
+            resetRecorded();
+            await runSecretsCommand(args);
+            expect(recorded.sessionRefreshes).toEqual([]);
+            expect(recorded.getCalls).toEqual([]);
+            expect(recorded.errors).toEqual([expect.objectContaining({
+              code: "AUTH_REQUIRED",
+              exitCode: 3,
+              metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
+            })]);
+          }
+        }
+      });
+    } finally {
+      useStoredSession = false;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("interactive canonical get refreshes an expired signed OpenKey session", async () => {
+    currentSession = await expiredSignedSession();
+    await runSecretsCommand(["secrets", "get", "KEY"]);
+    expect(recorded.sessionRefreshes).toEqual([{ profile: "default", host: "https://tinycloud.test" }]);
+    expect(recorded.getCalls).toHaveLength(1);
+    expect(recorded.outputs).toEqual([{ name: "KEY", value: "stored-value" }]);
+  });
+
+  test("canonical node failures remain node failures, not expired-session authentication errors", async () => {
+    interactive = false;
+    canonicalResultOverride = {
+      status: "error",
+      operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+      context: { profile: "default", host: "https://tinycloud.test", posture: "owner-openkey" },
+      error: { code: "NODE_ERROR", message: "Unexpected node response", retryable: false },
+    };
+    await runSecretsCommand(["secrets", "get", "KEY"]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "NODE_ERROR", exitCode: 1 })]);
+  });
+
+  test("a non-interactive OpenKey profile without the grant fails fast instead of opening a browser approval", async () => {
+    interactive = false;
+    const denied = { ok: false as const, error: { code: "PERMISSION_DENIED", service: "secrets", message: "Cannot autosign tinycloud.kv/get for OTHER_KEY" } };
+    currentNode = makeFakeNode({ getResult: denied, listResult: denied, putResult: denied, deleteResult: denied });
+
+    for (const args of [
+      ["secrets", "get", "OTHER_KEY", "--raw"],
+      ["secrets", "list"],
+      ["secrets", "put", "OTHER_KEY", "value"],
+      ["secrets", "delete", "OTHER_KEY"],
+    ]) {
+      resetRecorded();
+      await runSecretsCommand(args);
+      expect(recorded.permissionRequests).toEqual([]);
+      expect(recorded.sessionRefreshes).toEqual([]);
+      expect(recorded.errors).toEqual([expect.objectContaining({
+        code: "PERMISSION_DENIED",
+        exitCode: 5,
+        metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
+      })]);
+    }
+  });
+  test("names decrypt only when it is the sole missing headless read capability", async () => {
+    interactive = false;
+    const denied = { ok: false as const, error: { code: "PERMISSION_DENIED", service: "secrets", message: "Cannot autosign tinycloud.kv/get for KEY" } };
+    currentNode = makeFakeNode({ getResult: denied, listResult: denied });
+
+    await runSecretsCommand(["secrets", "get", "KEY", "--scope", "team", "--raw"]);
+    const getError = recorded.errors[0] as CLIErrorLike;
+    expect(getError).toMatchObject({
+      code: "PERMISSION_DENIED",
+      exitCode: 5,
+      metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
+    });
+    expect(getError.message).toContain("read or decrypt grant");
+    expect(getError.message).toContain('secret "KEY"');
+    expect(getError.message).not.toContain("holds no grant");
+    expect(getError.message).not.toContain("lacks the scoped decrypt authority");
+
+    resetRecorded();
+    canonicalResultOverride = {
+      status: "authority_required",
+      context: { posture: "owner-openkey" },
+      missing: [{ actions: ["tinycloud.kv/get"] }],
+    };
+    await runSecretsCommand(["secrets", "get", "KEY", "--raw"]);
+    expect((recorded.errors[0] as CLIErrorLike).message).toContain("read or decrypt grant");
+    expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("lacks the scoped decrypt authority");
+
+    resetRecorded();
+    canonicalResultOverride = {
+      status: "authority_required",
+      context: { posture: "owner-openkey" },
+      missing: [{ service: "tinycloud.encryption", actions: ["tinycloud.encryption/decrypt"] }],
+    };
+    await runSecretsCommand(["secrets", "get", "KEY", "--raw"]);
+    expect((recorded.errors[0] as CLIErrorLike).message).toContain("lacks the scoped decrypt authority (tinycloud.encryption/decrypt)");
+    expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("read or decrypt grant");
+
+    resetRecorded();
+    await runSecretsCommand(["secrets", "list"]);
+    expect((recorded.errors[0] as CLIErrorLike).message).toContain("holds no grant");
   });
 
   test("requests scoped put permission at secrets/scoped/<scope>/<name>", async () => {

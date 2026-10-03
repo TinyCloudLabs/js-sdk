@@ -17,7 +17,7 @@ TC="$(npm prefix --global)/bin/tc"
 ```
 
 - `--manifest FILE` (required with `--device`) is an app manifest (`app_id`, `space`, `permissions`) given as a file path or `base64:<json>`. `builtin:share-publishing` is the built-in manifest for `tc share publish`; [REFERENCE.md](REFERENCE.md#context-and-login) lists exactly what it requests, and the owner's consent page shows every capability. One space per login.
-- Device login is for KV-scoped manifests, and every device manifest must also request `{ "service": "tinycloud.capabilities", "path": "", "skipPrefix": true, "actions": ["read"] }` in the same space: OpenKey requires it to sign any delegation, shows it as required, and rejects a request without it with `SCOPE_REJECTED`. `builtin:share-publishing` already includes it. OpenKey also refuses `tinycloud.sql` and any other ability its device policy excludes with `SCOPE_REJECTED`; request SQL through [browser login with a manifest](#browser-login-with-a-manifest) on a machine with a browser.
+- Device login is for KV-scoped manifests. Every scoped login (device, browser, paste) adds `tinycloud.capabilities/read` on the space root (`""`) when the manifest lacks it: OpenKey requires it to sign any delegation and shows it as required. The CLI refuses `tinycloud.encryption` and the `secrets` space before a device request (`DEVICE_AUTH_UNSUPPORTED_SCOPE`); OpenKey also refuses `tinycloud.sql` and other excluded abilities with `SCOPE_REJECTED`. Request those through [browser or paste login with a manifest](#browser-login-with-a-manifest). Device login cannot grant secret reads.
 - `--expiry` sets the session lifetime as a duration counted from approval (`1h`, `7d`, or milliseconds; at least `1m`; device login at most `30d`, default `30d`). OpenKey signs approval time plus the lifetime, so ISO dates are refused up front (`INVALID_EXPIRY`): an absolute deadline cannot survive an approval that takes longer than the 30 s clock-skew allowance. A signed session that would outlive the requested lifetime is refused.
 - `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. Every login on a profile that already recorded an owner DID is held to that owner automatically, whatever wrote it (`tc init`, an earlier login, or `profile.json` with any posture), and `--owner` must agree with it. Only a local-owner-key profile is not pinned. Owner addresses compare case-insensitively; chain id and space name compare exactly. The owner, permissions and expiry recorded for a session only ever come from a verified signed proof; callback-supplied values are dropped.
 - Scoped and device logins refuse a profile that holds a local owner key (`LOCAL_OWNER_PROFILE`): a local-owner-key posture, `authMethod: "local"`, or a stored private key, whatever the recorded posture. Use a separate profile.
@@ -61,7 +61,33 @@ On a machine with a browser, request the same manifest through the OpenKey brows
 tc --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
 ```
 
-`--paste` prints a URL and waits for a return code in the terminal; `--no-popup` prints the callback URL without opening a browser. The same signed-proof, owner, live-session, local-owner and commit-time checks apply. Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure. `--expiry` reaches OpenKey as `<seconds>s`; dates and lifetimes under a minute are refused before the browser opens.
+`--paste` prints the approval URL on stderr and reads the owner's return code from stdin: a terminal paste, or piped text. End the code with a newline; a final line without one is also accepted. If stdin ends with no code, the command fails with `PASTE_CODE_MISSING` (exit 3), names the approval URL, and saves nothing. `--no-popup` prints the callback URL without opening a browser. The same signed-proof, owner, live-session, local-owner and commit-time checks apply, and the JSON result lists `permissions` (approved) and `declined` (unchecked). Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure. `--expiry` reaches OpenKey as `<seconds>s`; dates and lifetimes under a minute are refused before the browser opens.
+
+Browser approval uses stderr for the URL and accepts a code on terminal stdin even when stdout is redirected to a file or pipe. If neither stdin nor stderr is a terminal, use `--paste` instead of waiting for a browser. `--device --manifest` is available for eligible KV scopes, but cannot approve a secrets or encryption manifest.
+
+## Secret reads for an agent
+
+An agent reads named secrets through its own profile. The owner approves a scoped paste login whose manifest names the secrets. Device login cannot grant secrets.
+
+```bash
+cat > agent-secrets.json <<'EOF'
+{ "app_id": "my.agent", "name": "My agent", "space": "secrets", "secrets": { "OPENAI_API_KEY": true } }
+EOF
+tc init --name agent-secrets --key-only
+LOGIN=(tc --profile agent-secrets auth login --method openkey --paste --manifest agent-secrets.json
+  --owner did:pkh:eip155:1:0xOWNER_ADDRESS --expiry 7d)
+"${LOGIN[@]}" < /dev/null   # exits 3 with PASTE_CODE_MISSING; its stderr names the approval URL
+# Send the owner that URL. After they approve and send back the code:
+printf '%s\n' "$CODE" | "${LOGIN[@]}"
+tc --profile agent-secrets secrets get OPENAI_API_KEY --raw
+```
+
+- The approval URL depends only on the profile's session key and the request, so the same command run again accepts the owner's code from stdin. Write the code followed by a newline; a final line without one is also accepted. Nothing is saved until a code verifies.
+- `secrets: { NAME: true }` requests `tinycloud.kv/get` on `vault/secrets/NAME` in the `secrets` space, `tinycloud.capabilities/read` on that space, and decrypt on the owner's default secrets network. The decrypt entry is a raw network resource, `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`; it does not count as a second space.
+- The network belongs to the owner, so a profile with no recorded owner needs `--owner`, the did:pkh of the account that will approve (OpenKey refuses a network owned by anyone else). Without it the login fails with `OWNER_DID_UNKNOWN`; it never falls back to the profile's session `did:key`. A recorded or explicit owner address is EIP-55 checksummed in the network URN.
+- If the owner unchecks decrypt, the login still succeeds and lists the decrypt entry in `declined`; reads of that secret then fail. Older OpenKey deployments sign decrypt inside the owner's secrets space rather than as a top-level network grant. That does not grant raw decrypt: it is listed in `declined` with an old-deployment warning and omitted from saved approved permissions. A later `auth request --grant` or secret-read escalation refuses that old nested proof before activating or storing a delegation, with `OPENKEY_GRANT_BROADENED`; obtain a new approval from a deployment that signs the raw network grant.
+- A secrets command (`get`, `list`, `put`, `delete`) on an OpenKey profile without a grant for the name fails fast only when neither stdin nor stderr is a terminal: `PERMISSION_DENIED` (exit 5) with a hint naming this scoped login. Redirecting stdout (`|`, `>`, or command substitution) does not prevent a person at a terminal from seeing the browser approval prompt. If the session is missing or expired, a headless secrets command, including the canonical `secrets get` operation, instead fails with `AUTH_REQUIRED` (exit 3) and the scoped paste-login hint before invoking the node or starting an unscoped browser refresh.
+- `secrets get -o FILE` validates the destination and its existing directory before fetching or decrypting secret bytes. It refuses symlinks, directories and devices, syncs a new owner-only (0600) file, then atomically replaces the destination. Directory sync is attempted after replacement where supported; its failure does not report a failed write when the destination was already replaced. A destination that cannot be replaced fails with a sanitized filesystem error naming the destination; there is no unsafe fallback.
 
 ## More spaces after login
 
@@ -71,7 +97,7 @@ Login covers one space. Request further spaces on the logged-in profile:
 tc --profile PROFILE auth request --manifest FILE --grant --device
 ```
 
-`auth request --device` defaults to a 7-day lifetime (`--expiry` to change it, at most `30d`). Without `--device`, `--grant` opens the OpenKey browser flow.
+`auth request --device` defaults to a 7-day lifetime (`--expiry` to change it, at most `30d`). Without `--device`, `--grant` opens the OpenKey browser flow. Browser grants require a signed proof for the profile's session key and owner. Only the permissions and expiry in that proof can be activated and stored; an older space-nested decrypt proof, missing or foreign-owner proof, broader grant, wrong space, or too-long expiry is refused without storing a delegation.
 
 ## Unscoped login and sign-out
 

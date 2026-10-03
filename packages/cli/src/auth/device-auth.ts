@@ -13,10 +13,12 @@ import { CLIError } from "../output/errors.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
+  declinedPermissions,
   expiryLimit,
   permissionTuples,
   permissionsFromTuples,
   expectedOwnerFor,
+  scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
   type RequestedExpiry,
@@ -374,7 +376,7 @@ async function verifyApproval(input: {
 
   // Signed authority: owner, space, session key, lifetime, and a recap that
   // stays inside the request.
-  const session = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
+  const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry,
   });
@@ -393,14 +395,13 @@ async function verifyApproval(input: {
   ) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the signed grant. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  const requested = permissionTuples(input.requested, ownerDid);
   return {
     session,
     ownerDid,
     spaceId: delegation.spaceId as string,
     expiresAt: session.expiresAt,
     approved: permissionsFromTuples(signed),
-    declined: permissionsFromTuples([...requested].filter((tuple) => !signed.has(tuple))),
+    declined: declinedPermissions(input.requested, session.permissions, ownerDid),
   };
 }
 
@@ -420,6 +421,16 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   validateLoginPermissions(input.permissions);
+  if (input.permissions.some((permission) =>
+    permission.service === "tinycloud.encryption" ||
+    permission.space === "secrets" ||
+    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+    throw new CLIError(
+      "DEVICE_AUTH_UNSUPPORTED_SCOPE",
+      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
   const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1000 };
   const ttlSeconds = Math.floor(expiry.durationMs / 1000);
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
@@ -576,15 +587,18 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   assertNotLocalOwner(input.profileName, existing, "Device login");
   // Every profile that recorded an owner stays with that owner.
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
+  validateLoginPermissions(input.permissions);
+  const permissions = scopedLoginPermissions(input.permissions);
   // Early refusal on the request; the commit re-checks the approved scope.
   if (input.replaceSession !== true) {
     const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1000)).toISOString();
-    assertSessionReplaceable(input.profileName, snapshot, expectedOwner, input.permissions, estimatedExpiry);
+    assertSessionReplaceable(input.profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   const key = snapshot.key ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
   const result = await acquireDeviceDelegation({
     ...input,
+    permissions,
     sessionDid,
     jwk: key,
     openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
