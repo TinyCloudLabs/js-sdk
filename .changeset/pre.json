@@ -58,6 +58,7 @@
     "tc-575-device-rate-limit",
     "tc-577-safe-share-filenames",
     "tc-580-share-filename-policy",
+    "tc-586-hosted-mcp-owner-binding",
     "tidy-cats-share"
   ]
 }
