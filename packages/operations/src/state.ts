@@ -400,16 +400,24 @@ async function acquireProfileLock(
  *    successful link holds the lock; on either failure nothing is released,
  *    since nothing was acquired, and the caller retries.
  *
+ * A profile deletion removes the profile directory once it has released its
+ * lock, so `mkdir(.lock)` can see ENOENT; the directory is recreated and the
+ * attempt repeated, as for a first write to a new profile.
+ *
  * Only one owner.json can exist at the lock path, and it is removed only by
  * its holder's release or by recovery of a dead holder, so at most one
  * process holds the lock. Returns false when the lock is not acquired.
  */
 async function publishProfileLock(profile: string, lockPath: string, token: string): Promise<boolean> {
-  try {
-    await mkdir(lockPath, { mode: PRIVATE_DIR_MODE });
-  } catch (error) {
-    if (isErrno(error, "EEXIST")) return false;
-    throw error;
+  while (true) {
+    try {
+      await mkdir(lockPath, { mode: PRIVATE_DIR_MODE });
+      break;
+    } catch (error) {
+      if (isErrno(error, "EEXIST")) return false;
+      if (!isErrno(error, "ENOENT")) throw error;
+      await mkdir(profilePath(profile), { recursive: true, mode: PRIVATE_DIR_MODE });
+    }
   }
   await waitForTestBarrier(TEST_LOCK_PUBLISH_BARRIER_DIR, profile);
   const staged = join(dirname(lockPath), `.lock-owner-${token}.tmp`);

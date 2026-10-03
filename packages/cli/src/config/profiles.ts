@@ -1,4 +1,4 @@
-import { chmod, rm } from "node:fs/promises";
+import { chmod, readdir, rm, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   readSession,
@@ -19,7 +19,6 @@ import {
   writeJson,
   fileExists,
   ensureDir,
-  removeDir,
   listDirs,
   PRIVATE_DIR_MODE,
 } from "./storage.js";
@@ -139,7 +138,11 @@ export class ProfileManager {
   }
 
   /**
-   * Deletes a profile directory.
+   * Deletes a profile. Its key, session, settings, stores and cache are
+   * removed while holding the profile lock, so another writer's critical
+   * section never sees them vanish midway. `.lock` itself is left to the
+   * lock's release; the then-empty directory is removed afterwards unless
+   * another writer took the lock (or wrote) meanwhile.
    * Throws if trying to delete the current default profile.
    */
   static async deleteProfile(name: string): Promise<void> {
@@ -151,7 +154,14 @@ export class ProfileManager {
       );
     }
     const profileDir = join(PROFILES_DIR, name);
-    await removeDir(profileDir);
+    await ProfileManager.withLock(name, async () => {
+      for (const entry of await readdir(profileDir)) {
+        if (entry !== ".lock") await rm(join(profileDir, entry), { recursive: true, force: true });
+      }
+    });
+    await rmdir(profileDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
+    });
   }
 
   // ── Key management ──────────────────────────────────────────────────

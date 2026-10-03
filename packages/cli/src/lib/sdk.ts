@@ -1,7 +1,7 @@
 import { TinyCloudNode, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
-import { resolveProfilePosture, type CLIContext } from "../config/types.js";
-import { CLIError } from "../output/errors.js";
+import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
+import { CLIError, wrapError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 
@@ -142,49 +142,131 @@ export async function createSDKInstance(
 }
 
 /**
+ * A delegate-session bootstrap that can be undone while nothing newer has
+ * replaced what it wrote.
+ */
+export interface DelegatedSessionBootstrap {
+  readonly node: TinyCloudNode;
+  /**
+   * Abandons the bootstrap after `cause` failed a later step, then rethrows
+   * `cause`. Under the profile lock, the session is removed and the profile
+   * restored only if both still hold exactly what the bootstrap wrote.
+   * Otherwise another writer (a login, logout or profile update) replaced
+   * them meanwhile; its state is kept and the rethrown error says so.
+   */
+  abandon(cause: unknown): Promise<never>;
+}
+
+/** What a bootstrap replaced and what it wrote, read and written under the profile lock. */
+interface BootstrapWrite {
+  readonly previousProfile: ProfileConfig;
+  readonly profile: ProfileConfig;
+  readonly session: Record<string, unknown>;
+}
+
+/**
  * Establish the first authenticated session for a fresh delegate-session
- * profile from a delegation targeted at that profile's generated key.
+ * profile from a delegation targeted at that profile's generated key. The
+ * profile, key and absent session are read, and the session and profile
+ * written, in one profile-lock critical section; a session that appeared
+ * since the caller checked is never replaced.
  */
 export async function bootstrapDelegatedSession(
   ctx: CLIContext,
   delegation: PortableDelegation,
-): Promise<TinyCloudNode> {
-  const profile = await ProfileManager.getProfile(ctx.profile);
-  if (resolveProfilePosture(profile) !== "delegate-session") {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `Profile "${ctx.profile}" is not a delegate-session profile.`,
-      ExitCode.AUTH_REQUIRED,
-    );
-  }
+): Promise<DelegatedSessionBootstrap> {
+  const written = await ProfileManager.withLock(ctx.profile, async (): Promise<BootstrapWrite> => {
+    const previousProfile = await ProfileManager.getProfile(ctx.profile);
+    if (resolveProfilePosture(previousProfile) !== "delegate-session") {
+      throw new CLIError(
+        "AUTH_REQUIRED",
+        `Profile "${ctx.profile}" is not a delegate-session profile.`,
+        ExitCode.AUTH_REQUIRED,
+      );
+    }
 
-  const sessionDid = profile.sessionDid ?? profile.did;
-  if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
-    throw new CLIError(
-      "DELEGATION_AUDIENCE_MISMATCH",
-      `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
-      ExitCode.PERMISSION_DENIED,
-    );
-  }
+    const sessionDid = previousProfile.sessionDid ?? previousProfile.did;
+    if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
+      throw new CLIError(
+        "DELEGATION_AUDIENCE_MISMATCH",
+        `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
+        ExitCode.PERMISSION_DENIED,
+      );
+    }
 
-  const key = await ProfileManager.getKey(ctx.profile);
-  const jwk = signerJwkForProfile(ctx.profile, undefined, key);
-  await ProfileManager.withLock(ctx.profile, async () => {
-    await ProfileManager.setSession(ctx.profile, {
+    if (await ProfileManager.getSession(ctx.profile) !== null) {
+      throw new CLIError(
+        "PROFILE_CHANGED_DURING_IMPORT",
+        `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
+        ExitCode.ERROR,
+      );
+    }
+
+    const jwk = signerJwkForProfile(ctx.profile, undefined, await ProfileManager.getKey(ctx.profile));
+    const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
       spaceId: delegation.spaceId,
       jwk,
       verificationMethod: sessionDid,
-    });
-    await ProfileManager.updateProfile(ctx.profile, (current) => ({
-      ...current,
-      sessionDid,
-      spaceId: delegation.spaceId,
-    }));
+    };
+    const profile = { ...previousProfile, sessionDid, spaceId: delegation.spaceId };
+    try {
+      await ProfileManager.setSession(ctx.profile, session);
+      await ProfileManager.setProfile(ctx.profile, profile);
+    } catch (error) {
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+    }
+    return { previousProfile, profile, session };
   });
 
-  return createSDKInstance(ctx);
+  const abandon = async (cause: unknown): Promise<never> => {
+    const note = await ProfileManager.withLock(ctx.profile, async () => {
+      const profile = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
+        if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
+        throw error;
+      });
+      const session = await ProfileManager.getSession(ctx.profile);
+      if (JSON.stringify(profile) !== JSON.stringify(written.profile) || JSON.stringify(session) !== JSON.stringify(written.session)) {
+        return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
+      }
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+    });
+    throw annotate(cause, note);
+  };
+
+  let node: TinyCloudNode;
+  try {
+    node = await createSDKInstance(ctx);
+  } catch (error) {
+    return abandon(error);
+  }
+  return { node, abandon };
+}
+
+/**
+ * Removes the bootstrap's session and puts back the profile it replaced.
+ * Both writes are attempted; returns a note naming any failure.
+ */
+async function restoreBeforeBootstrap(profileName: string, previousProfile: ProfileConfig): Promise<string | undefined> {
+  const failures: string[] = [];
+  for (const write of [
+    () => ProfileManager.clearSession(profileName),
+    () => ProfileManager.setProfile(profileName, previousProfile),
+  ]) {
+    await write().catch((error: unknown) => {
+      failures.push(error instanceof Error ? error.message : String(error));
+    });
+  }
+  if (failures.length === 0) return undefined;
+  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+}
+
+/** `error` as a CLIError (same code and exit code) with `note` appended, or unchanged without a note. */
+function annotate(error: unknown, note: string | undefined): unknown {
+  if (note === undefined) return error;
+  const cause = wrapError(error);
+  return new CLIError(cause.code, `${cause.message} ${note}`, cause.exitCode, cause.metadata);
 }
 
 /**

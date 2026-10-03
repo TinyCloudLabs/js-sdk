@@ -311,6 +311,7 @@ const importRecorded = {
   appendedDelegations: [] as Array<{ delegation: { cid: string }; permissions: unknown[] }>,
   appendedRequests: [] as Array<Record<string, unknown>>,
   bootstrappedDelegations: [] as Array<{ cid: string }>,
+  abandonedBootstraps: [] as unknown[],
 };
 
 let ensureAuthenticatedError: Error | null = null;
@@ -340,7 +341,13 @@ mock.module("../lib/sdk.js", () => ({
   bootstrapDelegatedSession: async (_ctx: unknown, delegation: { cid: string }) => {
     importRecorded.bootstrappedDelegations.push({ cid: delegation.cid });
     if (bootstrapDelegatedSessionError) throw bootstrapDelegatedSessionError;
-    return importedNode;
+    return {
+      node: importedNode,
+      abandon: async (cause: unknown) => {
+        importRecorded.abandonedBootstraps.push(cause);
+        throw cause;
+      },
+    };
   },
 }));
 
@@ -548,7 +555,7 @@ describe("CLI auth rotate command", () => {
     expect(recorded.generateKeyCalls).toBe(1);
     expect(keys.get("default")).toBe(newJwk);
     expect(keys.get("default")).not.toBe(oldJwk);
-    expect(recorded.clearSessions).toEqual(["default"]);
+    expect(recorded.clearSessions).toEqual([]);
     expect(recorded.localSignIns).toEqual([
       { privateKey: "0xowner-private", host: activeHost },
     ]);
@@ -727,6 +734,7 @@ describe("CLI auth import command", () => {
     importRecorded.appendedDelegations.length = 0;
     importRecorded.appendedRequests.length = 0;
     importRecorded.bootstrappedDelegations.length = 0;
+    importRecorded.abandonedBootstraps.length = 0;
     ensureAuthenticatedError = null;
     bootstrapDelegatedSessionError = null;
     importSessionDid = "did:key:z6MkSession#z6MkSession";
@@ -905,7 +913,7 @@ describe("CLI auth import command", () => {
     });
   });
 
-  test("rolls back a fresh delegate bootstrap when canonical request-bound validation rejects it", async () => {
+  test("abandons a fresh delegate bootstrap when canonical request-bound validation rejects it", async () => {
     const originalProfile = makeProfile({ posture: "delegate-session" });
     profiles.set("default", originalProfile);
     operationRecorded.results.push({
@@ -930,17 +938,15 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors.pop()).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
+    const error = recorded.errors.pop();
+    expect(error).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
     expect(importRecorded.bootstrappedDelegations).toEqual([{ cid: "bafy-rejected-first" }]);
-    expect(recorded.clearSessions).toEqual(["default"]);
-    expect(recorded.setProfiles).toEqual([{ profile: "default", data: originalProfile }]);
-    expect(profiles.get("default")).toEqual(originalProfile);
-    expect(sessions.get("default")).toBeUndefined();
+    expect(importRecorded.abandonedBootstraps).toEqual([error]);
     expect(importRecorded.appendedDelegations).toEqual([]);
     expect(importRecorded.useRuntimeDelegation).toEqual([]);
   });
 
-  test("rolls back a fresh delegate profile when provisional bootstrap itself fails", async () => {
+  test("leaves rollback of a failed provisional bootstrap to the bootstrap itself", async () => {
     const originalProfile = makeProfile({ posture: "delegate-session" });
     profiles.set("default", originalProfile);
     bootstrapDelegatedSessionError = new Error("Invalid bootstrap delegation");
@@ -960,10 +966,9 @@ describe("CLI auth import command", () => {
 
     expect(recorded.errors).toEqual([bootstrapDelegatedSessionError]);
     expect(operationRecorded.calls).toEqual([]);
-    expect(recorded.clearSessions).toEqual(["default"]);
-    expect(recorded.setProfiles).toEqual([{ profile: "default", data: originalProfile }]);
-    expect(profiles.get("default")).toEqual(originalProfile);
-    expect(sessions.get("default")).toBeUndefined();
+    expect(importRecorded.abandonedBootstraps).toEqual([]);
+    expect(recorded.clearSessions).toEqual([]);
+    expect(recorded.setProfiles).toEqual([]);
   });
 
   test("fails closed without persistence when a v1 request-bound artifact is unknown", async () => {
