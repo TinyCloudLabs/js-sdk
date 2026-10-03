@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
-import { notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { historyRecordForPublishedShare, notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
@@ -37,6 +37,39 @@ async function goldenDescriptorDigest(name: string): Promise<string> {
   const vector = vectors.find((candidate) => typeof candidate === "object" && candidate !== null && "name" in candidate && candidate.name === name);
   if (typeof vector !== "object" || vector === null || !("digest" in vector) || typeof vector.digest !== "string") throw new Error(`golden descriptor vector ${name} is missing`);
   return vector.digest;
+}
+/** tinycloud-node `delivery_email`: ASCII-lowercased mailbox, or undefined when the Node refuses it. */
+function nodeDeliveryEmail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const at = value.lastIndexOf("@");
+  const local = value.slice(0, at);
+  const domain = value.slice(at + 1);
+  if (at <= 0 || domain.length === 0 || value.length > 254 || /[\u0000-\u0020\u007f-\uffff]/.test(value) || !/^[A-Za-z0-9.-]+$/.test(domain)) return undefined;
+  return `${local.toLowerCase()}@${domain.toLowerCase()}`;
+}
+/**
+ * The recipient, display, action and credential checks tinycloud-node applies
+ * to a Policy/v3 envelope before signing a delivery receipt
+ * (`v3_envelope_delivery_projection` and `authorize_delivery` in
+ * tinycloud-node-server/src/policy_v3.rs, v1.17.1). Any mismatch is a
+ * `403 delivery-authorization-invalid`; registration binding is not mirrored.
+ */
+function nodeRefusesDelivery(input: Record<string, unknown>): boolean {
+  const envelope = input.envelope as Record<string, unknown> | undefined;
+  const matcher = envelope?.recipientMatcher as Record<string, unknown> | undefined;
+  const display = envelope?.display as Record<string, unknown> | undefined;
+  const policy = envelope?.policy as { readonly credentialRequirement?: { readonly credentialType?: { readonly id?: unknown } } } | undefined;
+  const expected = nodeDeliveryEmail(matcher?.value);
+  return matcher === undefined
+    || Object.keys(matcher).length !== 2
+    || matcher.kind !== "exactEmail"
+    || expected === undefined
+    || expected !== nodeDeliveryEmail(input.recipientEmail)
+    || envelope?.deliveryEmail !== input.recipientEmail
+    || display?.filename !== input.documentName
+    || JSON.stringify(envelope?.actions) !== JSON.stringify(["read"])
+    || policy?.credentialRequirement?.credentialType?.id !== "opencredentials.email/v1"
+    || typeof envelope?.expiry !== "string";
 }
 const node = {
   did: transportDid,
@@ -125,6 +158,7 @@ const node = {
     const captured = { ...input };
     const body = JSON.stringify(captured);
     deliveryAuthorizationInputs.push(captured);
+    if (nodeRefusesDelivery(input)) throw new Error("V3 share delivery authorization failed: 403");
     if (deliveryAuthorization?.key === input.idempotencyKey) {
       if (deliveryAuthorization.body !== body) {
         deliveryAuthorizationConflicts += 1;
@@ -688,7 +722,15 @@ describe("TinyCloud share authority adapter", () => {
         link,
         filename: "readme.md",
         deliveryMaterial: {
-          envelope: { version: 3 },
+          envelope: {
+            version: 3,
+            recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+            deliveryEmail: "alice@example.com",
+            actions: ["read"],
+            display: { filename: "readme.md" },
+            policy: { credentialRequirement: { credentialType: { id: "opencredentials.email/v1", version: 1 } } },
+            expiry: "2030-01-01T00:00:00Z",
+          },
           sealedEnvelope: "AQ",
           envelopeKey: "A".repeat(43),
           shareCid: "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli",
@@ -744,6 +786,40 @@ describe("TinyCloud share authority adapter", () => {
     } finally {
       Date.now = originalNow;
     }
+  });
+
+  it("publishes an email share whose --notify invitation the Node authorizes and delivers (TC-571)", async () => {
+    const invitations: string[] = [];
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://credentials.example/v1/credential-invitations") {
+        invitations.push(String(init?.body));
+        return Response.json({ status: "accepted" }, { status: 202 });
+      }
+      return Response.json({
+        version: "tinycloud.share/config-v2",
+        shareOrigin: "https://share.example",
+        registryOrigin: "https://registry.example",
+        credentialsOrigin: "https://credentials.example",
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const adapters = createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn });
+
+    const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address: "Alice@Example.COM" }));
+    if ("state" in published) throw new Error("expected addressed publication");
+    const record = historyRecordForPublishedShare(published);
+    // The signed envelope names the canonical mailbox the Node delivers to.
+    expect(record.deliveryMaterial?.envelope).toMatchObject({
+      recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+      deliveryEmail: "alice@example.com",
+    });
+
+    const result = await notifyShare({ shareId: record.shareId, recipient: "Alice@Example.COM", record, adapter: adapters.delivery });
+
+    expect(result).toMatchObject({ state: "delivered", attempts: 1 });
+    expect(deliveryAuthorizationInputs).toHaveLength(1);
+    expect(deliveryAuthorizationInputs[0]).toMatchObject({ recipientEmail: "alice@example.com", documentName: "note.md" });
+    expect(invitations).toHaveLength(1);
   });
 
 });

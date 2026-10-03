@@ -469,6 +469,10 @@ export function createShareAuthorityAdapters(input: {
       policyActions,
       contentSource,
       ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
+      // The Node signs a delivery receipt only for the envelope's own signed
+      // delivery address, so an exact-email share names its canonical mailbox
+      // here; `--notify` and a later `tc share notify` both depend on it.
+      ...(prepared.target.kind === "email" ? { deliveryEmail: prepared.target.address } : {}),
       filename: targetInput.filename,
       mediaType,
       byteLength,
