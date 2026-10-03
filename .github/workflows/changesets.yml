@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type "release" for stable or "major-beta" for an explicitly reviewed major beta'
+        description: 'Type "release" to graduate the current betas to stable'
         required: true
 
 concurrency:
@@ -18,9 +18,7 @@ jobs:
   # On push to master: publish incrementing beta pre-releases
   beta:
     name: Beta Release
-    if: >-
-      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')) ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && github.event.inputs.confirm == 'major-beta')
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -50,11 +48,11 @@ jobs:
           COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
           echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Reject unconfirmed major beta releases
+      # Majors are a human decision (TC-615): a new major changeset publishes
+      # only after a maintainer's `approve-major-release:` sign-off commit.
+      - name: Require sign-off for major bumps
         if: steps.check.outputs.pending != '0'
-        run: node scripts/check-beta-release-plan.mjs
-        env:
-          ALLOW_MAJOR_BETA: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && github.event.inputs.confirm == 'major-beta' }}
+        run: node .github/scripts/check-major-release-signoff.mjs beta
 
       - name: List pending changesets
         if: steps.check.outputs.pending != '0'
@@ -157,6 +155,11 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - run: bun install
+
+      # A package that would graduate at a higher major than it entered pre
+      # mode needs a maintainer's `approve-major-release:` sign-off (TC-615).
+      - name: Require sign-off for major releases
+        run: node .github/scripts/check-major-release-signoff.mjs stable
 
       - name: Exit pre mode and version
         run: |

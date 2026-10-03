@@ -3,6 +3,13 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-03
+
+- Agents never bump a major version (TC-615). Changesets are `minor` or `patch`; a maintainer
+  approves a major with an empty `approve-major-release: <package>` commit. The `Major release
+  guard` PR check and the Release workflow enforce it, and the `major-beta` dispatch that let a
+  major beta through without a sign-off is gone.
+
 ## 2026-08-14
 
 - Added the Share-first device authorization contract and its cross-repository public CLI smoke.

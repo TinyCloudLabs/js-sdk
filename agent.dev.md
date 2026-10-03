@@ -86,6 +86,19 @@ Use changesets for package-facing changes that need release notes or version bum
 bun changeset add
 ```
 
+Changesets are `minor` (features) or `patch` (fixes), never `major`, even when a change breaks
+compatibility; say what breaks in the changeset text. A major version is a human decision. A
+maintainer approves one with an empty commit on the PR, and agents never write that commit or start
+a release that would publish an unapproved major:
+
+```bash
+git commit --allow-empty -m "approve-major-release: @tinycloud/<package>"
+```
+
+The `Major release guard` check fails a PR that adds a `major` changeset or raises a major version
+without that sign-off. The Release workflow applies the same rule before publishing betas and before
+graduating them to stable (TC-615).
+
 ## Debugging
 
 - Confirm `TC_TEST_SERVER` points at the node instance you intend to test.
