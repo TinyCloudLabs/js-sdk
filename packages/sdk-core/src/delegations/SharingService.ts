@@ -427,6 +427,14 @@ export interface SharingServiceConfig {
 }
 
 /**
+ * Whether a session can issue a sharing delegation from its own authority:
+ * `"ok"` (an uncaveated entry covers it), `"caveated"` (only caveated entries
+ * cover it; their caveats cannot be carried into a child delegation) or
+ * `"not-covered"`.
+ */
+export type ShareDelegationPreflight = "ok" | "caveated" | "not-covered";
+
+/**
  * Interface for the SharingService.
  */
 export interface ISharingService {
@@ -437,6 +445,13 @@ export interface ISharingService {
    * the key and delegation into a shareable link.
    */
   generate(params: GenerateShareParams): Promise<Result<ShareLink, DelegationError>>;
+
+  /**
+   * Report, without side effects, whether the session's own authority can
+   * issue the delegation {@link generate} would create for these parameters.
+   * Does not consult `onRootDelegationNeeded`.
+   */
+  preflightGenerate(params: Pick<GenerateShareParams, "path" | "actions" | "expiry">): ShareDelegationPreflight;
 
   /**
    * Receive and activate a sharing link.
@@ -727,11 +742,11 @@ export class SharingService implements ISharingService {
     // 1. Covers the required path and actions
     // 2. Has sufficient expiry (delegation.expiry >= requestedExpiry)
     // 3. Allows sub-delegation
-    const canSatisfyFromRegistry = this.findSuitableKeyForDelegation(
+    const canSatisfyFromRegistry = this.classifyDelegationAuthority(
       fullPath,
       actions,
       requestedExpiry
-    );
+    ) === "ok";
 
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
@@ -819,74 +834,71 @@ export class SharingService implements ISharingService {
   }
 
   /**
-   * Check if any key in the registry can satisfy the delegation request.
-   * A key can satisfy if it has a delegation that:
-   * 1. Covers the required path (exact match or parent path)
-   * 2. Has all required actions
-   * 3. Has sufficient expiry (delegation.expiry >= requestedExpiry)
-   * 4. Allows sub-delegation
+   * Report, without side effects, whether this session's registry authority
+   * can issue the child delegation {@link generate} would create for the same
+   * `path`, `actions` and `expiry` (defaults and `pathPrefix` applied the
+   * same way):
+   *
+   * - `"ok"`: an uncaveated entry covers it.
+   * - `"caveated"`: only caveated entries cover it. SharingService cannot
+   *   carry signed ReCap caveats into a child delegation.
+   * - `"not-covered"`: no entry covers it, or there is no session.
+   *
+   * It does not consult `onRootDelegationNeeded`, so a signer-backed session
+   * may still generate when this is not `"ok"`.
+   */
+  preflightGenerate(params: Pick<GenerateShareParams, "path" | "actions" | "expiry">): ShareDelegationPreflight {
+    if (!this.session || !params.path) return "not-covered";
+    const fullPath = this.pathPrefix
+      ? `${this.pathPrefix}/${params.path}`.replace(/\/+/g, "/")
+      : params.path;
+    return this.classifyDelegationAuthority(
+      fullPath,
+      params.actions ?? DEFAULT_READ_ACTIONS,
+      params.expiry ?? new Date(Date.now() + DEFAULT_EXPIRY_MS),
+    );
+  }
+
+  /**
+   * Classify the registry's authority for a child delegation. An entry
+   * satisfies it when it is in the session space, valid, lasts at least until
+   * `requestedExpiry`, allows sub-delegation, covers `path` (exact or parent)
+   * and grants every action. Satisfying entries with caveats are unusable.
    * @internal
    */
-  private findSuitableKeyForDelegation(
+  private classifyDelegationAuthority(
     path: string,
     actions: string[],
     requestedExpiry: Date
-  ): boolean {
-    // Check registry for keys with sufficient capabilities
-    const allKeys = this.registry.getAllKeys();
-    for (const key of allKeys) {
-      const delegations = this.registry.getDelegationsForKey(key.id);
-      for (const delegation of delegations) {
+  ): ShareDelegationPreflight {
+    let coveredOnlyByCaveated = false;
+    for (const key of this.registry.getAllKeys()) {
+      for (const delegation of this.registry.getDelegationsForKey(key.id)) {
         // A registry can contain capabilities for several spaces. A share
         // created by this service may only spend authority for its own
         // session space.
         if (delegation.spaceId === undefined || !spaceIdsEqual(delegation.spaceId, this.session?.spaceId ?? "")) {
           continue;
         }
-
+        if (!this.registry.isDelegationValid(delegation)) continue;
+        if (delegation.expiry < requestedExpiry) continue;
+        if (delegation.allowSubDelegation === false) continue;
+        if (!this.pathMatches(delegation.path || '', path)) continue;
+        const delegationActions = delegation.actions || [];
+        if (!actions.every((action) => delegationActions.includes(action) || delegationActions.includes('*'))) {
+          continue;
+        }
         // SharingService cannot reproduce arbitrary signed ReCap caveats when
         // issuing a child delegation.  Treat caveated authority as unusable
         // here rather than minting a broader child capability.
         if ((delegation.caveats?.length ?? 0) > 0) {
+          coveredOnlyByCaveated = true;
           continue;
         }
-
-        // Check if delegation is valid and not expired
-        if (!this.registry.isDelegationValid(delegation)) {
-          continue;
-        }
-
-        // Check if delegation has sufficient expiry
-        if (delegation.expiry < requestedExpiry) {
-          continue;
-        }
-
-        // Check if delegation allows sub-delegation
-        if (delegation.allowSubDelegation === false) {
-          continue;
-        }
-
-        // Check if delegation covers the path (exact match or parent path)
-        const delegationPath = delegation.path || '';
-        if (!this.pathMatches(delegationPath, path)) {
-          continue;
-        }
-
-        // Check if delegation has all required actions
-        const delegationActions = delegation.actions || [];
-        const hasAllActions = actions.every(action =>
-          delegationActions.includes(action) || delegationActions.includes('*')
-        );
-        if (!hasAllActions) {
-          continue;
-        }
-
-        // Found a suitable key
-        return true;
+        return "ok";
       }
     }
-
-    return false;
+    return coveredOnlyByCaveated ? "caveated" : "not-covered";
   }
 
   private retiredGraphError(): DelegationError | undefined {

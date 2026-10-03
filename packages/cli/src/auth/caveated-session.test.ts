@@ -36,8 +36,12 @@ const nodeDid = wasm.createSessionManager().getDID("default").split("#")[0]!;
 const requested = sharePublishingPermissions();
 const originalFetch = globalThis.fetch;
 
-/** An owner-signed session over the share-publishing manifest; `caveat`, when given, is signed onto every action. */
-async function signedProof(caveat?: Record<string, unknown>) {
+/**
+ * An owner-signed session over the share-publishing manifest; `caveat`, when
+ * given, is signed onto every action, or only onto resources ending with
+ * `resourceSuffix`.
+ */
+async function signedProof(caveat?: Record<string, unknown>, resourceSuffix?: string) {
   const abilities: Record<string, Record<string, string[]>> = {};
   for (const permission of requested) {
     (abilities[permission.service.slice("tinycloud.".length)] ??= {})[permission.path] = permission.actions;
@@ -47,20 +51,21 @@ async function signedProof(caveat?: Record<string, unknown>) {
     issuedAt: new Date(Date.now() - 60_000).toISOString(),
     expirationTime: new Date(Date.now() + 3600_000).toISOString(),
   });
-  if (caveat) prepared.siwe = withRecapCaveat(prepared.siwe, caveat);
+  if (caveat) prepared.siwe = withRecapCaveat(prepared.siwe, caveat, resourceSuffix);
   const signature = await signer.signMessage(prepared.siwe);
   return { ...wasm.completeSessionSetup({ ...prepared, signature }), jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did, address, chainId: 1, spaceId, siwe: prepared.siwe, signature };
 }
 
-async function login(caveat?: Record<string, unknown>): Promise<void> {
-  const proof = await signedProof(caveat);
+async function login(caveat?: Record<string, unknown>, resourceSuffix?: string): Promise<void> {
+  const proof = await signedProof(caveat, resourceSuffix);
   await refreshOpenKeySession("publisher", host, { permissions: requested, openKeyAcquisition: async () => proof });
 }
 
 /** A TinyCloud node and Share service double: KV and sharing calls succeed. */
-function nodeAndShareDouble(): typeof globalThis.fetch {
+function nodeAndShareDouble(requests?: string[]): typeof globalThis.fetch {
   return Object.assign(async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    requests?.push(url.pathname);
     if (url.pathname === "/.well-known/tinycloud-share/config.json") {
       return Response.json({ version: "tinycloud.share/config-v2", shareOrigin, registryOrigin: shareOrigin, credentialsOrigin: shareOrigin });
     }
@@ -69,8 +74,10 @@ function nodeAndShareDouble(): typeof globalThis.fetch {
   }, { preconnect: () => undefined }) as typeof globalThis.fetch;
 }
 
-async function publishBearer(fetchFn: typeof globalThis.fetch) {
-  const { targetAdapter } = createShareAuthorityAdapters({ origin: shareOrigin, nodeOrigin: host, profileName: async () => "publisher", fetchFn });
+/** Publish a bearer share; `nodeRequests` records the paths the node SDK fetches (KV writes go to `/invoke`). */
+async function publishBearer(nodeRequests: string[] = []) {
+  globalThis.fetch = nodeAndShareDouble(nodeRequests);
+  const { targetAdapter } = createShareAuthorityAdapters({ origin: shareOrigin, nodeOrigin: host, profileName: async () => "publisher", fetchFn: nodeAndShareDouble() });
   return targetAdapter.publish({
     source: new TextEncoder().encode("hello"), filename: "hello.txt", mediaType: "text/plain",
     target: { kind: "bearer" }, expiresAt: new Date(Date.now() + 600_000), origin: shareOrigin,
@@ -102,16 +109,36 @@ describe("a scoped session with signed caveats", () => {
     const read = await node.kv.get("xyz.tinycloud.share/shares/existing");
     expect(read.ok).toBe(true);
 
-    // The publish path restores and uploads; SharingService then fails closed
-    // on caveated authority, since it cannot reproduce the caveats on a child
-    // delegation (sdk-core SharingService.findSuitableKeyForDelegation).
-    await expect(publishBearer(nodeAndShareDouble())).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "sharing delegation" } });
+    // A caveated session cannot mint the link's child delegation; the
+    // adapter refuses before the KV upload.
+    const nodeRequests: string[] = [];
+    await expect(publishBearer(nodeRequests)).rejects.toMatchObject({ failure: { kind: "caveated-session", profileName: "publisher" } });
+    expect(nodeRequests).not.toContain("/invoke");
+  });
+
+  test("a caveat only on the bearer share prefix refuses before uploading", async () => {
+    await login({ tenant: "alpha" }, "/kv/xyz.tinycloud.share/shares/");
+    const nodeRequests: string[] = [];
+    await expect(publishBearer(nodeRequests)).rejects.toMatchObject({ failure: { kind: "caveated-session" } });
+    expect(nodeRequests).not.toContain("/invoke");
+  });
+
+  test("a caveat only on authority the bearer link does not use still publishes", async () => {
+    for (const suffix of [":default/capabilities", "/kv/shares/"]) {
+      await ProfileManager.clearSession("publisher");
+      await login({ tenant: "alpha" }, suffix);
+      const published = await publishBearer();
+      expect(published).toMatchObject({ protocol: "tinycloud-share", metadata: { target: { kind: "bearer", spaceId } } });
+    }
   });
 
   test("an unrestricted OpenKey session restored without a signer publishes a bearer share", async () => {
     await login();
-    const published = await publishBearer(nodeAndShareDouble());
+    const nodeRequests: string[] = [];
+    const published = await publishBearer(nodeRequests);
     expect(published).toMatchObject({ protocol: "tinycloud-share", metadata: { target: { kind: "bearer", spaceId } } });
+    // The recorder sees the upload, so the refusals above prove none happened.
+    expect(nodeRequests).toContain("/invoke");
   });
 
   test("a signed JSON null inside a caveat logs in, persists, restores and renews", async () => {

@@ -27,7 +27,7 @@ import { parseDuration } from "../lib/duration.js";
 import { formatBytes } from "../output/formatter.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
-import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, writeShareOutput } from "../share/io.js";
+import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
 import { SharePublishAuthorityError } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -79,6 +79,14 @@ export function shareCliError(error: unknown): CLIError {
     const loginHint = localKey
       ? `\`tc ${profileHint}auth login --method local\``
       : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+    if (failure.kind === "caveated-session") {
+      const holder = profileName === undefined ? "this session" : `profile ${profileName}'s session`;
+      return new CLIError(
+        "PERMISSION_DENIED",
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
+        5,
+      );
+    }
     if (failure.kind === "owner-space-unresolved") {
       return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
     }
@@ -255,7 +263,10 @@ export function registerShareCommand(program: Command): void {
         const json = jsonOutput(options, command);
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
-        const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : undefined, maxBytes)));
+        const name = files.length === 1 ? options.name : undefined;
+        // Refuse unsafe names before touching any source, so stdin is never awaited for one.
+        for (const file of files) shareInputFilename(file, name);
+        const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
         assertAggregateInputLimit(inputs, maxBytes);
         const target = parseShareTarget(options.to);
         const actions = requestedActions(options.action);

@@ -62,6 +62,15 @@ describe("tc share command contract", () => {
     expect(openKeyScope.message).toContain("builtin:share-publishing scope");
     expect(openKeyScope.message).toContain("verify the session includes");
     expect(openKeyScope.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
+    // A caveated session is fixed by a fresh unrestricted approval, not by
+    // logging the same profile in again for a scope it already has.
+    const caveated = shareCliError(new SharePublishAuthorityError({
+      kind: "caveated-session",
+      profileName: "wallet",
+    }));
+    expect(caveated).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(caveated.message).toContain("tc init --name publisher --key-only && tc --profile publisher enable share");
+    expect(caveated.message).not.toContain("--profile wallet");
     const quota = shareCliError(new SharePublishAuthorityError({
       kind: "storage-quota-exceeded",
       usedBytes: 387_382_794,
@@ -223,7 +232,12 @@ describe("safe Share output", () => {
 
   test("allows only one safe Markdown filename segment", () => {
     expect(safeFilename("report.md")).toBe("report.md");
-    expect(() => safeFilename("../report.md")).toThrow("UNSAFE_FILENAME");
-    expect(() => safeFilename("nested/report.md")).toThrow("UNSAFE_FILENAME");
+    expect(() => safeFilename("../report.md")).toThrow("filename must be one safe path segment");
+    expect(() => safeFilename("nested/report.md")).toThrow("filename must be one safe path segment");
+    for (const name of ["a\u0001.md", "a\u200b.md", "a\u202e.md", "a\u2028.md"]) {
+      let caught: unknown;
+      try { safeFilename(name); } catch (error) { caught = error; }
+      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 8, message: "filename contains control or invisible characters" });
+    }
   });
 });

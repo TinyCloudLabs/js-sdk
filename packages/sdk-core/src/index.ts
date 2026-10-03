@@ -680,6 +680,7 @@ export {
   SharingService,
   createSharingService,
   ISharingService,
+  ShareDelegationPreflight,
   SharingServiceConfig,
   EncodedShareData,
   ReceiveOptions,

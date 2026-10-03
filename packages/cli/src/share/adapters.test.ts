@@ -27,6 +27,8 @@ let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 let authenticationError: unknown;
 let registryError: unknown;
+let sharingPreflight: "ok" | "caveated" | "not-covered" = "ok";
+const preflightRequests: Array<{ readonly path: string; readonly actions?: string[]; readonly expiry?: Date }> = [];
 
 /** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
 async function goldenDescriptorDigest(name: string): Promise<string> {
@@ -84,6 +86,10 @@ const node = {
   }),
   sharing: {
     generate: async ({ expiry }: { readonly expiry: Date }) => ({ ok: true, data: { token: "opaque-share-token", delegation: { cid: "bafy-native-share" }, expiresAt: expiry } }),
+    preflightGenerate: (request: { readonly path: string; readonly actions?: string[]; readonly expiry?: Date }) => {
+      preflightRequests.push(request);
+      return sharingPreflight;
+    },
     decodeLink: () => ({ spaceId: nativeSpaceId, path: "xyz.tinycloud.share/shares/report.md" }),
   },
   createUnifiedOwnerRoot: async (input: { readonly ownerDid: string; readonly role: "policy-authority" | "policy-enforcement" }) => {
@@ -171,6 +177,8 @@ afterEach(() => {
   sessionExpiresAt = "2099-01-01T00:00:00.000Z";
   authenticationError = undefined;
   registryError = undefined;
+  sharingPreflight = "ok";
+  preflightRequests.length = 0;
 });
 
 describe("TinyCloud share authority adapter", () => {
@@ -239,7 +247,6 @@ describe("TinyCloud share authority adapter", () => {
       "my notes.md.": "my-notes-md",
       "notes.md~": "notes-md",
       "notes.\uff4d\uff44": "notes-md",
-      "x.html\u200b": "x-html",
       "a\uff0e\uff0emd": "a-md",
     };
     for (const [filename, stored] of Object.entries(storedAs)) {
@@ -261,6 +268,11 @@ describe("TinyCloud share authority adapter", () => {
         expect(uploadedPaths.at(-1)).toBe(path);
       }
     }
+    // The viewer refuses format characters, so publication refuses them too (TC-580).
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("filename round trip"), filename: "x.html\u200b", target: { kind: "email", address: "alice@example.com" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"), origin: "https://share.example",
+    })).rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "addressed filename is invalid" } });
   });
 
   it("clamps implicit lifetime to signed session expiry and rejects explicit overrun", async () => {
@@ -614,6 +626,34 @@ describe("TinyCloud share authority adapter", () => {
         .rejects.toMatchObject({ failure: { kind } });
     }
     expect(uploadedSpaces).toEqual([]);
+  });
+
+  it("refuses a bearer share the session cannot delegate before uploading anything", async () => {
+    const bearer = { ...addressedInput({ kind: "bearer" }), filename: "report.md" };
+    sharingPreflight = "caveated";
+    await expect(addressedAdapter().publish(bearer)).rejects.toMatchObject({ failure: { kind: "caveated-session", profileName: "test" } });
+    sharingPreflight = "not-covered";
+    await expect(addressedAdapter().publish(bearer)).rejects.toMatchObject({ failure: { kind: "scope-denied", capability: "sharing delegation", profileName: "test" } });
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    // Exactly the delegation createNativeShare will request.
+    expect(preflightRequests).toHaveLength(2);
+    expect(preflightRequests[0]).toEqual({
+      path: expect.stringMatching(/^xyz\.tinycloud\.share\/shares\/[0-9a-f]{32}\/report\.md$/),
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date("2030-01-01T00:00:00.000Z"),
+    });
+  });
+
+  it("does not preflight addressed shares or signer-backed bearer shares", async () => {
+    sharingPreflight = "caveated";
+    const addressed = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect("state" in addressed).toBe(false);
+    sessionOnly = false;
+    const bearer = await addressedAdapter().publish(addressedInput({ kind: "bearer" }));
+    expect("state" in bearer).toBe(false);
+    expect(preflightRequests).toEqual([]);
+    expect(uploadedPaths).toHaveLength(2);
   });
 
   it("uses the reusable Share SDK invitation client and forwards notify idempotency to Node", async () => {

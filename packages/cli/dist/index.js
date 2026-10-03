@@ -7735,6 +7735,17 @@ var __export2 = (target, all) => {
   for (var name in all)
     __defProp2(target, name, { get: all[name], enumerable: true });
 };
+var UNSAFE_FILENAME_CODE_POINT = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
+function hasUnsafeFilenameCodePoint(value) {
+  return UNSAFE_FILENAME_CODE_POINT.test(value);
+}
+function canonicalShareFilename(value) {
+  const canonical = value.normalize("NFC");
+  if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint(canonical)) {
+    throw new TypeError("share filename is unsafe");
+  }
+  return canonical;
+}
 var external_exports = {};
 __export2(external_exports, {
   BRAND: () => BRAND,
@@ -13908,8 +13919,17 @@ function normalizeShareTarget(target) {
 function targetAuthorizationMethod(target) {
   return authorizationMethodForTarget(target);
 }
+function publishFilename(value) {
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment");
+  }
+}
 async function publishTargetShare(input) {
   const target = normalizeShareTarget(input.target);
+  const filename = publishFilename(input.filename);
+  const files = input.files?.map((file) => ({ ...file, filename: publishFilename(file.filename) }));
   if (input.targetAdapter === void 0) {
     if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
@@ -13935,9 +13955,6 @@ async function publishTargetShare(input) {
     return bytes3;
   })();
   if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  if (!input.filename || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) {
-    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-  }
   if (target.kind === "bearer" && input.allowBinary !== true) {
     try {
       new TextDecoder("utf-8", { fatal: true }).decode(source);
@@ -13945,10 +13962,10 @@ async function publishTargetShare(input) {
       throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
     }
   }
-  const files = input.files === void 0 || input.files.length === 0 ? [{ bytes: source }] : input.files;
+  const publishFiles = files === void 0 || files.length === 0 ? [{ bytes: source }] : files;
   const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
   let totalBytes = 0;
-  for (const file of files) {
+  for (const file of publishFiles) {
     totalBytes += file.bytes.byteLength;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
       throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
@@ -13959,8 +13976,8 @@ async function publishTargetShare(input) {
   if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
   return input.targetAdapter.publish({
     source,
-    filename: input.filename,
-    ...input.files === void 0 ? {} : { files: input.files },
+    filename,
+    ...files === void 0 ? {} : { files },
     ...input.mediaType === void 0 ? {} : { mediaType: input.mediaType },
     ...input.resourceKind === void 0 ? {} : { resourceKind: input.resourceKind },
     ...input.actions === void 0 ? {} : { actions: input.actions },
@@ -14103,7 +14120,11 @@ function mailboxCredentialCommitment(target) {
   };
 }
 function prepareAddressedShare(request) {
-  if (request.filename.length === 0 || request.filename === "." || request.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(request.filename)) throw new TypeError("addressed filename is invalid");
+  try {
+    canonicalShareFilename(request.filename);
+  } catch {
+    throw new TypeError("addressed filename is invalid");
+  }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
@@ -14121,9 +14142,10 @@ function assertMailboxCommitment(commitment, target) {
   if (canonicalize(commitment.profile) !== canonicalize(expected.profile) || canonicalize(commitment.credentialType) !== canonicalize(expected.credentialType) || commitment.descriptorDigest !== expected.descriptorDigest || commitment.issuerDid !== expected.issuerDid || commitment.issuerKid !== expected.issuerKid) throw new TypeError(`${label} shares require the ${label} credential profile`);
   if (commitment.requirementDigest !== expected.requirementDigest) throw new TypeError(`credential requirement is not bound to the email ${target.kind === "email" ? "address" : "domain"}`);
 }
-async function publishAddressedShare(options) {
-  assertSafeInput(options);
-  const { target } = prepareAddressedShare(options);
+async function publishAddressedShare(input) {
+  assertSafeInput(input);
+  const { target } = prepareAddressedShare(input);
+  const options = { ...input, filename: canonicalShareFilename(input.filename) };
   if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
@@ -15099,6 +15121,7 @@ import { constants } from "fs";
 import { lstat, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
 import { randomBytes as randomBytes2 } from "crypto";
 import { basename as basename2, join as join4, resolve, sep } from "path";
+init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
@@ -15120,21 +15143,28 @@ async function readBoundedUrlStdin() {
   return value;
 }
 function safeFilename(value) {
-  if (value.length === 0 || value === "." || value === ".." || /[/\\\u0000-\u001f\u007f]/.test(value)) throw new Error("UNSAFE_FILENAME");
-  return value;
+  return shareFilename(value);
 }
 function shareFilename(value) {
-  return safeFilename(value);
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new CLIError(
+      "UNSAFE_FILENAME",
+      hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
+      8
+    );
+  }
+}
+function shareInputFilename(input, name) {
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename2(resolve(input))));
 }
 async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
-  if (input === "-") {
-    const bytes2 = await readBoundedStdin(limit);
-    return { bytes: bytes2, filename: shareFilename(name ?? "stdin.md") };
-  }
+  const filename = shareInputFilename(input, name);
+  if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
   const path = resolve(input);
   const info = await stat2(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const filename = shareFilename(name ?? basename2(path));
   const bytes = new Uint8Array(await readFile2(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
@@ -15254,6 +15284,14 @@ function shareCliError(error) {
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
     const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+    if (failure.kind === "caveated-session") {
+      const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
+      return new CLIError(
+        "PERMISSION_DENIED",
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
+        5
+      );
+    }
     if (failure.kind === "owner-space-unresolved") {
       return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
     }
@@ -15382,7 +15420,9 @@ function registerShareCommand(program2) {
       const json = jsonOutput(options, command);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
-      const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : void 0, maxBytes)));
+      const name = files.length === 1 ? options.name : void 0;
+      for (const file of files) shareInputFilename(file, name);
+      const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
       assertAggregateInputLimit(inputs, maxBytes);
       const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
@@ -17162,6 +17202,15 @@ function createShareAuthorityAdapters(input = {}) {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file2 = files[0];
       const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+      if (node.isSessionOnly) {
+        const authority = node.sharing.preflightGenerate({ path: resourcePath2, actions: ["tinycloud.kv/get"], expiry: expiresAt });
+        if (authority === "caveated") {
+          throw new SharePublishAuthorityError({ kind: "caveated-session", profileName: activeProfileName2 });
+        }
+        if (authority === "not-covered") {
+          throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "sharing delegation", localKey, profileName: activeProfileName2 });
+        }
+      }
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
         contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
       });

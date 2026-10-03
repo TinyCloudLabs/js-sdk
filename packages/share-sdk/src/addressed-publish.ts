@@ -1,3 +1,4 @@
+import { canonicalShareFilename } from "./filename-policy.js";
 import { sha256 } from "@noble/hashes/sha256";
 import {
   canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, seal,
@@ -279,7 +280,11 @@ export interface PreparedAddressedShare {
  * a location record; a refused share then leaves nothing behind.
  */
 export function prepareAddressedShare(request: AddressedShareRequest): PreparedAddressedShare {
-  if (request.filename.length === 0 || request.filename === "." || request.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(request.filename)) throw new TypeError("addressed filename is invalid");
+  try {
+    canonicalShareFilename(request.filename);
+  } catch {
+    throw new TypeError("addressed filename is invalid");
+  }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
@@ -308,9 +313,11 @@ function assertMailboxCommitment(commitment: PolicyCredentialRequirementV1 | und
 }
 
 /** Canonical application-neutral Policy/v3 addressed publisher shared by browser and CLI. */
-export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
-  assertSafeInput(options);
-  const { target } = prepareAddressedShare(options);
+export async function publishAddressedShare(input: AddressedSharePublishOptions): Promise<PublishedShare> {
+  assertSafeInput(input);
+  const { target } = prepareAddressedShare(input);
+  // Envelope, result metadata and history all carry the viewer's NFC form.
+  const options = { ...input, filename: canonicalShareFilename(input.filename) };
   if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);

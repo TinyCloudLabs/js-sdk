@@ -53,8 +53,11 @@
     "tc-538-share-restored-space",
     "tc-540-device-login-manifest",
     "tc-540-node-sdk-verified-caveats",
+    "tc-551-caveated-share-publish",
     "tc-556-addressed-links",
+    "tc-575-device-rate-limit",
     "tc-577-safe-share-filenames",
+    "tc-580-share-filename-policy",
     "tidy-cats-share"
   ]
 }
