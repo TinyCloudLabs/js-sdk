@@ -1,5 +1,16 @@
 # @tinycloud/cli
 
+## 1.0.0-beta.20
+
+### Patch Changes
+
+- bf6fbd1: Share publication now applies the share viewer's filename policy: names are NFC-normalized, and control, format (such as U+200B zero-width space and U+202E bidi override), surrogate, and U+2028/U+2029 code points are refused before any content is read or uploaded. share-sdk exports `canonicalShareFilename` and `hasUnsafeFilenameCodePoint`, and `publishTargetShare` reports "filename contains control or invisible characters". `tc share publish` refuses every such filename with `UNSAFE_FILENAME` (exit 8), and addressed shares display the NFC-normalized name.
+- Updated dependencies [bf6fbd1]
+  - @tinycloud/share-sdk@1.0.0-beta.8
+  - @tinycloud/sdk-core@3.0.0-beta.17
+  - @tinycloud/node-sdk@3.0.0-beta.17
+  - @tinycloud/operations@0.3.3-beta.15
+
 ## 1.0.0-beta.19
 
 ### Patch Changes

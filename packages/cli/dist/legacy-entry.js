@@ -20384,6 +20384,17 @@ var __export2 = (target, all) => {
   for (var name in all)
     __defProp2(target, name, { get: all[name], enumerable: true });
 };
+var UNSAFE_FILENAME_CODE_POINT = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
+function hasUnsafeFilenameCodePoint(value) {
+  return UNSAFE_FILENAME_CODE_POINT.test(value);
+}
+function canonicalShareFilename(value) {
+  const canonical = value.normalize("NFC");
+  if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint(canonical)) {
+    throw new TypeError("share filename is unsafe");
+  }
+  return canonical;
+}
 var external_exports2 = {};
 __export2(external_exports2, {
   BRAND: () => BRAND2,
@@ -26519,8 +26530,17 @@ function normalizeShareTarget(target) {
 function targetAuthorizationMethod(target) {
   return authorizationMethodForTarget(target);
 }
+function publishFilename(value) {
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment");
+  }
+}
 async function publishTargetShare(input) {
   const target = normalizeShareTarget(input.target);
+  const filename = publishFilename(input.filename);
+  const files = input.files?.map((file) => ({ ...file, filename: publishFilename(file.filename) }));
   if (input.targetAdapter === void 0) {
     if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
@@ -26546,9 +26566,6 @@ async function publishTargetShare(input) {
     return bytes3;
   })();
   if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  if (!input.filename || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) {
-    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-  }
   if (target.kind === "bearer" && input.allowBinary !== true) {
     try {
       new TextDecoder("utf-8", { fatal: true }).decode(source);
@@ -26556,10 +26573,10 @@ async function publishTargetShare(input) {
       throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8");
     }
   }
-  const files = input.files === void 0 || input.files.length === 0 ? [{ bytes: source }] : input.files;
+  const publishFiles = files === void 0 || files.length === 0 ? [{ bytes: source }] : files;
   const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
   let totalBytes = 0;
-  for (const file of files) {
+  for (const file of publishFiles) {
     totalBytes += file.bytes.byteLength;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
       throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
@@ -26570,8 +26587,8 @@ async function publishTargetShare(input) {
   if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs2) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
   return input.targetAdapter.publish({
     source,
-    filename: input.filename,
-    ...input.files === void 0 ? {} : { files: input.files },
+    filename,
+    ...files === void 0 ? {} : { files },
     ...input.mediaType === void 0 ? {} : { mediaType: input.mediaType },
     ...input.resourceKind === void 0 ? {} : { resourceKind: input.resourceKind },
     ...input.actions === void 0 ? {} : { actions: input.actions },
@@ -27302,6 +27319,7 @@ import { constants } from "fs";
 import { lstat, mkdir as mkdir3, mkdtemp, open as open3, readFile as readFile9, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
 import { randomBytes as randomBytes4 } from "crypto";
 import { basename as basename2, join as join6, resolve as resolve2, sep } from "path";
+init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
@@ -27323,21 +27341,28 @@ async function readBoundedUrlStdin() {
   return value;
 }
 function safeFilename(value) {
-  if (value.length === 0 || value === "." || value === ".." || /[/\\\u0000-\u001f\u007f]/.test(value)) throw new Error("UNSAFE_FILENAME");
-  return value;
+  return shareFilename(value);
 }
 function shareFilename(value) {
-  return safeFilename(value);
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new CLIError(
+      "UNSAFE_FILENAME",
+      hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
+      8
+    );
+  }
+}
+function shareInputFilename(input, name) {
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename2(resolve2(input))));
 }
 async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
-  if (input === "-") {
-    const bytes2 = await readBoundedStdin(limit);
-    return { bytes: bytes2, filename: shareFilename(name ?? "stdin.md") };
-  }
+  const filename = shareInputFilename(input, name);
+  if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
   const path = resolve2(input);
   const info = await stat2(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const filename = shareFilename(name ?? basename2(path));
   const bytes = new Uint8Array(await readFile9(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
@@ -27582,7 +27607,9 @@ function registerShareCommand(program) {
       const json = jsonOutput(options, command);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
-      const inputs = await Promise.all(files.map((file) => readShareInput(file, files.length === 1 ? options.name : void 0, maxBytes)));
+      const name = files.length === 1 ? options.name : void 0;
+      for (const file of files) shareInputFilename(file, name);
+      const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
       assertAggregateInputLimit(inputs, maxBytes);
       const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
