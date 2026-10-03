@@ -1,3 +1,4 @@
+import { canonicalShareFilename } from "./filename-policy.js";
 import { sha256 } from "@noble/hashes/sha256";
 import {
   canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, seal,
@@ -279,7 +280,11 @@ export interface PreparedAddressedShare {
  * a location record; a refused share then leaves nothing behind.
  */
 export function prepareAddressedShare(request: AddressedShareRequest): PreparedAddressedShare {
-  if (request.filename.length === 0 || request.filename === "." || request.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(request.filename)) throw new TypeError("addressed filename is invalid");
+  try {
+    canonicalShareFilename(request.filename);
+  } catch {
+    throw new TypeError("addressed filename is invalid");
+  }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
@@ -311,6 +316,7 @@ function assertMailboxCommitment(commitment: PolicyCredentialRequirementV1 | und
 export async function publishAddressedShare(options: AddressedSharePublishOptions): Promise<PublishedShare> {
   assertSafeInput(options);
   const { target } = prepareAddressedShare(options);
+  const filename = canonicalShareFilename(options.filename);
   if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
   const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
@@ -341,13 +347,11 @@ export async function publishAddressedShare(options: AddressedSharePublishOption
     version: 3 as const, shareId: options.shareId, recipientMatcher: matcher,
     ...(options.deliveryEmail === undefined ? {} : { deliveryEmail: options.deliveryEmail }),
     actions: [...options.actions], resource: { ...options.resource },
-    target: { origin: options.nodeOrigin, nodeAudience: registration.attestedEnforcerBinding.enforcerDid, spaceId: options.spaceId },
-    policy: created.policy, policyCid: created.policyCid, policyRoot, enforcementRoot,
     attestedEnforcerBinding: registration.attestedEnforcerBinding, contentSource: options.contentSource,
     contentSourceDigestHex, encryptionNetwork: options.contentSource.encryptionNetwork, expiry,
-    display: { filename: options.filename }, encrypted: true as const,
+    display: { filename }, encrypted: true as const,
     metadata: {
-      mediaType: options.mediaType, byteLength: options.byteLength, filename: options.filename,
+      mediaType: options.mediaType, byteLength: options.byteLength, filename,
       ...(options.mediaType.startsWith("text/") ? { encoding: "utf-8" as const } : {}),
       ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
     },
