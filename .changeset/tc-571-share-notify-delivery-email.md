@@ -1,6 +1,6 @@
 ---
 "@tinycloud/cli": patch
-"@tinycloud/share-envelope": patch
+"@tinycloud/share-envelope": minor
 "@tinycloud/share-sdk": patch
 ---
 
