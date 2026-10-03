@@ -1,3 +1,4 @@
+export { canonicalShareFilename, hasUnsafeFilenameCodePoint } from "./filename-policy.js";
 export { DEFAULT_MAX_CONTENT_BLOB_BYTES, DEFAULT_MAX_SEALED_BLOB_BYTES, SHARE_RESULT_VERSION, inspectShare, receiveShare, ShareReceiveError, toShareErrorInfo, type ShareReceiveAuthorizationRequired, type ShareErrorCode, type ShareErrorInfo, type ShareFetchOptions, type ShareInspection, type ShareMetadata, type ShareReceiveOutcome, type ShareReceiveResult } from "./receive.js";
 export { DEFAULT_SHARE_LIFETIME_MS, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare, SharePublishError, type PublishedShare, type PublishedShareDeliveryMaterial, type PublishedShareMetadata, type SharePublishErrorCode, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 export { parseAddressedEnvelope, type ParsedAddressedEnvelope } from "./addressed.js";

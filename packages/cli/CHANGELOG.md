@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.0.0-beta.19
+
+### Patch Changes
+
+- c79f5f4: TC-575: Report OpenKey device sign-in rate limits as `DEVICE_AUTH_RATE_LIMITED` with a wait hint and any `Retry-After` window.
+
 ## 1.0.0-beta.18
 
 ### Patch Changes

@@ -247,7 +247,6 @@ describe("TinyCloud share authority adapter", () => {
       "my notes.md.": "my-notes-md",
       "notes.md~": "notes-md",
       "notes.\uff4d\uff44": "notes-md",
-      "x.html\u200b": "x-html",
       "a\uff0e\uff0emd": "a-md",
     };
     for (const [filename, stored] of Object.entries(storedAs)) {
@@ -269,6 +268,11 @@ describe("TinyCloud share authority adapter", () => {
         expect(uploadedPaths.at(-1)).toBe(path);
       }
     }
+    // The viewer refuses format characters, so publication refuses them too (TC-580).
+    await expect(targetAdapter.publish({
+      source: new TextEncoder().encode("filename round trip"), filename: "x.html\u200b", target: { kind: "email", address: "alice@example.com" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"), origin: "https://share.example",
+    })).rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "addressed filename is invalid" } });
   });
 
   it("clamps implicit lifetime to signed session expiry and rejects explicit overrun", async () => {

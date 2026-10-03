@@ -232,7 +232,12 @@ describe("safe Share output", () => {
 
   test("allows only one safe Markdown filename segment", () => {
     expect(safeFilename("report.md")).toBe("report.md");
-    expect(() => safeFilename("../report.md")).toThrow("UNSAFE_FILENAME");
-    expect(() => safeFilename("nested/report.md")).toThrow("UNSAFE_FILENAME");
+    expect(() => safeFilename("../report.md")).toThrow("filename must be one safe path segment");
+    expect(() => safeFilename("nested/report.md")).toThrow("filename must be one safe path segment");
+    for (const name of ["a\u0001.md", "a\u200b.md", "a\u202e.md", "a\u2028.md"]) {
+      let caught: unknown;
+      try { safeFilename(name); } catch (error) { caught = error; }
+      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 8, message: "filename contains control or invisible characters" });
+    }
   });
 });

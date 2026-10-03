@@ -3,6 +3,7 @@ import { authorizationMethodForTarget } from "./authorization.js";
 import { DEFAULT_SHARE_LIFETIME_MS, SharePublishError, SHARE_CONTENT_LIMIT, type PublishedShare, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 import { base58btc } from "multiformats/bases/base58";
 import { canonicalMailbox, isCanonicalEmailDomain } from "@tinycloud/share-envelope";
+import { canonicalShareFilename, hasUnsafeFilenameCodePoint } from "./filename-policy.js";
 
 export type ShareTarget = SharePublishTarget;
 
@@ -73,6 +74,17 @@ export function targetAuthorizationMethod(target: ShareTarget): ShareAuthorizati
   return authorizationMethodForTarget(target);
 }
 
+/** The share viewer's filename rule, reported as a fixed `invalid-argument` reason. */
+function publishFilename(value: string): string {
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint(value)
+      ? "filename contains control or invisible characters"
+      : "filename must be one safe path segment");
+  }
+}
+
 /** Route every share through the authenticated TinyCloud authority adapter. */
 export async function publishTargetShare(input: SharePublishOptions & {
   readonly target: ShareTarget;
@@ -83,6 +95,8 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly actions?: readonly ("read" | "list" | "edit")[];
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
+  const filename = publishFilename(input.filename);
+  const files = input.files?.map((file) => ({ ...file, filename: publishFilename(file.filename) }));
   if (input.targetAdapter === undefined) {
     if (target.kind === "bearer") throw new SharePublishError("authority-required", "native bearer publication requires an authenticated TinyCloud node");
     return {
@@ -105,19 +119,16 @@ export async function publishTargetShare(input: SharePublishOptions & {
     return bytes;
   })();
   if (source.byteLength === 0) throw new SharePublishError("invalid-argument", "share content is empty");
-  if (!input.filename || input.filename === "." || input.filename === ".." || /[/\\\u0000-\u001f\u007f]/.test(input.filename)) {
-    throw new SharePublishError("invalid-argument", "filename must be one safe path segment");
-  }
   if (target.kind === "bearer" && input.allowBinary !== true) {
     try { new TextDecoder("utf-8", { fatal: true }).decode(source); }
     catch { throw new SharePublishError("invalid-argument", "Markdown input must be valid UTF-8"); }
   }
-  const files = input.files === undefined || input.files.length === 0
+  const publishFiles = files === undefined || files.length === 0
     ? [{ bytes: source }]
-    : input.files;
+    : files;
   const limit = input.maxBytes ?? SHARE_CONTENT_LIMIT;
   let totalBytes = 0;
-  for (const file of files) {
+  for (const file of publishFiles) {
     totalBytes += file.bytes.byteLength;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limit) {
       throw new SharePublishError("max-bytes-exceeded", "share publication exceeds the combined byte limit");
@@ -128,8 +139,8 @@ export async function publishTargetShare(input: SharePublishOptions & {
   if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= nowMs) throw new SharePublishError("invalid-argument", "expiresAt must be a valid future time");
   return input.targetAdapter.publish({
     source,
-    filename: input.filename,
-    ...(input.files === undefined ? {} : { files: input.files }),
+    filename,
+    ...(files === undefined ? {} : { files }),
     ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
     ...(input.resourceKind === undefined ? {} : { resourceKind: input.resourceKind }),
     ...(input.actions === undefined ? {} : { actions: input.actions }),

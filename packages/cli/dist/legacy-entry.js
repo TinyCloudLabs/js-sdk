@@ -14594,6 +14594,34 @@ function errorDescription(value) {
   const description = value?.errorDescription ?? value?.error_description;
   return typeof description === "string" && description.length > 0 ? description : void 0;
 }
+function retryAfterSeconds(response) {
+  const value = response.headers.get("retry-after");
+  if (!value) return void 0;
+  let seconds;
+  if (/^\d+$/.test(value)) {
+    seconds = Number(value);
+    if (!Number.isSafeInteger(seconds)) return void 0;
+  } else {
+    if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/.test(value)) {
+      return void 0;
+    }
+    const retryAt = Date.parse(value);
+    if (!Number.isFinite(retryAt) || new Date(retryAt).toUTCString() !== value) return void 0;
+    seconds = Math.ceil((retryAt - Date.now()) / 1e3);
+  }
+  return seconds > 0 && seconds <= 600 ? seconds : void 0;
+}
+function deviceAuthRateLimit(response) {
+  const retrySeconds = retryAfterSeconds(response);
+  return new CLIError(
+    "DEVICE_AUTH_RATE_LIMITED",
+    "OpenKey rate limited device sign-in requests from this network",
+    ExitCode.ERROR,
+    {
+      hint: `OpenKey allows 5 device sign-in requests per 10 minutes from this network; wait up to 10 minutes, then retry once. The limit is shared by every agent on this network.${retrySeconds !== void 0 ? ` Retry after ${retrySeconds} seconds.` : ""}`
+    }
+  );
+}
 function publicSessionJwk(value) {
   const publicJwk = publicJwkForDelegation(value);
   const record = publicJwk;
@@ -14774,6 +14802,9 @@ async function acquireDeviceDelegation(input) {
   if (!startResponse.ok) {
     const code2 = errorCode(startValue);
     const description = errorDescription(startValue);
+    if (startResponse.status === 429 && code2 === "rate_limited") {
+      throw deviceAuthRateLimit(startResponse);
+    }
     if (code2 === "invalid_scope") {
       throw new CLIError(
         "SCOPE_REJECTED",

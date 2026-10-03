@@ -272,6 +272,66 @@ describe("OpenKey device authorization", () => {
     expect(waits).toEqual([2000, 2000, 2000, 2000, 7000]);
   });
 
+  test("accepts only bounded integer or IMF-fixdate retry windows", async () => {
+    const initialTime = new Date("2026-10-03T00:00:00Z");
+    setSystemTime(initialTime);
+    try {
+      const cases: Array<{ value?: string; retryHint?: string }> = [
+        { value: "120", retryHint: "Retry after 120 seconds." },
+        { value: "Sat, 03 Oct 2026 00:05:00 GMT", retryHint: "Retry after 300 seconds." },
+        { value: "600", retryHint: "Retry after 600 seconds." },
+        { value: "Fri, 02 Oct 2026 23:59:00 GMT" },
+        { value: "0" },
+        { value: "-5" },
+        { value: "-3600" },
+        { value: "1.5" },
+        { value: "3600.5" },
+        { value: "601" },
+        { value: "not a date" },
+        {},
+      ];
+      for (const { value, retryHint } of cases) {
+        const headers = new Headers();
+        if (value !== undefined) headers.set("Retry-After", value);
+        const start = new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers });
+        let error: unknown;
+        try {
+          await acquire(fakeOpenKey(() => response({}), { start }));
+        } catch (caught) {
+          error = caught;
+        }
+        if (!(error instanceof Error) || !("metadata" in error)) {
+          throw new Error("Expected device-auth rate-limit CLIError");
+        }
+        expect(error).toMatchObject({
+          code: "DEVICE_AUTH_RATE_LIMITED",
+          exitCode: 1,
+          message: "OpenKey rate limited device sign-in requests from this network",
+        });
+        const metadata = error.metadata;
+        if (!metadata || typeof metadata !== "object" || !("hint" in metadata) || typeof metadata.hint !== "string") {
+          throw new Error("Expected a rate-limit error hint");
+        }
+        const hint = metadata.hint;
+        expect(hint).toContain("OpenKey allows 5 device sign-in requests per 10 minutes from this network");
+        if (retryHint) expect(hint).toContain(retryHint);
+        else expect(hint).not.toContain("Retry after");
+      }
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("leaves other device-start errors unchanged", async () => {
+    await expect(acquire(fakeOpenKey(() => response({}), {
+      start: response({ error: "temporarily_unavailable" }, 503),
+    }))).rejects.toMatchObject({
+      code: "DEVICE_AUTH_FAILED",
+      exitCode: 1,
+      message: "OpenKey device authorization failed: temporarily_unavailable",
+    });
+  });
+
   test("stops on denial or expiry instead of retrying", async () => {
     await expect(acquire(fakeOpenKey(() => response({ error: "access_denied" }, 400)))).rejects.toMatchObject({ code: "DEVICE_AUTH_DENIED" });
     await expect(acquire(fakeOpenKey(() => response({ error: "expired_token" }, 410)), { openkeyHost: "https://openkey.localhost" }))
