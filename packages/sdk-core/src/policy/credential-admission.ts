@@ -845,7 +845,9 @@ export async function postPolicyDelegation(
   });
   if (requestedExpiresAt === undefined) return send(body);
   const response = await send({ ...body, requestedExpiresAt });
-  return response.status === 422 ? send(body) : response;
+  if (response.status !== 422) return response;
+  await response.body?.cancel().catch(() => undefined);
+  return send(body);
 }
 
 function policyRuntimeBasePath(value: string | undefined): string {

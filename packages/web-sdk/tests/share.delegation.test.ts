@@ -127,7 +127,7 @@ test("a delegation only opens for the key and share it names", async () => {
   await expect(receivedAs(receiverDid, receiverKey).delegate({ to: accountDid })).rejects.toThrow("different share or key");
   await expect(receivedAs(delegateDid, delegateKey, { delegation: { ...delegation, shareId: "another-share" } }).delegate({ to: accountDid })).rejects.toThrow("different share or key");
   // A delegation carries at least one re-delegation after the session.
-  await expect(receivedAs(delegateDid, delegateKey, { delegation: { ...delegation, chain: [delegation.chain[0]!] } }).delegate({ to: accountDid })).rejects.toThrow("different share or key");
+  await expect(receivedAs(delegateDid, delegateKey, { delegation: { ...delegation, chain: [delegation.chain[0]!] } }).delegate({ to: accountDid })).rejects.toThrow("no re-delegation to this key");
   // Compact policy invocations need an Ed25519 did:key on the receiving end.
   await expect(receivedAs(delegateDid, delegateKey).delegate({ to: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001" })).rejects.toThrow("Ed25519 did:key");
   expect(imported).toHaveLength(0);

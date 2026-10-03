@@ -1118,6 +1118,7 @@ export interface CompactPolicyDescendantInput {
   readonly issuerDid: string;
   readonly audienceDid: string;
   readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>;
+  /** Start of the window; defaults to one second after the parent's start. */
   readonly now?: number;
   /** Defaults to the longest window the parent allows: one second inside it. */
   readonly expiresAt?: number;
@@ -1133,7 +1134,8 @@ function compactPolicyDescendantClaims(input: CompactPolicyDescendantInput) {
   if (!Number.isInteger(depth) || (depth as number) <= 0) throw new Error("policy descendant depth is exhausted");
   if (!compactAttenuationContains(parent.payload.att, input.attenuation))
     throw new Error("policy descendant exceeds the parent attenuation");
-  const now = Math.max(input.now ?? Math.floor(Date.now() / 1000), parent.payload.nbf + 1);
+  // Start just inside the parent's window, so a fresh link is usable at once.
+  const now = Math.max(input.now ?? parent.payload.nbf + 1, parent.payload.nbf + 1);
   const exp = Math.min(input.expiresAt ?? parent.payload.exp - 1, parent.payload.exp - 1);
   if (exp <= now) throw new Error("policy parent has no strictly narrower validity window");
   return {

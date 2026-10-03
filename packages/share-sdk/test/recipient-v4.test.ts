@@ -317,7 +317,11 @@ describe("TC-500 accountless v4 recipient", () => {
     const enforcementRoot = "bafy-enforcement-root-531";
     const policyCid = "bafy-policy-531";
     const resource = "tinycloud://owner-space/kv/shares/tc-531/document.txt";
-    const attenuation = { [resource]: { "tinycloud.kv/get": [{ type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource }] } };
+    const network = "urn:tinycloud:encryption:owner:default";
+    const attenuation = {
+      [resource]: { "tinycloud.kv/get": [{ type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource }] },
+      [network]: { "tinycloud.encryption/decrypt": [{}] },
+    };
     const now = Math.floor(Date.now() / 1000);
     const envelope = {
       version: 3,
@@ -326,10 +330,12 @@ describe("TC-500 accountless v4 recipient", () => {
       target: { origin: "https://node.example", nodeAudience: enforcerDid },
       attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
       policyCid,
-      policy: { ownerDid: "did:key:z6MkOwner", policyId: "pol_tc500", capabilityCeiling: [{ kind: "kv", resource, selector: "exact", actions: ["tinycloud.kv/get"] }] },
+      policy: { ownerDid: "did:key:z6MkOwner", policyId: "pol_tc500", capabilityCeiling: [{ kind: "kv", resource, selector: "exact", actions: ["tinycloud.kv/get"] }, { kind: "encryption", resource: network, action: "tinycloud.encryption/decrypt" }] },
       policyRoot: { cid: policyRoot },
       enforcementRoot: { cid: enforcementRoot },
       contentSourceDigestHex: "1".repeat(64),
+      encryptionNetwork: network,
+      metadata: { mediaType: "text/plain" },
       expiry: wholeSeconds(now + 7200),
     } as any;
     const facts = policySessionFacts({ policyCid, policyRoot, enforcementRoot, enforcerDid, nodeAudience: nodeDid, recipientDid: receiverDid });
@@ -389,9 +395,59 @@ describe("TC-500 accountless v4 recipient", () => {
         child({ att: { ...attenuation, "tinycloud://owner-space/kv/private": { "tinycloud.kv/get": [{}] } } }),
         // Issued by a key other than the parent's audience.
         child({ iss: `${delegateDid}#${delegateDid.slice("did:key:".length)}` }, delegateKey),
+        // Proves more than its parent.
+        child({ prf: [s0.cid, "bafy-another-proof"] }),
       ]) {
         expect(() => client(delegateDid, { authorization: s0.authorization, cid: s0.cid, descendants: [{ authorization: broken.authorization, cid: broken.cid }] })).toThrow("does not extend its parent");
       }
+      // A leaf that has expired authorizes nothing.
+      const expired = child({ nbf: now - 9, exp: now - 1 });
+      expect(() => client(delegateDid, { authorization: s0.authorization, cid: s0.cid, descendants: [{ authorization: expired.authorization, cid: expired.cid }] })).toThrow("not currently valid");
+    });
+
+    test("decrypts through the chain with the delegate's key, proving the leaf", async () => {
+      const s0 = session(3600);
+      const d1 = signLongLived(receiverKey, {
+        att: attenuation, aud: delegateDid, exp: now + 3599, fct: [{ ...facts, remainingRedelegationDepth: 7 }],
+        iss: `${receiverDid}#${receiverDid.slice("did:key:".length)}`, nbf: now - 9, nnc: "delegate-decrypt-531", prf: [s0.cid],
+      });
+      let decryptAuthorization = "";
+      const delegated = client(delegateDid, { authorization: s0.authorization, cid: s0.cid, descendants: [{ authorization: d1.authorization, cid: d1.cid }] }, async (_input, init) => {
+        decryptAuthorization = new Headers(init?.headers).get("Authorization") ?? "";
+        return new Response(null, { status: 400 });
+      });
+      const encryptedSymmetricKey = "wrapped-key";
+      const encryptedSymmetricKeyHash = [...sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: "AA" }));
+      envelope.contentSource = { keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash, initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
+      await expect(delegated.decryptV3Content(encrypted)).rejects.toThrow("decrypt invocation rejected");
+      const invocation = verifyCompactUcanAuthorization(decryptAuthorization);
+      expect(invocation.payload.iss.split("#", 1)[0]).toBe(delegateDid);
+      expect(invocation.payload.prf).toEqual([d1.cid]);
+      expect(Object.keys(invocation.payload.att)).toEqual([network]);
+    });
+
+    test("refuses a chain whose session the owner's Node never signed, or that redelegates past depth zero", () => {
+      // A recipient cannot stand in for the Node: the session must be Node-signed.
+      const forgedSession = signLongLived(receiverKey, {
+        att: attenuation, aud: receiverDid, exp: now + 3600, fct: [facts],
+        iss: `${receiverDid}#${receiverDid.slice("did:key:".length)}`, nbf: now - 10, nnc: "forged-531", prf: [policyRoot, enforcementRoot],
+      });
+      const forgedChild = signLongLived(receiverKey, {
+        att: attenuation, aud: delegateDid, exp: now + 3599, fct: [{ ...facts, remainingRedelegationDepth: 7 }],
+        iss: `${receiverDid}#${receiverDid.slice("did:key:".length)}`, nbf: now - 9, nnc: "forged-child-531", prf: [forgedSession.cid],
+      });
+      expect(() => client(delegateDid, { authorization: forgedSession.authorization, cid: forgedSession.cid, descendants: [{ authorization: forgedChild.authorization, cid: forgedChild.cid }] })).toThrow("signed binding");
+      // A session that may not be redelegated cannot gain a child.
+      const final = signLongLived(nodeKey, {
+        att: attenuation, aud: receiverDid, exp: now + 3600, fct: [{ ...facts, remainingRedelegationDepth: 0 }],
+        iss: `${nodeDid}#${nodeDid.slice("did:key:".length)}`, nbf: now - 10, nnc: "final-531", prf: [policyRoot, enforcementRoot],
+      });
+      const beyond = signLongLived(receiverKey, {
+        att: attenuation, aud: delegateDid, exp: now + 3599, fct: [{ ...facts, remainingRedelegationDepth: -1 }],
+        iss: `${receiverDid}#${receiverDid.slice("did:key:".length)}`, nbf: now - 9, nnc: "beyond-531", prf: [final.cid],
+      });
+      expect(() => client(delegateDid, { authorization: final.authorization, cid: final.cid, descendants: [{ authorization: beyond.authorization, cid: beyond.cid }] })).toThrow("does not extend its parent");
     });
   });
 });

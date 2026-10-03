@@ -257,6 +257,8 @@ export interface CredentialsPolicyAdmissionOptions {
   readonly requirement: CredentialRequirement;
   readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
   readonly nodeOrigin: string;
+  /** How long the minted session should last; see `admitPolicyCredentialV3`. */
+  readonly requestedExpiresAt?: string | null;
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
   readonly now?: Date;

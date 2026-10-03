@@ -12,8 +12,10 @@ email-domain shares (TC-530).
   as the share: `requestedExpiresAt`, which defaults to the policy's expiry
   and can be set to `null` for the legacy minute. On Nodes before 1.17.3,
   which reject the field with 422, it falls back to the 60-second session.
-  Received sessions longer than 60 seconds are accepted, but never beyond the
-  share's expiry (and at most the 31-day root bound).
+  The request asks for the earlier of the envelope's and the policy's expiry.
+  Received sessions longer than 60 seconds are accepted:
+  `ShareRecipientClient` bounds them by the share's expiry, and
+  `parsePolicySessionUcan` by the 31-day root window.
 - **Re-delegation.** `ReceivedShare.delegate({ to, expiresAt? })`
   re-delegates a received share, decryption included, to another Ed25519
   `did:key`, for example an account session key. It imports the new link into

@@ -378,6 +378,9 @@ describe("TC-405 unified policy contracts", () => {
     expect(longest.payload.exp).toBe(session.exp - 1);
     expect(longest.payload.nbf).toBe(s1.payload.nbf);
     expect(longest.payload.fct[0]!.remainingRedelegationDepth).toBe(session.fact.remainingRedelegationDepth - 1);
+    // Without a start time it starts just inside the parent, so it is usable at once.
+    const { now: _now, ...startless } = base;
+    expect(createCompactPolicyDescendant({ ...startless, privateKey: recipientKey }).payload.nbf).toBe(session.nbf + 1);
     // A requested expiry is honoured but never exceeds the parent.
     expect(createCompactPolicyDescendant({ ...base, privateKey: recipientKey, expiresAt: session.exp + 3600 }).payload.exp).toBe(session.exp - 1);
     // A signer that is not the issuer's key is refused.

@@ -293,6 +293,7 @@ function verifyV3PolicyDescendants(
       || child.payload.nbf <= parent.payload.nbf
       || child.payload.exp >= parent.payload.exp
       || typeof parentDepth !== "number"
+      || parentDepth <= 0
       || depth !== parentDepth - 1
       || canonicalize(facts) !== canonicalize(parentFacts)
       || canonicalize(child.payload.att) !== canonicalize(parent.payload.att)) throw new Error("v3 policy descendant does not extend its parent");
