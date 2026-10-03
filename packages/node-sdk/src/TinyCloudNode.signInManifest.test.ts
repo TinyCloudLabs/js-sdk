@@ -901,7 +901,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     auth._tinyCloudSession = {
       delegationHeader: { Authorization: "Bearer fake" },
     };
-    auth.hostOwnedSpace = mock(async () => true);
+    auth.hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
 
     await withFetchResponses(
       [
@@ -921,7 +921,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       "Bearer fake",
     );
 
-    expect(auth.hostOwnedSpace).not.toHaveBeenCalled();
+    expect(auth.hostOwnedSpaceResult).not.toHaveBeenCalled();
   });
 
   test("manifest registry write hosts account space only when activation skips it", async () => {
@@ -932,7 +932,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     auth._tinyCloudSession = {
       delegationHeader: { Authorization: "Bearer manifest-activation-fixture" },
     };
-    auth.hostOwnedSpace = mock(async () => true);
+    auth.hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
 
     await withActivationResponses(
       [
@@ -950,8 +950,8 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       },
     );
 
-    expect(auth.hostOwnedSpace).toHaveBeenCalledTimes(1);
-    expect(auth.hostOwnedSpace).toHaveBeenCalledWith(accountSpaceId);
+    expect(auth.hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
+    expect(auth.hostOwnedSpaceResult).toHaveBeenCalledWith(accountSpaceId);
   });
 
   test("signIn writes manifest records into the account applications registry", async () => {

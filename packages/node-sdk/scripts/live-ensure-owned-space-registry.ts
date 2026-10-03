@@ -130,19 +130,21 @@ async function main(): Promise<void> {
     // registry plumbing and is not what `ensureOwnedSpaceHosted("secrets")`
     // should re-trigger.) Counting `secrets`-space host calls proves whether a
     // redundant host prompt occurs.
+    // `hostOwnedSpace` delegates to `hostOwnedSpaceResult`, and the registry
+    // plumbing calls the latter directly, so wrapping it counts every host.
     const auth = (owner as any).auth;
-    const realHostOwnedSpace = auth.hostOwnedSpace.bind(auth);
+    const realHostOwnedSpaceResult = auth.hostOwnedSpaceResult.bind(auth);
     let secretsHostCount = 0;
-    auth.hostOwnedSpace = async (spaceId: string) => {
+    auth.hostOwnedSpaceResult = async (spaceId: string, purpose?: unknown) => {
       if (spaceId === secretsSpaceId) {
         secretsHostCount += 1;
         console.log(
-          `[live] auth.hostOwnedSpace(secrets) called (#${secretsHostCount})`,
+          `[live] auth.hostOwnedSpaceResult(secrets) called (#${secretsHostCount})`,
         );
       } else {
-        console.log(`[live] auth.hostOwnedSpace(other) called for ${spaceId}`);
+        console.log(`[live] auth.hostOwnedSpaceResult(other) called for ${spaceId}`);
       }
-      return realHostOwnedSpace(spaceId);
+      return realHostOwnedSpaceResult(spaceId, purpose);
     };
 
     // The owner is root of their own encryption network; create it so the

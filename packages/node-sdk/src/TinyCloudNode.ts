@@ -36,6 +36,7 @@ import {
   TinyCloudSession,
   activateSessionWithHost,
   authorizationVerdictOf,
+  type SpaceHostResult,
   KVService,
   IKVService,
   SQLService,
@@ -590,6 +591,12 @@ function persistedExpiry(value: unknown): Date {
 
 function sameInstant(left: Date, right: Date): boolean {
   return left.getTime() === right.getTime();
+}
+
+/** `<status> - <server text>` for a failed host/activation request; never drops the status. */
+function describeHostFailure(result: SpaceHostResult): string {
+  const text = result.error?.trim();
+  return text ? `${result.status} - ${text}` : `${result.status}`;
 }
 
 function ownerDelegationPermissions(
@@ -2469,24 +2476,30 @@ export class TinyCloudNode {
 
     if (!activation.success && activation.status !== 404) {
       throw Object.assign(
-        new Error(`Failed to check owned space ${spaceId}: ${activation.error ?? activation.status}`),
+        new Error(`Failed to check owned space ${spaceId}: ${describeHostFailure(activation)}`),
         { cause: activation },
       );
     }
 
-    const created = await (this.auth as NodeUserAuthorization).hostOwnedSpace(spaceId);
-    if (!created) {
-      throw new Error(`Failed to create owned space: ${spaceId}`);
+    const created = await (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
+    if (!created.success) {
+      throw Object.assign(
+        new Error(`Failed to create owned space ${spaceId}: ${describeHostFailure(created)}`),
+        { cause: created },
+      );
     }
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     const retry = await activateSessionWithHost(host, session.delegationHeader);
     if (!retry.success || retry.skipped?.includes(spaceId)) {
-      throw new Error(
-        `Failed to activate session after creating owned space ${spaceId}: ${
-          retry.error ?? "space was skipped"
-        }`,
+      throw Object.assign(
+        new Error(
+          `Failed to activate session after creating owned space ${spaceId}: ${
+            retry.success ? "space was skipped" : describeHostFailure(retry)
+          }`,
+        ),
+        { cause: retry },
       );
     }
     this.confirmedHostedSpaceIds.add(spaceId);

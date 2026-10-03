@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   CapabilityKeyRegistry,
+  KVService,
+  ServiceContext,
   SharingService,
   type ServiceSession,
 } from "@tinycloud/sdk-core";
@@ -42,11 +44,27 @@ const AUTH_BODIES = [
   "Forbidden",
   "session expired",
 ];
+const RETHROW_STYLES = ["error", "cause", "message"] as const;
+type RethrowStyle = (typeof RETHROW_STYLES)[number];
 const AUTH_CASES = [401, 403].flatMap((status) =>
-  AUTH_BODIES.flatMap((body) =>
-    (["cause", "message"] as const).map((rethrow) => ({ status, body, rethrow })),
-  ),
+  AUTH_BODIES.flatMap((body) => RETHROW_STYLES.map((rethrow) => ({ status, body, rethrow }))),
 );
+
+/** The three ways a caller unwraps a failed `Result` inside `withSessionRefresh`. */
+function rethrown(error: { message: string }, style: RethrowStyle): unknown {
+  if (style === "error") return error;
+  return style === "cause" ? new Error(error.message, { cause: error }) : new Error(error.message);
+}
+
+/** Settle `run`, returning the rejection (or undefined when it resolved). */
+async function rejectionOf(run: Promise<unknown>): Promise<{ message?: unknown } | undefined> {
+  try {
+    await run;
+    return undefined;
+  } catch (error) {
+    return error as { message?: unknown };
+  }
+}
 
 describe("@tinycloud/server sharing session refresh", () => {
   test.each(AUTH_CASES)("node.sharing.generate $status body=$body rethrown with $rethrow", async ({ status, body, rethrow }) => {
@@ -122,22 +140,61 @@ describe("@tinycloud/server sharing session refresh", () => {
         path: "shared",
         actions: ["tinycloud.kv/get"],
       });
-      if (!result.ok) {
-        throw rethrow === "cause"
-          ? new Error(result.error.message, { cause: result.error })
-          : new Error(result.error.message);
-      }
+      if (!result.ok) throw rethrown(result.error, rethrow);
       return result.data;
     });
 
+    const failure = await rejectionOf(generate());
     if (status === 401) {
-      await expect(generate()).resolves.toBeDefined();
+      expect(failure).toBeUndefined();
     } else {
-      await expect(generate()).rejects.toThrow(
-        `Failed to register delegation with server: 403 ${body}`,
-      );
+      expect(String(failure?.message)).toContain(`Failed to register delegation with server: 403 ${body}`);
     }
     expect(generateCalls).toBe(status === 401 ? 2 : 1);
+    expect(fetchCalls).toBe(status === 401 ? 2 : 1);
+    expect(signInCalls).toBe(status === 401 ? 1 : 0);
+  });
+
+  test.each(AUTH_CASES)("kv.put $status body=$body rethrown with $rethrow", async ({ status, body, rethrow }) => {
+    let fetchCalls = 0;
+    let signedIn = false;
+    const kv = new KVService({});
+    kv.initialize(new ServiceContext({
+      hosts: ["https://node.example"],
+      session: {
+        delegationHeader: { Authorization: "Bearer session" },
+        delegationCid: "bafy-session",
+        spaceId: "tinycloud:test-space",
+        verificationMethod: "did:key:zSession#zSession",
+        jwk: {},
+      },
+      invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+      fetch: async () => {
+        fetchCalls += 1;
+        return signedIn ? new Response(null, { status: 200 }) : new Response(body, { status });
+      },
+    }));
+    let signInCalls = 0;
+    const node = {
+      signIn: async () => {
+        signInCalls += 1;
+        signedIn = true;
+      },
+    } as unknown as TinyCloudNode;
+
+    const failure = await rejectionOf(withSessionRefresh(node, async () => {
+      const result = await kv.put("shared/item", "value");
+      if (!result.ok) throw rethrown(result.error, rethrow);
+    }));
+
+    if (status === 401) {
+      expect(failure).toBeUndefined();
+    } else {
+      // The message keeps the HTTP status and the server text for diagnostics.
+      expect(String(failure?.message)).toBe(
+        `Failed to put key "shared/item": 403 - ${body || "authorization failed"}`,
+      );
+    }
     expect(fetchCalls).toBe(status === 401 ? 2 : 1);
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
@@ -147,10 +204,20 @@ describe("@tinycloud/server sharing session refresh", () => {
     ["typed 403 with a session body", Object.assign(new Error("session expired"), { meta: { status: 403 } }), false],
     ["typed non-auth status with a 401 body", Object.assign(new Error("401 Unauthorized"), { status: 502 }), false],
     ["AUTH_UNAUTHORIZED without status", { code: "AUTH_UNAUTHORIZED", message: "Unauthorized Action: x / y" }, false],
-    ["untyped 401 text", new Error("request failed: 401"), true],
-    ["untyped 403 Unauthorized Action text", new Error("403 Unauthorized Action: x / y"), false],
+    ["untyped status after a colon", new Error("request failed: 401"), true],
+    ["untyped KV-format 401", new Error('Failed to put key "k": 401 - Forbidden'), true],
+    ["untyped KV-format 403 with session text", new Error('Failed to put key "k": 403 - session expired'), false],
+    ["untyped HTTP 401", new Error("HTTP 401 from upstream"), true],
+    ["untyped parenthesised 401", new Error("upstream service returned an HTML error page (401)."), true],
+    ["untyped leading 403 Unauthorized Action", new Error("403 Unauthorized Action: x / y"), false],
     ["untyped session wording", new Error("session expired"), true],
-    ["untyped generic failure", new Error("socket hang up"), false],
+    ["session wording with 403 in a path", new Error("session expired while reading /vault/403/item"), true],
+    ["session wording with 403 in an id", new Error("session expired for request req-403"), true],
+    ["session wording with 403 as a port", new Error("session expired at https://node.example:403/invoke"), true],
+    ["session wording with a 403 byte count", new Error("session expired after 403 bytes"), true],
+    ["401 as a port", new Error("connect ECONNREFUSED 127.0.0.1:401"), false],
+    ["401 as a byte count", new Error("wrote 401 bytes"), false],
+    ["401 in an expectation", new Error("expected 401, got 500"), false],
   ])("withSessionRefresh: %s", async (_name, failure, refreshes) => {
     let calls = 0;
     let signInCalls = 0;

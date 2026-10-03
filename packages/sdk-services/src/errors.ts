@@ -175,13 +175,16 @@ export function authUnauthorizedError(
  * - `"unauthenticated"`: HTTP 401 — the session is missing or stale.
  * - `"forbidden"`: HTTP 403, or `AUTH_UNAUTHORIZED` without a status — the
  *   session is valid but lacks the capability.
- * - `"other"`: a non-authorization HTTP status.
+ * - `"other"`: a non-authorization HTTP error status (4xx/5xx).
  */
 export type AuthorizationVerdict = "unauthenticated" | "forbidden" | "other";
 
 const MAX_CAUSE_DEPTH = 8;
 
-function httpStatusOf(node: Record<string, unknown>): number | undefined {
+/** The first 4xx/5xx among `status`, `statusCode`, `meta.status`. Success and
+ * informational statuses (e.g. a 200 `Response` kept as `cause`) are not
+ * failures, so they are skipped rather than ending the search. */
+function errorStatusOf(node: Record<string, unknown>): number | undefined {
   const meta = node.meta;
   const candidates = [
     node.status,
@@ -194,7 +197,7 @@ function httpStatusOf(node: Record<string, unknown>): number | undefined {
     if (
       typeof candidate === "number" &&
       Number.isInteger(candidate) &&
-      candidate >= 100 &&
+      candidate >= 400 &&
       candidate <= 599
     ) {
       return candidate;
@@ -204,11 +207,13 @@ function httpStatusOf(node: Record<string, unknown>): number | undefined {
 }
 
 /**
- * Classify an error from its typed HTTP status (`status`, `statusCode`, or
- * `meta.status`) and `AUTH_UNAUTHORIZED` code, following the `cause` chain
- * outward-in so wrappers that rethrow with `cause` keep the verdict. The
- * first HTTP status found decides. Returns `undefined` for untyped errors;
- * only then may callers fall back to message heuristics.
+ * Classify an error from its typed HTTP error status (`status`, `statusCode`,
+ * or `meta.status`, 4xx/5xx only) and `AUTH_UNAUTHORIZED` code, following the
+ * `cause` chain outer-first (at most {@link MAX_CAUSE_DEPTH} links, cycles
+ * stop the walk) so wrappers that rethrow with `cause` keep the verdict. The
+ * outermost error status decides, so an outer 5xx keeps its retry budget even
+ * over an inner 401. Returns `undefined` for untyped errors; only then may
+ * callers fall back to message heuristics.
  */
 export function authorizationVerdictOf(
   error: unknown,
@@ -223,7 +228,7 @@ export function authorizationVerdictOf(
   ) {
     seen.add(node);
     const record = node as Record<string, unknown>;
-    const status = httpStatusOf(record);
+    const status = errorStatusOf(record);
     if (status === 401) return "unauthenticated";
     if (status === 403) return "forbidden";
     if (status !== undefined) return "other";

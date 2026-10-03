@@ -82,10 +82,15 @@ export async function createServerIdentity(
   };
 }
 
-// Message heuristics for untyped errors only. An explicit 401/403 in the text
-// decides before the session-wording pattern, so a 403 whose body reads
+// Message heuristics for untyped errors only. A 401/403 counts as a status
+// only in the contexts the SDK's own messages put it: after `: ` (`…key "k":
+// 403 - text`, `…with server: 403 text`, `…failed: 401`), after `HTTP `, inside
+// `(403)`, or leading the message (`403 Unauthorized Action: …`); and only
+// when followed by whitespace, `)` or the end. Paths, ids, ports, byte counts
+// and `expected 401, got 500` are not statuses. An explicit status decides
+// before the session-wording pattern, so a 403 whose body reads
 // `Unauthorized Action: …` never triggers a refresh.
-const HTTP_AUTH_STATUS_PATTERN = /\b(401|403)\b(?![\d-])/;
+const HTTP_AUTH_STATUS_PATTERN = /(?:^|\bHTTP\s+|:\s|\()(401|403)(?=[\s)]|$)/;
 const SESSION_ERROR_PATTERN =
   /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
 

@@ -556,12 +556,11 @@ export class KVService extends BaseService implements IKVService {
       if (!response.ok) {
         const errorText = await response.text();
         if (response.status === 401 || response.status === 403) {
-          const { resource, action: requiredAction } = parseAuthError(errorText);
-          return err(authUnauthorizedError("kv", errorText, {
-            status: response.status,
-            ...(requiredAction && { requiredAction }),
-            ...(resource && { resource }),
-          }));
+          return this.authorizationFailure(
+            `Failed to batch read ${keys.length} key(s)`,
+            response,
+            errorText
+          );
         }
         if (response.status === 413) {
           return err(serviceError(
@@ -680,12 +679,11 @@ export class KVService extends BaseService implements IKVService {
     }
 
     if (response.status === 401 || response.status === 403) {
-      const { resource, action } = parseAuthError(errorText);
-      return err(authUnauthorizedError("kv", errorText, {
-        status: response.status,
-        ...(action && { requiredAction: action }),
-        ...(resource && { resource }),
-      }));
+      return this.authorizationFailure(
+        `Failed to create signed read URL for key "${key}"`,
+        response,
+        errorText
+      );
     }
 
     const code =
@@ -698,6 +696,31 @@ export class KVService extends BaseService implements IKVService {
         { meta: { status: response.status, statusText: response.statusText } }
       )
     );
+  }
+
+  /**
+   * AUTH_UNAUTHORIZED for a 401/403 response. The message keeps the HTTP
+   * status and the server text (`<context>: <status> - <text>`, the same
+   * shape as every other KV failure) so callers that rethrow only the message
+   * still see the status; `meta.status` carries it for typed callers.
+   * Resource/ability hints are parsed from the raw body, never the message.
+   */
+  private authorizationFailure(
+    context: string,
+    response: FetchResponse,
+    errorText: string,
+    extraMeta: Record<string, unknown> = {}
+  ): Result<never> {
+    const { resource, action } = parseAuthError(errorText);
+    const detail = errorText.trim().length > 0
+      ? errorText
+      : response.statusText || "authorization failed";
+    return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
+      status: response.status,
+      ...(action && { requiredAction: action }),
+      ...(resource && { resource }),
+      ...extraMeta,
+    }));
   }
 
   private normalizeSignedReadUrlResponse(
@@ -763,14 +786,13 @@ export class KVService extends BaseService implements IKVService {
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
             const errorText = await response.text();
-            const { resource, action } = parseAuthError(errorText);
             const permissionHint = parsePermissionHintFromErrorText(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...(action && { requiredAction: action }),
-              ...(resource && { resource }),
-              ...(permissionHint === undefined ? {} : { permissionHint }),
-            }));
+            return this.authorizationFailure(
+              `Failed to get key "${key}"`,
+              response,
+              errorText,
+              permissionHint === undefined ? {} : { permissionHint }
+            );
           }
 
           if (response.status === 404) {
@@ -861,16 +883,11 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (response.status === 401 || response.status === 403) {
-          const errorText = await response.text();
-          const message = errorText.trim().length > 0
-            ? errorText
-            : `Failed to put key "${key}": ${response.status} - ${response.statusText || "authorization failed"}`;
-          const { resource, action: requiredAction } = parseAuthError(errorText);
-          return err(authUnauthorizedError("kv", message, {
-            status: response.status,
-            ...(requiredAction && { requiredAction }),
-            ...(resource && { resource }),
-          }));
+          return this.authorizationFailure(
+            `Failed to put key "${key}"`,
+            response,
+            await response.text()
+          );
         }
 
         if (!response.ok) {
@@ -1045,12 +1062,11 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 401 || response.status === 403) {
-            const { resource, action } = parseAuthError(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...(action && { requiredAction: action }),
-              ...(resource && { resource }),
-            }));
+            return this.authorizationFailure(
+              `Failed to batch put ${items.length} key(s)`,
+              response,
+              errorText
+            );
           }
 
           const quotaError = this.handleQuotaErrorResponse(
@@ -1218,13 +1234,11 @@ export class KVService extends BaseService implements IKVService {
 
         if (!response.ok) {
           if (response.status === 401) {
-            const errorText = await response.text();
-            const { resource, action } = parseAuthError(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...(action && { requiredAction: action }),
-              ...(resource && { resource }),
-            }));
+            return this.authorizationFailure(
+              "Failed to list keys",
+              response,
+              await response.text()
+            );
           }
 
           const errorText = await response.text();
@@ -1295,13 +1309,11 @@ export class KVService extends BaseService implements IKVService {
 
         if (!response.ok) {
           if (response.status === 401) {
-            const errorText = await response.text();
-            const { resource, action } = parseAuthError(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...(action && { requiredAction: action }),
-              ...(resource && { resource }),
-            }));
+            return this.authorizationFailure(
+              `Failed to delete key "${key}"`,
+              response,
+              await response.text()
+            );
           }
 
           if (response.status === 404) {
@@ -1369,13 +1381,11 @@ export class KVService extends BaseService implements IKVService {
 
         if (!response.ok) {
           if (response.status === 401) {
-            const errorText = await response.text();
-            const { resource, action } = parseAuthError(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...(action && { requiredAction: action }),
-              ...(resource && { resource }),
-            }));
+            return this.authorizationFailure(
+              `Failed to get metadata for key "${key}"`,
+              response,
+              await response.text()
+            );
           }
 
           if (response.status === 404) {
