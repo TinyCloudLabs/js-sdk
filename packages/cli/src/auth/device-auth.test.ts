@@ -419,6 +419,17 @@ describe("device login persistence", () => {
     expect((await ProfileManager.getProfile("agent")).openkeyHost).toBe("https://openkey.example");
   });
 
+  test("adds the capability read OpenKey requires when the manifest omits it", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+
+    const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [bearerPrefix, addressedPrefix], fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+
+    expect(openkey.startBodies[0]!.permissions).toEqual(requested);
+    expect(result.declined).toEqual([]);
+  });
+
   const OTHER_OWNER = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
   const baseProfile = { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" };
   const login = (openkey: FakeOpenKey, extra: Record<string, unknown> = {}) => loginWithDeviceAuthorization({

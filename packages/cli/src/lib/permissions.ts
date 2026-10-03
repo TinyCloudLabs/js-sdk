@@ -34,6 +34,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
+import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
@@ -337,7 +338,11 @@ export async function loadPermissionRequest(
 export async function loadManifestPermissions(
   source: string,
   profile: string,
-  options: { allowLogicalSpaces?: boolean } = {},
+  options: {
+    allowLogicalSpaces?: boolean;
+    /** `--owner`: names the secrets owner when the profile has not recorded one. */
+    ownerDid?: string;
+  } = {},
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
@@ -353,23 +358,28 @@ export async function loadManifestPermissions(
       .map((entry) => {
         const service = normalizeService(String(entry.service ?? ""));
         const path = String(entry.path ?? "");
-        const skipPrefix = entry.skipPrefix === true;
-        const resolvedPath = skipPrefix
+        const actions = expandActionShortNames(
+          service,
+          Array.isArray(entry.actions)
+            ? entry.actions.map(String)
+            : [],
+        );
+        // A raw encryption network URN is owner-scoped, not a path in the
+        // manifest's space (sdk-core resolveManifest keeps it the same way).
+        if (isRawEncryptionPermission({ service, path })) {
+          return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+        }
+        const resolvedPath = entry.skipPrefix === true
           ? path
           : prefixAppManifestPath(path, manifest.app_id as string);
         return {
           service,
           space: String(manifest.space ?? "applications"),
           path: resolvedPath,
-          actions: expandActionShortNames(
-            service,
-            Array.isArray(entry.actions)
-              ? entry.actions.map(String)
-              : [],
-          ),
+          actions,
         };
       });
-    permissions.push(...await secretPermissionsFromAppManifest(manifest, profile));
+    permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
     return resolvePermissionSpaces(permissions, profile, options);
   }
 
@@ -383,6 +393,7 @@ export async function loadManifestPermissions(
 async function secretPermissionsFromAppManifest(
   manifest: Record<string, unknown>,
   profile: string,
+  requestedOwner: string | undefined,
 ): Promise<PermissionEntry[]> {
   if (manifest.secrets === undefined) {
     return [];
@@ -408,26 +419,39 @@ async function secretPermissionsFromAppManifest(
     permissions.push({
       service: ENCRYPTION_PERMISSION_SERVICE,
       space: ENCRYPTION_MANIFEST_SPACE,
-      path: await defaultSecretsNetworkId(profile),
+      path: await defaultSecretsNetworkId(profile, requestedOwner),
       actions: ["tinycloud.encryption/decrypt"],
-      skipPrefix: true,
     });
   }
 
   return permissions;
 }
 
-async function defaultSecretsNetworkId(profileName: string): Promise<string> {
+/**
+ * The owner's default secrets network. The owner is the profile's recorded
+ * owner (or a local owner key's own did:pkh), else `--owner`. A key-only
+ * profile's `did` is its session did:key, which owns no secrets network.
+ */
+async function defaultSecretsNetworkId(profileName: string, requestedOwner: string | undefined): Promise<string> {
   const profile = await ProfileManager.getProfile(profileName);
-  const ownerDid = (profile.ownerDid ?? profile.did)?.split("#")[0];
-  if (!ownerDid) {
+  const ownDid = profile.did?.split("#")[0];
+  const recorded = profile.ownerDid ?? (ownDid?.startsWith("did:pkh:") ? ownDid : undefined);
+  const owner = (recorded ?? requestedOwner)?.split("#")[0];
+  if (!owner) {
     throw new CLIError(
       "OWNER_DID_UNKNOWN",
-      `Cannot determine owner DID for profile "${profileName}". Run \`tc auth login\` first.`,
+      `Cannot determine the secrets owner for profile "${profileName}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
       ExitCode.AUTH_REQUIRED,
     );
   }
-  return `urn:tinycloud:encryption:${ownerDid}:default`;
+  if (!/^did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}$/.test(owner)) {
+    throw new CLIError(
+      "INVALID_ARGUMENT",
+      `Secrets owner "${owner}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return `urn:tinycloud:encryption:${owner}:default`;
 }
 
 export function diffPermissions(
@@ -483,6 +507,15 @@ export async function resolvePermissionSpaces(
   const resolved: PermissionEntry[] = [];
   for (const entry of entries) {
     const service = normalizeService(entry.service);
+    const actions = expandActionShortNames(service, entry.actions);
+    // Raw encryption network entries keep the `encryption` pseudo-space; an
+    // owner space prefix would make the node refuse the decrypt grant.
+    if (isRawEncryptionPermission({ service, path: entry.path })) {
+      // A network URN is never prefixed; send OpenKey the contract shape.
+      const { skipPrefix: _skipPrefix, ...raw } = entry;
+      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      continue;
+    }
     let space: string;
     try {
       space = await resolveSpaceUri(entry.space, profile) ?? entry.space;
@@ -503,7 +536,7 @@ export async function resolvePermissionSpaces(
       ...entry,
       service,
       space,
-      actions: expandActionShortNames(service, entry.actions),
+      actions,
     });
   }
   return resolved;

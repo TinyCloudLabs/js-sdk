@@ -4,6 +4,11 @@ import { ExitCode } from "../config/constants.js";
 import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
+import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
+import { isRawEncryptionPermission } from "../lib/raw-encryption.js";
+
+/** OpenKey signs a scoped delegation only when it carries this read on the session space. */
+const CAPABILITIES_READ = "tinycloud.capabilities/read";
 
 /** Tolerated clock difference between OpenKey and this machine. */
 export const CLOCK_SKEW_MS = 30_000;
@@ -105,6 +110,18 @@ export function expectedOwnerFor(profileName: string, profile: ProfileConfig | n
   return pinned ?? requested;
 }
 
+/**
+ * `--owner` as the EIP-55 did:pkh OpenKey signs with. The owner DID is part
+ * of the secrets network URN, which must name the approving account exactly.
+ */
+export function canonicalOwnerDid(did: string): string {
+  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did);
+  if (!match) {
+    throw new CLIError("INVALID_ARGUMENT", `--owner "${did}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`, ExitCode.USAGE_ERROR);
+  }
+  return `did:pkh:eip155:${match[1]}:${new NodeWasmBindings().ensureEip55(match[2]!)}`;
+}
+
 /** Expiry recorded in a saved session (explicit fields, else the SIWE message). */
 export function sessionExpiresAt(session: Record<string, unknown> | null): string | null {
   if (session === null) return null;
@@ -126,9 +143,13 @@ export function permissionTuples(permissions: readonly PermissionEntry[], ownerD
 
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-  const space = normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  // Raw network entries stay in the `encryption` pseudo-space; the owner
+  // address inside the URN compares case-insensitively like a space id.
+  const raw = isRawEncryptionPermission(permission);
+  const space = raw ? ENCRYPTION_MANIFEST_SPACE : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  const path = raw ? normalizePkhIdentifier(permission.path) : permission.path;
   return permission.actions.map((action) =>
-    JSON.stringify([service, space, permission.path, action.includes("/") ? action : `${service}/${action}`]));
+    JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
 }
 
 /** JSON with object keys sorted, so equal values serialize identically. */
@@ -219,15 +240,45 @@ export function permissionsFromTuples(tuples: Iterable<string>): PermissionEntry
   return [...grouped.values()];
 }
 
+/** Requested actions the signed grant does not carry: what the owner unchecked. */
+export function declinedPermissions(requested: readonly PermissionEntry[], signed: readonly PermissionEntry[], ownerDid: string): PermissionEntry[] {
+  const granted = permissionTuples(signed, ownerDid);
+  return permissionsFromTuples([...permissionTuples(requested, ownerDid)].filter((tuple) => !granted.has(tuple)));
+}
+
+/**
+ * A first-login scope: one TinyCloud space, plus optional raw encryption
+ * network entries (`space: "encryption"`), which are not a second space.
+ */
 export function validateLoginPermissions(permissions: PermissionEntry[]): void {
-  if (!permissions.length || permissions.some((p) =>
+  const spaced = permissions.filter((p) => !isRawEncryptionPermission(p));
+  if (!spaced.length || permissions.some((p) =>
     !p.service?.startsWith("tinycloud.") || !p.space ||
-    (!p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
+    (isRawEncryptionPermission(p)
+      ? p.space !== ENCRYPTION_MANIFEST_SPACE
+      : !p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
     typeof p.path !== "string" || !p.actions?.length ||
     p.actions.some((action) => !action.startsWith(`${p.service}/`)),
-  ) || new Set(permissions.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space. Request additional spaces after login.", ExitCode.USAGE_ERROR);
+  ) || new Set(spaced.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space (raw tinycloud.encryption network entries may accompany them). Request additional spaces after login.", ExitCode.USAGE_ERROR);
   }
+}
+
+/**
+ * The scope a scoped OpenKey login requests: the validated manifest plus
+ * `tinycloud.capabilities/read` on the space root, which OpenKey requires
+ * before it signs any delegation.
+ */
+export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
+  validateLoginPermissions(permissions);
+  // Validation guarantees one non-raw entry with a non-empty space.
+  const space = permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "";
+  const hasRead = permissions.some((p) =>
+    p.service === "tinycloud.capabilities" && p.path === "" && p.actions.includes(CAPABILITIES_READ) &&
+    normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(space));
+  return hasRead
+    ? permissions
+    : [{ service: "tinycloud.capabilities", space, path: "", actions: [CAPABILITIES_READ] }, ...permissions];
 }
 
 export interface SignedSessionExpectations {
@@ -316,6 +367,7 @@ export function verifyScopedLogin(
   const signed = verifySignedSession(data, key, sessionDid, expected);
   const spaceId = data.spaceId as string;
   for (const permission of requested) {
+    if (isRawEncryptionPermission(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved space differs from the requested space. No scoped session was saved.", ExitCode.PERMISSION_DENIED);
     }

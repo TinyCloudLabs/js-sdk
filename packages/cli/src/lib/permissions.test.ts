@@ -372,10 +372,9 @@ describe("loadManifestPermissions", () => {
         },
         {
           service: "tinycloud.encryption",
-          space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:encryption`,
+          space: "encryption",
           path: `urn:tinycloud:encryption:${OWNER_DID}:default`,
           actions: ["tinycloud.encryption/decrypt"],
-          skipPrefix: true,
         },
       ]),
     );
@@ -403,5 +402,61 @@ describe("loadManifestPermissions", () => {
         }),
       ]),
     );
+  });
+
+  test("keeps an app manifest's raw decrypt entry out of the manifest space", async () => {
+    const network = `urn:tinycloud:encryption:${OWNER_DID}:default`;
+    const permissions = await loadManifestPermissions(
+      manifestSource({
+        app_id: "xyz.tinycloud.agent",
+        space: "secrets",
+        permissions: [
+          { service: "tinycloud.kv", path: "vault/secrets/OPENAI_API_KEY", actions: ["get"], skipPrefix: true },
+          { service: "tinycloud.encryption", path: network, actions: ["decrypt"] },
+        ],
+      }),
+      "default",
+    );
+
+    expect(permissions).toEqual([
+      {
+        service: "tinycloud.kv",
+        space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:secrets`,
+        path: "vault/secrets/OPENAI_API_KEY",
+        actions: ["tinycloud.kv/get"],
+      },
+      {
+        service: "tinycloud.encryption",
+        space: "encryption",
+        path: network,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+    ]);
+  });
+
+  test("derives the secrets decrypt network from --owner on a key-only profile, never its session did:key", async () => {
+    activeProfile = {
+      name: "agent",
+      host: "https://node.tinycloud.test",
+      chainId: 1,
+      spaceName: "default",
+      did: "did:key:z6MkSession",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const source = manifestSource({ app_id: "xyz.tinycloud.agent", space: "secrets", secrets: { OPENAI_API_KEY: true } });
+
+    await expect(loadManifestPermissions(source, "agent", { allowLogicalSpaces: true }))
+      .rejects.toMatchObject({ code: "OWNER_DID_UNKNOWN" });
+
+    const permissions = await loadManifestPermissions(source, "agent", {
+      allowLogicalSpaces: true,
+      ownerDid: OWNER_DID,
+    });
+    expect(permissions.find((permission) => permission.service === "tinycloud.encryption")).toEqual({
+      service: "tinycloud.encryption",
+      space: "encryption",
+      path: `urn:tinycloud:encryption:${OWNER_DID}:default`,
+      actions: ["tinycloud.encryption/decrypt"],
+    });
   });
 });

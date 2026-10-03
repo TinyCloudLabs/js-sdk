@@ -1,6 +1,5 @@
 import { Command } from "commander";
-import { readFile } from "node:fs/promises";
-import { writeFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -15,10 +14,11 @@ import {
 } from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 import { ProfileManager } from "../config/profiles.js";
-import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
+import { formatCheck, formatSection, isInteractive, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError, CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -250,6 +250,7 @@ async function runSecretOperation<T>(params: {
   if (!canRequestOwnerPermissions(profile)) {
     return first;
   }
+  assertOwnerApprovalPossible(params.ctx.profile, profile, params.action, params.name);
 
   const requested = secretPermissionEntries({
     action: params.action,
@@ -278,6 +279,36 @@ async function runSecretOperation<T>(params: {
 function secretPermissionReason(action: SecretAction, name?: string): string {
   const target = name ? ` secret "${name}"` : " secrets";
   return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+}
+
+/**
+ * An OpenKey profile asks the owner for a missing grant through the browser
+ * callback flow. With no terminal nobody can complete it, so the command
+ * would wait silently; fail with the scoped login an agent can use instead.
+ */
+function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string): void {
+  if (profile.authMethod !== "openkey" || isInteractive()) return;
+  const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  throw new CLIError(
+    "PERMISSION_DENIED",
+    `Profile "${profileName}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
+    ExitCode.PERMISSION_DENIED,
+    {
+      hint: `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`,
+    },
+  );
+}
+
+/** Write a secret value to a file only its owner can read, whether or not it existed. */
+async function writeSecretFile(path: string, value: string): Promise<void> {
+  const handle = await open(path, "w", PRIVATE_FILE_MODE);
+  try {
+    // `open` applies the mode only when it creates the file.
+    await handle.chmod(PRIVATE_FILE_MODE);
+    await handle.writeFile(value);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function runSecretOperationAttempt<T>(
@@ -348,6 +379,7 @@ async function invokeCanonicalSecretGet(params: {
 
   const profile = await ProfileManager.getProfile(params.ctx.profile);
   if (!canRequestOwnerPermissions(profile)) return first;
+  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name);
   const node = params.node ?? ownerNode ?? await ensureSecretsNode(
     params.ctx,
     params.options,
@@ -1214,7 +1246,7 @@ export function registerSecretsCommand(
           );
 
           if (options.output) {
-            await writeFile(options.output, value);
+            await writeSecretFile(options.output, value);
             outputJson({ name, written: options.output });
             return;
           }
@@ -1255,7 +1287,7 @@ export function registerSecretsCommand(
         const value = result.output.value;
 
         if (options.output) {
-          await writeFile(options.output, value);
+          await writeSecretFile(options.output, value);
           outputJson({ name, written: options.output });
           return;
         }

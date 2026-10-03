@@ -2,7 +2,8 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isInteractive } from "../output/formatter.js";
 import { createInterface } from "node:readline";
-import { DEFAULT_OPENKEY_HOST } from "../config/constants.js";
+import { DEFAULT_OPENKEY_HOST, ExitCode } from "../config/constants.js";
+import { CLIError } from "../output/errors.js";
 
 interface DelegationData {
   delegationHeader: { Authorization: string };
@@ -333,7 +334,12 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
   });
 
   return new Promise((resolve, reject) => {
-    rl.question("Paste delegation code: ", (input) => {
+    let answered = false;
+    // `line` also fires for a final line without a newline when stdin ends;
+    // `question` would drop it. Blank lines are not a code.
+    rl.on("line", (input) => {
+      if (answered || input.trim() === "") return;
+      answered = true;
       rl.close();
       let parsed: unknown;
       try {
@@ -354,5 +360,20 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
       }
       resolve(parsed as DelegationData);
     });
+    rl.on("close", () => {
+      if (answered) return;
+      answered = true;
+      reject(new CLIError(
+        "PASTE_CODE_MISSING",
+        `Stdin ended before a delegation code was pasted; no session was saved. Approve at ${authUrl} and pass the returned code on stdin.`,
+        ExitCode.AUTH_REQUIRED,
+        {
+          approvalUrl: authUrl,
+          hint: `Open ${authUrl}, approve, then pass the code on stdin followed by a newline.`,
+        },
+      ));
+    });
+    rl.setPrompt("Paste delegation code: ");
+    rl.prompt();
   });
 }

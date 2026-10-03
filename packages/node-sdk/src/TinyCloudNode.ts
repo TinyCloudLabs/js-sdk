@@ -3895,9 +3895,16 @@ export class TinyCloudNode {
               permissionHint = parsePermissionHint(record?.permissionHint) ??
                 parsePermissionHint(nested?.permissionHint);
             } catch {
-              // A denied response without the SDK-owned structured field is
-              // classified safely below and cannot become a grant hint.
+              // Production nodes deny with plain text; handled below.
             }
+            // The node refused this decrypt invocation, so the session lacks
+            // decrypt on the network it named. The hint comes from the request
+            // itself, never from the response body.
+            permissionHint ??= parsePermissionHint({
+              service: "tinycloud.encryption",
+              path: networkId,
+              actions: ["tinycloud.encryption/decrypt"],
+            });
           }
           throw new DecryptTransportResponseError(response.status, permissionHint);
         }

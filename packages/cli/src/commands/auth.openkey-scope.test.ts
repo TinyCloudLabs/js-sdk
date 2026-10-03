@@ -84,6 +84,31 @@ describe("portableFromOpenKeyDelegation (scope mismatch)", () => {
     expect(portable.resources?.length).toBe(2);
   });
 
+  test("matches OpenKey's reported raw decrypt entry in the encryption pseudo-space", () => {
+    const network = `urn:tinycloud:encryption:did:pkh:eip155:1:${ADDR_CHECKSUM}:default`;
+    const permissions = [
+      cap("tinycloud.kv", SPACE_CHECKSUM, "vault/secrets/OPENAI_API_KEY", ["tinycloud.kv/get"]),
+      // A runtime secret request names no space for the network entry.
+      { service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry,
+    ];
+    const data = {
+      spaceId: SPACE_CHECKSUM,
+      delegationCid: "bafyRAW",
+      delegationHeader: { Authorization: "Bearer x" },
+      verificationMethod: "did:key:zTest",
+      address: ADDR_CHECKSUM,
+      chainId: 1,
+      expiry: new Date(Date.now() + 3600_000).toISOString(),
+      // OpenKey (TC-598) reports entries with short service names.
+      permissions: [
+        { service: "kv", space: SPACE_CHECKSUM, path: "vault/secrets/OPENAI_API_KEY", actions: ["tinycloud.kv/get"] },
+        { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+      ],
+    };
+    const portable = portableFromOpenKeyDelegation(data, permissions, "https://host");
+    expect(portable.resources).toContainEqual({ service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] });
+  });
+
   test("uses OpenKey expirationTime when expiry aliases are absent", () => {
     const expirationTime = "2099-01-01T00:00:00.000Z";
     const permissions = [

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,6 +176,16 @@ afterAll(async () => {
 });
 
 describe("owner secrets get OpenKey retry", () => {
+  // The browser approval retry runs only for a person at a terminal.
+  const isTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  beforeEach(() => {
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  });
+  afterEach(() => {
+    if (isTTY) Object.defineProperty(process.stdout, "isTTY", isTTY);
+    else Reflect.deleteProperty(process.stdout, "isTTY");
+  });
+
   test("acquires once and retries the secret exactly once through the real owner path", async () => {
     secretAttempts.length = 0;
     operationAttempts = 0;

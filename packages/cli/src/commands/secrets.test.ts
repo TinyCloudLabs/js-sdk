@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -124,6 +124,7 @@ let canonicalResultOverride: unknown | null = null;
 
 let currentNode: FakeNode;
 let outputJsonRequested = false;
+let interactive = true;
 let currentSession: object | null = {
   expiresAt: "2099-01-01T00:00:00.000Z",
   address: "0x0000000000000000000000000000000000000001",
@@ -508,6 +509,7 @@ mock.module("../output/formatter.js", () => ({
     recorded.outputs.push(payload);
   },
   shouldOutputJson: () => outputJsonRequested,
+  isInteractive: () => interactive,
   withSpinner: async (_message: string, fn: () => unknown) => {
     recorded.spinners.push(_message);
     return await fn();
@@ -555,6 +557,7 @@ async function runSecretsCommand(args: string[]): Promise<void> {
 beforeEach(() => {
   resetRecorded();
   outputJsonRequested = false;
+  interactive = true;
   currentNode = makeFakeNode();
   currentSession = {
     expiresAt: "2099-01-01T00:00:00.000Z",
@@ -1322,6 +1325,48 @@ describe("CLI secrets commands", () => {
     expect(recorded.outputs).toEqual([]);
     expect(recorded.getCalls).toHaveLength(2);
     expect(recorded.permissionRequests).toHaveLength(1);
+  });
+
+  test("writes `get -o` output owner-only, also over an existing world-readable file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-output-"));
+    try {
+      const created = join(dir, "created.txt");
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", created]);
+      const existing = join(dir, "existing.txt");
+      await writeFile(existing, "old", { mode: 0o644 });
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "-o", existing]);
+
+      expect(recorded.errors).toEqual([]);
+      for (const path of [created, existing]) {
+        expect((await stat(path)).mode & 0o777).toBe(0o600);
+        expect(await Bun.file(path).text()).toBe("stored-value");
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-interactive OpenKey profile without the grant fails fast instead of opening a browser approval", async () => {
+    interactive = false;
+    const denied = { ok: false as const, error: { code: "PERMISSION_DENIED", service: "secrets", message: "Cannot autosign tinycloud.kv/get for OTHER_KEY" } };
+    currentNode = makeFakeNode({ getResult: denied, listResult: denied, putResult: denied, deleteResult: denied });
+
+    for (const args of [
+      ["secrets", "get", "OTHER_KEY", "--raw"],
+      ["secrets", "list"],
+      ["secrets", "put", "OTHER_KEY", "value"],
+      ["secrets", "delete", "OTHER_KEY"],
+    ]) {
+      resetRecorded();
+      await runSecretsCommand(args);
+      expect(recorded.permissionRequests).toEqual([]);
+      expect(recorded.sessionRefreshes).toEqual([]);
+      expect(recorded.errors).toEqual([expect.objectContaining({
+        code: "PERMISSION_DENIED",
+        exitCode: 5,
+        metadata: { hint: expect.stringContaining("auth login --method openkey --paste --manifest") },
+      })]);
+    }
   });
 
   test("requests scoped put permission at secrets/scoped/<scope>/<name>", async () => {
