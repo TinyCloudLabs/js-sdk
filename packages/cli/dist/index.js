@@ -15284,6 +15284,14 @@ function shareCliError(error) {
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
     const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+    if (failure.kind === "caveated-session") {
+      const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
+      return new CLIError(
+        "PERMISSION_DENIED",
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
+        5
+      );
+    }
     if (failure.kind === "owner-space-unresolved") {
       return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
     }
@@ -17194,6 +17202,15 @@ function createShareAuthorityAdapters(input = {}) {
       if (resourceKind !== "exact" || files.length !== 1) throw new Error("native bearer publication requires one exact source file");
       const file2 = files[0];
       const resourcePath2 = `xyz.tinycloud.share/shares/${shareId}/${safeStorageFilename(targetInput.filename)}`;
+      if (node.isSessionOnly) {
+        const authority = node.sharing.preflightGenerate({ path: resourcePath2, actions: ["tinycloud.kv/get"], expiry: expiresAt });
+        if (authority === "caveated") {
+          throw new SharePublishAuthorityError({ kind: "caveated-session", profileName: activeProfileName2 });
+        }
+        if (authority === "not-covered") {
+          throw new SharePublishAuthorityError({ kind: "scope-denied", capability: "sharing delegation", localKey, profileName: activeProfileName2 });
+        }
+      }
       const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
         contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
       });
