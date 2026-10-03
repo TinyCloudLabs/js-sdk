@@ -1234,6 +1234,38 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+  test("TC-531: an activated delegation lasts as long as the delegation, not an hour", async () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const networkId = node.getDefaultEncryptionNetworkId();
+    const encryptionSpaceId = `tinycloud:pkh:eip155:1:${address}:encryption`;
+    const expiry = new Date(Date.now() + 3 * 24 * 3600_000);
+    const delegation = {
+      cid: "owner-decrypt-cid",
+      delegationHeader: { Authorization: "owner-decrypt-token" },
+      spaceId: encryptionSpaceId,
+      path: networkId,
+      actions: ["tinycloud.encryption/decrypt"],
+      resources: [{ service: "encryption", space: encryptionSpaceId, path: networkId, actions: ["tinycloud.encryption/decrypt"] }],
+      disableSubDelegation: false,
+      expiry,
+      delegateDID: "did:key:default",
+      ownerAddress: address,
+      chainId: 1,
+      host: "https://tinycloud.test",
+    };
+
+    await withActivatedDelegations(async () => {
+      await node.useDelegation(delegation as any);
+    });
+
+    const prepareSession = (node as any).wasmBindings.prepareSession;
+    expect(prepareSession.mock.calls[0][0].expirationTime).toBe(expiry.toISOString());
+  });
+
   test("useDelegation installs encryption delegations as raw runtime grants", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

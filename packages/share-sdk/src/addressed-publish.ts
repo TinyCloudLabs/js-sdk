@@ -111,6 +111,8 @@ function targetKind(target: Exclude<ShareTarget, { readonly kind: "bearer" }>): 
   return target.kind;
 }
 
+const OWNER_SHARE_ACTIONS: ReadonlySet<string> = new Set<OwnerShareAction>(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"]);
+
 function assertSafeInput(input: AddressedSharePublishOptions): void {
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
   if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
@@ -224,8 +226,8 @@ function publicationResult(input: {
  * The receiving SDK recomputes the requirement from the envelope's recipient
  * matcher and refuses any share whose commitment differs, so the commitment
  * is derived here from the same normalized target rather than trusted from
- * the caller. A domain share additionally admits every mailbox at the
- * domain, so it is view-only and never emailed.
+ * the caller. A domain share admits every mailbox at the domain; its access
+ * and delivery are the owner's choice, as for exact-email shares.
  */
 const EMAIL_PROFILE = { id: "tinycloud.email-proof/v1", version: 1 } as const;
 const EMAIL_DOMAIN_PROFILE = { id: "tinycloud.email-domain-proof/v1", version: 1 } as const;
@@ -286,13 +288,17 @@ export function prepareAddressedShare(request: AddressedShareRequest): PreparedA
     throw new TypeError("addressed filename is invalid");
   }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
+  if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
   if (target.kind === "recipientDid") return { target };
-  if (target.kind === "emailDomain") {
-    if (!request.actions.every((action) => action === "read" || action === "list")
-      || !request.policyActions.every((action) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list" || action === "tinycloud.kv/metadata")) throw new TypeError("email-domain shares are view-only");
-    if (request.deliveryEmail !== undefined) throw new TypeError("email-domain shares are not emailed");
+  // A domain link can be emailed to any number of mailboxes at the domain, so
+  // it is normally not pinned to one. If the owner pins one, it must be the
+  // issuer's lowercase mailbox at exactly that domain, the form the owner's
+  // Node names in its delivery admission.
+  if (target.kind === "emailDomain" && request.deliveryEmail !== undefined
+    && (request.deliveryEmail !== request.deliveryEmail.toLowerCase() || !request.deliveryEmail.endsWith(`@${target.domain}`))) {
+    throw new TypeError("email-domain delivery address must be a lowercase mailbox at the domain");
   }
   return { target, credentialRequirement: mailboxCredentialCommitment(target) };
 }

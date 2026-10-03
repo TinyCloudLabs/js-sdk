@@ -1048,11 +1048,17 @@ export async function signCompactUcanAuthorization(
   return signCompactUcan(input);
 }
 
+/**
+ * Longest window a policy root may have. A policy session never outlives its
+ * roots, so this also bounds every session and descendant.
+ */
+const MAX_POLICY_ROOT_SECONDS = 31 * 24 * 60 * 60;
+
 /** Sign a proofless policy root without weakening the 60-second invocation profile. */
 export async function signCompactUcanRootAuthorization(
   input: SignCompactUcanRootAuthorizationInput,
 ): Promise<CompactUcanAuthorizationV1> {
-  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > 31 * 24 * 60 * 60)
+  if (input.notBefore >= input.expiresAt || input.expiresAt - input.notBefore > MAX_POLICY_ROOT_SECONDS)
     throw new Error("compact policy root lifetime must be between one second and 31 days");
   return signCompactUcan({ ...input, proofs: [] });
 }
@@ -1106,17 +1112,21 @@ export function createCompactPolicyInvocation(
   return parseCompactUcanAuthorization(`${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`);
 }
 
-export function createCompactPolicyDescendant(input: {
+export interface CompactPolicyDescendantInput {
   readonly parentAuthorization: string;
   readonly parentCid: string;
   readonly issuerDid: string;
   readonly audienceDid: string;
   readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>;
-  readonly privateKey: Uint8Array;
+  /** Start of the window; defaults to one second after the parent's start. */
   readonly now?: number;
+  /** Defaults to the longest window the parent allows: one second inside it. */
   readonly expiresAt?: number;
   readonly nonce?: string;
-}): CompactUcanAuthorizationV1 {
+}
+
+/** The checked claims of a descendant, before anyone signs them. */
+function compactPolicyDescendantClaims(input: CompactPolicyDescendantInput) {
   const parent = parseCompactUcanAuthorization(input.parentAuthorization, input.parentCid);
   if (parent.payload.aud !== input.issuerDid) throw new Error("policy descendant issuer is not the parent audience");
   const parentFact = parent.payload.fct[0]!;
@@ -1124,28 +1134,63 @@ export function createCompactPolicyDescendant(input: {
   if (!Number.isInteger(depth) || (depth as number) <= 0) throw new Error("policy descendant depth is exhausted");
   if (!compactAttenuationContains(parent.payload.att, input.attenuation))
     throw new Error("policy descendant exceeds the parent attenuation");
+  // Start just inside the parent's window, so a fresh link is usable at once.
+  const now = Math.max(input.now ?? parent.payload.nbf + 1, parent.payload.nbf + 1);
+  const exp = Math.min(input.expiresAt ?? parent.payload.exp - 1, parent.payload.exp - 1);
+  if (exp <= now) throw new Error("policy parent has no strictly narrower validity window");
+  return {
+    parentCid: parent.cid,
+    fact: { ...parentFact, remainingRedelegationDepth: (depth as number) - 1 },
+    notBefore: now,
+    expiresAt: exp,
+    nonce: input.nonce ?? encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+  };
+}
+
+export function createCompactPolicyDescendant(
+  input: CompactPolicyDescendantInput & { readonly privateKey: Uint8Array },
+): CompactUcanAuthorizationV1 {
+  const claims = compactPolicyDescendantClaims(input);
   const principal = input.issuerDid.split("#", 1)[0]!;
   const didMaterial = base58btc.decode(principal.slice("did:key:".length));
   const publicKey = ed25519.getPublicKey(input.privateKey);
   if (didMaterial.length !== 34 || !equalBytes(publicKey, didMaterial.slice(2))) throw new Error("policy descendant signer does not bind issuer DID");
-  const now = Math.max(input.now ?? Math.floor(Date.now() / 1000), parent.payload.nbf + 1);
-  const exp = Math.min(input.expiresAt ?? now + 60, now + 60, parent.payload.exp - 1);
-  if (exp <= now) throw new Error("policy parent has no strictly narrower validity window");
   const header = { alg: "EdDSA", jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: encodeBase64Url(publicKey) }, typ: "JWT", ucv: "0.10.0" };
   const payload = {
     att: input.attenuation,
     aud: input.audienceDid,
-    exp,
-    fct: [{ ...parentFact, remainingRedelegationDepth: (depth as number) - 1 }],
+    exp: claims.expiresAt,
+    fct: [claims.fact],
     iss: input.issuerDid.includes("#") ? input.issuerDid : `${principal}#${principal.slice("did:key:".length)}`,
-    nbf: now,
-    nnc: input.nonce ?? encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
-    prf: [parent.cid],
+    nbf: claims.notBefore,
+    nnc: claims.nonce,
+    prf: [claims.parentCid],
   };
   const protectedSegment = encodeBase64Url(new TextEncoder().encode(jcsCanonicalize(header)));
   const payloadSegment = encodeBase64Url(new TextEncoder().encode(jcsCanonicalize(payload)));
   const signature = ed25519.sign(new TextEncoder().encode(`${protectedSegment}.${payloadSegment}`), input.privateKey);
   return parseCompactUcanAuthorization(`${protectedSegment}.${payloadSegment}.${encodeBase64Url(signature)}`);
+}
+
+/**
+ * The same descendant, signed by a caller-owned key that may be
+ * non-extractable. The result is verified against the issuer DID.
+ */
+export async function signCompactPolicyDescendant(
+  input: CompactPolicyDescendantInput & { readonly sign: (bytes: Uint8Array) => Promise<Uint8Array> },
+): Promise<CompactUcanAuthorizationV1> {
+  const claims = compactPolicyDescendantClaims(input);
+  return signCompactUcan({
+    issuerDid: input.issuerDid,
+    audienceDid: input.audienceDid,
+    attenuation: input.attenuation,
+    facts: [claims.fact],
+    proofs: [claims.parentCid],
+    notBefore: claims.notBefore,
+    expiresAt: claims.expiresAt,
+    nonce: claims.nonce,
+    sign: input.sign,
+  });
 }
 
 /** Byte-independent semantic containment shared by S0, descendants and mint requests. */
@@ -1251,7 +1296,7 @@ export function parsePolicySessionUcan(
     !Number.isInteger(fact.remainingRedelegationDepth) ||
     fact.remainingRedelegationDepth < 0 ||
     fact.remainingRedelegationDepth > 8 ||
-    parsed.payload.exp - parsed.payload.nbf > 60 ||
+    parsed.payload.exp - parsed.payload.nbf > MAX_POLICY_ROOT_SECONDS ||
     parsed.payload.iss.split("#", 1)[0] !== fact.nodeAudience ||
     parsed.payload.aud !== fact.recipientDid
   )

@@ -5,6 +5,8 @@ import {
   createEmailDomainCredentialRequirement,
   encodeBase64Url,
   isCanonicalEmailDomain,
+  parseCompactUcanAuthorization,
+  signCompactPolicyDescendant,
   verifyOwnerNodeBinding,
   type CredentialRequirement,
   type UnifiedPolicyV2,
@@ -16,6 +18,9 @@ import { SessionReceiverCredentialCustody } from "./receiver-credentials";
 import { createOrRestoreShareReceiverSession, type ReceiverSessionStorage, type ShareReceiverSession } from "./receiver-session";
 import type {
   ReceivedShare,
+  ShareDelegateOptions,
+  ShareDelegation,
+  ShareDelegationLink,
   ShareImportAccountClient,
   ShareImportOptions,
   ShareImportResult,
@@ -132,9 +137,43 @@ function guestCredentialClient(session: ShareReceiverSession, storage: ReceiverS
 }
 
 /** @internal */
+type ShareProgressStage = "policy-admission" | "delegation-import" | "invocation" | "decryption";
+
+/** An admitted client and the delegation chain that authorizes it, S0 first. */
+interface ShareAccess {
+  readonly client: ShareRecipientClient;
+  readonly chain: readonly ShareDelegationLink[];
+  /** When the chain's last link stops authorizing anything, in Unix seconds. */
+  readonly expiresAt: number;
+}
+
+/** The Node refused the session or its chain (expired, revoked, or unknown). */
+function sessionRefused(error: unknown): boolean {
+  return error instanceof Error && /\((?:401|403)\)$/.test(error.message);
+}
+
+/** The earlier of two RFC 3339 instants, as whole-second RFC 3339. */
+function earliestExpiry(...values: readonly (string | undefined)[]): string | undefined {
+  const seconds = values.map((value) => (value === undefined ? Number.NaN : Math.floor(Date.parse(value) / 1000))).filter(Number.isFinite);
+  return seconds.length === 0 ? undefined : new Date(Math.min(...seconds) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function leafExpiry(chain: readonly ShareDelegationLink[]): number {
+  const leaf = chain[chain.length - 1]!;
+  return parseCompactUcanAuthorization(leaf.authorization, leaf.cid).payload.exp;
+}
+
+function combinedSignal(...signals: readonly (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const present = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (present.length < 2) return present[0];
+  return typeof AbortSignal.any === "function" ? AbortSignal.any(present) : present[0];
+}
+
 export class ReceivedShareImpl implements ReceivedShare {
   private content?: ShareReceivedContent;
   private getPromise?: Promise<ShareReceivedContent>;
+  private accessPromise?: Promise<ShareAccess>;
+  private stage?: ShareProgressStage;
 
   readonly recipient: ShareReceiverRecipient;
 
@@ -160,44 +199,86 @@ export class ReceivedShareImpl implements ReceivedShare {
     this.getPromise = this.load().catch((error) => {
       this.getPromise = undefined;
       this.content = undefined;
+      this.stage = undefined;
+      // Keep a durable session across a transient failure; start over only
+      // when the Node refused it (older Nodes mint 60-second sessions).
+      if (sessionRefused(error)) this.accessPromise = undefined;
       throw error;
     });
     return this.getPromise;
   }
 
-  private async load(): Promise<ShareReceivedContent> {
-    aborted(this.options.signal);
+  /** The admitted access, admitted again once its chain has expired. */
+  private async access(signal?: AbortSignal): Promise<ShareAccess> {
+    const cached = this.accessPromise;
+    if (cached !== undefined) {
+      const current = await cached;
+      if (current.expiresAt > Math.floor(Date.now() / 1000) + 1) return current;
+      if (this.accessPromise === cached) this.accessPromise = undefined;
+      else if (this.accessPromise !== undefined) return this.accessPromise;
+    }
+    const pending = this.admit(combinedSignal(this.options.signal, signal)).catch((error) => {
+      if (this.accessPromise === pending) this.accessPromise = undefined;
+      throw error;
+    });
+    this.accessPromise = pending;
+    return pending;
+  }
+
+  /** Forget `access` so the next request admits again, unless it was already replaced. */
+  private async forget(access: ShareAccess): Promise<void> {
+    const cached = this.accessPromise;
+    if (cached !== undefined && (await cached.catch(() => undefined)) === access && this.accessPromise === cached) this.accessPromise = undefined;
+  }
+
+  private async admit(signal: AbortSignal | undefined): Promise<ShareAccess> {
+    aborted(signal);
+    const common = {
+      nodeOrigin: this.envelope.target.origin,
+      envelope: this.envelope,
+      holderDid: this.identity.holderDid,
+      fetchFn: this.fetchFn,
+      signal,
+      sign: this.sign,
+      onStage: (stage: ShareProgressStage) => {
+        if (this.stage !== undefined) this.options.onProgress?.({ state: this.stage, status: "completed" });
+        this.stage = stage;
+        this.options.onProgress?.({ state: stage, status: "started" });
+      },
+    } as const;
+    const delegation = this.options.delegation;
+    if (delegation !== undefined) {
+      // Another recipient re-delegated their access to this key; the client
+      // verifies every link before anything is requested.
+      const chain = Object.freeze(delegation.chain.map((link) => Object.freeze({ authorization: link.authorization, cid: link.cid })));
+      const [session, ...descendants] = chain;
+      if (session === undefined) throw new Error("this delegation has no session");
+      if (descendants.length === 0) throw new Error("this delegation has no re-delegation to this key");
+      if (delegation.shareId !== this.shareId || delegation.delegateDid !== this.identity.holderDid) {
+        throw new Error("this delegation is for a different share or key");
+      }
+      const client = new ShareRecipientClient({ ...common, policyAuthorization: { authorization: session.authorization, cid: session.cid, descendants } });
+      return { client, chain, expiresAt: leafExpiry(chain) };
+    }
     const requirement = this.requirement;
     const policy = policyV2For(this.envelope);
+    // Ask for a session as long as this share; the Node caps it further.
+    const requestedExpiresAt = earliestExpiry(this.envelope.expiry, policy.expiresAt) ?? null;
     this.options.onProgress?.({ state: "credential-acquisition", status: "started" });
     const ensured = await this.credentials.ensure(requirement, {
       interaction: "inline",
       mountTarget: this.options.interaction.mountTarget,
       discoveryUrl: this.credentialDiscoveryUrl,
       fetch: this.fetchFn,
-      signal: this.options.signal,
+      signal,
       // Entering an address, waiting for real mail, and typing the code must
       // fit; this matches the issuer's ten-minute request lifetime.
       timeoutMs: 10 * 60_000,
     });
     // The mailbox comes from the verified, holder-bound credential.
     this.options.onProgress?.({ state: "credential-acquisition", status: "completed", ...(ensured.credential.claims.email === undefined ? {} : { mailbox: ensured.credential.claims.email }) });
-    aborted(this.options.signal);
-    let previousStage: "policy-admission" | "delegation-import" | "invocation" | "decryption" | undefined;
-    const common = {
-      nodeOrigin: this.envelope.target.origin,
-      envelope: this.envelope,
-      holderDid: this.identity.holderDid,
-      fetchFn: this.fetchFn,
-      signal: this.options.signal,
-      sign: this.sign,
-      onStage: (stage: "policy-admission" | "delegation-import" | "invocation" | "decryption") => {
-        if (previousStage !== undefined) this.options.onProgress?.({ state: previousStage, status: "completed" });
-        previousStage = stage;
-        this.options.onProgress?.({ state: stage, status: "started" });
-      },
-    } as const;
-    let client: ShareRecipientClient;
+    aborted(signal);
+    let session: ShareDelegationLink;
     if (this.identity.kind === "account") {
       this.options.onProgress?.({ state: "policy-admission", status: "started" });
       const admitted = await this.credentials.admitPolicy({
@@ -208,14 +289,15 @@ export class ReceivedShareImpl implements ReceivedShare {
         enforcementRootCid: this.envelope.enforcementRoot.cid,
         requirement,
         requestedCapabilities: policy.capabilityCeiling,
+        requestedExpiresAt,
         nodeOrigin: this.envelope.target.origin,
         fetch: this.fetchFn,
-        signal: this.options.signal,
+        signal,
       });
       this.options.onProgress?.({ state: "policy-admission", status: "completed" });
       this.options.onProgress?.({ state: "delegation-import", status: "started" });
       this.options.onProgress?.({ state: "delegation-import", status: "completed" });
-      client = new ShareRecipientClient({ ...common, policyAuthorization: { authorization: admitted.session.authorization, cid: admitted.session.cid } });
+      session = { authorization: admitted.session.authorization, cid: admitted.session.cid };
     } else {
       const admitted = await admitPolicyCredentialV4({
         policy,
@@ -227,24 +309,28 @@ export class ReceivedShareImpl implements ReceivedShare {
         requirement,
         credential: ensured.credential,
         requestedCapabilities: policy.capabilityCeiling,
+        requestedExpiresAt,
         sign: this.sign,
         nodeOrigin: this.envelope.target.origin,
         fetch: this.fetchFn,
-        signal: this.options.signal,
+        signal,
       });
-      client = new ShareRecipientClient({
-        ...common,
-        policyAuthorization: {
-          authorization: admitted.session.authorization,
-          cid: admitted.session.cid,
-        },
-      });
+      session = { authorization: admitted.session.authorization, cid: admitted.session.cid };
     }
+    const client = new ShareRecipientClient({ ...common, policyAuthorization: session });
+    const chain = Object.freeze([Object.freeze(session)]);
+    return { client, chain, expiresAt: leafExpiry(chain) };
+  }
+
+  private async load(): Promise<ShareReceivedContent> {
+    const { client } = await this.access();
+    const policy = policyV2For(this.envelope);
     const response = await client.nativeInvoke({ action: "get", resource: this.envelope.resource });
     if (!response.ok) throw new Error(`share invocation rejected (${response.status})`);
     const encrypted = new Uint8Array(await response.arrayBuffer());
     const opened = await client.decryptV3Content(encrypted);
-    if (previousStage !== undefined) this.options.onProgress?.({ state: previousStage, status: "completed" });
+    if (this.stage !== undefined) this.options.onProgress?.({ state: this.stage, status: "completed" });
+    this.stage = undefined;
     aborted(this.options.signal);
     const bytes = opened.bytes.slice();
     const byteDigest = encodeBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
@@ -260,6 +346,49 @@ export class ReceivedShareImpl implements ReceivedShare {
     this.content = content;
     this.options.onProgress?.({ state: "ready", status: "completed" });
     return content;
+  }
+
+  async delegate(options: ShareDelegateOptions): Promise<ShareDelegation> {
+    aborted(options.signal);
+    // Policy invocations are compact UCANs, which only an Ed25519 did:key can sign.
+    try { ed25519PublicKeyFromDidKey(options.to); } catch { throw new Error("a share can only be delegated to an Ed25519 did:key"); }
+    for (let attempt = 0; ; attempt += 1) {
+      const access = await this.access(options.signal);
+      aborted(options.signal);
+      const leaf = access.chain[access.chain.length - 1]!;
+      const parent = parseCompactUcanAuthorization(leaf.authorization, leaf.cid);
+      const descendant = await signCompactPolicyDescendant({
+        parentAuthorization: leaf.authorization,
+        parentCid: leaf.cid,
+        issuerDid: this.identity.holderDid,
+        audienceDid: options.to,
+        attenuation: parent.payload.att,
+        ...(options.expiresAt === undefined ? {} : { expiresAt: Math.floor(options.expiresAt.getTime() / 1000) }),
+        sign: this.sign,
+      });
+      aborted(options.signal);
+      // The owner's Node admits the link against its parent before the delegate can use it.
+      const imported = await this.fetchFn(new URL("/delegate", this.envelope.target.origin), {
+        method: "POST",
+        redirect: "error",
+        headers: { Authorization: descendant.authorization },
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      if (imported.ok) {
+        return Object.freeze({
+          shareId: this.shareId,
+          delegateDid: options.to,
+          expiresAt: new Date(descendant.payload.exp * 1000).toISOString(),
+          chain: Object.freeze([...access.chain, Object.freeze({ authorization: descendant.authorization, cid: descendant.cid })]),
+        });
+      }
+      // A refused parent (expired or revoked) gets one fresh admission.
+      if (attempt === 0 && (imported.status === 401 || imported.status === 403)) {
+        await this.forget(access);
+        continue;
+      }
+      throw new Error(`share delegation rejected (${imported.status})`);
+    }
   }
 
   async importInto(accountClient: ShareImportAccountClient, options: ShareImportOptions): Promise<ShareImportResult> {

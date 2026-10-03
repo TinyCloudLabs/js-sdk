@@ -264,6 +264,7 @@ export class CredentialsService {
       accountAuthorizationCid: this.client.accountAuthorizationCid(),
       credentialSpaceId: space.spaceId,
       requestedCapabilities: options.requestedCapabilities,
+      ...(options.requestedExpiresAt === undefined ? {} : { requestedExpiresAt: options.requestedExpiresAt }),
       sign: (digest) => this.client.signSessionBytes(digest),
       fetch: options.fetch,
       signal: options.signal,

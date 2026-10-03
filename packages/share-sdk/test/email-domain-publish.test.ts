@@ -31,10 +31,7 @@ function options(overrides: Partial<AddressedSharePublishOptions>): AddressedSha
 }
 
 describe("email-domain publication guards", () => {
-  it("refuses write access, delivery, and requirements not bound to the domain before any authority is used", async () => {
-    await expect(publishAddressedShare(options({ actions: ["read", "edit"] }))).rejects.toThrow("view-only");
-    await expect(publishAddressedShare(options({ policyActions: ["tinycloud.kv/get", "tinycloud.kv/put"] }))).rejects.toThrow("view-only");
-    await expect(publishAddressedShare(options({ deliveryEmail: "reader@tinycloud.xyz" }))).rejects.toThrow("not emailed");
+  it("refuses requirements not bound to the domain before any authority is used", async () => {
     await expect(publishAddressedShare(options({ credentialRequirement: undefined }))).rejects.toThrow("require a credential requirement");
     for (const other of ["sub.tinycloud.xyz", "tinycloud.xyz.evil", "evil.example"]) {
       await expect(publishAddressedShare(options({ credentialRequirement: commitmentFor(other) }))).rejects.toThrow("not bound to the email domain");
@@ -44,8 +41,19 @@ describe("email-domain publication guards", () => {
     const exactProfile = { ...commitmentFor("tinycloud.xyz"), profile: { id: "tinycloud.email-proof/v1", version: 1 } } as never;
     await expect(publishAddressedShare(options({ credentialRequirement: exactProfile }))).rejects.toThrow("email-domain credential profile");
     await expect(publishAddressedShare(options({ credentialRequirement: { ...commitmentFor("tinycloud.xyz"), descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0" } }))).rejects.toThrow("email-domain credential profile");
-    await expect(publishAddressedShare(options({ policyActions: ["tinycloud.kv/get", "tinycloud.kv/delete" as never] }))).rejects.toThrow("view-only");
+    await expect(publishAddressedShare(options({ policyActions: ["tinycloud.kv/get", "tinycloud.kv/delete" as never] }))).rejects.toThrow("not supported");
     // A well-formed domain share proceeds to the owner's authority.
     await expect(publishAddressedShare(options({}))).rejects.toThrow("authority must not be reached");
+  });
+
+  it("TC-530: leaves access and delivery to the owner", async () => {
+    // Edit access, as for exact-email shares.
+    await expect(publishAddressedShare(options({ actions: ["read", "edit"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/put"] }))).rejects.toThrow("authority must not be reached");
+    // An owner may still pin the link to one mailbox at the domain, in the
+    // issuer's lowercase form; anything else is refused before any side effect.
+    await expect(publishAddressedShare(options({ deliveryEmail: "reader@tinycloud.xyz" }))).rejects.toThrow("authority must not be reached");
+    for (const outside of ["reader@other.xyz", "reader@sub.tinycloud.xyz", "Reader@tinycloud.xyz"]) {
+      await expect(publishAddressedShare(options({ deliveryEmail: outside })), outside).rejects.toThrow("lowercase mailbox at the domain");
+    }
   });
 });

@@ -57,8 +57,21 @@ export interface ShareRecipientClientOptions {
   readonly sign?: (bytes: Uint8Array) => Promise<Uint8Array>;
   readonly signal?: AbortSignal;
   readonly onStage?: (stage: "policy-admission" | "delegation-import" | "invocation" | "decryption") => void;
-  /** Previously admitted and imported ordinary policy delegation (account v3 fast path). */
-  readonly policyAuthorization?: { readonly authorization: string; readonly cid: string };
+  /**
+   * A previously admitted and imported policy session (S0), optionally with
+   * the descendants that re-delegate it, in order, down to this holder.
+   */
+  readonly policyAuthorization?: {
+    readonly authorization: string;
+    readonly cid: string;
+    readonly descendants?: readonly SharePolicyDelegationLink[];
+  };
+}
+
+/** One signed link of a policy delegation chain, as imported into the Node. */
+export interface SharePolicyDelegationLink {
+  readonly authorization: string;
+  readonly cid: string;
 }
 
 export interface SharePolicySession {
@@ -250,9 +263,53 @@ function verifyV3PolicyAuthorization(input: {
     || compact.payload.prf[1] !== input.envelope.enforcementRoot.cid
     || compact.payload.nbf > now
     || compact.payload.exp <= now
-    || compact.payload.exp - compact.payload.nbf > 60
+    // A session may last as long as the share, never longer (fails closed
+    // when the expiry does not parse).
+    || !(compact.payload.exp * 1000 <= Date.parse(input.envelope.expiry))
     || canonicalize(compact.payload.att) !== canonicalize(policyAttenuationForV3(input.envelope))) throw new Error("v3 policy delegation signed binding mismatch");
   return compact;
+}
+
+/**
+ * Follow re-delegations of a verified session down to this holder. Each link
+ * must be signed by its parent's audience, prove exactly its parent, sit
+ * strictly inside the parent's window, keep the parent's facts with one less
+ * redelegation, and pass the parent's capabilities on unchanged. The Node
+ * re-checks the whole chain on every request.
+ */
+function verifyV3PolicyDescendants(
+  session: ReturnType<typeof verifyCompactUcanAuthorization>,
+  descendants: readonly SharePolicyDelegationLink[],
+  holderDid: string,
+): ReturnType<typeof verifyCompactUcanAuthorization> {
+  let parent = session;
+  for (const link of descendants) {
+    const child = verifyCompactUcanAuthorization(link.authorization, link.cid);
+    const { remainingRedelegationDepth: parentDepth, ...parentFacts } = parent.payload.fct[0];
+    const { remainingRedelegationDepth: depth, ...facts } = child.payload.fct[0];
+    if (child.payload.iss.split("#", 1)[0] !== parent.payload.aud
+      || child.payload.prf.length !== 1
+      || child.payload.prf[0] !== parent.cid
+      || child.payload.nbf <= parent.payload.nbf
+      || child.payload.exp >= parent.payload.exp
+      || typeof parentDepth !== "number"
+      || parentDepth <= 0
+      || depth !== parentDepth - 1
+      || canonicalize(facts) !== canonicalize(parentFacts)
+      || canonicalize(child.payload.att) !== canonicalize(parent.payload.att)) throw new Error("v3 policy descendant does not extend its parent");
+    parent = child;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (parent.payload.aud !== holderDid) throw new Error("v3 policy delegation chain does not end at this holder");
+  if (parent.payload.nbf > now || parent.payload.exp <= now) throw new Error("v3 policy delegation chain is not currently valid");
+  return parent;
+}
+
+/** Whole-second RFC 3339, or undefined when the share ends within a minute. */
+function requestedSessionExpiry(expiry: string): string | undefined {
+  const seconds = Math.floor(Date.parse(expiry) / 1000);
+  if (!Number.isFinite(seconds) || seconds <= Math.floor(Date.now() / 1000) + 60) return undefined;
+  return new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function hex(value: Uint8Array): string {
@@ -358,14 +415,21 @@ export class ShareRecipientClient {
     this.signer = options.sign;
     if (options.policyAuthorization !== undefined) {
       if (options.envelope.version !== 3) throw new Error("policy delegation fast path requires a v3 envelope");
-      const compact = verifyV3PolicyAuthorization({ ...options.policyAuthorization, envelope: options.envelope, holderDid: options.holderDid });
+      const { authorization, cid, descendants = [] } = options.policyAuthorization;
+      // S0 names the recipient it was minted for: this holder, or the first
+      // delegator when the session was re-delegated.
+      const sessionHolder = descendants.length === 0
+        ? options.holderDid
+        : verifyCompactUcanAuthorization(authorization, cid).payload.aud;
+      const compact = verifyV3PolicyAuthorization({ authorization, cid, envelope: options.envelope, holderDid: sessionHolder });
+      const leaf = verifyV3PolicyDescendants(compact, descendants, options.holderDid);
       const nodeAudience = compact.payload.fct[0].nodeAudience as string;
-      this.v3Authorization = options.policyAuthorization.authorization;
+      this.v3Authorization = leaf.authorization;
       this.v3NodeAudience = nodeAudience;
       this.nativeSigner = options.sign;
       this.session = {
-        sessionId: options.policyAuthorization.cid,
-        expiresAt: new Date(compact.payload.exp * 1000).toISOString(),
+        sessionId: leaf.cid,
+        expiresAt: new Date(leaf.payload.exp * 1000).toISOString(),
         actions: options.envelope.actions,
         resource: options.envelope.resource,
       };
@@ -446,15 +510,21 @@ export class ShareRecipientClient {
       throw new Error(accountless ? "v4 ceremony requires a verified credential and requirement" : "v3 ceremony requires a claim");
     }
     this.options.onStage?.("policy-admission");
-    const delegationResponse = await this.fetchFn(new URL("/policy/v3/delegations", this.options.nodeOrigin), {
+    const mintBody = accountless
+      ? { policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, requirement: material.requirement, credential: material.credentialEnvelope, presentation: material.presentation }
+      : { policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: material.claim, presentation: material.presentation };
+    const mint = (body: Readonly<Record<string, unknown>>) => this.fetchFn(new URL("/policy/v3/delegations", this.options.nodeOrigin), {
       method: "POST",
       redirect: "error",
       headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify(accountless
-        ? { policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, requirement: material.requirement, credential: material.credentialEnvelope, presentation: material.presentation }
-        : { policyCid: envelope.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: material.claim, presentation: material.presentation }),
+      body: JSON.stringify(body),
       ...(this.options.signal === undefined ? {} : { signal: this.options.signal }),
     });
+    // Ask for a session as long as the share. Nodes before 1.17.3 reject the
+    // unknown field with 422 before spending the challenge.
+    const requestedExpiresAt = requestedSessionExpiry(envelope.expiry);
+    let delegationResponse = await mint(requestedExpiresAt === undefined ? mintBody : { ...mintBody, requestedExpiresAt });
+    if (requestedExpiresAt !== undefined && delegationResponse.status === 422) delegationResponse = await mint(mintBody);
     if (!delegationResponse.ok) throw new Error(`v3 policy delegation rejected (${delegationResponse.status})`);
     const delegation = object(await delegationResponse.json(), "v3 policy delegation");
     if (delegation.admitted !== true || typeof delegation.sessionCid !== "string" || typeof delegation.authorization !== "string") throw new Error("v3 policy delegation response is not admitted");

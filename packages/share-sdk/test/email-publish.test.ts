@@ -65,11 +65,17 @@ describe("mailbox credential commitments", () => {
 });
 
 describe("addressed publication preflight", () => {
-  it("refuses a domain share that is not view-only without touching any authority", () => {
+  it("TC-530: leaves domain access and delivery to the owner, and refuses bad input without touching any authority", () => {
     const request = { target: { kind: "emailDomain" as const, domain: "tinycloud.xyz" }, actions: ["read", "edit"] as const, policyActions: ["tinycloud.kv/get", "tinycloud.kv/put"] as const, filename: "readme.md" };
-    expect(() => prepareAddressedShare(request)).toThrow("email-domain shares are view-only");
-    expect(() => prepareAddressedShare({ ...request, actions: ["read"], policyActions: ["tinycloud.kv/get"], deliveryEmail: "reader@tinycloud.xyz" })).toThrow("not emailed");
-    expect(() => prepareAddressedShare({ ...request, actions: ["read"], policyActions: ["tinycloud.kv/get"], filename: "../readme.md" })).toThrow("addressed filename is invalid");
+    // Edit access and a pinned mailbox at the domain are the owner's choice.
+    expect(prepareAddressedShare(request).target).toEqual({ kind: "emailDomain", domain: "tinycloud.xyz" });
+    expect(prepareAddressedShare({ ...request, deliveryEmail: "reader@tinycloud.xyz" }).credentialRequirement?.profile).toEqual({ id: "tinycloud.email-domain-proof/v1", version: 1 });
+    // A pinned mailbox elsewhere, or not in the issuer's lowercase form, is refused before any side effect.
+    for (const outside of ["reader@other.xyz", "reader@sub.tinycloud.xyz", "Reader@tinycloud.xyz"]) {
+      expect(() => prepareAddressedShare({ ...request, deliveryEmail: outside }), outside).toThrow("lowercase mailbox at the domain");
+    }
+    expect(() => prepareAddressedShare({ ...request, policyActions: ["tinycloud.kv/get", "tinycloud.kv/delete" as never] })).toThrow("not supported");
+    expect(() => prepareAddressedShare({ ...request, filename: "../readme.md" })).toThrow("addressed filename is invalid");
   });
 });
 
