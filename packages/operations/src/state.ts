@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readFileSync, readlinkSync } from "node:fs";
 import {
   chmod,
   link,
@@ -14,7 +15,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const DEFAULT_PROFILE = "default";
@@ -54,9 +55,9 @@ interface HeldProfileLock {
  * value it stores. Held-lock entries gained `turnSlot` and
  * `deletedWhileWaiting` in TC-633, so `.v2` must not read TC-602's `.v1`
  * entries. The invocation root remains a string path with unchanged
- * semantics and stays `.v1`. Relinquished turn tokens use a separate
- * versioned process-wide key: only an explicitly given-up turn of this PID
- * may be settled across separately bundled entry points.
+ * semantics and stays `.v1`. Relinquished turn tokens and the process
+ * instance ID use separate versioned process-wide keys: only an explicitly
+ * given-up turn of this process may be settled across bundled entry points.
  */
 function processWideContext<T>(key: string): AsyncLocalStorage<T> {
   const registry = globalThis as unknown as Record<symbol, AsyncLocalStorage<T> | undefined>;
@@ -65,6 +66,54 @@ function processWideContext<T>(key: string): AsyncLocalStorage<T> {
 const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot.v1");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
 const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v2");
+/** One ID across separately bundled ESM, CJS, CLI and MCP copies in this process. */
+const processInstanceId: string =
+  (globalThis as unknown as Record<symbol, string | undefined>)[Symbol.for("tinycloud.operations.profileLockInstance.v1")] ??=
+    randomUUID();
+
+interface ProcessOrigin {
+  readonly hostname: string;
+  readonly bootId: string;
+  readonly pidNamespace: string;
+  /** /proc/self/stat field 22, in kernel clock ticks since boot. */
+  readonly processStartTime: string;
+}
+
+interface RecordedProcess {
+  readonly pid?: unknown;
+  readonly instanceId?: unknown;
+  readonly hostname?: unknown;
+  readonly bootId?: unknown;
+  readonly pidNamespace?: unknown;
+  readonly processStartTime?: unknown;
+}
+
+let cachedProcessOrigin: ProcessOrigin | null | undefined;
+
+/** Missing/inaccessible Linux provenance is not evidence that an owner died. */
+function processOrigin(): ProcessOrigin | null {
+  if (cachedProcessOrigin !== undefined) return cachedProcessOrigin;
+  if (process.platform !== "linux") return cachedProcessOrigin = null;
+  try {
+    const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    const pidNamespace = readlinkSync("/proc/self/ns/pid");
+    const processStat = readFileSync("/proc/self/stat", "utf8");
+    const closingParen = processStat.lastIndexOf(") ");
+    const processStartTime = closingParen < 0 ? undefined : processStat.slice(closingParen + 2).trim().split(/\s+/)[19];
+    if (!/^[0-9a-f-]{36}$/.test(bootId) || !/^pid:\[[0-9]+\]$/.test(pidNamespace) ||
+      !processStartTime || !/^[0-9]+$/.test(processStartTime)) {
+      return cachedProcessOrigin = null;
+    }
+    return cachedProcessOrigin = { hostname: hostname(), bootId, pidNamespace, processStartTime };
+  } catch {
+    return cachedProcessOrigin = null;
+  }
+}
+
+/** Extra JSON properties only: older releases still read the original owner fields. */
+function processOwner(): { instanceId: string } & Partial<ProcessOrigin> {
+  return { instanceId: processInstanceId, ...processOrigin() };
+}
 
 export type ProfileStoreName =
   | "session"
@@ -571,7 +620,7 @@ interface Turn {
 }
 
 /** A turn as recorded on disk. */
-interface TurnState {
+interface TurnState extends RecordedProcess {
   readonly slot: number;
   readonly token: string;
   readonly pid: number;
@@ -610,14 +659,14 @@ const SETTLE_RETRIES = 300;
 /**
  * The turn lock: mutual exclusion among processes of this release that does
  * not depend on how long any of them is paused. It uses only `mkdir`,
- * `rename`, exclusive file creation, and a check that a holder's PID is gone
- * (as `.lock` recovery always has), so it needs no hard links.
+ * `rename`, exclusive file creation, and isRecordedProcessAlive (also used
+ * for `.lock` recovery), so it needs no hard links.
  *
  * Turns are numbered directories in profileTurnLockPath(profile). Turn n has
- * `owner.json` ({ pid, createdAt, token, after }), where `after` is the token
- * of the turn n-1 its creator observed, and gains `<token>.held` when granted
- * and `<token>.done` when over. Markers name the turn's own token, so one
- * written late into a recreated directory of the same number means nothing.
+ * `owner.json` ({ pid, createdAt, token, after, instanceId, ...origin }), where
+ * `after` is the token of its observed predecessor. It gains `<token>.held`
+ * when granted and `<token>.done` when over. Markers name the turn's own token,
+ * so one written late into a recreated directory of the same number means nothing.
  *
  * - A turn is published by renaming a fully written staging directory to
  *   `n`, which fails while `n` exists (rename never replaces a non-empty
@@ -636,9 +685,9 @@ const SETTLE_RETRIES = 300;
  * process whose stale read led it to republish n finds n-1 gone or holding
  * another token, and its turn is void. A process that finds n-1 as it read
  * it published `n` for the first time, so it is the only process granted n,
- * and n-1 was done before. A turn is marked done only by its holder, or by
- * another process once the holder's PID is gone (or by its own process,
- * once it has explicitly given that turn up); a paused holder is alive.
+ * and n-1 was done before. A turn is marked done only by its holder, by a
+ * process with evidence the holder is gone, or by its own process once it
+ * explicitly gave the turn up; a paused holder is alive.
  * A turn is voided only on definite evidence (the turn it follows is gone or
  * holds another token), never because a read failed. Nothing above is
  * decided from elapsed time.
@@ -687,7 +736,11 @@ async function acquireTurn(
     } else if (latest.done) {
       problem = damaged(`ends with turn ${latest.slot}, which was never granted`);
       await waitOrTimeOut(profile, deadline, problem);
-    } else if (latest.pid === process.pid ? relinquishedTurns.has(latest.token) : !isProcessAlive(latest.pid)) {
+    } else if (
+      !isRecordedProcessAlive(latest) ||
+      (latest.pid === process.pid && (latest.instanceId === undefined || latest.instanceId === processInstanceId) &&
+        relinquishedTurns.has(latest.token))
+    ) {
       await waitForTestBarrier(TEST_LOCK_TURN_SETTLE_BARRIER_DIR, profile);
       await settleAbandonedTurn(directory, latest);
       relinquishedTurns.delete(latest.token);
@@ -734,7 +787,7 @@ async function readTurn(directory: string, slot: number): Promise<TurnState | "d
     if (!isErrno(error, "ENOENT") && !isErrno(error, "ENOTDIR")) throw error;
     return await exists(path) ? "damaged" : null;
   }
-  let owner: { pid?: unknown; token?: unknown; after?: unknown } | null;
+  let owner: (RecordedProcess & { token?: unknown; after?: unknown }) | null;
   try {
     owner = JSON.parse(text) as typeof owner;
   } catch {
@@ -746,6 +799,7 @@ async function readTurn(directory: string, slot: number): Promise<TurnState | "d
   const done = await exists(join(path, `${owner.token}.done`));
   const held = await exists(join(path, `${owner.token}.held`));
   return {
+    ...owner,
     slot,
     token: owner.token,
     pid: owner.pid,
@@ -775,7 +829,7 @@ async function takeTurn(profile: string, directory: string, latest: TurnState): 
   const token = randomUUID();
   const slot = latest.slot + 1;
   const path = join(directory, String(slot));
-  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: latest.token };
+  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: latest.token, ...processOwner() };
   let published = false;
   try {
     published = await publishDirectory(
@@ -854,7 +908,7 @@ async function markTurn(path: string, token: string, kind: "held" | "done"): Pro
 /** Creates the turn directory with a granted, finished turn 0, unless another process did. */
 async function createTurnDirectory(directory: string): Promise<void> {
   const token = randomUUID();
-  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: null };
+  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: null, ...processOwner() };
   await publishDirectory(join(dirname(directory), `.stage-${basename(directory)}-${process.pid}-${token}`), directory, {
     "0/owner.json": `${JSON.stringify(owner, null, 2)}\n`,
     [`0/${token}.held`]: "",
@@ -916,13 +970,13 @@ async function releaseTurn(profile: string, turn: Turn): Promise<void> {
 function isAbandonedTurnEntry(name: string): boolean {
   if (name.startsWith(".trash-")) return true;
   const writer = /^\.(?:stage|deleted\.json)[-.]([0-9]+)[-.]/.exec(name)?.[1];
-  return writer !== undefined && !isProcessAlive(Number(writer));
+  return writer !== undefined && !isRecordedProcessAlive({ pid: Number(writer) });
 }
 
 /** A turn directory's staging directory left beside it by a process that is gone. */
 function isAbandonedTurnDirectoryStage(name: string): boolean {
   const writer = /^\.stage-.+-([0-9]+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(name)?.[1];
-  return writer !== undefined && !isProcessAlive(Number(writer));
+  return writer !== undefined && !isRecordedProcessAlive({ pid: Number(writer) });
 }
 
 /**
@@ -1003,7 +1057,7 @@ async function publishProfileLock(profile: string, lockPath: string, token: stri
   await waitForTestBarrier(TEST_LOCK_PUBLISH_BARRIER_DIR, profile);
   const ownerPath = join(lockPath, "owner.json");
   const staged = join(dirname(lockPath), `.lock-owner-${token}.tmp`);
-  const owner = `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), token }, null, 2)}\n`;
+  const owner = `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), token, ...processOwner() }, null, 2)}\n`;
   try {
     await writeFile(staged, owner, { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
     try {
@@ -1159,8 +1213,9 @@ async function hasLiveRecoveryOwner(claimPath: string): Promise<boolean> {
   } catch {
     return false;
   }
-  const pid = typeof owner === "object" && owner !== null && "pid" in owner ? owner.pid : null;
-  return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && isProcessAlive(pid);
+  const record = typeof owner === "object" && owner !== null && "pid" in owner ? owner as RecordedProcess : null;
+  return typeof record?.pid === "number" && Number.isInteger(record.pid) && record.pid > 0 &&
+    isRecordedProcessAlive(record);
 }
 
 /**
@@ -1277,8 +1332,9 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
 
 /**
  * Whether an owner record (its exact bytes, read from `ownerPath`) is
- * abandoned: a holder's whose PID is gone, older than the stale threshold;
- * or, if it is not a complete record, a file older than that threshold.
+ * abandoned: its holder is confirmed gone (including a proven same-PID
+ * predecessor), and it is older than the existing stale threshold; or, if
+ * it is not a complete record, the file is older than that threshold.
  * Every release publishes complete records (by link or rename) except this
  * one's no-hard-link fallback, which writes in place while holding a turn;
  * so an incomplete record seen while holding a turn was left by a crash.
@@ -1291,7 +1347,7 @@ async function isAbandonedOwner(observed: string, ownerPath: string, staleAfterM
     owner = null;
   }
   if (typeof owner === "object" && owner !== null && "pid" in owner) {
-    return isStaleOwner(owner as { pid?: unknown; createdAt?: unknown }, staleAfterMs);
+    return isStaleOwner(owner as RecordedProcess & { createdAt?: unknown }, staleAfterMs);
   }
   const modifiedAt = await stat(ownerPath).then(({ mtimeMs }) => mtimeMs, () => Number.NaN);
   return Date.now() - modifiedAt >= staleAfterMs;
@@ -1317,7 +1373,7 @@ async function waitForTestBarrier(environmentName: string, profile: string): Pro
 }
 
 function isStaleOwner(
-  owner: { pid?: unknown; createdAt?: unknown } | null,
+  owner: (RecordedProcess & { createdAt?: unknown }) | null,
   staleAfterMs: number,
 ): boolean {
   const now = Date.now();
@@ -1325,14 +1381,14 @@ function isStaleOwner(
     ? Date.parse(owner.createdAt)
     : Number.NaN;
 
-  // Reclaim only a fully published lock whose owner PID is confirmed dead.
+  // Reclaim only a fully published lock whose owner is confirmed gone.
   // A lock without an owner record is handled by recoverOwnerlessLock: a
   // process holds the lock only once its owner.json is linked in.
   if (!Number.isFinite(createdAt) || now - createdAt < staleAfterMs) return false;
   if (typeof owner?.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
     return false;
   }
-  return !isProcessAlive(owner.pid);
+  return !isRecordedProcessAlive(owner);
 }
 
 /** Whether `path` exists. Only ENOENT/ENOTDIR mean it does not; other errors are thrown. */
@@ -1346,13 +1402,34 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-function isProcessAlive(pid: number): boolean {
+/**
+ * A different instance at this PID is dead only with positive provenance.
+ * Within one boot and PID namespace, a different process start proves PID
+ * reuse. Across namespaces, Docker's default 12-hex hostname identifies the
+ * same container across a restart (its namespace and process start change);
+ * distinct live containers and host processes have different hostnames.
+ * This cross-namespace case assumes Docker's unpinned, unique hostname;
+ * absent provenance, redeploys, reboots and non-Linux keep PID-only behavior.
+ */
+function isRecordedProcessAlive(owner: RecordedProcess): boolean {
+  const pid = owner.pid;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return !isErrno(error, "ESRCH");
   }
+  if (pid !== process.pid || typeof owner.instanceId !== "string" ||
+    !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(owner.instanceId) ||
+    owner.instanceId === processInstanceId) return true;
+  const origin = processOrigin();
+  if (!origin || owner.bootId !== origin.bootId ||
+    typeof owner.processStartTime !== "string" || !/^[0-9]+$/.test(owner.processStartTime) ||
+    owner.processStartTime === origin.processStartTime ||
+    typeof owner.hostname !== "string" || owner.hostname.length === 0 ||
+    typeof owner.pidNamespace !== "string" || !/^pid:\[[0-9]+\]$/.test(owner.pidNamespace)) return true;
+  if (owner.pidNamespace === origin.pidNamespace) return false;
+  return !/^[0-9a-f]{12}$/.test(origin.hostname) || owner.hostname !== origin.hostname;
 }
 
 function validateProfileName(profile: string): string {

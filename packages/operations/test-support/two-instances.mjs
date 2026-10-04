@@ -2,7 +2,7 @@
 // as ES module and as CommonJS: two module instances, as the CLI's several
 // entry points are. While one instance holds the profile lock, the other must
 // wait for its turn, never settle it. Writes the outcome as JSON to `out`.
-import { readdir, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import * as esm from "@tinycloud/operations/state";
@@ -20,6 +20,7 @@ const holding = esm.withProfileLock(profile, async () => {
   await finished;
 });
 await inside;
+const firstInstance = JSON.parse(await readFile(esm.profileLockMetadataPath(profile), "utf8")).instanceId;
 
 // Outside the holder's async context, so this is a separate acquisition.
 const turns = esm.profileTurnLockPath(profile);
@@ -31,4 +32,11 @@ const heldTurnSettled = !await stat(heldTurn).then(() => true, () => false) ||
   (await readdir(heldTurn)).some((name) => name.endsWith(".done"));
 finish();
 await holding;
-await writeFile(out, JSON.stringify({ distinct: esm.withProfileLock !== cjs.withProfileLock, other, heldTurnSettled }));
+const second = await cjs.withProfileLock(profile, async () =>
+  JSON.parse(await readFile(cjs.profileLockMetadataPath(profile), "utf8")).instanceId);
+await writeFile(out, JSON.stringify({
+  distinct: esm.withProfileLock !== cjs.withProfileLock,
+  other,
+  heldTurnSettled,
+  sharedInstance: typeof firstInstance === "string" && firstInstance === second,
+}));

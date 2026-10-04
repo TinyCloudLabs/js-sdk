@@ -313,7 +313,7 @@ const node = Bun.which("node");
 const twoInstances = new URL("../test-support/two-instances.mjs", import.meta.url).pathname;
 const oldContext = new URL("../test-support/old-context.mjs", import.meta.url).pathname;
 
-test("built ESM and CJS copies in one PID do not settle one another's active turn", async () => {
+test("built ESM and CJS copies share an instance ID without settling one another's active turn", async () => {
   const { home } = await lockTestHome();
   if (!node) throw new Error("These tests need Node on PATH, as the CLI does.");
   const outcome = join(home, "two-instances.json");
@@ -329,6 +329,7 @@ test("built ESM and CJS copies in one PID do not settle one another's active tur
     distinct: true,
     other: "PROFILE_LOCK_TIMEOUT",
     heldTurnSettled: false,
+    sharedInstance: true,
   });
 }, 30_000);
 
