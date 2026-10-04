@@ -25690,11 +25690,12 @@ var contentMetadataSchema = external_exports2.object({
   /** Encrypted presentation discriminator. The fixed entry point is index.html. */
   artifact: external_exports2.literal("html").optional()
 }).strict();
+var deliveryEmailSchema = external_exports2.string().email();
 var unsignedShareEnvelopeV2BaseSchema = external_exports2.object({
   version: external_exports2.literal(2),
   shareId: external_exports2.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: external_exports2.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: external_exports2.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v2TargetSchema,
@@ -25834,7 +25835,7 @@ var unsignedShareEnvelopeV3BaseSchema = external_exports2.object({
   version: external_exports2.literal(3),
   shareId: external_exports2.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: external_exports2.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: external_exports2.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v3TargetSchema,

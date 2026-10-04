@@ -12900,11 +12900,15 @@ var contentMetadataSchema = external_exports.object({
   /** Encrypted presentation discriminator. The fixed entry point is index.html. */
   artifact: external_exports.literal("html").optional()
 }).strict();
+var deliveryEmailSchema = external_exports.string().email();
+function isEnvelopeDeliveryEmail(value) {
+  return deliveryEmailSchema.safeParse(value).success;
+}
 var unsignedShareEnvelopeV2BaseSchema = external_exports.object({
   version: external_exports.literal(2),
   shareId: external_exports.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: external_exports.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: external_exports.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v2TargetSchema,
@@ -13044,7 +13048,7 @@ var unsignedShareEnvelopeV3BaseSchema = external_exports.object({
   version: external_exports.literal(3),
   shareId: external_exports.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: external_exports.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: external_exports.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v3TargetSchema,
@@ -14147,6 +14151,7 @@ function prepareAddressedShare(request) {
   }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
+  if (request.deliveryEmail !== void 0 && !isEnvelopeDeliveryEmail(request.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
   if (target.kind === "recipientDid") return { target };
@@ -16704,11 +16709,15 @@ var contentMetadataSchema2 = external_exports2.object({
   /** Encrypted presentation discriminator. The fixed entry point is index.html. */
   artifact: external_exports2.literal("html").optional()
 }).strict();
+var deliveryEmailSchema2 = external_exports2.string().email();
+function isEnvelopeDeliveryEmail2(value) {
+  return deliveryEmailSchema2.safeParse(value).success;
+}
 var unsignedShareEnvelopeV2BaseSchema2 = external_exports2.object({
   version: external_exports2.literal(2),
   shareId: external_exports2.string().min(1),
   recipientMatcher: recipientMatcherSchema2,
-  deliveryEmail: external_exports2.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema2.optional(),
   actions: external_exports2.array(shareActionSchema2).min(1).max(3),
   resource: resourceSelectorSchema2,
   target: v2TargetSchema2,
@@ -16848,7 +16857,7 @@ var unsignedShareEnvelopeV3BaseSchema2 = external_exports2.object({
   version: external_exports2.literal(3),
   shareId: external_exports2.string().min(1),
   recipientMatcher: recipientMatcherSchema2,
-  deliveryEmail: external_exports2.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema2.optional(),
   actions: external_exports2.array(shareActionSchema2).min(1).max(3),
   resource: resourceSelectorSchema2,
   target: v3TargetSchema2,
@@ -17354,6 +17363,12 @@ function createShareAuthorityAdapters(input = {}) {
       policyActions,
       contentSource,
       ...prepared.credentialRequirement === void 0 ? {} : { credentialRequirement: prepared.credentialRequirement },
+      // tinycloud-node 1.17.2 signs a delivery receipt only for the envelope's
+      // own signed delivery address (1.17.3 accepts it and no longer requires
+      // it), so an exact-email share pins its canonical mailbox for `--notify`
+      // and `tc share notify`. A mailbox the envelope's `deliveryEmail` rule
+      // rejects (deployed viewers validate with it) is published unpinned.
+      ...prepared.target.kind === "email" && isEnvelopeDeliveryEmail2(prepared.target.address) ? { deliveryEmail: prepared.target.address } : {},
       filename: targetInput.filename,
       mediaType,
       byteLength,
