@@ -626,15 +626,14 @@ async function responseError(
   } catch {
     // Ignore secondary body read failure.
   }
-  const error = wrapError(
+  // A response body is diagnostic text, not evidence that the request timed out.
+  // Keep network exceptions on wrapError's separate, untyped path.
+  return serviceError(
+    response.status === 408 || response.status === 504 ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
+    `${message}: ${response.status} ${detail}`,
     service,
-    new Error(`${message}: ${response.status} ${detail}`),
+    { meta: { status: response.status, statusText: response.statusText } },
   );
-  // Typed status so callers never have to read it back out of the message.
-  return {
-    ...error,
-    meta: { ...error.meta, status: response.status, statusText: response.statusText },
-  };
 }
 
 function isAbortError(error: unknown): boolean {

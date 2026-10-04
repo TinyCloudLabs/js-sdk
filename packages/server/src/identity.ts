@@ -84,9 +84,9 @@ export async function createServerIdentity(
 
 // Message heuristics, for untyped errors only.
 //
-// 1. Double-quoted strings are dropped (escape-aware). The SDK writes
-//    caller-chosen names such as KV keys with `JSON.stringify`, so a status-like
-//    number or quote inside a key can never be read as, or hide, the status.
+// 1. Double- and single-quoted strings are dropped (escape-aware). The SDK
+//    writes caller-chosen names in diagnostics; a status-like number or quote
+//    inside a name can never be read as, or hide, the status.
 // 2. The first number in 400-599 in one of the SDK's diagnostic positions is
 //    the status:
 //      - `: NNN` followed by whitespace or the end — KV `…key "k": 403 - text`,
@@ -97,7 +97,7 @@ export async function createServerIdentity(
 //    Only a 401 refreshes, so a real 502 or 403 is never overridden by a `401`
 //    later in its body.
 // 3. With no status, session wording on the unstripped message decides.
-const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"/g;
+const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
 const DIAGNOSTIC_STATUS_PATTERN =
   /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 const SESSION_ERROR_PATTERN =

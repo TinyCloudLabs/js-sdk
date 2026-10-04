@@ -2297,7 +2297,13 @@ export class TinyCloudNode {
           return;
         }
 
-        await this.account.index.ensure();
+        const index = await this.account.index.ensure();
+        if (!index.ok) {
+          throw Object.assign(
+            new Error(`Failed to ensure account index: ${index.error.message}`),
+            { cause: index.error },
+          );
+        }
         if (this.currentTinyCloudSession() !== session) {
           return;
         }
@@ -2396,7 +2402,7 @@ export class TinyCloudNode {
         const verdict = authorizationVerdictOf(error);
         const message = error instanceof Error ? error.message : String(error);
         const isAuthorizationVerdict = verdict === undefined
-          ? /Unauthorized Action|\b(?:401|403)\b/.test(message)
+          ? /^(?:Unauthorized Action\b|(?:(?:request failed|HTTP request failed|status(?: code)?|response status)\s*:\s*)?(?:HTTP\s*)?(?:401|403)\b)/i.test(message)
           : verdict !== "other";
         if (isAuthorizationVerdict) {
           console.warn(
