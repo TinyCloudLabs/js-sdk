@@ -30,7 +30,19 @@ interface ServerIdentity {
     privateKey: string;
 }
 declare function createServerIdentity(options: CreateServerIdentityOptions): Promise<ServerIdentity>;
+/**
+ * Whether re-signing in can fix `error`. Typed errors (HTTP `status`,
+ * `statusCode` or `meta.status`, or `AUTH_UNAUTHORIZED`, including through the
+ * `cause` chain) decide from their structure: only a 401 refreshes, so a 403
+ * never does whatever its body says. Untyped errors fall back to the message.
+ */
 declare function isTinyCloudSessionError(error: unknown): boolean;
+/**
+ * Run `fn`, re-signing in and retrying once when it fails with a session
+ * error (see {@link isTinyCloudSessionError}). To keep the typed status when
+ * unwrapping a `Result`, throw the `ServiceError` itself or an `Error` whose
+ * `cause` is the `ServiceError`.
+ */
 declare function withSessionRefresh<T>(node: TinyCloudNode, fn: () => Promise<T>): Promise<T>;
 
 type KvLike = {

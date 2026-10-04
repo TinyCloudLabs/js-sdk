@@ -2,6 +2,7 @@
 import { keccak256 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 var DEFAULT_HOST = "https://node.tinycloud.xyz";
 async function deriveDstackPrivateKey(options) {
   const res = await options.client.getKey(options.path, options.purpose);
@@ -34,9 +35,27 @@ async function createServerIdentity(options) {
     privateKey: options.privateKey
   };
 }
-var SESSION_ERROR_PATTERN = /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b|\b401\b(?![\d-])/i;
+var QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"/g;
+var DIAGNOSTIC_STATUS_PATTERN = /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
+var SESSION_ERROR_PATTERN = /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
+function diagnosticStatusOf(message) {
+  const unquoted = message.replace(QUOTED_STRING_PATTERN, '""');
+  for (const match of unquoted.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
+    const status = Number(match.slice(1).find((group) => group !== void 0));
+    if (status >= 400 && status <= 599) return status;
+  }
+  return void 0;
+}
 function isTinyCloudSessionError(error) {
+  const verdict = authorizationVerdictOf(error);
+  if (verdict !== void 0) {
+    return verdict === "unauthenticated";
+  }
   const message = error instanceof Error ? error.message : String(error);
+  const status = diagnosticStatusOf(message);
+  if (status !== void 0) {
+    return status === 401;
+  }
   return SESSION_ERROR_PATTERN.test(message);
 }
 async function withSessionRefresh(node, fn) {

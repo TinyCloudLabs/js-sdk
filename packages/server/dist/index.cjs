@@ -43,6 +43,7 @@ module.exports = __toCommonJS(index_exports);
 var import_viem = require("viem");
 var import_accounts = require("viem/accounts");
 var import_node_sdk = require("@tinycloud/node-sdk");
+var import_sdk_core = require("@tinycloud/sdk-core");
 var DEFAULT_HOST = "https://node.tinycloud.xyz";
 async function deriveDstackPrivateKey(options) {
   const res = await options.client.getKey(options.path, options.purpose);
@@ -75,9 +76,27 @@ async function createServerIdentity(options) {
     privateKey: options.privateKey
   };
 }
-var SESSION_ERROR_PATTERN = /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b|\b401\b(?![\d-])/i;
+var QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"/g;
+var DIAGNOSTIC_STATUS_PATTERN = /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
+var SESSION_ERROR_PATTERN = /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
+function diagnosticStatusOf(message) {
+  const unquoted = message.replace(QUOTED_STRING_PATTERN, '""');
+  for (const match of unquoted.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
+    const status = Number(match.slice(1).find((group) => group !== void 0));
+    if (status >= 400 && status <= 599) return status;
+  }
+  return void 0;
+}
 function isTinyCloudSessionError(error) {
+  const verdict = (0, import_sdk_core.authorizationVerdictOf)(error);
+  if (verdict !== void 0) {
+    return verdict === "unauthenticated";
+  }
   const message = error instanceof Error ? error.message : String(error);
+  const status = diagnosticStatusOf(message);
+  if (status !== void 0) {
+    return status === 401;
+  }
   return SESSION_ERROR_PATTERN.test(message);
 }
 async function withSessionRefresh(node, fn) {
@@ -94,7 +113,7 @@ async function withSessionRefresh(node, fn) {
 
 // src/delegated-secrets.ts
 var import_node_sdk2 = require("@tinycloud/node-sdk");
-var import_sdk_core = require("@tinycloud/sdk-core");
+var import_sdk_core2 = require("@tinycloud/sdk-core");
 function createServerDelegateClient(options) {
   const delegation = parseDelegation(options.delegation);
   let nodePromise;
@@ -128,7 +147,7 @@ function createServerDelegateClient(options) {
   };
 }
 async function readDelegatedSecret(node, delegation, name, options) {
-  const secretKey = (0, import_sdk_core.resolveSecretPath)(name, options).permissionPaths.vault;
+  const secretKey = (0, import_sdk_core2.resolveSecretPath)(name, options).permissionPaths.vault;
   const access = await node.useDelegation(delegation);
   const result = await access.kv.get(secretKey, { raw: true, prefix: "" });
   if (!result.ok) {

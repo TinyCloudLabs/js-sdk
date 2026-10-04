@@ -7282,7 +7282,7 @@ var KVService = class extends BaseService {
       return err(
         storageQuotaExceededError(
           "kv",
-          `Storage quota exceeded for key "${key}": ${errorText}`,
+          `Storage quota exceeded for key ${JSON.stringify(key)}: ${errorText}`,
           {
             status: response.status,
             ...quotaInfo ? { usedBytes: quotaInfo.usedBytes, limitBytes: quotaInfo.limitBytes } : {}
@@ -7295,7 +7295,7 @@ var KVService = class extends BaseService {
       return err(
         storageLimitReachedError(
           "kv",
-          `Storage limit reached for key "${key}": ${errorText}`,
+          `Storage limit reached for key ${JSON.stringify(key)}: ${errorText}`,
           {
             status: response.status,
             ...quotaInfo ? { usedBytes: quotaInfo.usedBytes, limitBytes: quotaInfo.limitBytes } : {}
@@ -7581,12 +7581,11 @@ var KVService = class extends BaseService {
       if (!response.ok) {
         const errorText = await response.text();
         if (response.status === 401 || response.status === 403) {
-          const { resource, action: requiredAction } = parseAuthError(errorText);
-          return err(authUnauthorizedError("kv", errorText, {
-            status: response.status,
-            ...requiredAction && { requiredAction },
-            ...resource && { resource }
-          }));
+          return this.authorizationFailure(
+            `Failed to batch read ${keys.length} key(s)`,
+            response,
+            errorText
+          );
         }
         if (response.status === 413) {
           return err(serviceError(
@@ -7685,22 +7684,38 @@ var KVService = class extends BaseService {
     } catch {
     }
     if (response.status === 401 || response.status === 403) {
-      const { resource, action } = parseAuthError(errorText);
-      return err(authUnauthorizedError("kv", errorText, {
-        status: response.status,
-        ...action && { requiredAction: action },
-        ...resource && { resource }
-      }));
+      return this.authorizationFailure(
+        `Failed to create signed read URL for key ${JSON.stringify(key)}`,
+        response,
+        errorText
+      );
     }
     const code2 = response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
     return err(
       serviceError(
         code2,
-        `Failed to create signed read URL for key "${key}": ${response.status} - ${errorText}`,
+        `Failed to create signed read URL for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
         "kv",
         { meta: { status: response.status, statusText: response.statusText } }
       )
     );
+  }
+  /**
+   * AUTH_UNAUTHORIZED for a 401/403 response. The message keeps the HTTP
+   * status and the server text (`<context>: <status> - <text>`, the same
+   * shape as every other KV failure) so callers that rethrow only the message
+   * still see the status; `meta.status` carries it for typed callers.
+   * Resource/ability hints are parsed from the raw body, never the message.
+   */
+  authorizationFailure(context, response, errorText, extraMeta = {}) {
+    const { resource, action } = parseAuthError(errorText);
+    const detail = errorText.trim().length > 0 ? errorText : response.statusText || "authorization failed";
+    return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
+      status: response.status,
+      ...action && { requiredAction: action },
+      ...resource && { resource },
+      ...extraMeta
+    }));
   }
   normalizeSignedReadUrlResponse(data) {
     if (!data || typeof data !== "object") {
@@ -7744,14 +7759,13 @@ var KVService = class extends BaseService {
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
             const errorText2 = await response.text();
-            const { resource, action } = parseAuthError(errorText2);
             const permissionHint = parsePermissionHintFromErrorText(errorText2);
-            return err(authUnauthorizedError("kv", errorText2, {
-              status: response.status,
-              ...action && { requiredAction: action },
-              ...resource && { resource },
-              ...permissionHint === void 0 ? {} : { permissionHint }
-            }));
+            return this.authorizationFailure(
+              `Failed to get key ${JSON.stringify(key)}`,
+              response,
+              errorText2,
+              permissionHint === void 0 ? {} : { permissionHint }
+            );
           }
           if (response.status === 404) {
             return this.classifyNotFound(response, key);
@@ -7760,7 +7774,7 @@ var KVService = class extends BaseService {
           if (response.status === 413) {
             return err(serviceError(
               ErrorCodes.KV_RESPONSE_TOO_LARGE,
-              `KV value at key "${key}" exceeds the requested response limit`,
+              `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -7768,7 +7782,7 @@ var KVService = class extends BaseService {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to get key "${key}": ${response.status} - ${errorText}`,
+              `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -7824,21 +7838,18 @@ var KVService = class extends BaseService {
           }
         );
         if (response.status === 401 || response.status === 403) {
-          const errorText = await response.text();
-          const message = errorText.trim().length > 0 ? errorText : `Failed to put key "${key}": ${response.status} - ${response.statusText || "authorization failed"}`;
-          const { resource, action: requiredAction } = parseAuthError(errorText);
-          return err(authUnauthorizedError("kv", message, {
-            status: response.status,
-            ...requiredAction && { requiredAction },
-            ...resource && { resource }
-          }));
+          return this.authorizationFailure(
+            `Failed to put key ${JSON.stringify(key)}`,
+            response,
+            await response.text()
+          );
         }
         if (!response.ok) {
           const errorText = await response.text();
           if (response.status === 412) {
             return err(serviceError(
               ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key "${key}"`,
+              `KV precondition failed for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -7846,7 +7857,7 @@ var KVService = class extends BaseService {
           if (response.status === 503 && (options?.ifMatch !== void 0 || options?.ifNoneMatch !== void 0)) {
             return err(serviceError(
               ErrorCodes.KV_CONFLICT,
-              `Concurrent KV update conflicted for key "${key}"`,
+              `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -7862,7 +7873,7 @@ var KVService = class extends BaseService {
           return err(
             serviceError(
               ErrorCodes.KV_WRITE_FAILED,
-              `Failed to put key "${key}": ${response.status} - ${errorText}`,
+              `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -7956,12 +7967,11 @@ var KVService = class extends BaseService {
             );
           }
           if (response.status === 401 || response.status === 403) {
-            const { resource, action } = parseAuthError(errorText);
-            return err(authUnauthorizedError("kv", errorText, {
-              status: response.status,
-              ...action && { requiredAction: action },
-              ...resource && { resource }
-            }));
+            return this.authorizationFailure(
+              `Failed to batch put ${items.length} key(s)`,
+              response,
+              errorText
+            );
           }
           const quotaError = this.handleQuotaErrorResponse(
             response,
@@ -8082,13 +8092,11 @@ var KVService = class extends BaseService {
         );
         if (!response.ok) {
           if (response.status === 401) {
-            const errorText2 = await response.text();
-            const { resource, action } = parseAuthError(errorText2);
-            return err(authUnauthorizedError("kv", errorText2, {
-              status: response.status,
-              ...action && { requiredAction: action },
-              ...resource && { resource }
-            }));
+            return this.authorizationFailure(
+              "Failed to list keys",
+              response,
+              await response.text()
+            );
           }
           const errorText = await response.text();
           return err(
@@ -8137,13 +8145,11 @@ var KVService = class extends BaseService {
         );
         if (!response.ok) {
           if (response.status === 401) {
-            const errorText2 = await response.text();
-            const { resource, action } = parseAuthError(errorText2);
-            return err(authUnauthorizedError("kv", errorText2, {
-              status: response.status,
-              ...action && { requiredAction: action },
-              ...resource && { resource }
-            }));
+            return this.authorizationFailure(
+              `Failed to delete key ${JSON.stringify(key)}`,
+              response,
+              await response.text()
+            );
           }
           if (response.status === 404) {
             return this.classifyNotFound(response, key);
@@ -8152,7 +8158,7 @@ var KVService = class extends BaseService {
           if (response.status === 412) {
             return err(serviceError(
               ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key "${key}"`,
+              `KV precondition failed for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -8160,7 +8166,7 @@ var KVService = class extends BaseService {
           if (response.status === 503 && options?.ifMatch !== void 0) {
             return err(serviceError(
               ErrorCodes.KV_CONFLICT,
-              `Concurrent KV delete conflicted for key "${key}"`,
+              `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             ));
@@ -8168,7 +8174,7 @@ var KVService = class extends BaseService {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to delete key "${key}": ${response.status} - ${errorText}`,
+              `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -8201,13 +8207,11 @@ var KVService = class extends BaseService {
         );
         if (!response.ok) {
           if (response.status === 401) {
-            const errorText2 = await response.text();
-            const { resource, action } = parseAuthError(errorText2);
-            return err(authUnauthorizedError("kv", errorText2, {
-              status: response.status,
-              ...action && { requiredAction: action },
-              ...resource && { resource }
-            }));
+            return this.authorizationFailure(
+              `Failed to get metadata for key ${JSON.stringify(key)}`,
+              response,
+              await response.text()
+            );
           }
           if (response.status === 404) {
             return this.classifyNotFound(response, key);
@@ -8216,7 +8220,7 @@ var KVService = class extends BaseService {
           return err(
             serviceError(
               ErrorCodes.NETWORK_ERROR,
-              `Failed to get metadata for key "${key}": ${response.status} - ${errorText}`,
+              `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
               "kv",
               { meta: { status: response.status, statusText: response.statusText } }
             )
@@ -9675,10 +9679,14 @@ async function responseError(service, message, response) {
     }
   } catch {
   }
-  return wrapError2(
+  const error = wrapError2(
     service,
     new Error(`${message}: ${response.status} ${detail}`)
   );
+  return {
+    ...error,
+    meta: { ...error.meta, status: response.status, statusText: response.statusText }
+  };
 }
 function isAbortError(error) {
   return error instanceof DOMException && error.name === "AbortError";
