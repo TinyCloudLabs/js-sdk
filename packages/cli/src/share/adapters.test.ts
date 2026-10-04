@@ -498,12 +498,13 @@ describe("TinyCloud share authority adapter", () => {
   });
 
 
-  it("classifies quota and other KV upload failures for bearer and addressed shares", async () => {
+  it("classifies storage and other KV upload failures for bearer and addressed shares", async () => {
+    const account = { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" };
     const cases = [
-      { code: "STORAGE_QUOTA_EXCEEDED", meta: undefined, failure: { kind: "storage-quota-exceeded", usedBytes: 387_382_794, limitBytes: 8_119_195 } },
-      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402 }, failure: { kind: "storage-quota-exceeded" } },
-      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402, usedBytes: -1, limitBytes: "8 MB" }, failure: { kind: "storage-quota-exceeded" } },
-      { code: "STORAGE_LIMIT_REACHED", meta: { status: 413 }, failure: { kind: "upload-failed" } },
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402, usedBytes: 155_744, limitBytes: 0, account }, failure: { kind: "storage-full", code: "STORAGE_QUOTA_EXCEEDED", account } },
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402 }, failure: { kind: "storage-full", code: "STORAGE_QUOTA_EXCEEDED" } },
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402, account: { usedBytes: -1, limitBytes: "100 MB" } }, failure: { kind: "storage-full", code: "STORAGE_QUOTA_EXCEEDED" } },
+      { code: "STORAGE_LIMIT_REACHED", meta: { status: 413 }, failure: { kind: "storage-full", code: "STORAGE_LIMIT_REACHED" } },
       { code: "UNAVAILABLE", meta: undefined, failure: { kind: "upload-failed" } },
     ];
     for (const target of [{ kind: "bearer" as const }, { kind: "email" as const, address: "alice@example.com" }]) {

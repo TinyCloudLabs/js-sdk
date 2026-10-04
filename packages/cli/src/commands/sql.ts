@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { TinyCloudNode, IDatabaseHandle } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes } from "../output/formatter.js";
-import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService, storageFullError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
@@ -44,6 +44,9 @@ async function throwSqlError(
   profileName: string,
   prefix?: string,
 ): Promise<never> {
+  // The prefix says how far the command got, which beats "nothing was written".
+  const storageFull = storageFullError(error, prefix);
+  if (storageFull) throw storageFull;
   const hosted = await unhostedSpaceError(error, spaceUri, profileName);
   if (hosted) throw hosted;
   const message = prefix ? `${prefix}${error.message}` : error.message;

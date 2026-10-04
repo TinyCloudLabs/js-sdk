@@ -28,6 +28,7 @@ test("defines every stable v1 operation error code", () => {
     "ENCRYPTION_NETWORK_UNRESOLVED",
     "NODE_UNREACHABLE",
     "NODE_ERROR",
+    "STORAGE_QUOTA_EXCEEDED",
     "KV_NOT_FOUND",
     "KV_PRECONDITION_FAILED",
     "KV_CONFLICT",

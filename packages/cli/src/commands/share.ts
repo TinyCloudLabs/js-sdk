@@ -29,8 +29,7 @@ import {
 import { canonicalMailbox } from "@tinycloud/share-envelope";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
-import { formatBytes } from "../output/formatter.js";
-import { CLIError, handleError, wrapError } from "../output/errors.js";
+import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
@@ -140,11 +139,8 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
     }
-    if (failure.kind === "storage-quota-exceeded") {
-      const sizes = failure.usedBytes === undefined || failure.limitBytes === undefined
-        ? ""
-        : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
-      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
+    if (failure.kind === "storage-full") {
+      return storageFullError(failure)!;
     }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
@@ -165,6 +161,9 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     const code = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
     return new CLIError(code, error.message, exit);
   }
+  // Any other write the share flow makes (history, delegations) can hit full storage too.
+  const storageFull = storageFullError(error);
+  if (storageFull) return storageFull;
   const message = error instanceof Error ? error.message : String(error);
   const nodeCode = typeof error === "object" && error !== null && "code" in error
     ? (error as { readonly code?: unknown }).code

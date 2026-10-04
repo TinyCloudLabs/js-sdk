@@ -1,7 +1,7 @@
 import { parentPort } from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
-import { createEACCES, createEEXIST, createEIO, createEISDIR, createENOTDIR, createENOTEMPTY, createENOENT, createEINVAL, createEBUSY } from "./errors";
+import { createEACCES, createEEXIST, createEIO, createEISDIR, createENOSPC, createENOTDIR, createENOTEMPTY, createENOENT, createEINVAL, createEBUSY } from "./errors";
 import { dirnameOf, INTERNAL_META_PREFIX, joinStoragePath, normalizeStoragePrefix, toLogicalPath } from "./pathing";
 import { dataKey, decodeEnvelope, decodeMetadata, encodeFileValue, metadataKey, metadataPrefix, normalizeMode, nowMetadata, stripStoragePrefix } from "./metadata";
 import type {
@@ -122,6 +122,9 @@ async function kvPut(key: string, value: unknown): Promise<void> {
   if (!result.ok) {
     if (result.error?.code === "AUTH_UNAUTHORIZED") {
       throw createEACCES("put", key, result.error.message);
+    }
+    if (result.error?.code === "STORAGE_QUOTA_EXCEEDED" || result.error?.code === "STORAGE_LIMIT_REACHED") {
+      throw createENOSPC("put", key);
     }
     throw createEIO("put", key, result.error?.message ?? "kv put failed");
   }

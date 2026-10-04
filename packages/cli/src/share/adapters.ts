@@ -1,4 +1,5 @@
 import { ShareHistoryRetryError, SharePublishAuthorityError } from "./errors.js";
+import { storageRejection } from "../output/storage.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -35,18 +36,10 @@ function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get
   const action = meta.requiredAction;
   return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : undefined;
 }
-function isByteCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-/** A quota refusal stays one even when the Node's text carried no sizes; its text never reaches output. */
+/** A storage refusal stays one with or without account totals; the Node's text never reaches output. */
 function throwKvUploadFailure(error: unknown): never {
-  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED") {
-    const meta = ("meta" in error && typeof error.meta === "object" && error.meta !== null ? error.meta : {}) as { usedBytes?: unknown; limitBytes?: unknown };
-    const { usedBytes, limitBytes } = meta;
-    throw new SharePublishAuthorityError(isByteCount(usedBytes) && isByteCount(limitBytes)
-      ? { kind: "storage-quota-exceeded", usedBytes, limitBytes }
-      : { kind: "storage-quota-exceeded" });
-  }
+  const rejection = storageRejection(error);
+  if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";

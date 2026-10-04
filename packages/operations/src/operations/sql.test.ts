@@ -466,6 +466,29 @@ describe("SQLite DML operation", () => {
       expect(JSON.stringify(result)).not.toContain("private mutation outcome");
     }
   });
+
+  test("reports a storage rejection as a known, non-retryable outcome", async () => {
+    const operation = definition("tinycloud.sql.execute");
+    const input = operation.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "INSERT INTO notes (body) VALUES (?)",
+      params: ["x"],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    for (const error of [
+      { code: "STORAGE_QUOTA_EXCEEDED", meta: { status: 402, usedBytes: 155_744, limitBytes: 0 } },
+      { code: "STORAGE_LIMIT_REACHED", meta: { status: 413 } },
+    ] as const) {
+      const result = await operation.execute(context(sqlWriteNode(async () => ({ ok: false, error }))), input);
+      expect(result).toMatchObject({
+        status: "error",
+        error: { code: "STORAGE_QUOTA_EXCEEDED", retryable: false },
+      });
+      expect(JSON.stringify(result)).not.toContain("outcome is unknown");
+      expect(JSON.stringify(result)).not.toContain("155744");
+    }
+  });
 });
 
 function sqlNode(query: (...args: unknown[]) => Promise<unknown>) {

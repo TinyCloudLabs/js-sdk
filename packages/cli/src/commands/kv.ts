@@ -26,18 +26,6 @@ async function throwKvError(
   throw cliErrorFromService(error);
 }
 
-function isByteCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-/** A quota refusal stays one even when the Node's text carried no sizes; its text never reaches output. */
-function storageQuotaError(error: { code: string; meta?: unknown }): CLIError | undefined {
-  if (error.code !== "STORAGE_QUOTA_EXCEEDED") return undefined;
-  const { usedBytes, limitBytes } = (typeof error.meta === "object" && error.meta !== null ? error.meta : {}) as { usedBytes?: unknown; limitBytes?: unknown };
-  const sizes = isByteCount(usedBytes) && isByteCount(limitBytes) ? ` (${formatBytes(usedBytes)} used of ${formatBytes(limitBytes)} limit)` : "";
-  return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was written`, ExitCode.ERROR);
-}
-
 /**
  * The SDK puts KV keys unescaped into the Node resource URI, and the Node
  * refuses a space or control character there with a 401. Fail before
@@ -195,8 +183,6 @@ export function registerKvCommand(program: Command): void {
         const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue)) as any;
 
         if (!result.ok) {
-          const quota = storageQuotaError(result.error);
-          if (quota) throw quota;
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 

@@ -37,4 +37,6 @@ export const ExitCode = {
   PERMISSION_DENIED: 5,
   NETWORK_ERROR: 6,
   NODE_ERROR: 7,
+  /** A write was refused because the owner's TinyCloud storage is full. */
+  STORAGE_FULL: 10,
 } as const;

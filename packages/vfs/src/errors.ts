@@ -10,6 +10,7 @@ const ERRNO: Record<string, number> = {
   EISDIR: -21,
   EINVAL: -22,
   ENOTEMPTY: -39,
+  ENOSPC: -28,
   EROFS: -30,
 };
 
@@ -59,6 +60,11 @@ export function createEROFS(syscall: string, path: string): NodeJS.ErrnoExceptio
 
 export function createEIO(syscall: string, path: string, message: string): NodeJS.ErrnoException {
   return createNodeError("EIO", `${message}, ${syscall} '${path}'`, syscall, path);
+}
+
+/** The owner's TinyCloud storage is full (or too small for this write); nothing was written. */
+export function createENOSPC(syscall: string, path: string): NodeJS.ErrnoException {
+  return createNodeError("ENOSPC", `TinyCloud storage is full; nothing was written, ${syscall} '${path}'`, syscall, path);
 }
 
 export function createEBUSY(syscall: string, path: string, message = "resource busy or locked"): NodeJS.ErrnoException {

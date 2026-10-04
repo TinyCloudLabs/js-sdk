@@ -12,7 +12,7 @@ import type {
   RuntimeOperationContext,
   TinyCloudPosture,
 } from "../contract.js";
-import { OperationInvocationError, operationError } from "../errors.js";
+import { OperationInvocationError, operationError, storageFullOperationError } from "../errors.js";
 import { operationSpaceResolver } from "../secrets.js";
 import { authorizationFailure } from "./exploration.js";
 
@@ -438,7 +438,7 @@ async function executeSqlDml(
       .sqlForSpace(space)
       .db(input.database)
       .execute(input.sql, input.params.map(decodeSqlInputValue));
-    if (!result.ok) return authorizationFailure(result.error, "execute the SQLite statement") ?? sqlMutationFailure();
+    if (!result.ok) return authorizationFailure(result.error, "execute the SQLite statement") ?? sqlMutationFailure(result.error);
     const normalized = normalizeExecuteResult(result.data);
     return {
       status: "ok",
@@ -452,7 +452,7 @@ async function executeSqlDml(
     };
   } catch (error) {
     if (error instanceof OperationInvocationError) return { status: "error", error: error.operationError };
-    return authorizationFailure(error, "execute the SQLite statement") ?? sqlMutationFailure();
+    return authorizationFailure(error, "execute the SQLite statement") ?? sqlMutationFailure(error);
   }
 }
 
@@ -681,7 +681,10 @@ function sqlServiceFailure(
   return nodeFailure(action);
 }
 
-function sqlMutationFailure(): OperationExecutionOutcome<never> {
+function sqlMutationFailure(error: unknown): OperationExecutionOutcome<never> {
+  // A storage rejection leaves nothing written, so that outcome is known.
+  const storageFull = storageFullOperationError(error);
+  if (storageFull) return { status: "error", error: storageFull };
   return {
     status: "error",
     error: operationError(

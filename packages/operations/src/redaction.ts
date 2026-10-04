@@ -141,7 +141,25 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
     expectedHost: safeOriginHost,
     artifactHost: safeOriginHost,
   },
+  STORAGE_QUOTA_EXCEEDED: {
+    account: safeStorageAccount,
+  },
 };
+
+/** Account-wide totals only; a zero budget explains nothing and is dropped. */
+function safeStorageAccount(value: unknown): unknown | undefined {
+  if (!isRecord(value)) return undefined;
+  const { usedBytes, limitBytes, plan } = value;
+  if (
+    !Number.isSafeInteger(usedBytes) || (usedBytes as number) < 0 ||
+    !Number.isSafeInteger(limitBytes) || (limitBytes as number) <= 0
+  ) {
+    return undefined;
+  }
+  return typeof plan === "string" && /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$/.test(plan)
+    ? { usedBytes, limitBytes, plan }
+    : { usedBytes, limitBytes };
+}
 
 function redactSafeErrorDetails(
   code: OperationErrorCode,

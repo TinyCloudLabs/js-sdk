@@ -49,11 +49,8 @@ function errorFor(key: string) {
   if (key.startsWith("MISSING:")) {
     return { ok: false, error: { code: "KV_NOT_FOUND", message: "Key not found: " + key } };
   }
-  if (key.startsWith("QUOTA-NO-SIZES:")) {
-    return { ok: false, error: { code: "STORAGE_QUOTA_EXCEEDED", message: "server quota text", service: "kv", meta: { status: 402 } } };
-  }
   if (key.startsWith("QUOTA:")) {
-    return { ok: false, error: { code: "STORAGE_QUOTA_EXCEEDED", message: "server quota text", service: "kv", meta: { status: 402, usedBytes: 387_382_794, limitBytes: 8_119_195 } } };
+    return { ok: false, error: { code: "STORAGE_QUOTA_EXCEEDED", message: "server quota text", service: "kv", meta: { status: 402, usedBytes: 155_744, limitBytes: 0, account: { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" } } } };
   }
   return null;
 }
@@ -244,25 +241,15 @@ describe("CLI kv put --space", () => {
       },
     ]);
   });
-  test("reports quota exhaustion with used and limit sizes", async () => {
+  // handleError (output/errors.test.ts) words the one storage-full error; the
+  // command must hand it the SDK error with its code and account totals intact.
+  test("hands a storage rejection to handleError with its account totals", async () => {
     await runKv(["put", "QUOTA:report", "hello"]);
 
     expect(recorded.errors).toHaveLength(1);
     expect(recorded.errors[0]).toMatchObject({
       code: "STORAGE_QUOTA_EXCEEDED",
-      exitCode: 1,
-      message: "storage quota exceeded (369.4 MB used of 7.7 MB limit); nothing was written",
-    });
-  });
-
-  test("reports quota exhaustion without echoing server text when the sizes are missing", async () => {
-    await runKv(["put", "QUOTA-NO-SIZES:report", "hello"]);
-
-    expect(recorded.errors).toHaveLength(1);
-    expect(recorded.errors[0]).toMatchObject({
-      code: "STORAGE_QUOTA_EXCEEDED",
-      exitCode: 1,
-      message: "storage quota exceeded; nothing was written",
+      metadata: { account: { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" } },
     });
   });
 
