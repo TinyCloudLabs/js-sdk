@@ -430,6 +430,16 @@ export async function renewPolicyRootStatusV3(input: {
   return object(await response.json(), "policy root renewal");
 }
 
+/**
+ * RFC 3339 in whole seconds. The Node refuses a revocation time it can't
+ * reproduce exactly, and its formatter drops trailing zeros from the
+ * fraction, so a millisecond `toISOString()` such as `.120Z` came back as
+ * `.12Z` and was refused about one time in ten (TC-601).
+ */
+function rfc3339Seconds(value: Date): string {
+  return new Date(Math.floor(value.getTime() / 1000) * 1000).toISOString().replace(/\.000Z$/, "Z");
+}
+
 export async function revokePolicyRootV3(input: {
   readonly nodeOrigin: string;
   readonly rootCid: string;
@@ -449,7 +459,7 @@ export async function revokePolicyRootV3(input: {
     targetRole: input.targetRole,
     ownerDid: input.ownerDid,
     nodeAudience: input.nodeAudience,
-    revokedAt: (input.now ?? new Date()).toISOString(),
+    revokedAt: rfc3339Seconds(input.now ?? new Date()),
     reason: input.reason,
     issuerDid: input.issuerDid,
   };

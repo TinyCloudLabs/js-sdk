@@ -14,7 +14,9 @@ import {
   parseCompactUcanAuthorization,
   policyDigestHex,
   policyIdForDigestHex,
+  ROOT_REVOCATION_V1_DOMAIN,
   ROOT_STATUS_V1_DOMAIN,
+  revokePolicyRootV3,
   signCompactPolicyDescendant,
   signCompactUcanAuthorization,
   signCompactUcanRootAuthorization,
@@ -413,5 +415,32 @@ describe("TC-405 unified policy contracts", () => {
     expect(parsePolicySessionUcan(sessionLasting(3600)).exp - parsed.payload.nbf).toBe(3600);
     expect(parsePolicySessionUcan(sessionLasting(31 * 24 * 60 * 60)).exp).toBe(parsed.payload.nbf + 31 * 24 * 60 * 60);
     expect(() => parsePolicySessionUcan(sessionLasting(31 * 24 * 60 * 60 + 1))).toThrow("fact is invalid");
+  });
+
+  test("TC-601: a root revocation is stamped in whole seconds, the one form the Node reproduces exactly", async () => {
+    const ownerKey = new Uint8Array(32).fill(61);
+    const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerKey)]))}`;
+    const nodeAudience = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(new Uint8Array(32).fill(62))]))}`;
+    const posted: Record<string, unknown>[] = [];
+    const fetch = (async (_url: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ revoked: true, cid: "bafy-root" }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    // The Node formats `.120Z` as `.12Z` and `.000Z` without a fraction, so
+    // either millisecond stamp was refused as non-canonical.
+    for (const now of ["2026-10-04T06:00:00.120Z", "2026-10-04T06:00:00.000Z", "2026-10-04T06:00:00.567Z"]) {
+      await revokePolicyRootV3({
+        nodeOrigin: "https://node.example", rootCid: "bafy-root", targetRole: "policy-enforcement", ownerDid, issuerDid: ownerDid,
+        nodeAudience, reason: "share revoked", sign: async (digest) => ed25519.sign(digest, ownerKey), now: new Date(now), fetch,
+      });
+    }
+    const revocations = posted.map((body) => body.revocation as Record<string, unknown>);
+    expect(revocations.map((revocation) => revocation.revokedAt)).toEqual(["2026-10-04T06:00:00Z", "2026-10-04T06:00:00Z", "2026-10-04T06:00:00Z"]);
+    // The signature covers that text, and it matches the checkpoint the Node
+    // signs: its revokedAt and the revocation digest it records.
+    const { signature: _signature, ...unsigned } = revocations[0]!;
+    const revocationCid = Buffer.from(sha256(new TextEncoder().encode(ROOT_REVOCATION_V1_DOMAIN + jcsCanonicalize(unsigned)))).toString("hex");
+    const checkpoint = { targetRole: "policy-enforcement", ownerDid, nodeAudience, revokedAt: "2026-10-04T06:00:00Z", revocationCid };
+    expect(verifyPolicyRootRevocationV3({ rootCid: "bafy-root", checkpoint, revocation: revocations[0]! })).toBe(true);
   });
 });
