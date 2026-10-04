@@ -1333,30 +1333,48 @@ describe("KVService authorization responses", () => {
     expect(validatedCapabilityOf(result.error)).toBeUndefined();
   });
 
-  test("get preserves a structured hint only for its actual space and key", async () => {
+  test.each([401, 403])("get: a matching structured hint gives the same canonical capability as an equivalent text denial at status %i", async (status) => {
     const permissionHint = {
       service: "tinycloud.kv",
       space: "tinycloud:pkh:eip155:1:0xabc:default",
       path,
       actions: [KVAction.GET],
     };
-    const service = new KVService({});
-    service.initialize(createContext(async () => response(false, 403, { permissionHint })));
-    const result = await service.get(path);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.meta?.permissionHint).toEqual(permissionHint);
-    expect(result.error.meta?.status).toBe(403);
+    const structured = new KVService({});
+    structured.initialize(createContext(async () => response(false, status, {
+      permissionHint,
+      resource: "tinycloud:pkh:eip155:1:0xdef:other/kv/vault/secrets/OTHER_KEY",
+    })));
+    const text = new KVService({});
+    text.initialize(createContext(async () =>
+      response(false, status, `Unauthorized Action: ${path} / ${KVAction.GET}`)
+    ));
+
+    const [structuredResult, textResult] = await Promise.all([structured.get(path), text.get(path)]);
+    expect(structuredResult.ok).toBe(false);
+    expect(textResult.ok).toBe(false);
+    if (structuredResult.ok || textResult.ok) return;
+    expect(structuredResult.error.meta?.permissionHint).toEqual(permissionHint);
+    expect(structuredResult.error.meta?.status).toBe(status);
+    expect(structuredResult.error.meta?.resource).toBe(canonicalResource);
+    expect(structuredResult.error.meta?.requiredAction).toBe(KVAction.GET);
+    expect(validatedCapabilityOf(structuredResult.error)).toEqual(validatedCapabilityOf(textResult.error));
   });
 
-  test("get does not pass through a structured hint for a different request path", async () => {
+  test.each([
+    ["path", { path: "vault/secrets/OTHER_KEY" }],
+    ["space", { space: "tinycloud:pkh:eip155:1:0xdef:default" }],
+    ["service", { service: "tinycloud.sql" }],
+    ["action", { actions: [KVAction.PUT] }],
+  ])("get: a structured hint for a different %s never becomes grant advice", async (_field, change) => {
     const service = new KVService({});
     service.initialize(createContext(async () => response(false, 403, {
       permissionHint: {
         service: "tinycloud.kv",
         space: "tinycloud:pkh:eip155:1:0xabc:default",
-        path: "vault/secrets/OTHER_KEY",
+        path,
         actions: [KVAction.GET],
+        ...change,
       },
     })));
     const result = await service.get(path);
@@ -1364,5 +1382,8 @@ describe("KVService authorization responses", () => {
     if (result.ok) return;
     expect(result.error.meta?.status).toBe(403);
     expect(result.error.meta?.permissionHint).toBeUndefined();
+    expect(result.error.meta?.resource).toBeUndefined();
+    expect(result.error.meta?.requiredAction).toBeUndefined();
+    expect(validatedCapabilityOf(result.error)).toBeUndefined();
   });
 });

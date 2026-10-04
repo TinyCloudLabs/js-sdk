@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import { KVService, SQLService, SpaceService } from "@tinycloud/sdk-core";
 import type { SpaceServiceConfig } from "@tinycloud/sdk-core";
+import { setActiveProfileName } from "../output/errors.js";
 
 const SPACE = "tinycloud:pkh:eip155:1:0xabc:default";
 let node: Record<string, unknown>;
@@ -81,6 +82,29 @@ test("KV 500 JWK wording remains a non-auth service failure", async () => {
   const result = await captureCommand("kv", ["get", "vault/item"]);
   expect(result.exitCode).toBe(1);
   expect(result.error.code).toBe("NETWORK_ERROR");
+});
+
+test("KV signer-wrapped NETWORK_ERROR requests profile sign-in rather than suggesting a reachable profile", async () => {
+  setActiveProfileName("cli-review");
+  const kv = new KVService();
+  kv.initialize({
+    ...serviceContext(500, ""),
+    invoke: () => { throw new Error("Missing private key parameter in JWK"); },
+    fetch: async () => { throw new Error("a signing failure must not reach the node"); },
+  });
+  const serviceResult = await kv.get("vault/item");
+  expect(serviceResult).toMatchObject({
+    ok: false,
+    error: { code: "NETWORK_ERROR", message: "Missing private key parameter in JWK" },
+  });
+  node = { kv };
+
+  const result = await captureCommand("kv", ["get", "vault/item"]);
+  expect(result.exitCode).toBe(3);
+  expect(result.error.code).toBe("AUTH_REQUIRED");
+  expect(result.error.message).toBe('Profile "cli-review" cannot restore its session because its private key material is missing.');
+  expect(result.error.hint).toBe("Sign in again with: tc --profile cli-review auth login --method openkey");
+  expect(result.error.hint).not.toContain("reachable profile");
 });
 
 test.each([401, 403].flatMap((status) =>

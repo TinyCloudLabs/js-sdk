@@ -789,26 +789,26 @@ export class KVService extends BaseService implements IKVService {
           if (response.status === 401 || response.status === 403) {
             const errorText = await this.readAuthorizationText(response);
             const permissionHint = parsePermissionHintFromErrorText(errorText);
+            const structuredCapability = permissionHint?.service === "tinycloud.kv" &&
+              permissionHint.space === this.context.session!.spaceId &&
+              permissionHint.path === path
+              ? validatedCapabilityOf({
+                  service: "kv",
+                  code: ErrorCodes.AUTH_UNAUTHORIZED,
+                  meta: {
+                    status: response.status,
+                    resource: `${this.context.session!.spaceId}/kv/${path}`,
+                    requiredAction: KVAction.GET,
+                  },
+                })
+              : undefined;
             return this.authorizationFailure(
               `Failed to get key ${JSON.stringify(key)}`,
               response,
               errorText,
               [path],
               KVAction.GET,
-              permissionHint?.service === "tinycloud.kv" &&
-              permissionHint.space === this.context.session!.spaceId &&
-              permissionHint.path === path &&
-              validatedCapabilityOf({
-                service: "kv",
-                code: ErrorCodes.AUTH_UNAUTHORIZED,
-                meta: {
-                  status: response.status,
-                  resource: `${this.context.session!.spaceId}/kv/${path}`,
-                  requiredAction: KVAction.GET,
-                },
-              })
-                ? { permissionHint }
-                : {}
+              structuredCapability ? { permissionHint, ...structuredCapability } : {}
             );
           }
 

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
-import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 
 let activeProfileName: string | undefined;
 
@@ -33,12 +33,16 @@ export function cliErrorFromService(
   error: { code: string; message: string; meta?: Record<string, unknown>; status?: number; statusCode?: number },
   message = error.message,
 ): CLIError {
+  if (error instanceof CLIError) return error;
   const meta = { ...error.meta };
   // Service metadata is not allowed to supply an arbitrary displayed command hint.
   delete meta.hint;
   const status = error.status ?? error.statusCode;
   if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
   const verdict = authorizationVerdictOf({ ...error, meta });
+  if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
+    return missingPrivateKeyError();
+  }
   const missingCapability = validatedCapabilityOf({ ...error, meta }) !== undefined;
   const denied = verdict === "forbidden" || (verdict === "unauthenticated" && missingCapability);
   return new CLIError(
@@ -66,15 +70,7 @@ export function wrapError(error: unknown): CLIError {
   // A genuinely untyped signer restore failure is local auth state. Never
   // interpret HTTP response text (or a command's deliberate CLIError) as JWK state.
   if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
-    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
-    return new CLIError(
-      "AUTH_REQUIRED",
-      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
-      ExitCode.AUTH_REQUIRED,
-      {
-        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
-      },
-    );
+    return missingPrivateKeyError();
   }
 
   // Any profile write (session, key, profile settings, stores) waits on the
@@ -111,6 +107,16 @@ export function wrapError(error: unknown): CLIError {
   return new CLIError("ERROR", message, ExitCode.ERROR);
 }
 
+function missingPrivateKeyError(): CLIError {
+  const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` },
+  );
+}
+
 export function handleError(error: unknown): never {
   const cliError = wrapError(error);
   // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
@@ -144,26 +150,21 @@ function buildAuthHint(error: CLIError): string | undefined {
   if (!spec) return undefined;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap "${spec}"`,
+    `Request it with: tc auth request --cap "${spec.replace(/[$`"\\!]/g, "\\$&")}"`,
     "Then retry the original command.",
   ].join("\n");
 }
 
 function capSpecFromAuthMeta(resource: string, action: string): string | undefined {
-  const slash = resource.indexOf("/");
-  if (slash <= 0 || slash === resource.length - 1) return undefined;
-  const spaceUri = resource.slice(0, slash);
-  const rest = resource.slice(slash + 1);
-  const nextSlash = rest.indexOf("/");
-  if (nextSlash <= 0) return undefined;
-
-  const serviceShort = rest.slice(0, nextSlash);
-  const path = rest.slice(nextSlash + 1);
-  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
-  const spaceName = spaceUri.startsWith("tinycloud:")
-    ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1)
-    : spaceUri;
-  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
+  const slash = action.indexOf("/");
+  if (slash < 0) return undefined;
+  const longService = action.slice(0, slash);
+  const serviceShort = SERVICE_LONG_TO_SHORT[longService];
+  if (!serviceShort) return undefined;
+  const parsed = parseCapabilityResource(resource, serviceShort);
+  if (!parsed) return undefined;
+  const spaceName = parsed.space.slice(parsed.space.lastIndexOf(":") + 1);
+  return `${longService}:${spaceName}:${parsed.path}:${action.slice(slash + 1)}`;
 }
 
 /**

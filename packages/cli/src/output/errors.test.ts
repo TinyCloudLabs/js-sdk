@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { CLIError, handleError, setActiveProfileName, wrapError } from "./errors.js";
+import { CLIError, cliErrorFromService, handleError, setActiveProfileName, wrapError } from "./errors.js";
 
 afterEach(() => {
   delete process.env.TC_PROFILE;
@@ -20,6 +20,34 @@ describe("wrapError", () => {
       "Sign in again with: tc --profile feed-migration-owner auth login --method openkey",
     );
     expect(error.message).not.toContain("NETWORK");
+  });
+
+  test("converts an untyped signer-wrapped service result into the active profile's login hint", () => {
+    setActiveProfileName("feed-migration-owner");
+    const error = cliErrorFromService({
+      code: "NETWORK_ERROR",
+      message: "Failed to sign request: Missing private key parameter in JWK",
+    });
+    expect(error).toMatchObject({
+      code: "AUTH_REQUIRED",
+      exitCode: 3,
+      message: 'Profile "feed-migration-owner" cannot restore its session because its private key material is missing.',
+      metadata: { hint: "Sign in again with: tc --profile feed-migration-owner auth login --method openkey" },
+    });
+  });
+
+  test("service HTTP statuses and deliberate CLI decisions defeat misleading JWK text", () => {
+    const message = "Missing private key parameter in JWK";
+    for (const [status, code, exitCode] of [
+      [401, "AUTH_REQUIRED", 3],
+      [403, "PERMISSION_DENIED", 5],
+      [500, "NETWORK_ERROR", 1],
+    ] as const) {
+      expect(cliErrorFromService({ code: "NETWORK_ERROR", message, meta: { status } }))
+        .toMatchObject({ code, exitCode, message, status });
+    }
+    const deliberate = new CLIError("NODE_ERROR", message, 7);
+    expect(cliErrorFromService(deliberate)).toBe(deliberate);
   });
 
   test("preserves the shipped not-found, permission, and network exit mappings", () => {
@@ -168,20 +196,48 @@ function captureHandleError(error: unknown): { code: number | undefined; rendere
 }
 
 describe("handleError authorization output", () => {
-  test("SQL 401 with a validated missing capability preserves its request hint", () => {
+  test("SQL 401 with a nested space requests the correct grant", () => {
+    const resource = "tinycloud:pkh:eip155:1:0xabc:default/notes/sql/default";
     const result = captureHandleError(new CLIError("PERMISSION_DENIED", "Unauthorized Action", 5, {
       status: 401,
-      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/default",
+      resource,
       requiredAction: "tinycloud.sql/read",
     }));
     const output = JSON.parse(result.rendered);
     expect(result.code).toBe(5);
-    expect(output.error.hint).toContain("tinycloud.sql:default:default:read");
+    expect(output.error.hint).toContain('tc auth request --cap "tinycloud.sql:default/notes:default:read"');
     expect(output.error.meta).toEqual({
       status: 401,
-      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/default",
+      resource,
       requiredAction: "tinycloud.sql/read",
     });
+  });
+
+  test("KV list at the root and at a trailing prefix retains the empty or trailing path", () => {
+    for (const [resource, path] of [
+      ["tinycloud:pkh:eip155:1:0xabc:default/kv/", ""],
+      ["tinycloud:pkh:eip155:1:0xabc:default/kv/vault/", "vault/"],
+    ]) {
+      const result = captureHandleError(new CLIError("PERMISSION_DENIED", "Unauthorized Action", 5, {
+        status: 403, resource, requiredAction: "tinycloud.kv/list",
+      }));
+      const output = JSON.parse(result.rendered);
+      expect(result.code).toBe(5);
+      expect(output.error.hint).toContain(`tc auth request --cap "tinycloud.kv:default:${path}:list"`);
+      expect(output.error.meta).toEqual({ status: 403, resource, requiredAction: "tinycloud.kv/list" });
+    }
+  });
+
+  test("renders valid punctuation in KV keys as shell-literal grant hints", () => {
+    const path = 'vault/a+b@c=d%e(f)~g/日本語//key?x="$HOME!`echo`\\tail';
+    const resource = `tinycloud:pkh:eip155:1:0xabc:default/kv/${path}`;
+    const result = captureHandleError(new CLIError("PERMISSION_DENIED", "Unauthorized Action", 5, {
+      status: 401, resource, requiredAction: "tinycloud.kv/get",
+    }));
+    const output = JSON.parse(result.rendered);
+    expect(output.error.meta).toEqual({ status: 401, resource, requiredAction: "tinycloud.kv/get" });
+    expect(output.error.hint).toContain('tc auth request --cap "tinycloud.kv:default:vault/a+b@c=d%e(f)~g/日本語//key?x=');
+    expect(output.error.hint).toContain('\\"\\$HOME\\!\\`echo\\`\\\\tail');
   });
 
   test("rejects server-controlled URL fragments and unsafe action values inside allowed meta fields", () => {

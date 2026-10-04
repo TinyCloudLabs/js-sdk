@@ -464,6 +464,7 @@ export {
   type ServiceError,
   authorizationVerdictOf,
   validatedCapabilityOf,
+  parseCapabilityResource,
   type AuthorizationVerdict,
   isStorageFullError,
   STORAGE_FULL_MESSAGE,
