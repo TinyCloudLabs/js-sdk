@@ -43,7 +43,9 @@ export async function fetchPeerId(
 
   if (!res.ok) {
     const error = await res.text().catch(() => res.statusText);
-    throw new Error(`Failed to get peer ID: ${res.status} - ${error}`);
+    throw Object.assign(new Error(`Failed to get peer ID: ${res.status} - ${error}`), {
+      status: res.status,
+    });
   }
 
   return res.text();

@@ -10,6 +10,7 @@ import { resolveSpaceUri } from "../lib/space.js";
 import { unhostedSpaceError } from "../lib/host.js";
 import { theme } from "../output/theme.js";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
+import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 
 /**
  * Throw the kv/sql service error, normalized to SPACE_NOT_HOSTED with an
@@ -17,13 +18,19 @@ import type { TinyCloudNode } from "@tinycloud/node-sdk";
  * unhosted-space condition. Keeps the single error path consistent across kv.
  */
 async function throwKvError(
-  error: { code: string; message: string; meta?: { status?: number } },
+  error: { code: string; message: string; meta?: Record<string, unknown> },
   spaceUri: string | undefined,
   profileName: string,
 ): Promise<never> {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName);
   if (hosted) throw hosted;
-  throw new CLIError(error.code, error.message, ExitCode.ERROR);
+  const verdict = authorizationVerdictOf(error);
+  throw new CLIError(
+    verdict === "unauthenticated" ? "AUTH_REQUIRED" : verdict === "forbidden" ? "PERMISSION_DENIED" : error.code,
+    error.message,
+    verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : verdict === "forbidden" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR,
+    error.meta,
+  );
 }
 
 function isByteCount(value: unknown): value is number {

@@ -4,6 +4,7 @@ import {
   CapabilityKeyRegistry,
   CaveatedDelegationUnsupportedError,
   canonicalizeEncryptionJson,
+  authorizationVerdictOf,
   type EncodedShareData,
   type ISessionManager,
   type IWasmBindings,
@@ -800,5 +801,36 @@ describe("TinyCloudNode sharing", () => {
     expect(calls[1]!.body.jti).toBe(unsigned.jti);
     expect(calls[1]!.body.requestBodyDigest).toBe(requestBodyDigest);
     expect(unsigned.jti).toMatch(/^[A-Za-z0-9_-]{22}$/);
+  });
+
+  test("V3 delivery HTTP denial carries status and server body through the public method", async () => {
+    const wasmBindings = {
+      ...makeWasmBindings(),
+      invokeAny: () => ({ Authorization: "delivery-invocation" }),
+    } as unknown as IWasmBindings;
+    const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
+    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
+    Reflect.set(node, "_serviceContext", { session: { spaceId: SPACE } });
+    globalThis.fetch = mock(async () => new Response("Forbidden", { status: 403 })) as unknown as typeof fetch;
+
+    try {
+      await node.authorizeShareDeliveryV3({
+        envelope: { version: 3 },
+        sealedEnvelope: "AQ".repeat(20),
+        envelopeKey: "A".repeat(43),
+        shareCid: "cid",
+        resourcePath: "shares/test/readme.md",
+        recipientEmail: "recipient@example.test",
+        shareUrl: "https://share.example/s/test#key",
+        documentName: "readme.md",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        deliveryAudience: "https://witness.example",
+        idempotencyKey: "stable-key",
+      });
+      throw new Error("expected V3 delivery denial");
+    } catch (error) {
+      expect((error as Error).message).toContain("HTTP 403 - Forbidden");
+      expect(authorizationVerdictOf(error)).toBe("forbidden");
+    }
   });
 });

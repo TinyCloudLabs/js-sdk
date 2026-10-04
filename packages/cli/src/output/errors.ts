@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
+import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 
 let activeProfileName: string | undefined;
 
@@ -25,6 +26,16 @@ export class CLIError extends Error {
 
 export function wrapError(error: unknown): CLIError {
   const message = error instanceof Error ? error.message : String(error);
+
+  // A typed HTTP refusal wins over misleading response text, including text
+  // that describes a different auth or local signing failure.
+  const verdict = authorizationVerdictOf(error);
+  if (verdict === "unauthenticated") {
+    return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
+  }
+  if (verdict === "forbidden") {
+    return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
+  }
 
   // A signer cannot make a request without private key material. Some SDK
   // service paths historically wrapped that local restore/signing failure as
@@ -62,13 +73,13 @@ export function wrapError(error: unknown): CLIError {
   }
 
   // Map known error patterns to exit codes
-  if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
+  if (verdict === undefined && (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired"))) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
   if (message.includes("NOT_FOUND") || message.includes("KV_NOT_FOUND")) {
     return new CLIError("NOT_FOUND", message, ExitCode.NOT_FOUND);
   }
-  if (message.includes("PERMISSION_DENIED")) {
+  if (verdict === undefined && message.includes("PERMISSION_DENIED")) {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
   if (message.includes("ECONNREFUSED") || message.includes("ETIMEDOUT") || message.includes("fetch failed")) {
@@ -87,7 +98,16 @@ export function handleError(error: unknown): never {
     : undefined;
   const hint = prebuilt ?? buildAuthHint(cliError) ??
     (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : undefined);
-  outputError(cliError.code, cliError.message, hint);
+  // Never expose arbitrary SDK/server metadata (or share adapter secrets).
+  // Only the KV authorization fields used by the capability hint are public.
+  const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED"
+    ? cliError.metadata
+    : undefined;
+  const meta: Record<string, unknown> = {};
+  if (typeof authMeta?.status === "number") meta.status = authMeta.status;
+  if (typeof authMeta?.resource === "string") meta.resource = authMeta.resource;
+  if (typeof authMeta?.requiredAction === "string") meta.requiredAction = authMeta.requiredAction;
+  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : undefined);
   process.exit(cliError.exitCode);
 }
 

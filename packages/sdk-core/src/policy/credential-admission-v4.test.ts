@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
+import { authorizationVerdictOf } from "@tinycloud/sdk-services";
 import { sha256 } from "@noble/hashes/sha256";
-import { decodeBase64Url, encodeBase64Url } from "../credentials";
+import { decodeBase64Url, encodeBase64Url, sha256Base64Url } from "../credentials";
+import type { CredentialRequirement, VerifiedCredential } from "../credentials";
 import { jcsCanonicalize } from "./jcs";
 import {
+  admitPolicyCredentialV3,
+  admitPolicyCredentialV4,
+  POLICY_V2_SCHEMA,
+  policyV2DigestHex,
+  type UnsignedUnifiedPolicyV2,
   POLICY_PRESENTATION_V4_DOMAIN,
   postPolicyDelegation,
   requestedSessionExpiry,
@@ -12,7 +20,7 @@ import {
   type UnifiedPolicyV2,
   type UnsignedPolicyCredentialPresentationV4,
 } from "./credential-admission";
-import { requestPolicyChallengeV3 } from "./unified";
+import { policyCidFromCanonicalBytes, policyIdForDigestHex, requestPolicyChallengeV3 } from "./unified";
 
 describe("TC-500 policy presentation v4", () => {
   test("matches the frozen cross-language golden vector", async () => {
@@ -138,4 +146,92 @@ describe("TC-500 policy presentation v4", () => {
     await postPolicyDelegation(legacy.fetchFn, url, body, undefined, undefined);
     expect(legacy.bodies).toEqual([body]);
   });
+  test("v3 and v4 admission preserve typed Node mint failures after a valid challenge and credential", async () => {
+    const vector = (await Bun.file(
+      `${import.meta.dir}/../../test-fixtures/policy-engine-vectors/unified-policy/credential-requirement.json`,
+    ).json()) as { sdkRequirement: CredentialRequirement; policyProjection: UnifiedPolicyV2["credentialRequirement"] };
+    const seed = new Uint8Array(32).fill(27);
+    const holderDid = `did:key:${base58btc.encode(
+      Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(seed)]),
+    )}`;
+    const capability = {
+      kind: "kv" as const,
+      resource: "tinycloud://space/kv/docs/a",
+      selector: "exact" as const,
+      actions: ["tinycloud.kv/get"] as const,
+    };
+    const unsigned: UnsignedUnifiedPolicyV2 = {
+      schema: POLICY_V2_SCHEMA,
+      ownerDid: "did:key:zOwner",
+      createdAt: "2026-10-04T00:00:00Z",
+      contentSource: {
+        shareId: "share", kvResource: capability.resource, selector: "exact",
+        encryptionNetwork: "urn:tinycloud:encryption:did:key:zOwner:default",
+        encryptedSymmetricKeyDigestHex: "a".repeat(64), keyVersion: 1, mode: "immutable",
+      },
+      capabilityCeiling: [capability],
+      credentialRequirement: vector.policyProjection,
+    };
+    const policy: UnifiedPolicyV2 = {
+      ...unsigned,
+      policyId: policyIdForDigestHex(policyV2DigestHex(unsigned)),
+      signature: { suite: "Ed25519", signerDid: unsigned.ownerDid, value: "signature" },
+    };
+    const policyCid = policyCidFromCanonicalBytes(new TextEncoder().encode(jcsCanonicalize(policy)));
+    const credentialText = "header.payload.signature";
+    const credential: VerifiedCredential = {
+      type: "OpenCredentialsIssuedCredential", version: 1,
+      protocol: "tinycloud.credentials/acquisition/v1", format: "vc+sd-jwt",
+      profile: vector.policyProjection.profile, credentialType: vector.policyProjection.credentialType,
+      schema: "test", issuerDid: vector.policyProjection.issuerDid, issuerKid: vector.policyProjection.issuerKid,
+      subjectDid: holderDid, holderDid, claims: { email: "alice@example.test" },
+      claimsDigest: vector.policyProjection.requirementDigest,
+      descriptorDigest: vector.policyProjection.descriptorDigest,
+      credentialId: "credential", issuedAt: "2026-10-04T00:00:00Z",
+      notBefore: "2026-10-04T00:00:00Z", expiresAt: "2026-10-05T00:00:00Z",
+      status: { method: "none", freshnessSeconds: 3600 },
+      credential: credentialText, credentialDigest: await sha256Base64Url(credentialText),
+      verifiedAt: "2026-10-04T00:00:00Z", statusCheckedAt: "2026-10-04T00:00:00Z",
+    };
+    const base = {
+      policy, policyCid, policyRootCid: "bafy-root", enforcementRootCid: "bafy-enforcement",
+      nodeOrigin: "https://node.example", requirement: vector.sdkRequirement,
+      credential, requestedCapabilities: [capability], now: new Date("2026-10-04T01:00:00Z"),
+      sign: async (digest: Uint8Array) => ed25519.sign(digest, seed),
+    };
+    for (const version of [3, 4] as const) {
+      for (const [status, body, verdict] of [
+        [401, "Forbidden", "unauthenticated"],
+        [403, "session expired", "forbidden"],
+      ] as const) {
+        const routes: string[] = [];
+        const fetch = (async (input: string | URL) => {
+          routes.push(String(input));
+          if (routes.length === 1)
+            return new Response(JSON.stringify({
+              challengeId: "challenge", nonce: "nonce", policyCid, recipientDid: holderDid,
+              nodeAudience: "did:key:zNode", expiresAt: "2026-10-05T00:00:00Z",
+            }), { status: 200 });
+          return new Response(body, { status });
+        }) as typeof globalThis.fetch;
+        const input = { ...base, fetch };
+        const result = version === 3
+          ? admitPolicyCredentialV3({
+            ...input, accountAuthorizationCid: "bafy-account", credentialSpaceId: "credentials",
+            credentialSpaceOwnerDid: holderDid,
+          })
+          : admitPolicyCredentialV4({
+            ...input, expectedNodeAudience: "did:key:zNode", expectedEnforcerDid: "did:key:zEnforcer",
+          });
+        const error: unknown = await result.catch((failure: unknown) => failure);
+        expect(routes).toHaveLength(2);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ status });
+        expect((error as Error).message).toContain(String(status));
+        expect((error as Error).message).toContain(body);
+        expect(authorizationVerdictOf(error)).toBe(verdict);
+      }
+    }
+  });
+
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { authorizationVerdictOf, ErrorCodes } from "@tinycloud/sdk-services";
 import type {
   IDataVaultService,
   ISecretsService,
@@ -86,5 +87,57 @@ describe("SpaceService space factories", () => {
     expect(calls.kv).toHaveLength(1);
     expect(calls.vault).toHaveLength(1);
     expect(calls.secrets).toHaveLength(1);
+  });
+});
+
+describe("SpaceService HTTP failures", () => {
+  it("preserves 401/403 status and Node text on space and delegation operations", async () => {
+    const calls = { kv: [] as string[], vault: [] as string[], secrets: [] as string[] };
+    for (const [status, body, verdict] of [
+      [401, "Forbidden", "unauthenticated"],
+      [403, "session expired", "forbidden"],
+    ] as const) {
+      const spaces = new SpaceService({
+        ...makeConfig(calls),
+        fetch: async () => new Response(body, { status }),
+      });
+      const space = spaces.get("secrets");
+      const operations = [
+        spaces.create("secrets"),
+        space.info(),
+        space.delegations.list(),
+        space.delegations.listReceived(),
+        space.delegations.revoke("bafy-delegation"),
+      ];
+      for (const operation of operations) {
+        const result = await operation;
+        expect(result.ok).toBe(false);
+        if (result.ok) continue;
+        expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+        expect(result.error.meta?.status).toBe(status);
+        expect(result.error.message).toContain(String(status));
+        expect(result.error.message).toContain(body);
+        expect(authorizationVerdictOf(result.error)).toBe(verdict);
+      }
+    }
+  });
+
+  it("keeps domain-specific 404 and 409 result codes, status, and response body", async () => {
+    const calls = { kv: [] as string[], vault: [] as string[], secrets: [] as string[] };
+    for (const [status, action, code] of [
+      [404, "info", "SPACE_NOT_FOUND"],
+      [409, "create", "SPACE_ALREADY_EXISTS"],
+    ] as const) {
+      const spaces = new SpaceService({
+        ...makeConfig(calls),
+        fetch: async () => new Response("Node explains refusal", { status }),
+      });
+      const result = action === "info" ? await spaces.get("secrets").info() : await spaces.create("secrets");
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.error).toMatchObject({ code, meta: { status } });
+      expect(result.error.message).toContain("Node explains refusal");
+      expect(authorizationVerdictOf(result.error)).toBe("other");
+    }
   });
 });

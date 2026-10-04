@@ -41,6 +41,13 @@ describe("wrapError", () => {
     });
   });
 
+  test("typed 403 defeats an expired-session body when hosting fails", () => {
+    const error = wrapError(Object.assign(new Error("Failed to host: 403 session expired"), { status: 403 }));
+    expect(error).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(wrapError(Object.assign(new Error("Failed to host: 500 session expired"), { status: 500 })))
+      .toMatchObject({ code: "ERROR", exitCode: 1 });
+  });
+
   test("classifies a profile lock timeout from any writer as PROFILE_LOCK_TIMEOUT with a retry hint", () => {
     const error = wrapError(new ProfileLockTimeoutError("publisher", 10_000));
     expect(error).toMatchObject({ code: "PROFILE_LOCK_TIMEOUT", exitCode: 1 });
@@ -95,6 +102,39 @@ describe("wrapError", () => {
       "}",
       "",
     ].join("\n"));
+    expect(rendered).not.toContain(canary);
+  });
+
+  test("renders only capability metadata in JSON and a useful hint", () => {
+    const canary = "private-response-should-not-appear";
+    const stderr = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+    const originalWrite = stderr.write;
+    const originalExit = process.exit;
+    let rendered = "";
+    stderr.write = (chunk: unknown) => {
+      rendered += String(chunk);
+      return true;
+    };
+    process.exit = (() : never => { throw new Error("expected process exit"); }) as typeof process.exit;
+    try {
+      expect(() => handleError(new CLIError("PERMISSION_DENIED", "403 - Forbidden", 5, {
+        status: 403,
+        resource: "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/record",
+        requiredAction: "tinycloud.kv/get",
+        secretValue: canary,
+      }))).toThrow("expected process exit");
+    } finally {
+      stderr.write = originalWrite;
+      process.exit = originalExit;
+    }
+    const output = JSON.parse(rendered) as { error: { code: string; hint: string; meta: Record<string, unknown> } };
+    expect(output.error.code).toBe("PERMISSION_DENIED");
+    expect(output.error.hint).toContain("tinycloud.kv:default:vault/record:get");
+    expect(output.error.meta).toEqual({
+      status: 403,
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/record",
+      requiredAction: "tinycloud.kv/get",
+    });
     expect(rendered).not.toContain(canary);
   });
 });

@@ -5,7 +5,7 @@ export function outputJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
 
-export function outputError(code: string, message: string, hint?: string): void {
+export function outputError(code: string, message: string, hint?: string, meta?: Record<string, unknown>): void {
   if (isInteractive()) {
     process.stderr.write(
       `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
@@ -16,10 +16,11 @@ export function outputError(code: string, message: string, hint?: string): void 
       }
     }
   } else {
-    const payload: { error: { code: string; message: string; hint?: string } } = {
+    const payload: { error: { code: string; message: string; hint?: string; meta?: Record<string, unknown> } } = {
       error: { code, message },
     };
     if (hint) payload.error.hint = hint;
+    if (meta) payload.error.meta = meta;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
 }

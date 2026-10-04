@@ -3,7 +3,8 @@
  */
 
 import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
-import { activateSessionWithHost } from "./space";
+import { authorizationVerdictOf } from "@tinycloud/sdk-services";
+import { activateSessionWithHost, fetchPeerId } from "./space";
 
 /**
  * The real `fetch`, captured at import time before any test replaces it.
@@ -137,6 +138,26 @@ describe("activateSessionWithHost", () => {
         headers: TEST_DELEGATION_HEADER,
       }
     );
+  });
+});
+
+describe("fetchPeerId HTTP failures", () => {
+  afterEach(() => { globalThis.fetch = REAL_FETCH; });
+
+  it.each([
+    [401, "", "unauthenticated"],
+    [401, "Forbidden", "unauthenticated"],
+    [403, "Unauthorized Action: host", "forbidden"],
+    [403, "session expired", "forbidden"],
+  ] as const)("keeps status %i and server body %s", async (status, body, verdict) => {
+    // The injected fetch is only used as a callable, not through Bun's preconnect extension.
+    globalThis.fetch = mock(async () => new Response(body, { status })) as unknown as typeof fetch;
+    const error: unknown = await fetchPeerId(TEST_HOST, "public").catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ status });
+    expect((error as Error).message).toContain(String(status));
+    if (body) expect((error as Error).message).toContain(body);
+    expect(authorizationVerdictOf(error)).toBe(verdict);
   });
 });
 

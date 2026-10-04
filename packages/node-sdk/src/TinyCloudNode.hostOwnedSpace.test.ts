@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
 
-import type { ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, submitHostDelegation, type ISessionManager, type IWasmBindings } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 
@@ -51,7 +51,7 @@ function makeNode(
       delegationHeader: { Authorization: "base-token" },
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
-    hostOwnedSpace,
+    hostOwnedSpaceResult: hostOwnedSpace,
   };
   return { node };
 }
@@ -69,7 +69,7 @@ function withFetch<T>(
 
 test("hostOwnedSpace resolves the owned space URI and always submits the host delegation", async () => {
   const APPS = `tinycloud:pkh:eip155:1:${ADDRESS}:applications`;
-  const hostOwnedSpace = mock(async () => true);
+  const hostOwnedSpace = mock(async () => ({ success: true, status: 200 }));
   const { node } = makeNode(hostOwnedSpace);
 
   // /delegate re-activation after hosting.
@@ -93,7 +93,7 @@ test("hostOwnedSpace succeeds when re-activation omits the space from skipped", 
   // A genuinely-hosted owned space the session has not referenced is reported
   // under neither `activated` nor `skipped`; that must still count as success.
   const APPS = `tinycloud:pkh:eip155:1:${ADDRESS}:applications`;
-  const hostOwnedSpace = mock(async () => true);
+  const hostOwnedSpace = mock(async () => ({ success: true, status: 200 }));
   const { node } = makeNode(hostOwnedSpace);
 
   const spaceId = await withFetch(
@@ -112,7 +112,7 @@ test("hostOwnedSpace succeeds when re-activation omits the space from skipped", 
 });
 
 test("hostOwnedSpace throws when the host delegation is rejected", async () => {
-  const hostOwnedSpace = mock(async () => false);
+  const hostOwnedSpace = mock(async () => ({ success: false, status: 403, error: "Forbidden" }));
   const { node } = makeNode(hostOwnedSpace);
 
   await expect(
@@ -129,7 +129,7 @@ test("hostOwnedSpace throws when the host delegation is rejected", async () => {
 
 test("hostOwnedSpace throws when re-activation reports the space skipped", async () => {
   const APPS = `tinycloud:pkh:eip155:1:${ADDRESS}:applications`;
-  const hostOwnedSpace = mock(async () => true);
+  const hostOwnedSpace = mock(async () => ({ success: true, status: 200 }));
   const { node } = makeNode(hostOwnedSpace);
 
   await expect(
@@ -148,7 +148,7 @@ test("hostOwnedSpace throws when re-activation reports the space skipped", async
 });
 
 test("hostOwnedSpace throws when re-activation fails", async () => {
-  const hostOwnedSpace = mock(async () => true);
+  const hostOwnedSpace = mock(async () => ({ success: true, status: 200 }));
   const { node } = makeNode(hostOwnedSpace);
 
   await expect(
@@ -163,7 +163,7 @@ test("hostOwnedSpace throws when re-activation fails", async () => {
 });
 
 test("hostOwnedSpace throws when no TinyCloud host is configured", async () => {
-  const hostOwnedSpace = mock(async () => true);
+  const hostOwnedSpace = mock(async () => ({ success: true, status: 200 }));
   const { node } = makeNode(hostOwnedSpace);
   // Remove every host source so resolution yields none.
   (node as any).config.host = undefined;
@@ -190,4 +190,30 @@ test("hostOwnedSpace throws when not signed in", async () => {
   await expect(node.hostOwnedSpace("applications")).rejects.toThrow(
     "Not signed in",
   );
+});
+
+test("public hostOwnedSpace keeps the real delegation response verdict and body", async () => {
+  for (const [status, body, verdict] of [
+    [401, "", "unauthenticated"],
+    [401, "Unauthorized Action: missing owner", "unauthenticated"],
+    [403, "Forbidden", "forbidden"],
+    [500, "session expired", "other"],
+  ] as const) {
+    const submit = mock(() => submitHostDelegation("https://tinycloud.test", {}));
+    const { node } = makeNode(submit);
+    await withFetch(
+      async (_input) => new Response(body, { status }),
+      async () => {
+        try {
+          await node.hostOwnedSpace("applications");
+          throw new Error("expected hosting to fail");
+        } catch (error) {
+          expect((error as Error).message).toContain(`${status}`);
+          if (body) expect((error as Error).message).toContain(body);
+          expect(authorizationVerdictOf(error)).toBe(verdict);
+        }
+      },
+    );
+    expect(submit).toHaveBeenCalledTimes(1);
+  }
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { KVService } from "@tinycloud/node-sdk";
 
 import type { OperationContext, RuntimeOperationContext } from "../contract.js";
 import { explorationOperationDefinitions } from "./exploration.js";
@@ -160,6 +161,31 @@ describe("account exploration operations", () => {
       },
     }), {});
     expect(oversized).toMatchObject({ status: "error", error: { code: "KV_RESPONSE_TOO_LARGE" } });
+  });
+
+  test("classifies account-registry list and record-read authorization failures", async () => {
+    const operation = definition("tinycloud.account.spaces.list");
+    for (const [stage, status, expected] of [
+      ["list", 401, "AUTH_REQUIRED"],
+      ["get", 403, "PERMISSION_DENIED"],
+    ] as const) {
+      const result = await operation.execute(context({
+        kvForSpace() {
+          return {
+            async list() {
+              return stage === "list"
+                ? { ok: false, error: { code: "AUTH_UNAUTHORIZED", meta: { status, resource: "private path" } } }
+                : { ok: true, data: { keys: ["spaces/one"], truncated: false } };
+            },
+            async get() {
+              return { ok: false, error: { code: "AUTH_UNAUTHORIZED", meta: { status, resource: "private path" } } };
+            },
+          };
+        },
+      }), {});
+      expect(result).toMatchObject({ status: "error", error: { code: expected, retryable: false } });
+      expect(JSON.stringify(result)).not.toContain("private path");
+    }
   });
 });
 
@@ -361,6 +387,78 @@ describe("generic KV exploration operations", () => {
       status: "error",
       error: { code: "KV_CONFLICT", retryable: true },
     });
+  });
+
+  test("classifies actual KV HTTP failures for every MCP-exposed method without leaking server text", async () => {
+    const inputs = [
+      ["tinycloud.kv.list", { space: "applications" }],
+      ["tinycloud.kv.get", { space: "applications", key: "documents/one" }],
+      ["tinycloud.kv.head", { space: "applications", key: "documents/one" }],
+      ["tinycloud.kv.put", {
+        space: "applications", key: "documents/one", mode: "upsert",
+        content: { encoding: "utf8", value: "private content" },
+      }],
+      ["tinycloud.kv.delete", { space: "applications", key: "documents/one" }],
+    ] as const;
+    const bodies = [
+      "",
+      "Unauthorized Action: private resource tinycloud.kv/get",
+      "Forbidden",
+      "session expired",
+    ];
+
+    for (const status of [401, 403, 502] as const) {
+      for (const body of bodies) {
+        for (const [id, raw] of inputs) {
+          const service = new KVService();
+          // The service only reads these context members on this failed HTTP path.
+          service.initialize({
+            session: {
+              delegationHeader: { Authorization: "Bearer fixture" },
+              spaceId: OWNER_APPLICATIONS,
+            },
+            isAuthenticated: true,
+            invoke: () => ({ Authorization: "Bearer fixture" }),
+            fetch: async () => new Response(body, { status, statusText: "upstream error" }),
+            hosts: ["https://node.tinycloud.test"],
+            emit: () => undefined,
+          } as unknown as Parameters<KVService["initialize"]>[0]);
+          const node = { kvForSpace: () => service };
+          const operation = definition(id);
+          const result = await operation.execute(context(node), operation.input.parse(raw));
+          const expected = status === 401
+            ? { code: "AUTH_REQUIRED", retryable: false }
+            : status === 403
+              ? { code: "PERMISSION_DENIED", retryable: false }
+              : { code: "NODE_ERROR", retryable: true };
+          expect(result).toMatchObject({ status: "error", error: expected });
+          expect(JSON.stringify(result)).not.toContain(body || "Bearer fixture");
+          expect(JSON.stringify(result)).not.toContain("private content");
+          expect(JSON.stringify(result)).not.toContain("private resource");
+        }
+      }
+    }
+  });
+
+  test("retains typed authorization through thrown KV wrappers but keeps outer 5xx retryable", async () => {
+    const operation = definition("tinycloud.kv.get");
+    for (const [outer, cause, expected] of [
+      [undefined, { statusCode: 401 }, { code: "AUTH_REQUIRED", retryable: false }],
+      [undefined, { code: "AUTH_UNAUTHORIZED" }, { code: "PERMISSION_DENIED", retryable: false }],
+      [{ status: 503 }, { meta: { status: 401 } }, { code: "NODE_ERROR", retryable: true }],
+    ] as const) {
+      const wrapped = Object.assign(new Error("private transport body"), {
+        ...outer,
+        cause,
+      });
+      const result = await operation.execute(context({
+        kvForSpace() {
+          return { async get() { throw wrapped; } };
+        },
+      }), operation.input.parse({ space: "applications", key: "documents/one" }));
+      expect(result).toMatchObject({ status: "error", error: expected });
+      expect(JSON.stringify(result)).not.toContain("private transport body");
+    }
   });
 
   test("rejects every generic KV operation for account and secrets spaces", async () => {

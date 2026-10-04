@@ -16,12 +16,14 @@ const recorded = {
 // Controls whether the resolved space is owned by the active profile.
 let owner = false;
 let profile: Record<string, unknown> = {};
+let spaceListError: { code: string; message: string; meta: { status: number } } | undefined;
 
 function resetState(): void {
   recorded.outputs = [];
   recorded.errors = [];
   recorded.fileWrites = [];
   owner = false;
+  spaceListError = undefined;
   profile = {
     name: "agent-test",
     chainId: 1,
@@ -38,10 +40,12 @@ mock.module("../config/profiles.js", () => ({
 }));
 
 mock.module("../lib/sdk.js", () => ({
-  // host-request must NOT contact the node; fail loudly if it tries.
-  ensureAuthenticated: async () => {
-    throw new Error("host-request must not authenticate");
-  },
+  // host-request stays local; list uses the controlled service response below.
+  ensureAuthenticated: async () => ({
+    spaces: { list: async () => spaceListError
+      ? { ok: false, error: spaceListError }
+      : { ok: true, data: [] } },
+  }),
 }));
 
 mock.module("../lib/host.js", () => ({
@@ -96,6 +100,21 @@ async function runSpace(args: string[]): Promise<void> {
   registerSpaceCommand(program);
   await program.parseAsync(["node", "tc", "space", ...args], { from: "node" });
 }
+
+describe("tc space list authorization", () => {
+  beforeEach(resetState);
+
+  test.each([401, 403])("preserves status and exit code for HTTP %i despite misleading text", async (status) => {
+    spaceListError = { code: "NETWORK_ERROR", message: `${status} - session expired`, meta: { status } };
+    await runSpace(["list"]);
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({
+      code: status === 401 ? "AUTH_REQUIRED" : "PERMISSION_DENIED",
+      exitCode: status === 401 ? 3 : 5,
+      metadata: { status },
+    });
+  });
+});
 
 describe("tc space host-request", () => {
   beforeEach(resetState);
