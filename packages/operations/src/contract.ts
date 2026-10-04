@@ -90,9 +90,16 @@ export const STORED_GRANT_SKIP_REASONS = [
 export type StoredGrantSkipReason = typeof STORED_GRANT_SKIP_REASONS[number];
 
 /**
+ * The string form of every delegation CID TinyCloud computes: CIDv1, raw
+ * codec, BLAKE3-256 multihash, base32. A published `grantCid` also has to be
+ * the CID recomputed from the stored authorization bytes.
+ */
+export const DELEGATION_CID_PATTERN = "^bafkr4i[a-z2-7]{52}$";
+
+/**
  * A non-fatal diagnostic attached to a result. `STORED_GRANT_SKIPPED`: a
  * stored grant failed validation and gave no authority; `grantCid` is present
- * only when the stored CID is a well-formed identifier.
+ * only when the stored CID is the CID of the stored authorization bytes.
  */
 export interface OperationWarning {
   readonly code: "STORED_GRANT_SKIPPED";

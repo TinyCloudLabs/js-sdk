@@ -1058,7 +1058,7 @@ async function importRequestBoundDelegation(
   switch (result.status) {
     case "ok": {
       const output = result.output as AuthImportOutput;
-      outputWarnings(warnings);
+      // Diagnostics follow the command's output, never precede a failure of it.
       outputJson({
         imported: true,
         activated: output.activated,
@@ -1071,6 +1071,7 @@ async function importRequestBoundDelegation(
         permissions: output.effectivePermissions,
         expiry: output.expiry,
       });
+      outputWarnings(warnings);
       return;
     }
     case "authority_required":

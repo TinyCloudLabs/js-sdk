@@ -1,7 +1,7 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { PermissionEntrySchema, PermissionRequestArtifactSchema } from "./artifacts.js";
-import { STORED_GRANT_SKIP_REASONS } from "./contract.js";
+import { DELEGATION_CID_PATTERN, STORED_GRANT_SKIP_REASONS } from "./contract.js";
 import { OPERATION_ERROR_CODES } from "./errors.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -79,7 +79,7 @@ const warningsSchema: JsonSchema = {
     properties: {
       code: { const: "STORED_GRANT_SKIPPED" },
       reason: { type: "string", enum: [...STORED_GRANT_SKIP_REASONS] },
-      grantCid: { type: "string", pattern: "^[A-Za-z0-9]{1,128}$" },
+      grantCid: { type: "string", pattern: DELEGATION_CID_PATTERN },
     },
     required: ["code", "reason"],
     additionalProperties: false,

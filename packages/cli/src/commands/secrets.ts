@@ -25,7 +25,7 @@ import {
   withSpinner,
 } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
-import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -402,12 +402,16 @@ async function runSecretOperationAttempt<T>(
 
 type CanonicalSecretGetWarning = NonNullable<CanonicalSecretGetResult["warnings"]>[number];
 
-/** Carry an operation's warnings on the CLI error that reports it, so handleError renders them. */
+/**
+ * Carry an operation's warnings on the CLI error that reports the failure, so
+ * handleError renders them in the same envelope. Any thrown value (a browser
+ * approval can throw a plain Error) is first classified as handleError would.
+ */
 function withOperationWarnings(error: unknown, warnings: readonly CanonicalSecretGetWarning[] | undefined): unknown {
-  if (error instanceof CLIError && warnings !== undefined && warnings.length > 0) {
-    error.metadata = { ...error.metadata, warnings };
-  }
-  return error;
+  if (warnings === undefined || warnings.length === 0) return error;
+  const cliError = wrapError(error);
+  cliError.metadata = { ...cliError.metadata, warnings };
+  return cliError;
 }
 
 /**
@@ -1411,22 +1415,22 @@ export function registerSecretsCommand(
             throw withOperationWarnings(error, result.warnings);
           }
         }
-        outputWarnings(operationWarnings(result.warnings));
-
+        // Success warnings go out only once the command's output has; a
+        // failed write reports them inside its error instead.
         const value = result.output.value;
-
-        if (options.output) {
-          await writeSecretFile(options.output, value);
-          outputJson({ name, written: options.output });
-          return;
+        try {
+          if (options.output) {
+            await writeSecretFile(options.output, value);
+            outputJson({ name, written: options.output });
+          } else if (options.raw || options.valueOnly) {
+            process.stdout.write(value);
+          } else {
+            outputJson({ name, value });
+          }
+        } catch (error) {
+          throw withOperationWarnings(error, result.warnings);
         }
-
-        if (options.raw || options.valueOnly) {
-          process.stdout.write(value);
-          return;
-        }
-
-        outputJson({ name, value });
+        outputWarnings(operationWarnings(result.warnings));
       } catch (error) {
         handleError(error);
       }

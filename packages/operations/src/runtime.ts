@@ -6,6 +6,7 @@ import type {
 import * as nodeSdk from "@tinycloud/node-sdk";
 
 import {
+  DELEGATION_CID_PATTERN,
   type InvocationTarget,
   type OperationContext,
   type OperationRuntime,
@@ -218,7 +219,7 @@ export async function createInvocationRuntime(
           // keeps one stale record from blocking what the session or other
           // grants cover; the result says which grant and why, in fixed
           // codes only. An expired grant is routine and is not reported.
-          warnings.push(skippedGrantWarning(entry, replay.reason));
+          warnings.push(skippedGrantWarning(node, entry, replay.reason));
         }
       }
     }
@@ -253,14 +254,32 @@ export async function createInvocationRuntime(
   }
 }
 
-function skippedGrantWarning(entry: unknown, reason: StoredGrantSkipReason): OperationWarning {
-  const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
-  return {
-    code: "STORED_GRANT_SKIPPED",
-    reason,
-    ...(typeof cid === "string" && /^[A-Za-z0-9]{1,128}$/.test(cid) ? { grantCid: cid } : {}),
-  };
+/**
+ * A stored CID is published only when it is the CID of the stored
+ * authorization bytes, recomputed here. Any other value (free text, or a
+ * well-formed CID of different bytes) is caller-controlled data and is omitted.
+ */
+function skippedGrantWarning(node: unknown, entry: unknown, reason: StoredGrantSkipReason): OperationWarning {
+  const grantCid = verifiedStoredCid(node, entry);
+  return { code: "STORED_GRANT_SKIPPED", reason, ...(grantCid === undefined ? {} : { grantCid }) };
 }
+
+function verifiedStoredCid(node: unknown, entry: unknown): string | undefined {
+  const delegation = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation : undefined;
+  const header = isRecord(delegation?.delegationHeader) ? delegation.delegationHeader : undefined;
+  const cid = delegation?.cid;
+  const computeDelegationCid = isRecord(node) ? node.computeDelegationCid : undefined;
+  if (typeof cid !== "string" || typeof header?.Authorization !== "string" || typeof computeDelegationCid !== "function") {
+    return undefined;
+  }
+  try {
+    return computeDelegationCid.call(node, header.Authorization) === cid && DELEGATION_CID.test(cid) ? cid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const DELEGATION_CID = new RegExp(DELEGATION_CID_PATTERN);
 
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
   if (principal === undefined) return undefined;

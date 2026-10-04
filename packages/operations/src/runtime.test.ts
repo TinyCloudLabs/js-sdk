@@ -444,6 +444,32 @@ test("a local sign-in without the profile's stored session never runs the migrat
   }
 });
 
+test("a stored CID is published only when it is the CID of the stored authorization", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const cidCanary = "TCGRANTCIDSECRETCANARY";
+  try {
+    const first = await fixture.hermetic.mintDelegation();
+    const second = await fixture.hermetic.mintDelegationWithPermissions(
+      fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv"),
+    );
+    await persistRuntimeDelegations(fixture, [
+      // Free text in the CID field, and a well-formed CID of other bytes.
+      { ...first, cid: cidCanary, host: "https://elsewhere.example" },
+      { ...second, cid: first.cid, host: "https://elsewhere.example" },
+    ]);
+
+    const result = await invokeOperation("tinycloud.secrets.get", 1, { profile: fixture.profile }, { name: "KEY" });
+
+    expect(result.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(cidCanary);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("never falls back to a configured profile when the pinned profile disappears", async () => {
   await writeJsonAtomic(profileConfigPath("fallback"), {
     name: "fallback",

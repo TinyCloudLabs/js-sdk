@@ -7,14 +7,15 @@ import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
 // Stored grants that cannot be used are reported as fixed codes inside the
 // CLI's JSON error, under both Bun (source) and Node (the built CLI). The
-// three grants are real owner-signed CACAOs: one stored without its proof (as
-// earlier releases did), one whose stored host carries URL userinfo, and one
-// the node refuses with a response body. Neither the body nor the host may
-// reach the output.
+// grants are real owner-signed CACAOs: one stored without its proof (as
+// earlier releases did), one whose stored host carries URL userinfo, one the
+// node refuses with a response body, and one whose stored CID is free text.
+// Neither the body, the host nor the free-text CID may reach the output.
 
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 const RESPONSE_CANARY = "tc-node-response-body-canary";
 const USERINFO_CANARY = "tc-stored-host-userinfo-canary";
+const CID_CANARY = "TCGRANTCIDSECRETCANARY";
 const home = await mkdtemp(join(tmpdir(), "tc-stored-grant-warnings-"));
 const originalTcHome = process.env.TC_HOME;
 process.env.TC_HOME = home;
@@ -85,10 +86,12 @@ beforeAll(async () => {
     jwk, address, chainId: 1, spaceId, verificationMethod: sessionDid,
     siwe: session.siwe, signature: session.signature, ownerDid, expiresAt, tinycloudHosts: [node.url.origin],
   });
+  const freeTextCid = await grant(node.url.origin, true);
   await writeJsonAtomic(additionalDelegationsPath("owner"), [
     await grant(node.url.origin, false),
     await grant(`https://agent:${USERINFO_CANARY}@evil.example`, true),
     await grant(node.url.origin, true),
+    { ...freeTextCid, delegation: { ...freeTextCid.delegation, cid: CID_CANARY } },
   ]);
 });
 
@@ -123,14 +126,16 @@ test.each(runtimes)("under %s, --json stderr is one parseable error carrying the
   expect(parsed.error).toMatchObject({
     code: "PERMISSION_DENIED",
     warnings: [
-      { code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: grantCids[0] },
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: grantCids[1] },
-      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: grantCids[2] },
+      { code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: grantCids[1] },
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: grantCids[2] },
+      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: grantCids[3] },
+      { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
     ],
   });
   expect(stderr).not.toContain(RESPONSE_CANARY);
   expect(stderr).not.toContain(USERINFO_CANARY);
   expect(stderr).not.toContain("evil.example");
+  expect(stderr).not.toContain(CID_CANARY);
   // Only the grant that passed verification was offered to the node.
   expect(requests).toEqual(["POST /delegate"]);
 });

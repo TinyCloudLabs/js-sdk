@@ -204,7 +204,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -330,7 +330,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -523,7 +523,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -723,7 +723,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -1313,7 +1313,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -1439,7 +1439,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -1632,7 +1632,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -1832,7 +1832,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -2431,7 +2431,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -2557,7 +2557,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -2750,7 +2750,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -2950,7 +2950,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -3732,7 +3732,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -3858,7 +3858,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -4051,7 +4051,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -4251,7 +4251,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -5000,7 +5000,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -5126,7 +5126,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -5319,7 +5319,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -5519,7 +5519,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -6237,7 +6237,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -6363,7 +6363,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -6556,7 +6556,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -6756,7 +6756,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -7355,7 +7355,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -7481,7 +7481,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -7674,7 +7674,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -7874,7 +7874,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -8465,7 +8465,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -8591,7 +8591,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -8784,7 +8784,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -8984,7 +8984,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -9579,7 +9579,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -9705,7 +9705,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -9898,7 +9898,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -10098,7 +10098,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -10652,7 +10652,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -10778,7 +10778,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -10971,7 +10971,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -11171,7 +11171,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -11893,7 +11893,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -12019,7 +12019,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -12212,7 +12212,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -12412,7 +12412,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -12956,7 +12956,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -13082,7 +13082,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -13275,7 +13275,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -13475,7 +13475,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -14066,7 +14066,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -14192,7 +14192,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -14385,7 +14385,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -14585,7 +14585,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -15263,7 +15263,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -15389,7 +15389,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -15582,7 +15582,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -15782,7 +15782,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -16441,7 +16441,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -16567,7 +16567,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -16760,7 +16760,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -16960,7 +16960,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -17598,7 +17598,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -17724,7 +17724,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -17917,7 +17917,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [
@@ -18117,7 +18117,7 @@
                     },
                     "grantCid": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                      "pattern": "^bafkr4i[a-z2-7]{52}$"
                     }
                   },
                   "required": [

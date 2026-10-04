@@ -550,20 +550,26 @@ mock.module("../output/theme.js", () => {
   };
 });
 
+class MockCLIError extends Error implements CLIErrorLike {
+  constructor(
+    public code: string,
+    message: string,
+    public exitCode: number,
+    public metadata?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "CLIError";
+  }
+}
+
 mock.module("../output/errors.js", () => ({
-  CLIError: class CLIError extends Error implements CLIErrorLike {
-    constructor(
-      public code: string,
-      message: string,
-      public exitCode: number,
-      public metadata?: Record<string, unknown>,
-    ) {
-      super(message);
-      this.name = "CLIError";
-    }
-  },
+  CLIError: MockCLIError,
   cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
-    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
+    new MockCLIError(error.code, error.message, 1, error.meta),
+  // Classification itself is covered by output/errors.test.ts.
+  wrapError: (error: unknown) => error instanceof MockCLIError
+    ? error
+    : new MockCLIError("ERROR", error instanceof Error ? error.message : String(error), 1),
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },

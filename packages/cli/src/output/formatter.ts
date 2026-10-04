@@ -30,7 +30,7 @@ export function outputError(
   details: { readonly meta?: Record<string, unknown>; readonly warnings?: readonly OperationWarningOutput[] } = {},
 ): void {
   const { meta, warnings = [] } = details;
-  if (isInteractive()) {
+  if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
     );
@@ -61,23 +61,35 @@ export function outputError(
 
 /**
  * Report diagnostics of a successful command on stderr without breaking
- * machine-readable output: one JSON line in JSON mode, one line otherwise.
+ * machine-readable output: one JSON line in JSON mode (`--json`, or stdout
+ * not a terminal), one human line otherwise. Call it only after the
+ * command's output has been written.
  */
 export function outputWarnings(warnings: readonly OperationWarningOutput[]): void {
   if (warnings.length === 0) return;
-  process.stderr.write(isInteractive()
-    ? `${theme.warn("!")} ${warningLine(warnings)}\n`
-    : `${JSON.stringify({ warnings })}\n`);
+  process.stderr.write(shouldOutputJson()
+    ? `${JSON.stringify({ warnings })}\n`
+    : `${theme.warn("!")} ${warningLine(warnings)}\n`);
 }
 
-/** The well-formed warnings of an operation result (or error metadata); anything else is dropped. */
+const WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;
+const WARNING_REASON = /^[a-z][a-z_]{0,63}$/;
+const DELEGATION_CID = /^bafkr4i[a-z2-7]{52}$/;
+
+/**
+ * The well-formed warnings of an operation result (or error metadata). Only
+ * code-shaped values and delegation-CID-shaped identifiers are kept, so no
+ * free text reaches stderr even if a producer misbehaves.
+ */
 export function operationWarnings(value: unknown): OperationWarningOutput[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((warning: unknown): OperationWarningOutput[] => {
     if (warning === null || typeof warning !== "object") return [];
     const { code, reason, grantCid } = warning as Record<string, unknown>;
-    if (typeof code !== "string" || typeof reason !== "string") return [];
-    return [{ code, reason, ...(typeof grantCid === "string" ? { grantCid } : {}) }];
+    if (typeof code !== "string" || !WARNING_CODE.test(code) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
+      return [];
+    }
+    return [{ code, reason, ...(typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {}) }];
   });
 }
 
@@ -86,7 +98,8 @@ export function isInteractive(): boolean {
 }
 
 export async function withSpinner<T>(label: string, fn: () => Promise<T>): Promise<T> {
-  if (!isInteractive()) {
+  // JSON mode keeps stderr machine-readable, even with stdout on a terminal.
+  if (shouldOutputJson()) {
     return fn();
   }
   const spinner = ora(label).start();

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -166,5 +166,111 @@ test("an approved escalation authorizes secrets get in the same process and in a
   expect(JSON.parse(upgraded.stdout)).toEqual({ name: SECRET, value: CANARY });
   expect(JSON.parse(upgraded.stderr)).toEqual({
     warnings: [{ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: stored[0]!.delegation.cid }],
+  });
+  staleGrantCid = stored[0]!.delegation.cid;
+});
+
+// Set by the test above, which leaves a stale copy of the grant beside the real one.
+let staleGrantCid: string | undefined;
+const staleWarning = () => ({ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: staleGrantCid });
+
+const cliRuntimes: Array<[string, string[]]> = [
+  ["bun", [process.execPath, join(import.meta.dir, "../index.ts")]],
+  ["node", [process.env.NODE_BINARY ?? "node", join(import.meta.dir, "../../bin/tc")]],
+];
+
+function cliEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
+  delete env.TC_HOST;
+  delete env.TC_PRIVATE_KEY;
+  return env;
+}
+
+// Root ignores directory permissions, so the write cannot be made to fail.
+test.skipIf(process.getuid?.() === 0).each(cliRuntimes)(
+  "under %s, a failed -o write reports the skipped grant inside its one JSON error",
+  async (_runtime, command) => {
+    expect(staleGrantCid).toBeDefined();
+    const readOnly = await mkdtemp(join(tmpdir(), "tc-grant-replay-readonly-"));
+    await chmod(readOnly, 0o500);
+    try {
+      const child = Bun.spawn([
+        ...command, "--quiet", "--json", "--profile", "owner", "secrets", "get", SECRET, "-o", join(readOnly, "secret.txt"),
+      ], { env: cliEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect({ exitCode, stdout }).toEqual({ exitCode: 1, stdout: "" });
+      expect(JSON.parse(stderr)).toEqual({
+        error: {
+          code: "ERROR",
+          message: expect.stringContaining("Could not write secret output"),
+          warnings: [staleWarning()],
+        },
+      });
+      expect(stderr).not.toContain(CANARY);
+    } finally {
+      await chmod(readOnly, 0o700);
+      await rm(readOnly, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps the warning machine-readable", async (_runtime, command) => {
+  expect(staleGrantCid).toBeDefined();
+  const runner = Bun.spawn([
+    "python3", join(import.meta.dir, "../../test-support/pty-run.py"),
+    ...command, "--quiet", "--json", "--profile", "owner", "secrets", "get", SECRET,
+  ], { env: cliEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [report, runnerStderr, runnerExit] = await Promise.all([
+    new Response(runner.stdout).text(),
+    new Response(runner.stderr).text(),
+    runner.exited,
+  ]);
+  expect({ runnerExit, runnerStderr }).toEqual({ runnerExit: 0, runnerStderr: "" });
+  const { exit, stdout, stderr } = JSON.parse(report) as { exit: number; stdout: string; stderr: string };
+  expect(exit).toBe(0);
+  expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
+  expect(JSON.parse(stderr)).toEqual({ warnings: [staleWarning()] });
+});
+
+test("a plain error from browser approval still carries the skipped grant", async () => {
+  expect(staleGrantCid).toBeDefined();
+  let stderr = "";
+  const errorOutput = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+  const originalWrite = errorOutput.write;
+  const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  const exit = spyOn(process, "exit").mockImplementation(((code?: number) => {
+    throw new Error(`secrets get exited with ${code}`);
+  }) as typeof process.exit);
+  // A person at a terminal with stdout redirected: approval runs, output is JSON.
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+  Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+  errorOutput.write = (chunk: unknown) => {
+    stderr += String(chunk);
+    return true;
+  };
+  try {
+    const program = new Command();
+    program.option("-p, --profile <name>").option("--json");
+    registerSecretsCommand(program, async () => {
+      throw new Error("the browser approval window closed");
+    });
+    // No grant covers this secret, so the read escalates and approval fails.
+    await expect(program.parseAsync(["node", "tc", "--profile", "owner", "secrets", "get", "UNGRANTED_SECRET"], { from: "node" }))
+      .rejects.toThrow("secrets get exited with 1");
+  } finally {
+    errorOutput.write = originalWrite;
+    exit.mockRestore();
+    if (stdoutTTY) Object.defineProperty(process.stdout, "isTTY", stdoutTTY);
+    else Reflect.deleteProperty(process.stdout, "isTTY");
+    if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
+    else Reflect.deleteProperty(process.stderr, "isTTY");
+  }
+  expect(JSON.parse(stderr)).toEqual({
+    error: { code: "ERROR", message: "the browser approval window closed", warnings: [staleWarning()] },
   });
 });
