@@ -1,5 +1,5 @@
 // The profile lock of the TC-540 and TC-548 releases (js-sdk 9b62dae7,
-// @tinycloud/cli 1.0.0 to 1.0.1-beta.2), copied verbatim so tests can run a
+// @tinycloud/cli 1.0.0-beta.17 to 1.0.1-beta.4), copied verbatim so tests can run a
 // realistic older writer against this release: `mkdir(.lock)`, then `link` a
 // staged owner record to `.lock/owner.json`; it holds the lock only once the
 // link succeeds. Do not change the lock code below; it stands for released

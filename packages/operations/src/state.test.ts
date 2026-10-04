@@ -589,7 +589,7 @@ test("a TC-540 recoverer killed holding only its claim leaves a lock the next wr
   expect(await exists(lockPath)).toBe(false);
 }, 30_000);
 
-test("a recoverer of this release killed mid-recovery leaves only claims that 1.0.0-beta.17+ releases reclaim once aged", async () => {
+test("a recoverer of this release killed mid-recovery leaves a claim only this release can clear", async () => {
   const { home, holders } = await lockTestHome();
   const profile = "delegate";
   const lockPath = profileLockPath(profile);
@@ -597,28 +597,27 @@ test("a recoverer of this release killed mid-recovery leaves only claims that 1.
   await mkdir(barrier, { recursive: true });
   await crashedHolderLock(profile);
 
-  // K recovers the dead holder's lock: moves owner.json into its claim, and
-  // is killed (holding its turn) before removing its claims.
+  // K unlinks the dead owner while its .recover-* claim keeps .lock in
+  // place, then dies. Older releases deliberately never remove this claim.
   const killed = spawnLockHolder(home, holders, profile, "killed", { timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR: barrier } });
-  await waitForProfileLockProtocol(join(barrier, `ready-${killed.pid}-${profile}`), "K holding only its claims");
+  await waitForProfileLockProtocol(join(barrier, `ready-${killed.pid}-${profile}`), "K holding only its claim");
   killed.kill();
   await killed.finished();
   const left = await readdir(lockPath);
-  expect(left.length).toBeGreaterThan(0);
-  for (const name of left) expect(name).toMatch(/^\.stale-[0-9a-f-]+\.json$/);
+  expect(left).toHaveLength(1);
+  expect(left[0]).toMatch(/^\.recover-[0-9a-f-]+\.json$/);
 
-  // Like a 1.0.0-beta.17 … 1.0.1-beta.4 recoverer's claim, it may belong to a
-  // live recoverer while fresh...
-  await expect(withProfileLock(profile, async () => undefined, { timeoutMs: 200, staleAfterMs: 30_000, retryMs: 5 }))
-    .rejects.toBeInstanceOf(ProfileLockTimeoutError);
-  // ...and once aged, a TC-540 release (the only kind left running here)
-  // reclaims it, as it would on master.
   await ageLock(profile);
-  const older = spawnLockHolder(home, holders, profile, "older", { timeoutMs: 10_000, staleAfterMs: 30_000, env: TC540 });
-  await waitForProfileLockProtocol(older.readyPath, "the TC-540 writer reclaiming");
-  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: older.pid });
-  await older.release();
-  const [exit, stderr] = await older.finished();
+  const older = spawnLockHolder(home, holders, profile, "older", { timeoutMs: 300, staleAfterMs: 30_000, env: TC540 });
+  const [olderExit, olderError] = await older.finished();
+  expect(olderExit, olderError).toBe(3);
+  // The turn lock excludes another current-release writer until K exits;
+  // afterward, an orphaned recovery claim can be cleared immediately.
+  const next = spawnLockHolder(home, holders, profile, "next", { timeoutMs: 10_000, staleAfterMs: 30_000 });
+  await waitForProfileLockProtocol(next.readyPath, "the current writer reclaiming");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: next.pid });
+  await next.release();
+  const [exit, stderr] = await next.finished();
   expect(exit, stderr).toBe(0);
   expect(await exists(lockPath)).toBe(false);
   expect(await violations(holders)).toEqual([]);

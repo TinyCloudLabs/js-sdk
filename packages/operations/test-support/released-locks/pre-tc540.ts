@@ -1,9 +1,11 @@
-// The profile lock of the releases before TC-540 (js-sdk 48eca361^, the
-// @tinycloud/cli 1.0.0-beta.14/15 line), copied verbatim so tests can run a
-// realistic older writer against this release. It holds the lock from the
-// moment `mkdir(.lock)` succeeds, before `owner.json` exists, and writes
-// owner.json with a replacing rename. Do not change the lock code below; it
-// stands for released binaries.
+// The profile lock of the releases before TC-540 (js-sdk 48eca361^, CLI up
+// to 1.0.0-beta.16), copied verbatim so tests can run a realistic older
+// writer against this release. It holds the lock from the moment
+// `mkdir(.lock)` succeeds, before `owner.json` exists, and writes owner.json
+// with a replacing rename. Do not change the lock code below; it stands for
+// released binaries. The one addition is a test-only pause where it holds
+// the lock without an owner record (TC_TEST_PROFILE_LOCK_PRE_TC540_OWNER_
+// BARRIER_DIR); it does not change what the writer does.
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -21,6 +23,7 @@ const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
 const TEST_LOCK_CONTENTION_SIGNAL_PATH = "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH";
 const TEST_LOCK_RECOVERY_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR";
+const TEST_LOCK_OWNER_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_PRE_TC540_OWNER_BARRIER_DIR";
 
 /** Runs `action` holding the profile lock the way pre-TC-540 releases do (not reentrant). */
 export async function withPreTc540ProfileLock<T>(
@@ -70,6 +73,7 @@ async function acquireProfileLock(
   while (true) {
     try {
       await mkdir(lockPath);
+      await waitForTestBarrier(TEST_LOCK_OWNER_BARRIER_DIR, profile); // test-only addition
       const token = randomUUID();
       try {
         await writeJsonAtomic(profileLockMetadataPath(profile), {
@@ -189,8 +193,13 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
 }
 
 async function waitForTestStaleRecoveryBarrier(profile: string): Promise<void> {
+  await waitForTestBarrier(TEST_LOCK_RECOVERY_BARRIER_DIR, profile);
+}
+
+/** Test-only rendezvous (NODE_ENV=test and the named barrier directory set). */
+async function waitForTestBarrier(environmentName: string, profile: string): Promise<void> {
   if (process.env.NODE_ENV !== "test") return;
-  const barrierDirectory = process.env[TEST_LOCK_RECOVERY_BARRIER_DIR];
+  const barrierDirectory = process.env[environmentName];
   if (!barrierDirectory) return;
   await mkdir(barrierDirectory, { recursive: true });
   const readyPath = join(barrierDirectory, `ready-${process.pid}-${profile}`);

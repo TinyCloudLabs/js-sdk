@@ -137,6 +137,121 @@ async function deadHolderLock(createdAgoMs: number): Promise<void> {
   });
 }
 
+test("a failed recovery claim cannot remove a pre-TC-540 writer's fresh empty lock", async () => {
+  const { home, holders } = await lockTestHome();
+  await deadHolderLock(3_600_000);
+  const recovery = join(home, "recovery-barrier");
+  const beforeOwner = join(home, "legacy-owner-barrier");
+  await Promise.all([mkdir(recovery), mkdir(beforeOwner)]);
+
+  // R has observed the dead owner, but has not claimed it yet.
+  const recoverer = spawnLockHolder(home, holders, PROFILE, "recoverer", {
+    timeoutMs: 20_000, staleAfterMs: 30_000,
+    env: { TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR: recovery },
+  });
+  await waitForProfileLockProtocol(join(recovery, `ready-${recoverer.pid}-${PROFILE}`), "R before its claim");
+  // An older recoverer clears the dead record and releases its acquisition.
+  const earlier = spawnLockHolder(home, holders, PROFILE, "earlier", {
+    timeoutMs: 20_000, staleAfterMs: 30_000, holdUntilReleased: false,
+    env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
+  });
+  const [earlierExit, earlierError] = await earlier.finished();
+  expect(earlierExit, earlierError).toBe(0);
+
+  // W owns the directory from mkdir, even before it publishes owner.json.
+  const writer = spawnLockHolder(home, holders, PROFILE, "writer", {
+    timeoutMs: 20_000, staleAfterMs: 30_000,
+    env: { TC_TEST_LOCK_PROTOCOL: "pre-tc540", TC_TEST_PROFILE_LOCK_PRE_TC540_OWNER_BARRIER_DIR: beforeOwner },
+  });
+  await waitForProfileLockProtocol(join(beforeOwner, `ready-${writer.pid}-${PROFILE}`), "W after its mkdir");
+  await writeFile(join(recovery, "release"), "release\n", "utf8");
+
+  // The broken recoverer removes W's directory after link(ENOENT), enters,
+  // and W then publishes and enters as well. Leave W parked long enough for
+  // R's attempt, then let both finish even when the assertion will fail.
+  await Bun.sleep(500);
+  const enteredBeforeOwner = await exists(recoverer.readyPath);
+  const directoryStillHeld = await exists(profileLockPath(PROFILE));
+  await writeFile(join(beforeOwner, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(writer.readyPath, "W holding its lock");
+  await writer.release();
+  const [writerExit, writerError] = await writer.finished();
+  expect(writerExit, writerError).toBe(0);
+  await waitForProfileLockProtocol(recoverer.readyPath, "R acquiring after W");
+  await recoverer.release();
+  const [recovererExit, recovererError] = await recoverer.finished();
+  expect(recovererExit, recovererError).toBe(0);
+  expect(directoryStillHeld).toBe(true);
+  expect(enteredBeforeOwner).toBe(false);
+  expect(await violations(holders)).toEqual([]);
+}, 60_000);
+
+test("a paused recoverer never moves a live owner aside for older cleanup", async () => {
+  const { home, holders } = await lockTestHome();
+  await deadHolderLock(3_600_000);
+  const verified = join(home, "verified-barrier");
+  const claimed = join(home, "claim-barrier");
+  await Promise.all([mkdir(verified), mkdir(claimed)]);
+  const recoverer = spawnLockHolder(home, holders, PROFILE, "recoverer", {
+    timeoutMs: 20_000, staleAfterMs: 600_000,
+    env: { TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR: verified, TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR: claimed },
+  });
+  await waitForProfileLockProtocol(join(verified, `ready-${recoverer.pid}-${PROFILE}`), "R after checking its claim");
+
+  // On the broken protocol, T1 removes R's aged .stale-* probe, recovers
+  // the dead record, then holds a live owner.json. With .recover-* R's claim
+  // cannot be removed by T1, irrespective of its stale threshold.
+  const first = spawnLockHolder(home, holders, PROFILE, "first-older", {
+    timeoutMs: 20_000, staleAfterMs: 20, env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
+  });
+  await Bun.sleep(500);
+  const firstHeldWhileVerified = await exists(first.readyPath);
+  await writeFile(join(verified, "release"), "release\n", "utf8");
+  await waitForProfileLockProtocol(join(claimed, `ready-${recoverer.pid}-${PROFILE}`), "R at its owner removal");
+
+  // With the broken protocol, R moved T1's live owner record into .stale-*.
+  // T2 ages that claim out and takes the lock while T1 still holds it.
+  const second = spawnLockHolder(home, holders, PROFILE, "second-older", {
+    timeoutMs: 20_000, staleAfterMs: 20, env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
+  });
+  await Bun.sleep(500);
+  const secondHeldWhilePaused = await exists(second.readyPath);
+  await writeFile(join(claimed, "release"), "release\n", "utf8");
+  if (firstHeldWhileVerified) {
+    await first.release();
+    const [exit, stderr] = await first.finished();
+    expect(exit, stderr).toBe(0);
+  }
+  if (secondHeldWhilePaused) {
+    await second.release();
+    const [exit, stderr] = await second.finished();
+    expect(exit, stderr).toBe(0);
+  }
+  await waitForProfileLockProtocol(recoverer.readyPath, "R to acquire after its claim");
+  await recoverer.release();
+  const [recovererExit, recovererError] = await recoverer.finished();
+  expect(recovererExit, recovererError).toBe(0);
+  const pending = [first, second].filter((holder) =>
+    holder === first ? !firstHeldWhileVerified : !secondHeldWhilePaused);
+  if (pending.length === 2) {
+    await waitUntil(async () => await exists(first.readyPath) || await exists(second.readyPath), "one older writer to acquire");
+    const next = await exists(first.readyPath) ? first : second;
+    await next.release();
+    const [exit, stderr] = await next.finished();
+    expect(exit, stderr).toBe(0);
+    pending.splice(pending.indexOf(next), 1);
+  }
+  for (const holder of pending) {
+    await waitForProfileLockProtocol(holder.readyPath, "remaining older writer to acquire");
+    await holder.release();
+    const [exit, stderr] = await holder.finished();
+    expect(exit, stderr).toBe(0);
+  }
+  expect(firstHeldWhileVerified).toBe(false);
+  expect(secondHeldWhilePaused).toBe(false);
+  expect(await violations(holders)).toEqual([]);
+}, 60_000);
+
 for (const other of ["current", "tc540"] as const) {
   test(`a recoverer paused after confirming a dead owner never removes the record of a holder that came after (other: ${other})`, async () => {
     const { home, holders } = await lockTestHome();
@@ -150,9 +265,9 @@ for (const other of ["current", "tc540"] as const) {
     const paused = spawnLockHolder(home, holders, PROFILE, "paused", { timeoutMs: 20_000, staleAfterMs: 600_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR: verified } });
     await waitForProfileLockProtocol(join(verified, `ready-${paused.pid}-${PROFILE}`), "R1 holding its confirmed claim");
 
-    // R2 (20 ms stale threshold) finishes the same recovery, finds only R1's
-    // claim left, and takes the lock once that looks abandoned, unless R1's
-    // claim or turn excludes it.
+    // R2 (20 ms stale threshold) may recover the same dead owner, but R1's
+    // .recover-* claim cannot be removed by an older process; R2 must wait
+    // for R1 to finish (or for its turn, if also of this release).
     const contended = join(home, "other-contended");
     const env: Record<string, string> = { TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contended };
     if (other === "tc540") env.TC_TEST_LOCK_PROTOCOL = "tc540";
@@ -161,9 +276,9 @@ for (const other of ["current", "tc540"] as const) {
       await waitUntil(async () => await exists(holder.readyPath) || (await exists(contended) && await turnLockExists(home)), "R2 to take the lock or wait for R1's turn");
     } else {
       // A TC-540 R2 that cannot take the lock just keeps retrying; there is
-      // no event for "tried and failed". Give it real time to try: the
-      // dead record gone (R2 recovered it) and then 500 ms of retries, each
-      // past its 20 ms stale threshold.
+      // no event for "tried and failed". Give it real time to remove the
+      // dead record and try the ownerless directory, which remains guarded
+      // by R1's claim past R2's 20 ms stale threshold.
       await waitUntil(async () => await exists(holder.readyPath) || !await exists(profileLockMetadataPath(PROFILE)), "R2 to recover the dead record");
       if (!await exists(holder.readyPath)) await Bun.sleep(500);
     }
@@ -188,6 +303,25 @@ for (const other of ["current", "tc540"] as const) {
 // fail (Bun cannot replace node:fs bindings), as on FAT/exFAT or some SMB
 // mounts. Run `bun run --cwd packages/operations build` first.
 const node = Bun.which("node");
+const twoInstances = new URL("../test-support/two-instances.mjs", import.meta.url).pathname;
+
+test("built ESM and CJS copies in one PID do not settle one another's active turn", async () => {
+  const { home } = await lockTestHome();
+  if (!node) throw new Error("These tests need Node on PATH, as the CLI does.");
+  const outcome = join(home, "two-instances.json");
+  const child = Bun.spawn([node, twoInstances, PROFILE, outcome], {
+    env: lockChildEnv(home),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exit, stderr] = (await finishedChildren([child]))[0]!;
+  expect(exit, stderr).toBe(0);
+  expect(JSON.parse(await readFile(outcome, "utf8"))).toEqual({
+    distinct: true,
+    other: "PROFILE_LOCK_TIMEOUT",
+    heldTurnSettled: false,
+  });
+}, 30_000);
 const noHardLinks = new URL("../test-support/no-hard-links/no-hard-links.cjs", import.meta.url).pathname;
 const nodeCycler = new URL("../test-support/no-hard-links/cycle-profile-lock.mjs", import.meta.url).pathname;
 

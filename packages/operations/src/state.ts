@@ -11,6 +11,7 @@ import {
   rmdir,
   rm,
   stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -585,12 +586,21 @@ interface TurnState {
 const TURN = /^(?:0|[1-9][0-9]*)$/;
 
 /**
- * Tokens of turns this process published and still answers for: from just
- * before publication until `done` is written. A turn of this process's PID
- * that is not done and not in here was given up (a marker write failed), so
- * this process settles it like a dead process's turn.
+ * Tokens of turns this process published and then gave up (a marker write or
+ * a read failed after publication): the positive evidence that lets this
+ * process settle a turn of its own PID. A live process's turn that is not in
+ * here is never settled by it, so a module instance that cannot see another
+ * instance's set (another bundled copy of this package) waits rather than
+ * settling a turn that copy still holds.
+ *
+ * One set per process, not per module instance: the package's entry points
+ * (state, index, artifacts, cli-runtime; ESM and CJS) each bundle their own
+ * copy of this module, and one process may load several. The key is
+ * versioned so that a release changing what the set holds uses a new one.
  */
-const turnsInProgress = new Set<string>();
+const relinquishedTurns: Set<string> =
+  (globalThis as unknown as Record<symbol, Set<string> | undefined>)[Symbol.for("tinycloud.operations.relinquishedProfileTurns.v1")] ??=
+    new Set<string>();
 
 /** Marker writes are retried this many times, after these delays (ms), before giving up. */
 const MARKER_RETRY_DELAYS_MS = [10, 50, 250];
@@ -629,7 +639,7 @@ const SETTLE_RETRIES = 300;
  * it published `n` for the first time, so it is the only process granted n,
  * and n-1 was done before. A turn is marked done only by its holder, or by
  * another process once the holder's PID is gone (or by its own process,
- * once no acquisition there answers for it); a paused holder is alive.
+ * once it has explicitly given that turn up); a paused holder is alive.
  * A turn is voided only on definite evidence (the turn it follows is gone or
  * holds another token), never because a read failed. Nothing above is
  * decided from elapsed time.
@@ -678,9 +688,10 @@ async function acquireTurn(
     } else if (latest.done) {
       problem = damaged(`ends with turn ${latest.slot}, which was never granted`);
       await waitOrTimeOut(profile, deadline, problem);
-    } else if (latest.pid === process.pid ? !turnsInProgress.has(latest.token) : !isProcessAlive(latest.pid)) {
+    } else if (latest.pid === process.pid ? relinquishedTurns.has(latest.token) : !isProcessAlive(latest.pid)) {
       await waitForTestBarrier(TEST_LOCK_TURN_SETTLE_BARRIER_DIR, profile);
       await settleAbandonedTurn(directory, latest);
+      relinquishedTurns.delete(latest.token);
     } else {
       await signalTestLockContention(profile);
       await waitOrTimeOut(profile, deadline);
@@ -766,7 +777,6 @@ async function takeTurn(profile: string, directory: string, latest: TurnState): 
   const slot = latest.slot + 1;
   const path = join(directory, String(slot));
   const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: latest.token };
-  turnsInProgress.add(token);
   let published = false;
   try {
     published = await publishDirectory(
@@ -779,10 +789,8 @@ async function takeTurn(profile: string, directory: string, latest: TurnState): 
       return { directory, slot, token };
     }
     if (published) await markTurn(path, token, "done");
-    turnsInProgress.delete(token);
     return null;
   } catch (error) {
-    turnsInProgress.delete(token);
     if (published) settleOwnTurn(directory, slot, token);
     throw error;
   }
@@ -812,12 +820,14 @@ async function settleAbandonedTurn(directory: string, abandoned: TurnState): Pro
  * this one has exited). The timer does not keep the process alive.
  */
 function settleOwnTurn(directory: string, slot: number, token: string, retries = SETTLE_RETRIES): void {
+  relinquishedTurns.add(token);
   void (async () => {
     try {
       const turn = await readTurn(directory, slot);
-      if (turn === null || turn === "damaged" || turn.token !== token || turn.done) return;
-      await settleAbandonedTurn(directory, turn);
+      if (turn !== null && turn !== "damaged" && turn.token === token && !turn.done) await settleAbandonedTurn(directory, turn);
+      relinquishedTurns.delete(token);
     } catch {
+      // Still relinquished: this process's next acquisition settles it too.
       if (retries > 0) setTimeout(() => settleOwnTurn(directory, slot, token, retries - 1), SETTLE_RETRY_MS).unref();
     }
   })();
@@ -893,11 +903,9 @@ async function releaseTurn(profile: string, turn: Turn): Promise<void> {
   try {
     await markTurn(join(turn.directory, String(turn.slot)), turn.token, "done");
   } catch {
-    turnsInProgress.delete(turn.token);
     settleOwnTurn(turn.directory, turn.slot, turn.token);
     return;
   }
-  turnsInProgress.delete(turn.token);
   await collectTurns(profile, turn).catch(() => undefined);
 }
 
@@ -1083,12 +1091,14 @@ async function signalTestLockContention(profile: string): Promise<void> {
 }
 
 /**
- * Reclaims a `.lock` with no owner record, while holding a turn: one older
- * than the stale threshold, left by a crash or by an older release, whose
- * claim files (`.stale-*`, `.release-*`; this release's recoveries use
- * `.stale-*` too) are removed with it. owner.json is never touched, and the
- * directory itself is only `rmdir`ed, which succeeds only while it is empty,
- * so a published lock is never removed; a 1.0.0-beta.17+ release whose
+ * Reclaims a `.lock` with no owner record, while holding a turn. Claims of
+ * this release's recovery (`.recover-*`) are then orphans of a crashed
+ * recoverer, so a directory holding nothing else is removed at once.
+ * Otherwise the directory must be older than the stale threshold: one left by
+ * a crash, or by an older release, whose `.stale-*` / `.release-*` claim
+ * files are removed too. owner.json is never touched, and the directory
+ * itself is only `rmdir`ed, which succeeds only while it is empty, so a
+ * published lock is never removed; a 1.0.0-beta.17+ release whose
  * unpublished directory this was sees its `link` fail and retries.
  *
  * Holding a turn, no other process of this release reclaims concurrently.
@@ -1101,9 +1111,10 @@ async function signalTestLockContention(profile: string): Promise<void> {
  * process's age check can be.
  */
 async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
+  let aged: boolean;
   try {
     const { mtimeMs } = await stat(lockPath);
-    if (Date.now() - mtimeMs < staleAfterMs) return false;
+    aged = Date.now() - mtimeMs >= staleAfterMs;
   } catch {
     return false;
   }
@@ -1112,8 +1123,9 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   try {
     const entries = await readdir(lockPath);
     if (entries.includes("owner.json")) return false;
-    if (recoveryFenced(checkedAt, staleAfterMs)) return false;
-    for (const name of entries.filter((entry) => STALE_CLAIM.test(entry))) {
+    const onlyOrphanedClaims = entries.length > 0 && entries.every((entry) => RECOVERY_CLAIM.test(entry));
+    if (!onlyOrphanedClaims && (!aged || recoveryFenced(checkedAt, staleAfterMs))) return false;
+    for (const name of entries.filter((entry) => RECOVERY_CLAIM.test(entry) || ABANDONED_CLAIM.test(entry))) {
       await rm(join(lockPath, name), { force: true });
     }
     await rmdir(lockPath);
@@ -1133,12 +1145,15 @@ function recoveryFenced(since: number, staleAfterMs: number): boolean {
   return performance.now() - since >= staleAfterMs / 2;
 }
 
+/** Claim files of older releases' stale recovery and (up to 1.0.0-beta.16) release. */
+const ABANDONED_CLAIM = /^\.(?:release|stale)-[0-9a-f-]+\.json$/;
 /**
- * Claim files of stale recovery and (in releases up to 1.0.0-beta.16) of
- * release. Every release from 1.0.0-beta.17 removes them from an ownerless
- * `.lock` once it has aged, so a recoverer that crashes never strands one.
+ * Claim files of this release's stale recovery. Releases up to 1.0.1-beta.4
+ * never remove them, which is what makes this recovery safe against them; a
+ * recoverer that crashes leaves one that only a release with the turn lock
+ * clears (see REFERENCE.md, "Profile lock").
  */
-const STALE_CLAIM = /^\.(?:release|stale)-[0-9a-f-]+\.json$/;
+const RECOVERY_CLAIM = /^\.recover-[0-9a-f-]+\.json$/;
 /** Owner files staged by publishProfileLock beside `.lock`. */
 const STAGED_OWNER = /^\.lock-owner-[0-9a-f-]+\.tmp$/;
 /**
@@ -1161,70 +1176,73 @@ async function removeAgedOwnerFiles(lockPath: string, staleAfterMs: number): Pro
 /**
  * Removes an abandoned owner record (see isAbandonedOwner) and its `.lock`,
  * while holding a turn, so no other process of this release recovers,
- * reclaims or acquires `.lock` meanwhile. owner.json is never unlinked by
- * path, and every file this leaves behind if it crashes is a `.stale-*`
- * claim, which every release from 1.0.0-beta.17 ages out.
+ * reclaims or acquires `.lock` meanwhile.
  *
- * 1. Probe: hard-link the record to a `.stale-*` claim and compare it with
- *    the exact bytes read. A record that replaced the observed one is left
- *    alone. While the probe is inside `.lock` the directory cannot be
- *    removed and recreated, so no other owner record can appear in it.
- * 2. Move owner.json into a second `.stale-*` claim with a rename, and
- *    compare again. If it is not the observed record, it is put back. That
- *    can only happen if this process stayed paused after its probe for
- *    longer than the stale threshold while an older release finished this
- *    recovery, aged out the probe, and took the lock; the holder's record
- *    is then missing only between this rename and the next.
+ * The record is claimed first: hard-linked to `.recover-<uuid>.json`, and the
+ * claim compared with the exact bytes read. A record that replaced the
+ * observed one is left in place. While the claim is inside `.lock`, the
+ * directory cannot be removed and recreated: older releases never remove a
+ * `.recover-*` claim (they clean up only their own claim names), and other
+ * processes of this release are kept out by the turn lock. So no other owner
+ * record can appear in it, and the unlink of owner.json can only remove the
+ * claimed, dead record. A live record is never unlinked or moved. `.lock`
+ * itself is removed only after this process's claim is unlinked from it,
+ * which proves it is still the dead holder's directory; if the claim cannot
+ * be made, `.lock` is left alone (it may be a directory a 1.0.0-beta.16-or-
+ * older writer just created, which it holds from that `mkdir`). No step
+ * depends on how long this process takes.
  *
- * Without hard links there is no probe; step 2 alone runs, and its put-back
- * also covers an older release recovering the same lock at the same moment.
+ * Without hard links (where 1.0.0-beta.17 … 1.0.1-beta.4 cannot run at all),
+ * the record is renamed into the claim instead, and put back if it is not
+ * the observed one: one a 1.0.0-beta.16-or-older process published after
+ * recovering the same lock at the same moment. The claim keeps `.lock` held
+ * meanwhile, so no second writer gets in, but if that holder releases
+ * between the two renames, the put-back restores a released record, and
+ * `.lock` stays held until that PID is gone and the record is 30 s old.
  */
 async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   const ownerPath = join(lockPath, "owner.json");
   const observed = await readFile(ownerPath, "utf8").catch(() => null);
   if (observed === null) return recoverOwnerlessLock(profile, lockPath, staleAfterMs);
   if (!await isAbandonedOwner(observed, ownerPath, staleAfterMs)) return false;
-  const isObserved = (path: string) => readFile(path, "utf8").then((claimed) => claimed === observed, () => false);
 
   await waitForTestBarrier(TEST_LOCK_RECOVERY_BARRIER_DIR, profile);
-  const probePath = join(lockPath, `.stale-${randomUUID()}.json`);
-  const claimPath = join(lockPath, `.stale-${randomUUID()}.json`);
-  const dropClaims = async () => {
-    for (const path of [probePath, claimPath]) await rm(path, { force: true }).catch(() => undefined);
-    // Empty now if the observed holder is gone: remove it rather than leave
-    // an ownerless lock to age out. rmdir fails while an owner record exists.
-    await rmdir(lockPath).catch(() => undefined);
-  };
+  const claimPath = join(lockPath, `.recover-${randomUUID()}.json`);
+  let moved = false;
   try {
-    await link(ownerPath, probePath);
-    if (!await isObserved(probePath)) {
-      await dropClaims();
-      return false;
-    }
+    await link(ownerPath, claimPath);
   } catch (error) {
-    if (!lacksHardLinks(error)) {
-      await dropClaims();
+    // Gone or replaced already (another release recovered it): leave `.lock`.
+    if (!lacksHardLinks(error)) return false;
+    try {
+      await rename(ownerPath, claimPath);
+      moved = true;
+    } catch {
       return false;
     }
   }
+  const sameInstance = await readFile(claimPath, "utf8").then((claimed) => claimed === observed, () => false);
   await waitForTestBarrier(TEST_LOCK_VERIFIED_BARRIER_DIR, profile);
-  try {
-    await rename(ownerPath, claimPath);
-  } catch {
-    // Gone already: another release finished this recovery.
-    await dropClaims();
+  if (!sameInstance) {
+    if (moved) {
+      // No other owner.json can have appeared meanwhile: only a process
+      // whose mkdir created this `.lock` publishes one, and it already has.
+      await rename(claimPath, ownerPath).catch(() => undefined);
+    } else {
+      await unlink(claimPath).catch(() => undefined);
+    }
     return false;
   }
+  if (!moved) await rm(ownerPath, { force: true });
   await waitForTestBarrier(TEST_LOCK_CLAIM_BARRIER_DIR, profile);
-  if (!await isObserved(claimPath)) {
-    // No other owner.json can have appeared meanwhile: only a process whose
-    // mkdir created this `.lock` publishes one, and it already has.
-    await rename(claimPath, ownerPath).catch(() => undefined);
-    await rm(probePath, { force: true }).catch(() => undefined);
-    return false;
-  }
   await waitForTestBarrier(TEST_LOCK_CLAIMED_BARRIER_DIR, profile);
-  await dropClaims();
+  // Drop any claim a crashed recoverer of this release left, then this one.
+  for (const name of (await readdir(lockPath).catch(() => [])).filter((entry) => RECOVERY_CLAIM.test(entry))) {
+    if (join(lockPath, name) !== claimPath) await rm(join(lockPath, name), { force: true });
+  }
+  // Empty now, and still the dead holder's directory if this claim was in
+  // it: remove it rather than leave an ownerless lock to age out.
+  if (await unlink(claimPath).then(() => true, () => false)) await rmdir(lockPath).catch(() => undefined);
   await removeAgedOwnerFiles(lockPath, staleAfterMs);
   return true;
 }
