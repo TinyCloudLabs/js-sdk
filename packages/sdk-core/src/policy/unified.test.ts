@@ -417,7 +417,7 @@ describe("TC-405 unified policy contracts", () => {
     expect(() => parsePolicySessionUcan(sessionLasting(31 * 24 * 60 * 60 + 1))).toThrow("fact is invalid");
   });
 
-  test("TC-601: a root revocation is stamped in whole seconds, the one form the Node reproduces exactly", async () => {
+  test("TC-601: a root revocation is stamped in whole seconds, a form the Node always reproduces exactly", async () => {
     const ownerKey = new Uint8Array(32).fill(61);
     const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerKey)]))}`;
     const nodeAudience = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(new Uint8Array(32).fill(62))]))}`;
@@ -442,5 +442,18 @@ describe("TC-405 unified policy contracts", () => {
     const revocationCid = Buffer.from(sha256(new TextEncoder().encode(ROOT_REVOCATION_V1_DOMAIN + jcsCanonicalize(unsigned)))).toString("hex");
     const checkpoint = { targetRole: "policy-enforcement", ownerDid, nodeAudience, revokedAt: "2026-10-04T06:00:00Z", revocationCid };
     expect(verifyPolicyRootRevocationV3({ rootCid: "bafy-root", checkpoint, revocation: revocations[0]! })).toBe(true);
+
+    // Every millisecond survives the Node's RFC 3339 formatter, which drops
+    // trailing zeros from the fraction and omits a zero fraction.
+    const nodeFormat = (text: string) => text.replace(/\.(\d*?)0*Z$/, (_match, digits: string) => digits.length > 0 ? `.${digits}Z` : "Z");
+    posted.length = 0;
+    for (let millisecond = 0; millisecond < 1000; millisecond += 1) {
+      await revokePolicyRootV3({
+        nodeOrigin: "https://node.example", rootCid: "bafy-root", targetRole: "policy-enforcement", ownerDid, issuerDid: ownerDid,
+        nodeAudience, reason: "share revoked", sign: async () => new Uint8Array(64), now: new Date(Date.UTC(2026, 9, 4, 6, 0, 0, millisecond)), fetch,
+      });
+    }
+    const refused = posted.map((body) => (body.revocation as Record<string, string>).revokedAt!).filter((stamp) => nodeFormat(stamp) !== stamp);
+    expect(refused).toEqual([]);
   });
 });
