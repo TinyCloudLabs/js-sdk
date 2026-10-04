@@ -107,8 +107,9 @@ test("includes cryptographically restored base-session ReCap authority in runtim
   }
 });
 
-test("replay rejects expired and CID-tampered stored records instead of trusting display metadata", async () => {
+test("replay skips expired and CID-tampered stored records, reporting the invalid one", async () => {
   const fixture = await createAuthRuntimeFixture();
+  const warnings = spyOn(process, "emitWarning").mockImplementation(() => undefined);
   try {
     const delegation = await fixture.hermetic.mintDelegation();
     await persistRuntimeDelegations(fixture, [
@@ -121,7 +122,13 @@ test("replay rejects expired and CID-tampered stored records instead of trusting
     if (!runtime.ok) throw new Error("expected a runtime");
     expect(runtime.context.runtime.granted).toEqual([]);
     expect((runtime.context.runtime.node as RuntimeNode).getRuntimePermissionDelegations()).toEqual([]);
+    // Only the record that failed validation is reported; an expired grant is routine.
+    expect(warnings.mock.calls).toEqual([[
+      `TinyCloud profile "${fixture.profile}" did not use stored grant (unidentified): Runtime delegation CID does not match authorization bytes.`,
+      { code: "TINYCLOUD_GRANT_SKIPPED" },
+    ]]);
   } finally {
+    warnings.mockRestore();
     fixture.hermetic.stop();
   }
 });

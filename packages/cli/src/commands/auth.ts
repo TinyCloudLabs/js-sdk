@@ -69,6 +69,7 @@ import {
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
+import { sessionExpiredError } from "../auth/session-expired.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
@@ -1073,6 +1074,7 @@ async function importRequestBoundDelegation(
         ExitCode.ERROR,
       );
     case "error":
+      if (result.error.code === "SESSION_EXPIRED") throw sessionExpiredError(ctx.profile, result.context.posture);
       throw cliErrorFromService(result.error);
   }
 }
@@ -1429,6 +1431,8 @@ export function portableFromOpenKeyDelegation(
     ownerAddress: ownerParts[4]!,
     chainId: Number(ownerParts[3]),
     host,
+    // Verified above; replay rebuilds the CACAO from it before trusting the grant.
+    sessionProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
 }
 

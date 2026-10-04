@@ -51,6 +51,15 @@ export interface PortableDelegation extends Omit<Delegation, "isRevoked"> {
    * fields are authoritative (legacy single-resource shape).
    */
   resources?: DelegatedResource[];
+
+  /**
+   * The wallet-signed SIWE message and EIP-191 signature behind a
+   * `delegationHeader` that is a CACAO session grant (OpenKey `/delegate`,
+   * {@link TinyCloudNode.grantRuntimePermissions}) rather than a compact UCAN.
+   * Not authority: activation rebuilds the CACAO from them and accepts only
+   * byte-identical authorization bytes.
+   */
+  sessionProof?: { siwe: string; signature: string };
 }
 
 /**
@@ -114,6 +123,11 @@ export interface RuntimeDelegationActivator {
   useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
   useDelegation?(delegation: PortableDelegation): Promise<unknown>;
   getRuntimePermissionDelegations(): PortableDelegation[];
+  /**
+   * Verify a wallet-signed session grant issued to this runtime's live session
+   * key. Required to activate a CACAO grant; compact UCANs do not use it.
+   */
+  verifySessionGrant?(grant: SessionGrantProof): VerifiedSessionGrant;
 }
 
 /** The installed authority returned by {@link activateValidatedRuntimeDelegation}. */
@@ -138,6 +152,29 @@ export interface CompactRuntimeDelegationInput {
   readonly host: string;
   readonly ownerAddress: string;
   readonly chainId: number;
+}
+
+/** A CACAO session grant and the signed SIWE proof it was built from. */
+export interface SessionGrantProof {
+  readonly delegationHeader: { Authorization: string };
+  readonly delegationCid: string;
+  readonly spaceId: string;
+  readonly address: string;
+  readonly chainId: number;
+  readonly siwe: string;
+  readonly signature: string;
+}
+
+/** Authority read from a verified session grant's signed ReCap. */
+export interface VerifiedSessionGrant {
+  readonly recap: readonly {
+    service: string;
+    space: string;
+    path: string;
+    actions: string[];
+    caveats?: Record<string, unknown>[];
+  }[];
+  readonly expiresAt: Date;
 }
 
 interface SignedRuntimeAuthority {
@@ -334,6 +371,21 @@ function signedAuthorityFromCompactUcan(
     ));
   }
 
+  return canonicalSignedAuthority({
+    issuer: payload.iss,
+    audience: payload.aud,
+    expiry,
+    proofs: [...payload.prf],
+    ...(remainingRedelegationDepth === undefined
+      ? {}
+      : { remainingRedelegationDepth: remainingRedelegationDepth as number }),
+  }, permissions);
+}
+
+function canonicalSignedAuthority(
+  signed: Omit<SignedRuntimeAuthority, "permissions" | "resources">,
+  permissions: PermissionEntry[],
+): SignedRuntimeAuthority {
   if (permissions.length === 0) {
     throw new Error("Validated runtime delegation has no signed capabilities.");
   }
@@ -351,17 +403,100 @@ function signedAuthorityFromCompactUcan(
     actions: [...permission.actions],
     ...(permission.caveats === undefined ? {} : { caveats: permission.caveats }),
   }));
-  return {
-    issuer: payload.iss,
-    audience: payload.aud,
-    expiry,
-    proofs: [...payload.prf],
-    ...(remainingRedelegationDepth === undefined
-      ? {}
-      : { remainingRedelegationDepth: remainingRedelegationDepth as number }),
-    permissions: canonicalPermissions,
-    resources: canonicalResources,
-  };
+  return { ...signed, permissions: canonicalPermissions, resources: canonicalResources };
+}
+
+const RAW_ENCRYPTION_PREFIX = "urn:tinycloud:encryption:";
+const PKH_SPACE = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):(.+)$/;
+
+/** A space id with its owner address lowercased, so EIP-55 casing never decides a match. */
+function comparableSpace(space: string): string {
+  const match = PKH_SPACE.exec(space);
+  return match ? `tinycloud:pkh:eip155:${match[1]}:${match[2]!.toLowerCase()}:${match[3]}` : space;
+}
+
+/**
+ * Authority of a CACAO session grant: the wallet-signed SIWE is rebuilt into
+ * the exact CACAO and verified against this runtime's live session key, so
+ * the signer (owner), audience, lifetime, space and ReCap all come from
+ * signed bytes. The grant must be signed by the session's own owner, stay in
+ * one owner space, and name only raw networks that owner holds.
+ */
+function signedAuthorityFromSessionGrant(
+  node: RuntimeDelegationActivator,
+  delegation: PortableDelegation,
+  authorization: string,
+  cid: string,
+): SignedRuntimeAuthority {
+  const proof = delegation.sessionProof;
+  if (
+    proof === undefined || proof === null || typeof proof !== "object" ||
+    typeof proof.siwe !== "string" || typeof proof.signature !== "string"
+  ) {
+    throw new Error(
+      "Runtime delegation is a wallet-signed session grant stored without its signed SIWE proof, so its authority cannot be verified.",
+    );
+  }
+  if (typeof node.verifySessionGrant !== "function") {
+    throw new Error("This runtime cannot verify wallet-signed session grants.");
+  }
+  const owner = `did:pkh:eip155:${delegation.chainId}:${delegation.ownerAddress}`;
+  if (typeof node.did !== "string" || !didPrincipalsMatch(owner, node.did)) {
+    throw new Error("Runtime delegation is not signed by this session's owner.");
+  }
+  const verified = node.verifySessionGrant({
+    delegationHeader: { Authorization: authorization },
+    delegationCid: cid,
+    spaceId: delegation.spaceId,
+    address: delegation.ownerAddress,
+    chainId: delegation.chainId,
+    siwe: proof.siwe,
+    signature: proof.signature,
+  });
+
+  const space = comparableSpace(delegation.spaceId);
+  const spaceOwner = PKH_SPACE.exec(delegation.spaceId);
+  if (!spaceOwner || !didPrincipalsMatch(`did:pkh:eip155:${spaceOwner[1]}:${spaceOwner[2]}`, owner)) {
+    throw new Error("Runtime delegation space is not owned by its signer.");
+  }
+  const groups = new Map<string, PermissionEntry>();
+  for (const entry of verified.recap) {
+    const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+    const raw = entry.space === "encryption";
+    if (raw) {
+      if (service !== "tinycloud.encryption" || !entry.path.startsWith(RAW_ENCRYPTION_PREFIX)) {
+        throw new Error("Runtime delegation has an unsupported signed raw resource.");
+      }
+      const networkOwner = entry.path.slice(RAW_ENCRYPTION_PREFIX.length, entry.path.lastIndexOf(":"));
+      if (!didPrincipalsMatch(networkOwner, owner)) {
+        throw new Error("Runtime delegation names an encryption network its signer does not own.");
+      }
+    } else if (service === "tinycloud.encryption" || comparableSpace(entry.space) !== space) {
+      // Decrypt signed inside a space (older OpenKey) is not a usable network
+      // grant, and one grant covers one space.
+      throw new Error("Runtime delegation has signed authority outside its space.");
+    }
+    const caveats = signedCaveats(entry.caveats ?? []);
+    const key = JSON.stringify([service, raw ? "" : entry.space, entry.path, canonicalizeRecapCaveats(caveats)]);
+    const group = groups.get(key) ?? {
+      service,
+      ...(raw ? {} : { space: entry.space }),
+      path: entry.path,
+      actions: [],
+      ...(caveats === undefined ? {} : { caveats }),
+    };
+    for (const action of entry.actions) {
+      if (!group.actions.includes(action)) group.actions.push(action);
+    }
+    groups.set(key, group);
+  }
+  return canonicalSignedAuthority({
+    issuer: owner,
+    // The verifier bound the SIWE audience to this runtime's own session key.
+    audience: node.sessionDid,
+    expiry: verified.expiresAt,
+    proofs: [],
+  }, [...groups.values()]);
 }
 
 function canonicalResourcesFromPortableDelegation(
@@ -413,12 +548,16 @@ function resourcesMatch(
 }
 
 /**
- * CID-bind and activate one compact runtime delegation.
+ * CID-bind and activate one runtime delegation.
  *
- * The helper derives audience, expiry, and effective permissions from the
- * compact UCAN's signed payload, verifies the transport fields agree, then
- * invokes {@link TinyCloudNode.useRuntimeDelegation}. The node activation call
- * remains the authority and delegation-chain validation boundary.
+ * A compact UCAN's audience, expiry and permissions come from its signed
+ * payload, and its transport fields must agree with them. A CACAO session
+ * grant (OpenKey `/delegate`, `grantRuntimePermissions`) is verified from its
+ * `sessionProof` against this runtime's live session key; its installed
+ * authority is exactly the verified ReCap, and its transport `resources` are
+ * display data that is never consulted. Either way the helper then invokes
+ * {@link TinyCloudNode.useRuntimeDelegation}; the node activation call remains
+ * the authority and delegation-chain validation boundary.
  *
  * `options.authorize`, when given, sees the signed capabilities before
  * anything is activated or installed; returning `false` refuses the
@@ -454,7 +593,10 @@ export async function activateValidatedRuntimeDelegation(
     throw new Error("Runtime delegation CID does not match authorization bytes.");
   }
 
-  const signed = signedAuthorityFromCompactUcan(authorization);
+  const compact = authorizationWithoutBearer(authorization).split(".").length === 3;
+  const signed = compact
+    ? signedAuthorityFromCompactUcan(authorization)
+    : signedAuthorityFromSessionGrant(node, delegation, authorization, cid);
   if (signed.expiry.getTime() <= Date.now()) {
     throw new Error("Runtime delegation is expired.");
   }
@@ -470,8 +612,7 @@ export async function activateValidatedRuntimeDelegation(
     throw new Error("Runtime delegation audience does not match signed authority.");
   }
 
-  const declaredResources = canonicalResourcesFromPortableDelegation(delegation);
-  if (!resourcesMatch(declaredResources, signed.resources)) {
+  if (compact && !resourcesMatch(canonicalResourcesFromPortableDelegation(delegation), signed.resources)) {
     throw new Error("Runtime delegation resources do not match signed authority.");
   }
   if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
@@ -517,6 +658,7 @@ export async function activateValidatedRuntimeDelegation(
     expiry: new Date(signed.expiry),
     delegateDID: signed.audience,
     host,
+    ...(compact ? {} : { sessionProof: delegation.sessionProof }),
   };
 
   if (

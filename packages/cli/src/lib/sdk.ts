@@ -4,6 +4,7 @@ import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../c
 import { CLIError, wrapError } from "../output/errors.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
+import { sessionExpiredError } from "../auth/session-expired.js";
 
 /**
  * Returns true when a JWK carries the private-key parameter required by the
@@ -56,24 +57,10 @@ function signerJwkForProfile(
 }
 
 /**
- * The stored session failed node-sdk's local verification (`AUTH_EXPIRED`:
- * expired, or no longer valid for its key). Only a new sign-in fixes it, and
- * the refusal happens before any node request.
+ * Restore the stored session. node-sdk refuses expired or otherwise unusable
+ * persisted authority (`AUTH_EXPIRED`) while verifying it locally, before any
+ * node request; only a new sign-in fixes that.
  */
-function sessionExpiredError(profileName: string, posture: string | undefined): CLIError {
-  const hint = posture === "local-owner-key"
-    ? `Sign in again with: tc --profile ${profileName} auth login --method local`
-    : posture === "delegate-session"
-      ? `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`
-      : `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
-  return new CLIError(
-    "AUTH_REQUIRED",
-    `The session for profile "${profileName}" has expired or is no longer valid.`,
-    ExitCode.AUTH_REQUIRED,
-    { hint },
-  );
-}
-
 async function restoreProfileSession(
   node: TinyCloudNode,
   profileName: string,

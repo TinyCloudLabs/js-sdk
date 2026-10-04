@@ -21,6 +21,7 @@ import { handleError, CLIError, cliErrorFromService } from "../output/errors.js"
 import { ExitCode } from "../config/constants.js";
 import { PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
+import { sessionExpiredError } from "../auth/session-expired.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
@@ -511,7 +512,7 @@ function throwCanonicalSecretGetError(
       throw new CLIError(
         "PERMISSION_DENIED",
         "Permission denied while reading secret",
-        ExitCode.ERROR,
+        ExitCode.PERMISSION_DENIED,
       );
     case "setup_required":
       throw new CLIError(
@@ -531,17 +532,7 @@ function throwCanonicalSecretGetError(
         );
       }
       if (result.error.code === "SESSION_EXPIRED") {
-        const profile = result.context.profile;
-        throw new CLIError(
-          "AUTH_REQUIRED",
-          `The session for profile "${profile}" has expired or is no longer valid.`,
-          ExitCode.AUTH_REQUIRED,
-          {
-            hint: result.context.posture === "local-owner-key"
-              ? `Sign in again with: tc --profile ${profile} auth login --method local`
-              : scopedSecretLoginHint(profile),
-          },
-        );
+        throw sessionExpiredError(result.context.profile, result.context.posture);
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);

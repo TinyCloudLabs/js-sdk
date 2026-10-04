@@ -248,7 +248,9 @@ export type {
   DelegationAuthority,
   CompactRuntimeDelegationInput,
   RuntimeDelegationActivator,
+  SessionGrantProof,
   ValidatedRuntimeDelegation,
+  VerifiedSessionGrant,
 } from "./delegation";
 
 // Re-export KV service values

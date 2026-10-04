@@ -12,19 +12,29 @@ export type OpenKeyDelegate = (
   options?: { permissions?: PermissionEntry[] },
 ) => Promise<OpenKeyCallback>;
 
+const RAW_NETWORK = /^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]*)$/;
+const NETWORK_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
 function isRawRequest(permission: PermissionEntry): boolean {
   return (permission.service === "tinycloud.encryption" || permission.service === "encryption") &&
-    permission.path.startsWith("urn:tinycloud:encryption:");
+    typeof permission.path === "string" && permission.path.startsWith("urn:tinycloud:encryption:");
 }
 
 /**
- * OpenKey `/delegate` as deployed (openkey apps/api/src/routes/delegate-session.ts,
- * TC-598): it refuses a request without `tinycloud.capabilities/read`
- * (`assertRequiredActions`), whose non-raw entries do not name exactly one
- * space (`spacePrefixFromPermissions`), or whose raw decrypt sits inside a
- * space; otherwise the owner signs exactly the requested abilities, nested in
- * that space, with raw networks as top-level ReCap resources. Every request is
- * recorded in `requests`.
+ * A partial model of OpenKey `/delegate` (openkey apps/api/src/routes:
+ * `validatePermissions` in delegate.ts, `assertRequiredActions`,
+ * `spacePrefixFromPermissions` and `assertRawEncryptionPermission` in
+ * delegate-session.ts, as deployed with TC-598). It refuses what those refuse:
+ * - a non-raw entry without a space, or entries in more than one space;
+ * - a request without `tinycloud.capabilities/read`;
+ * - a raw network entry inside a space, with any action but decrypt, owned by
+ *   anyone but the signer, or with an invalid network name.
+ * It then has the owner sign exactly the requested abilities, nested in that
+ * space, with raw networks as top-level ReCap resources.
+ *
+ * Not modelled: consent narrowing (the owner unticking entries), device-flow
+ * policy, action-prefix validation, and lifetime: it always signs chain 1 for
+ * one hour from now. Every request is recorded in `requests`.
  */
 export function openKeyDelegate(params: {
   wasm: NodeWasmBindings;
@@ -35,27 +45,45 @@ export function openKeyDelegate(params: {
   const requests: PermissionEntry[][] = [];
   const delegate: OpenKeyDelegate = async (_did, { permissions = [] } = {}) => {
     requests.push(permissions);
+    const address = await params.signer.getAddress();
+    if (permissions.length === 0) throw new Error("permissions must be a non-empty array");
+    permissions.forEach((p, index) => {
+      if (!isRawRequest(p) && (typeof p.space !== "string" || p.space.length === 0)) {
+        throw new Error(`permissions[${index}].space is required`);
+      }
+      if (!isRawRequest(p)) return;
+      if (p.space !== undefined && p.space !== "encryption") {
+        throw new Error(`permissions[${index}].space must be "encryption" or absent for a raw encryption network`);
+      }
+      if (p.actions.length === 0 || p.actions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+        throw new Error(`permissions[${index}].actions must be ["tinycloud.encryption/decrypt"] for a raw encryption network`);
+      }
+      const network = RAW_NETWORK.exec(p.path);
+      if (!network || network[1] !== "1" || network[2]!.toLowerCase() !== address.toLowerCase()) {
+        throw new Error(`permissions[${index}].path must be an encryption network owned by the signer`);
+      }
+      if (!NETWORK_NAME.test(network[3]!)) {
+        throw new Error(`permissions[${index}].path names an invalid encryption network`);
+      }
+    });
     if (!permissions.some((p) => p.service === "tinycloud.capabilities" && p.actions.includes("tinycloud.capabilities/read"))) {
       throw new Error("capabilities/read is required for this delegation");
     }
     const spaces = new Set(permissions.filter((p) => !isRawRequest(p)).map((p) =>
-      (p.space ?? "").replace(/0x[0-9a-fA-F]{40}/, (owner) => owner.toLowerCase())));
+      p.space!.replace(/0x[0-9a-fA-F]{40}/, (owner) => owner.toLowerCase())));
     if (spaces.size !== 1) throw new Error("permissions must belong to a single space");
-    if (permissions.some((p) => isRawRequest(p) && p.space !== undefined && p.space !== "encryption")) {
-      throw new Error("Raw encryption networks are not inside a space");
-    }
     const space = [...spaces][0]!;
     const abilities: Record<string, Record<string, string[]>> = {};
     const rawAbilities: Record<string, string[]> = {};
     for (const p of permissions) {
       if (isRawRequest(p)) {
-        rawAbilities[p.path] = [...p.actions];
+        rawAbilities[p.path] = [...new Set([...(rawAbilities[p.path] ?? []), ...p.actions])];
       } else {
         const service = p.service.slice("tinycloud.".length);
-        abilities[service] = { ...abilities[service], [p.path]: [...p.actions] };
+        const actions = abilities[service]?.[p.path] ?? [];
+        abilities[service] = { ...abilities[service], [p.path]: [...new Set([...actions, ...p.actions])] };
       }
     }
-    const address = await params.signer.getAddress();
     const spaceId = params.wasm.makeSpaceId(address, 1, space.slice(space.lastIndexOf(":") + 1));
     const now = Date.now();
     const prepared = params.wasm.prepareSession({

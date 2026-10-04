@@ -791,7 +791,7 @@ describe("CLI secrets commands", () => {
       getResult: { ok: false, error: { code: "PERMISSION_DENIED", message: "permission denied" } },
     });
     await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
-    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 1 });
+    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
     expect(recorded.outputs).toEqual([]);
 
     resetRecorded();
@@ -919,7 +919,7 @@ describe("CLI secrets commands", () => {
 
     expect(recorded.getCalls).toEqual([{ name: "ANTHROPIC_API_KEY", options: undefined }]);
     expect(recorded.permissionRequests).toEqual([]);
-    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 1 });
+    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
   });
 
   test("routes --space operations and permission requests to the requested TinyCloud space", async () => {
