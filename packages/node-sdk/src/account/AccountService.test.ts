@@ -6,6 +6,7 @@ function makeAccountService(options: {
   emptyIndexTables?: string[];
   failingIndexUpdates?: boolean;
   missingIndexTables?: string[];
+  storageFull?: boolean;
 } = {}) {
   const records = new Map<string, unknown>([
     [
@@ -18,6 +19,17 @@ function makeAccountService(options: {
     ],
   ]);
   const put = mock(async (key: string, value: unknown) => {
+    if (options.storageFull) {
+      return {
+        ok: false,
+        error: {
+          code: "STORAGE_QUOTA_EXCEEDED",
+          service: "kv",
+          message: "TinyCloud storage is full, so this change was not saved.",
+          meta: { status: 402, usedBytes: 1880793, limitBytes: 0 },
+        },
+      };
+    }
     records.set(key, value);
     return { ok: true, data: { data: undefined, headers: {} } };
   });
@@ -514,6 +526,33 @@ describe("AccountService index", () => {
       }),
     ]);
     expect(migrations[0].migrations[0].sql.some((sql: string) => sql.includes("CREATE TABLE IF NOT EXISTS spaces"))).toBe(true);
+  });
+
+  test("still lists accessible spaces when the account space is full", async () => {
+    const { put, service } = makeAccountService({
+      missingIndexTables: ["spaces"],
+      storageFull: true,
+    });
+
+    const result = await service.spaces.list({ preferIndex: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data).toEqual([
+      expect.objectContaining({
+        spaceId: "tinycloud:pkh:eip155:1:0xabc:applications",
+        name: "applications",
+      }),
+    ]);
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  test("an explicit sync reports a full account space", async () => {
+    const { service } = makeAccountService({ storageFull: true });
+
+    const result = await service.spaces.syncAccessible();
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("STORAGE_QUOTA_EXCEEDED");
   });
 
   test("lists delegations from the materialized index with filters", async () => {

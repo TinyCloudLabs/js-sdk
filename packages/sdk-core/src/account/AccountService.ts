@@ -3,6 +3,7 @@ import {
   ok,
   serviceError,
   ErrorCodes,
+  isStorageFullError,
   type IDatabaseHandle,
   type IKVService,
   type KVBatchPutItem,
@@ -300,7 +301,9 @@ export class AccountService {
         if (indexed.ok && indexed.data.length > 0) return indexed;
         if (!indexed.ok && !isMissingIndexError(indexed.error)) return indexed;
 
-        const canonical = await this.spaces.syncAccessible();
+        // Registering is a side effect of this read, so a full account space
+        // must not fail the listing.
+        const canonical = await this.syncAccessibleSpaces({ tolerateStorageFull: true });
         if (canonical.ok && options.refreshIndex !== false) {
           await this.replaceSpacesIndexQuietly(canonical.data);
         }
@@ -426,18 +429,8 @@ export class AccountService {
       return ok({ spaces: registered, recoveredFromBatchError: batchResult.error });
     },
 
-    syncAccessible: async (): Promise<Result<AccountSpace[]>> => {
-      const listed = await this.config.getSpaces().list();
-      if (!listed.ok) return accountErr(listed.error);
-
-      const registered: AccountSpace[] = [];
-      for (const space of listed.data) {
-        const result = await this.spaces.register(space);
-        if (!result.ok) return result;
-        registered.push(result.data);
-      }
-      return ok(registered);
-    },
+    syncAccessible: async (): Promise<Result<AccountSpace[]>> =>
+      this.syncAccessibleSpaces({ tolerateStorageFull: false }),
 
     remove: async (spaceId: string): Promise<Result<void>> => {
       const kvResult = this.accountKV();
@@ -933,6 +926,38 @@ export class AccountService {
     ]);
     if (!deleted.ok) return accountErr(deleted.error);
     return ok(undefined);
+  }
+
+  /**
+   * Register every space the session can reach and return them. With
+   * `tolerateStorageFull`, a full account space stops the registration
+   * writes but not the listing: the remaining spaces are returned as they
+   * would have been registered.
+   */
+  private async syncAccessibleSpaces(options: {
+    tolerateStorageFull: boolean;
+  }): Promise<Result<AccountSpace[]>> {
+    const listed = await this.config.getSpaces().list();
+    if (!listed.ok) return accountErr(listed.error);
+
+    const spaces: AccountSpace[] = [];
+    let canWrite = true;
+    for (const space of listed.data) {
+      if (canWrite) {
+        const result = await this.spaces.register(space);
+        if (result.ok) {
+          spaces.push(result.data);
+          continue;
+        }
+        if (!options.tolerateStorageFull || !isStorageFullError(result.error)) {
+          return result;
+        }
+        canWrite = false;
+      }
+      const record = spaceRecordFromInput(space);
+      spaces.push(spaceFromRecord(spaceKey(record.space_id), record));
+    }
+    return ok(spaces);
   }
 
   private async resolveSpace(space: string): Promise<Result<SpaceInfo>> {
