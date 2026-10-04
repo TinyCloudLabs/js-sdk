@@ -166,15 +166,16 @@ export class SQLService extends BaseService implements ISQLService {
         if (options?.maxRows !== undefined) body.maxRows = options.maxRows;
         if (options?.maxBytes !== undefined) body.maxBytes = options.maxBytes;
 
+        const action = this.actionForSql(sql, SQLAction.READ);
         const response = await this.invokeSQL(
           dbName,
-          this.actionForSql(sql, SQLAction.READ),
+          action,
           body,
           options?.signal
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "query");
+          return this.handleErrorResponse(response, "query", dbName, [action]);
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -212,15 +213,16 @@ export class SQLService extends BaseService implements ISQLService {
             this.actionForSql(statement, SQLAction.SCHEMA),
           ),
         ];
+        const requestedActions = this.dedupeActions(actions);
         const response = await this.invokeSQL(
           dbName,
-          this.dedupeActions(actions),
+          requestedActions,
           body,
           options?.signal
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "execute");
+          return this.handleErrorResponse(response, "execute", dbName, requestedActions);
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -242,15 +244,16 @@ export class SQLService extends BaseService implements ISQLService {
       }
 
       try {
+        const requestedActions = this.actionsForSqlBatch(statements);
         const response = await this.invokeSQL(
           dbName,
-          this.actionsForSqlBatch(statements),
+          requestedActions,
           { action: "batch", statements },
           options?.signal
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "batch");
+          return this.handleErrorResponse(response, "batch", dbName, requestedActions);
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -291,7 +294,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "executeStatement");
+          return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
         }
 
         const data = (await response.json()) as
@@ -327,7 +330,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "export");
+          return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
         }
 
         // FetchResponse doesn't expose blob(), so access it from the
@@ -519,7 +522,9 @@ export class SQLService extends BaseService implements ISQLService {
 
   private async handleErrorResponse(
     response: FetchResponse,
-    operation: string
+    operation: string,
+    dbName: string,
+    requestedActions: readonly string[],
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -544,9 +549,11 @@ export class SQLService extends BaseService implements ISQLService {
     );
 
     if (response.status === 401) {
-      const { resource, action } = parseAuthError(errorText);
-      if (action) meta.requiredAction = action;
-      if (resource) meta.resource = resource;
+      const { action } = parseAuthError(errorText);
+      if (action && requestedActions.includes(action)) {
+        meta.requiredAction = action;
+        meta.resource = `${this.context.session!.spaceId}/sql/${dbName}`;
+      }
     }
 
     return err(

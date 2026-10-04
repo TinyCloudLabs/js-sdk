@@ -85,6 +85,34 @@ describe("Share lifecycle and authorization parity", () => {
     expect(attempts).toBe(1);
   });
 
+  for (const status of [401, 403] as const) {
+    it(`does not retry a typed ${status} delivery refusal`, async () => {
+      let calls = 0;
+      const result = await notifyShare({
+        shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+        adapter: { async deliver() {
+          calls += 1;
+          throw Object.assign(new Error("delivery refused"), { status });
+        } },
+      });
+      expect(result).toMatchObject({ state: "partial-failure", attempts: 1, retryable: false });
+      expect(calls).toBe(1);
+    });
+  }
+
+  it("continues retrying a typed server failure within the attempt budget", async () => {
+    let calls = 0;
+    const result = await notifyShare({
+      shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+      adapter: { async deliver() {
+        calls += 1;
+        throw Object.assign(new Error("server unavailable"), { status: 503 });
+      } },
+    });
+    expect(result).toMatchObject({ state: "partial-failure", attempts: 3, retryable: true });
+    expect(calls).toBe(3);
+  });
+
   it("reports a confirmed prior delivery only after a successful repeat", async () => {
     const email = { ...record, recipientMatcher: { kind: "exactEmail" as const, value: "foo@x.com" }, deliveredRecipients: ["foo@x.com"] };
     let attempts = 0;

@@ -60,7 +60,14 @@ import {
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
+
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
+
+/** `<status> - <server text>` for a failed host activation. */
+function describeHostFailure(result: SpaceHostResult): string {
+  const text = result.error?.trim();
+  return text ? `${result.status} - ${text}` : `${result.status}`;
+}
 
 type JsonValue =
   | null
@@ -918,10 +925,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
       // Create the primary space
       try {
-        const created = (await this.hostSpace()).success;
-        if (!created) {
-          const err = new Error(`Failed to create space: ${primarySpaceId}`);
-          handler.onSpaceCreationFailed?.(creationContext, err);
+        const created = await this.hostSpace();
+        if (!created.success) {
+          const err = Object.assign(
+            new Error(`Failed to create space ${primarySpaceId}: ${describeHostFailure(created)}`),
+            { cause: created },
+          );
           throw err;
         }
       } catch (error) {
@@ -942,8 +951,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       );
 
       if (!retryResult.success) {
-        const err = new Error(
-          `Failed to activate session after creating space: ${retryResult.error}`,
+        const err = Object.assign(
+          new Error(`Failed to activate session after creating space: ${describeHostFailure(retryResult)}`),
+          { cause: retryResult },
         );
         handler.onSpaceCreationFailed?.(creationContext, err);
         throw err;
@@ -965,10 +975,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
 
       try {
-        const created = (await this.hostSpace()).success;
-        if (!created) {
-          const err = new Error(`Failed to create space: ${primarySpaceId}`);
-          handler.onSpaceCreationFailed?.(creationContext, err);
+        const created = await this.hostSpace();
+        if (!created.success) {
+          const err = Object.assign(
+            new Error(`Failed to create space ${primarySpaceId}: ${describeHostFailure(created)}`),
+            { cause: created },
+          );
           throw err;
         }
       } catch (error) {
@@ -987,8 +999,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       );
 
       if (!retryResult.success) {
-        const err = new Error(
-          `Failed to activate session after creating space: ${retryResult.error}`,
+        const err = Object.assign(
+          new Error(`Failed to activate session after creating space: ${describeHostFailure(retryResult)}`),
+          { cause: retryResult },
         );
         handler.onSpaceCreationFailed?.(creationContext, err);
         throw err;
@@ -998,7 +1011,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return;
     }
 
-    throw new Error(`Failed to activate session: ${result.error}`);
+    throw Object.assign(
+      new Error(`Failed to activate session: ${describeHostFailure(result)}`),
+      { cause: result },
+    );
   }
 
   private recordActivationSkippedSpaces(

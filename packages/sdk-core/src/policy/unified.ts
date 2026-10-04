@@ -6,6 +6,7 @@ import { base58btc } from "multiformats/bases/base58";
 import { create as createDigest } from "multiformats/hashes/digest";
 import { z } from "zod";
 import { jcsCanonicalize } from "./jcs";
+import { httpResponseError } from "../http-error";
 
 export const POLICY_V1_SCHEMA = "xyz.tinycloud.policy/policy/v1" as const;
 export const POLICY_CAPABILITY_V1_SCHEMA =
@@ -190,7 +191,7 @@ export async function requestPolicyChallengeV3(input: {
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ policyCid: input.policyCid, recipientDid: input.recipientDid, requestedCapabilities: input.requestedCapabilities.map(normalizeUnifiedPolicyCapability) }),
   });
-  if (!response.ok) throw new Error(`policy challenge rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy challenge rejected");
   const value = object(await response.json(), "policy challenge") as PolicyChallengeV3;
   if (typeof value.challengeId !== "string" || typeof value.nonce !== "string" || value.policyCid !== input.policyCid || value.recipientDid !== input.recipientDid)
     throw new Error("policy challenge binding is invalid");
@@ -230,7 +231,7 @@ export async function mintPolicySessionV3(input: {
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ policyCid: input.policyCid, challengeId: challenge.challengeId, nonce: challenge.nonce, claim: input.claim, presentation: input.presentation }),
   });
-  if (!response.ok) throw new Error(`policy delegation rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy delegation rejected");
   const value = object(await response.json(), "policy delegation");
   if (value.admitted !== true || typeof value.sessionCid !== "string" || typeof value.authorization !== "string")
     throw new Error("policy delegation response is invalid");
@@ -336,7 +337,7 @@ export async function getPolicyRootStatusV3(input: {
     redirect: "error",
     headers: { accept: "application/json" },
   });
-  if (!response.ok) throw new Error(`policy root status rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy root status rejected");
   const value = object(await response.json(), "policy root status");
   const checkpoint = object(value.checkpoint, "policy root checkpoint");
   if (value.rootCid !== input.rootCid
@@ -426,7 +427,7 @@ export async function renewPolicyRootStatusV3(input: {
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ rootCid: input.rootCid, renewal: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.ownerDid, value: encodeBase64Url(signature) } } }),
   });
-  if (!response.ok) throw new Error(`policy root renewal rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy root renewal rejected");
   return object(await response.json(), "policy root renewal");
 }
 
@@ -472,7 +473,7 @@ export async function revokePolicyRootV3(input: {
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ revocation: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.issuerDid, value: encodeBase64Url(signature) } } }),
   });
-  if (!response.ok) throw new Error(`policy root revocation rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy root revocation rejected");
   return object(await response.json(), "policy root revocation");
 }
 
@@ -843,7 +844,7 @@ export async function registerPolicyV3(
     },
   );
   if (!bindingResponse.ok) {
-    throw new Error(`policy enforcer binding rejected (${bindingResponse.status})`);
+    throw await httpResponseError(bindingResponse, "policy enforcer binding rejected");
   }
   const binding = exactObject(
     await bindingResponse.json(),
@@ -923,7 +924,7 @@ export async function registerPolicyV3(
     },
   );
   if (!response.ok) {
-    throw new Error(`policy registration rejected (${response.status})`);
+    throw await httpResponseError(response, "policy registration rejected");
   }
   const receipt = exactObject(
     await response.json(),

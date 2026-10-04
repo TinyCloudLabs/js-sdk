@@ -10,7 +10,7 @@ import { grantAuthRequest, principalDidEquals, type PermissionEntry, type Portab
 import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
@@ -1069,7 +1069,7 @@ async function importRequestBoundDelegation(
         ExitCode.ERROR,
       );
     case "error":
-      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      throw cliErrorFromService(result.error);
   }
 }
 

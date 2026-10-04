@@ -75,6 +75,8 @@ class MockCLIError extends Error {
 // resolving against this global mock never hits a missing-export error.
 mock.module("../output/errors.js", () => ({
   CLIError: MockCLIError,
+  cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
+    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },

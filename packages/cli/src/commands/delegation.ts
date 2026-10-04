@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { parseExpiry } from "../lib/duration.js";
@@ -52,7 +52,7 @@ export function registerDelegationCommand(program: Command): void {
         });
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({
@@ -80,7 +80,7 @@ export function registerDelegationCommand(program: Command): void {
 
         const result = await node.delegationManager.list();
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         let delegations: any[] = result.data;
@@ -141,7 +141,7 @@ export function registerDelegationCommand(program: Command): void {
 
         const result = await node.delegationManager.revoke(cid);
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ cid, revoked: true });

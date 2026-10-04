@@ -93,7 +93,6 @@ export async function notifyShare(input: {
     };
   }
   let attempts = 0;
-  let lastError: unknown;
   while (attempts < attemptsLimit) {
     if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
     attempts += 1;
@@ -112,10 +111,14 @@ export async function notifyShare(input: {
           retryable: false, reason: "delivery-window-expired",
         };
       }
-      lastError = error;
+      if (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)) {
+        return {
+          protocol: "tinycloud-share", version: 1, shareId: input.shareId,
+          state: "partial-failure", idempotencyKey, attempts, retryable: false,
+        };
+      }
     }
   }
-  void lastError;
   return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state: "partial-failure", idempotencyKey, attempts, retryable: true };
 }
 

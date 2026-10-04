@@ -18,7 +18,8 @@ import type {
   FetchFunction,
   InvokeFunction,
 } from "@tinycloud/sdk-services";
-import { ok, err, serviceError } from "@tinycloud/sdk-services";
+import { ok, err, serviceError, authorizationVerdictOf } from "@tinycloud/sdk-services";
+import { serviceHttpError } from "../http-error";
 import type {
   SpaceInfo,
   SpaceOwnership,
@@ -487,6 +488,10 @@ export class SpaceService implements ISpaceService {
       const ownedResult = await this.listOwnedSpaces();
       if (ownedResult.ok) {
         spaces.push(...ownedResult.data);
+      } else {
+        const verdict = authorizationVerdictOf(ownedResult.error);
+        // An authorization failure cannot be represented as a successful (possibly partial) list.
+        if (verdict === "unauthenticated" || verdict === "forbidden") return err(ownedResult.error);
       }
 
       // 2. Get delegated spaces from capability registry
@@ -527,15 +532,9 @@ export class SpaceService implements ISpaceService {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        return err(
-          serviceError(
-            SpaceErrorCodes.NETWORK_ERROR,
-            `Failed to list owned spaces: ${response.status} - ${errorText}`,
-            SERVICE_NAME,
-            { meta: { status: response.status } }
-          )
-        );
+        return err(await serviceHttpError(
+          response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list owned spaces", SERVICE_NAME,
+        ));
       }
 
       const rawData = await response.json();
@@ -691,26 +690,15 @@ export class SpaceService implements ISpaceService {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-
         if (response.status === 409) {
-          return err(
-            serviceError(
-              SpaceErrorCodes.ALREADY_EXISTS,
-              `Space "${name}" already exists`,
-              SERVICE_NAME
-            )
-          );
+          return err(await serviceHttpError(
+            response, SpaceErrorCodes.ALREADY_EXISTS, `Space "${name}" already exists`, SERVICE_NAME,
+          ));
         }
 
-        return err(
-          serviceError(
-            SpaceErrorCodes.CREATION_FAILED,
-            `Failed to create space: ${response.status} - ${errorText}`,
-            SERVICE_NAME,
-            { meta: { status: response.status } }
-          )
-        );
+        return err(await serviceHttpError(
+          response, SpaceErrorCodes.CREATION_FAILED, "Failed to create space", SERVICE_NAME,
+        ));
       }
 
       const rawData = await response.json();
@@ -878,19 +866,14 @@ export class SpaceService implements ISpaceService {
 
       if (!response.ok) {
         if (response.status === 404) {
-          return err(
-            serviceError(SpaceErrorCodes.NOT_FOUND, `Space not found: ${spaceId}`, SERVICE_NAME)
-          );
+          return err(await serviceHttpError(
+            response, SpaceErrorCodes.NOT_FOUND, `Space not found: ${spaceId}`, SERVICE_NAME,
+          ));
         }
 
-        const errorText = await response.text();
-        return err(
-          serviceError(
-            SpaceErrorCodes.NETWORK_ERROR,
-            `Failed to get space info: ${response.status} - ${errorText}`,
-            SERVICE_NAME
-          )
-        );
+        return err(await serviceHttpError(
+          response, SpaceErrorCodes.NETWORK_ERROR, "Failed to get space info", SERVICE_NAME,
+        ));
       }
 
       const rawData = await response.json();
@@ -1025,14 +1008,9 @@ export class SpaceService implements ISpaceService {
           });
 
           if (!response.ok) {
-            const errorText = await response.text();
-            return err(
-              serviceError(
-                SpaceErrorCodes.NETWORK_ERROR,
-                `Failed to list delegations: ${response.status} - ${errorText}`,
-                SERVICE_NAME
-              )
-            );
+            return err(await serviceHttpError(
+              response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list delegations", SERVICE_NAME,
+            ));
           }
 
           // Server returns { [cid: string]: DelegationInfo } - validate and transform to Delegation[]
@@ -1092,14 +1070,9 @@ export class SpaceService implements ISpaceService {
           });
 
           if (!response.ok) {
-            const errorText = await response.text();
-            return err(
-              serviceError(
-                SpaceErrorCodes.NETWORK_ERROR,
-                `Failed to list received delegations: ${response.status} - ${errorText}`,
-                SERVICE_NAME
-              )
-            );
+            return err(await serviceHttpError(
+              response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list received delegations", SERVICE_NAME,
+            ));
           }
 
           // Server returns { [cid: string]: DelegationInfo } - validate and transform to Delegation[]
@@ -1168,14 +1141,9 @@ export class SpaceService implements ISpaceService {
           });
 
           if (!response.ok) {
-            const errorText = await response.text();
-            return err(
-              serviceError(
-                SpaceErrorCodes.NETWORK_ERROR,
-                `Failed to revoke delegation: ${response.status} - ${errorText}`,
-                SERVICE_NAME
-              )
-            );
+            return err(await serviceHttpError(
+              response, SpaceErrorCodes.NETWORK_ERROR, "Failed to revoke delegation", SERVICE_NAME,
+            ));
           }
 
           return ok(undefined);

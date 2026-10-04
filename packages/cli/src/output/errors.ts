@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
+import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 
 let activeProfileName: string | undefined;
 
@@ -12,6 +13,8 @@ export function setActiveProfileName(name: string): void {
 }
 
 export class CLIError extends Error {
+  readonly status?: number;
+
   constructor(
     public code: string,
     message: string,
@@ -20,29 +23,55 @@ export class CLIError extends Error {
   ) {
     super(message);
     this.name = "CLIError";
+    if (typeof metadata?.status === "number" && Number.isInteger(metadata.status) &&
+      metadata.status >= 400 && metadata.status <= 599) this.status = metadata.status;
   }
 }
 
+/** Convert a service result once, before the CLI's own errors become immutable decisions. */
+export function cliErrorFromService(
+  error: { code: string; message: string; meta?: Record<string, unknown>; status?: number; statusCode?: number },
+  message = error.message,
+): CLIError {
+  if (error instanceof CLIError) return error;
+  const meta = { ...error.meta };
+  // Service metadata is not allowed to supply an arbitrary displayed command hint.
+  delete meta.hint;
+  const status = error.status ?? error.statusCode;
+  if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
+  const verdict = authorizationVerdictOf({ ...error, meta });
+  if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
+    return missingPrivateKeyError();
+  }
+  const missingCapability = validatedCapabilityOf({ ...error, meta }) !== undefined;
+  const denied = verdict === "forbidden" || (verdict === "unauthenticated" && missingCapability);
+  return new CLIError(
+    denied ? "PERMISSION_DENIED" : verdict === "unauthenticated" ? "AUTH_REQUIRED" : error.code,
+    message,
+    denied ? ExitCode.PERMISSION_DENIED : verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
+    meta,
+  );
+}
+
 export function wrapError(error: unknown): CLIError {
+  if (error instanceof CLIError) return error;
   const message = error instanceof Error ? error.message : String(error);
 
-  // A signer cannot make a request without private key material. Some SDK
-  // service paths historically wrapped that local restore/signing failure as
-  // NETWORK_ERROR, which led the CLI to suggest switching hosts. Classify the
-  // underlying auth-state problem before preserving an existing CLIError.
-  if (message.includes("Missing private key parameter in JWK")) {
-    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
-    return new CLIError(
-      "AUTH_REQUIRED",
-      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
-      ExitCode.AUTH_REQUIRED,
-      {
-        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
-      },
-    );
+  // A typed HTTP refusal wins over misleading response text, including text
+  // that describes a different auth or local signing failure.
+  const verdict = authorizationVerdictOf(error);
+  if (verdict === "unauthenticated") {
+    return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
+  }
+  if (verdict === "forbidden") {
+    return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
 
-  if (error instanceof CLIError) return error;
+  // A genuinely untyped signer restore failure is local auth state. Never
+  // interpret HTTP response text (or a command's deliberate CLIError) as JWK state.
+  if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
+    return missingPrivateKeyError();
+  }
 
   // Any profile write (session, key, profile settings, stores) waits on the
   // profile lock; a timeout means another tc/MCP process held it, not that
@@ -62,13 +91,13 @@ export function wrapError(error: unknown): CLIError {
   }
 
   // Map known error patterns to exit codes
-  if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
+  if (verdict === undefined && (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired"))) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
   if (message.includes("NOT_FOUND") || message.includes("KV_NOT_FOUND")) {
     return new CLIError("NOT_FOUND", message, ExitCode.NOT_FOUND);
   }
-  if (message.includes("PERMISSION_DENIED")) {
+  if (verdict === undefined && message.includes("PERMISSION_DENIED")) {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
   if (message.includes("ECONNREFUSED") || message.includes("ETIMEDOUT") || message.includes("fetch failed")) {
@@ -76,6 +105,16 @@ export function wrapError(error: unknown): CLIError {
   }
 
   return new CLIError("ERROR", message, ExitCode.ERROR);
+}
+
+function missingPrivateKeyError(): CLIError {
+  const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` },
+  );
 }
 
 export function handleError(error: unknown): never {
@@ -87,41 +126,45 @@ export function handleError(error: unknown): never {
     : undefined;
   const hint = prebuilt ?? buildAuthHint(cliError) ??
     (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : undefined);
-  outputError(cliError.code, cliError.message, hint);
+  // Never expose arbitrary SDK/server metadata (or share adapter secrets).
+  // Only the KV authorization fields used by the capability hint are public.
+  const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED"
+    ? cliError.metadata
+    : undefined;
+  const meta: Record<string, unknown> = {};
+  if (cliError.status !== undefined && authMeta !== undefined) meta.status = cliError.status;
+  const capability = validatedCapabilityOf({ meta: authMeta });
+  if (capability) {
+    meta.resource = capability.resource;
+    meta.requiredAction = capability.requiredAction;
+  }
+  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : undefined);
   process.exit(cliError.exitCode);
 }
 
 function buildAuthHint(error: CLIError): string | undefined {
-  const resource = error.metadata?.resource;
-  const requiredAction = error.metadata?.requiredAction;
-  if (typeof resource !== "string" || typeof requiredAction !== "string") {
-    return undefined;
-  }
+  const capability = validatedCapabilityOf({ meta: error.metadata });
+  if (!capability) return undefined;
 
-  const spec = capSpecFromAuthMeta(resource, requiredAction);
+  const spec = capSpecFromAuthMeta(capability.resource, capability.requiredAction);
   if (!spec) return undefined;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap "${spec}"`,
+    `Request it with: tc auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
     "Then retry the original command.",
   ].join("\n");
 }
 
 function capSpecFromAuthMeta(resource: string, action: string): string | undefined {
-  const slash = resource.indexOf("/");
-  if (slash <= 0 || slash === resource.length - 1) return undefined;
-  const spaceUri = resource.slice(0, slash);
-  const rest = resource.slice(slash + 1);
-  const nextSlash = rest.indexOf("/");
-  if (nextSlash <= 0) return undefined;
-
-  const serviceShort = rest.slice(0, nextSlash);
-  const path = rest.slice(nextSlash + 1);
-  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
-  const spaceName = spaceUri.startsWith("tinycloud:")
-    ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1)
-    : spaceUri;
-  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
+  const slash = action.indexOf("/");
+  if (slash < 0) return undefined;
+  const longService = action.slice(0, slash);
+  const serviceShort = SERVICE_LONG_TO_SHORT[longService];
+  if (!serviceShort) return undefined;
+  const parsed = parseCapabilityResource(resource, serviceShort);
+  if (!parsed) return undefined;
+  const spaceName = parsed.space.slice(parsed.space.lastIndexOf(":") + 1);
+  return `${longService}:${spaceName}:${parsed.path}:${action.slice(slash + 1)}`;
 }
 
 /**

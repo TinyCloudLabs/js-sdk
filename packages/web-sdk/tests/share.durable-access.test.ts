@@ -74,11 +74,15 @@ function accountShare(sessionLifetimes: readonly number[]) {
       return { session: { authorization: session.authorization, cid: session.cid } };
     },
   };
-  const responses = { invoke: 200 };
+  const responses: { invoke: { status: number; body: string } | Response | Error } = { invoke: { status: 200, body: "" } };
   const fetchFn = (async (input: unknown) => {
     const path = new URL(String(input)).pathname;
     if (path === "/delegate") return new Response(JSON.stringify({ cid: "imported" }), { status: 200 });
-    if (path === "/invoke") return new Response(null, { status: responses.invoke });
+    if (path === "/invoke") {
+      if (responses.invoke instanceof Error) throw responses.invoke;
+      if (responses.invoke instanceof Response) return responses.invoke;
+      return new Response(responses.invoke.body, { status: responses.invoke.status });
+    }
     throw new Error(`unexpected request ${path}`);
   }) as typeof fetch;
   const received = new ReceivedShareImpl(
@@ -108,14 +112,52 @@ test("an account recipient asks for a session as long as the share and is admitt
   expect(verifyCompactUcanAuthorization(onward.chain[0]!.authorization).payload.nnc).toBe("session-2");
 });
 
-test("a transient read failure keeps the durable session; a refusal from the Node starts over", async () => {
+for (const status of [401, 403] as const) {
+  for (const body of ["", "Unauthorized Action: session refused", "Forbidden", "session expired"]) {
+    test(`a ${status} share read with ${JSON.stringify(body)} re-admits cached access`, async () => {
+      const { received, admissions, responses, delegate } = accountShare([3600]);
+      responses.invoke = { status, body };
+      await expect(received.get()).rejects.toMatchObject({
+        status,
+        message: `share invocation rejected: HTTP ${status}${body ? ` - ${body}` : ""}`,
+      });
+      expect(admissions).toHaveLength(1);
+      await received.delegate({ to: delegate });
+      expect(admissions).toHaveLength(2);
+    });
+  }
+}
+
+test("a typed server failure retains cached access despite misleading authorization text", async () => {
   const { received, admissions, responses, delegate } = accountShare([3600]);
-  responses.invoke = 500;
-  await expect(received.get()).rejects.toThrow("(500)");
+  responses.invoke = { status: 500, body: "session expired (403)" };
+  await expect(received.get()).rejects.toMatchObject({
+    status: 500,
+    message: "share invocation rejected: HTTP 500 - session expired (403)",
+  });
   await received.delegate({ to: delegate });
   expect(admissions).toHaveLength(1);
-  responses.invoke = 403;
-  await expect(received.get()).rejects.toThrow("(403)");
+});
+
+test("a refused share read with a failed response stream still invalidates cached admission", async () => {
+  const { received, admissions, responses, delegate } = accountShare([3600]);
+  responses.invoke = new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.error(new Error("body stream failed")); },
+  }), { status: 403 });
+  await expect(received.get()).rejects.toMatchObject({
+    status: 403,
+    message: "share invocation rejected: HTTP 403",
+  });
   await received.delegate({ to: delegate });
   expect(admissions).toHaveLength(2);
 });
+
+for (const status of [401, 403, 500] as const) {
+  test(`an untyped legacy ${status} suffix ${status === 500 ? "retains" : "invalidates"} cached access`, async () => {
+    const { received, admissions, responses, delegate } = accountShare([3600]);
+    responses.invoke = new Error(`legacy invocation rejected (${status})`);
+    await expect(received.get()).rejects.toThrow(`legacy invocation rejected (${status})`);
+    await received.delegate({ to: delegate });
+    expect(admissions).toHaveLength(status === 500 ? 1 : 2);
+  });
+}

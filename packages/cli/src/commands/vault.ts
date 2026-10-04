@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
@@ -44,7 +44,7 @@ async function unlockVault(
   const signer = new PrivateKeySigner(privateKey);
   const result = await node.vault.unlock(signer);
   if (result && !result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    throw cliErrorFromService(result.error);
   }
 }
 
@@ -109,7 +109,7 @@ export function registerVaultCommand(program: Command): void {
         const result = await withSpinner(`Writing ${key}...`, () => node.vault.put(key, putValue)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ key, written: true });
@@ -140,7 +140,7 @@ export function registerVaultCommand(program: Command): void {
           if (result.error.code === "NOT_FOUND") {
             throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
           }
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const data = result.data.data ?? result.data;
@@ -184,7 +184,7 @@ export function registerVaultCommand(program: Command): void {
         const result = await withSpinner(`Deleting ${key}...`, () => node.vault.delete(key)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ key, deleted: true });
@@ -212,7 +212,7 @@ export function registerVaultCommand(program: Command): void {
         const result = await withSpinner("Listing vault keys...", () => node.vault.list(listOptions)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const keys = result.data.data ?? result.data;
@@ -249,7 +249,7 @@ export function registerVaultCommand(program: Command): void {
             outputJson({ key, exists: false, metadata: {} });
             return;
           }
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({

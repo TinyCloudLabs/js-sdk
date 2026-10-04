@@ -5,6 +5,7 @@ import type {
   IServiceContext,
 } from "../types";
 import { ErrorCodes } from "../types";
+import { validatedCapabilityOf } from "../errors";
 import { SQLService } from "./SQLService";
 import { SQLAction } from "./types";
 
@@ -674,6 +675,57 @@ describe("SQLService permissions", () => {
       name: "insert_note",
       params: ["hello"],
     });
+  });
+
+  test("401 grant metadata uses the signed query action and requested database, not the node resource", async () => {
+    const service = new SQLService();
+    service.initialize(createContext(async () => response(false, 401,
+      `Unauthorized Action: tinycloud:pkh:eip155:1:0xdef:other/sql/admin / ${SQLAction.READ}`,
+    ), []));
+
+    const result = await service.db("reports").query("SELECT * FROM notes");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.meta).toMatchObject({
+      status: 401,
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/reports",
+      requiredAction: SQLAction.READ,
+    });
+    expect(validatedCapabilityOf(result.error)).toEqual({
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/reports",
+      requiredAction: SQLAction.READ,
+    });
+  });
+
+  test("401 grant metadata accepts an action in a multi-action request, never an unrelated action", async () => {
+    const service = new SQLService();
+    let action: string = SQLAction.SCHEMA;
+    const invocations: Array<{ entries: Array<{ service: string; path: string; action: string }> }> = [];
+    service.initialize(createContext(async () => response(false, 401,
+      `Unauthorized Action: attacker-controlled / ${action}`,
+    ), [], invocations));
+
+    const execute = () => service.db("reports").execute("INSERT INTO notes VALUES (1)", [], {
+      schema: ["CREATE TABLE IF NOT EXISTS notes (id INTEGER)"],
+    });
+    const accepted = await execute();
+    expect(invocations[0]?.entries.map((entry) => entry.action)).toEqual([SQLAction.WRITE, SQLAction.SCHEMA]);
+    expect(accepted.ok).toBe(false);
+    if (accepted.ok) return;
+    expect(accepted.error.meta).toMatchObject({
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/reports",
+      requiredAction: SQLAction.SCHEMA,
+    });
+
+    action = SQLAction.ADMIN;
+    const rejected = await execute();
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) return;
+    expect(rejected.error.meta?.status).toBe(401);
+    expect(rejected.error.meta?.resource).toBeUndefined();
+    expect(rejected.error.meta?.requiredAction).toBeUndefined();
+    expect(validatedCapabilityOf(rejected.error)).toBeUndefined();
   });
 
   test("SQL errors sanitize proxy HTML pages", async () => {

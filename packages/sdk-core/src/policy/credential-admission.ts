@@ -16,6 +16,7 @@ import type {
   VerifiedCredential,
 } from "../credentials/types";
 import { jcsCanonicalize } from "./jcs";
+import { httpResponseError } from "../http-error";
 import {
   compactAttenuationForPolicyCapabilities,
   normalizeUnifiedPolicyCapability,
@@ -666,7 +667,7 @@ export async function admitPolicyCredentialV3(
     requestedSessionExpiry(input.requestedExpiresAt, policy),
     input.signal,
   );
-  if (!response.ok) throw new Error(`policy delegation rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy delegation rejected");
   const value = record(await response.json(), "policy delegation");
   if (
     value.admitted !== true ||
@@ -770,7 +771,7 @@ export async function admitPolicyCredentialV4(
     requestedSessionExpiry(input.requestedExpiresAt, policy),
     input.signal,
   );
-  if (!response.ok) throw new Error(`policy delegation rejected (${response.status})`);
+  if (!response.ok) throw await httpResponseError(response, "policy delegation rejected");
   const value = record(await response.json(), "policy delegation");
   if (
     value.admitted !== true ||
@@ -801,7 +802,7 @@ export async function admitPolicyCredentialV4(
     signal: input.signal,
     headers: { Authorization: session.authorization },
   });
-  if (!importResponse.ok) throw new Error(`delegation import rejected (${importResponse.status})`);
+  if (!importResponse.ok) throw await httpResponseError(importResponse, "delegation import rejected");
   input.signal?.throwIfAborted();
   return Object.freeze({ challenge, presentation, session, delegationImported: true as const });
 }

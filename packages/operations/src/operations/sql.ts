@@ -14,6 +14,7 @@ import type {
 } from "../contract.js";
 import { OperationInvocationError, operationError } from "../errors.js";
 import { operationSpaceResolver } from "../secrets.js";
+import { authorizationFailure } from "./exploration.js";
 
 const DEFAULT_MAX_ROWS = 100;
 const MAX_MAX_ROWS = 1_000;
@@ -437,7 +438,7 @@ async function executeSqlDml(
       .sqlForSpace(space)
       .db(input.database)
       .execute(input.sql, input.params.map(decodeSqlInputValue));
-    if (!result.ok) return sqlMutationFailure();
+    if (!result.ok) return authorizationFailure(result.error, "execute the SQLite statement") ?? sqlMutationFailure();
     const normalized = normalizeExecuteResult(result.data);
     return {
       status: "ok",
@@ -450,7 +451,8 @@ async function executeSqlDml(
       },
     };
   } catch (error) {
-    return sqlFailure(error, "execute the SQLite statement");
+    if (error instanceof OperationInvocationError) return { status: "error", error: error.operationError };
+    return authorizationFailure(error, "execute the SQLite statement") ?? sqlMutationFailure();
   }
 }
 
@@ -647,7 +649,7 @@ function sqlFailure(
   if (error instanceof OperationInvocationError) {
     return { status: "error", error: error.operationError };
   }
-  return nodeFailure(action);
+  return authorizationFailure(error, action) ?? nodeFailure(action);
 }
 
 function nodeFailure(action: string): OperationExecutionOutcome<never> {
@@ -665,6 +667,8 @@ function sqlServiceFailure(
   error: unknown,
   action: string,
 ): OperationExecutionOutcome<never> {
+  const auth = authorizationFailure(error, action);
+  if (auth !== undefined) return auth;
   if (isRecord(error) && error.code === "SQL_RESPONSE_TOO_LARGE") {
     return {
       status: "error",

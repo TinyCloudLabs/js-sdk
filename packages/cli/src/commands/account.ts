@@ -5,7 +5,7 @@ import type { AccountDelegation, AccountSpace, Manifest, SqlValue } from "@tinyc
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { CLIError, handleError } from "../output/errors.js";
+import { CLIError, handleError, cliErrorFromService } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 
@@ -368,7 +368,7 @@ async function authenticatedNode(cmd: Command) {
 
 function assertOk<T>(result: { ok: true; data: T } | { ok: false; error: { code: string; message: string } }): asserts result is { ok: true; data: T } {
   if (!result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    throw cliErrorFromService(result.error);
   }
 }
 

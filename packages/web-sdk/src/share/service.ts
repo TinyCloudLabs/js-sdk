@@ -1,9 +1,11 @@
 import {
   admitPolicyCredentialV4,
+  authorizationVerdictOf,
   credentialRequirementDigest,
   createEmailCredentialRequirement,
   createEmailDomainCredentialRequirement,
   encodeBase64Url,
+  httpResponseError,
   isCanonicalEmailDomain,
   parseCompactUcanAuthorization,
   signCompactPolicyDescendant,
@@ -149,6 +151,8 @@ interface ShareAccess {
 
 /** The Node refused the session or its chain (expired, revoked, or unknown). */
 function sessionRefused(error: unknown): boolean {
+  const verdict = authorizationVerdictOf(error);
+  if (verdict !== undefined) return verdict === "unauthenticated" || verdict === "forbidden";
   return error instanceof Error && /\((?:401|403)\)$/.test(error.message);
 }
 
@@ -326,7 +330,7 @@ export class ReceivedShareImpl implements ReceivedShare {
     const { client } = await this.access();
     const policy = policyV2For(this.envelope);
     const response = await client.nativeInvoke({ action: "get", resource: this.envelope.resource });
-    if (!response.ok) throw new Error(`share invocation rejected (${response.status})`);
+    if (!response.ok) throw await httpResponseError(response, "share invocation rejected");
     const encrypted = new Uint8Array(await response.arrayBuffer());
     const opened = await client.decryptV3Content(encrypted);
     if (this.stage !== undefined) this.options.onProgress?.({ state: this.stage, status: "completed" });

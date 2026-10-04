@@ -13,7 +13,7 @@
  */
 import { expect, mock, test } from "bun:test";
 
-import type { ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, type ISessionManager, type IWasmBindings } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 
@@ -277,6 +277,62 @@ test("without assumeMissing the warm path is unchanged: one GET, no create", asy
           url: `${HOST}/encryption/networks/${encodeURIComponent(NETWORK_ID)}`,
         },
       ]);
+    },
+  );
+});
+
+test("node-info and encryption network HTTP failures keep typed status and server text", async () => {
+  for (const [stage, status, body, verdict] of [
+    ["info", 401, "", "unauthenticated"],
+    ["probe", 403, "Unauthorized Action: denied", "forbidden"],
+    ["create", 403, "Forbidden", "forbidden"],
+    ["create", 500, "session expired", "other"],
+  ] as const) {
+    const node = makeNode(stage === "info" ? {} : { cachedNodeIdHost: HOST });
+    await withRecordedFetch(
+      (method, url) => {
+        if (stage === "info" && method === "GET" && url === `${HOST}/info`) {
+          return new Response(body, { status });
+        }
+        if (stage === "probe" && method === "GET" && url.startsWith(`${HOST}/encryption/networks/`)) {
+          return new Response(body, { status });
+        }
+        if (stage === "create" && method === "POST" && url === `${HOST}/encryption/networks`) {
+          return new Response(body, { status });
+        }
+        return undefined;
+      },
+      async () => {
+        try {
+          if (stage === "info") await node.activeNodeIdentity();
+          else if (stage === "probe") await node.getEncryptionNetwork(NETWORK_ID);
+          else await node.ensureEncryptionNetwork(NETWORK_ID, { assumeMissing: true });
+          throw new Error("expected HTTP failure");
+        } catch (error) {
+          expect((error as Error).message).toContain(`HTTP ${status}`);
+          if (body) expect((error as Error).message).toContain(body);
+          expect(authorizationVerdictOf(error)).toBe(verdict);
+        }
+      },
+    );
+  }
+});
+
+test("node-info HTTP failure bounds the diagnostic without losing the verdict", async () => {
+  const node = makeNode();
+  const body = `  ${"x".repeat(700)}  `;
+  await withRecordedFetch(
+    (method, url) => method === "GET" && url === `${HOST}/info`
+      ? new Response(body, { status: 403 })
+      : undefined,
+    async () => {
+      await node.activeNodeIdentity().then(
+        () => { throw new Error("expected HTTP failure"); },
+        (error: unknown) => {
+          expect((error as Error).message).toBe(`Failed to fetch node info: HTTP 403 - ${"x".repeat(512)}`);
+          expect(authorizationVerdictOf(error)).toBe("forbidden");
+        },
+      );
     },
   );
 });

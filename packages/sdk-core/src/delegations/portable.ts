@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FetchFunction } from "@tinycloud/sdk-services";
 import type { DelegatedResource } from "./types";
 import { createCompactPolicyDescendant } from "../policy/unified";
+import { httpResponseError } from "../http-error";
 
 /** Transport form shared by addressed-share recipients and normal agents. */
 export interface PortableDelegation {
@@ -87,7 +88,7 @@ export async function importPortableDelegation(
     headers: { Authorization: parsed.delegationHeader.Authorization },
   });
   if (!response.ok)
-    throw new Error(`node rejected delegation import (${response.status})`);
+    throw await httpResponseError(response, "node rejected delegation import");
   const body: unknown = await response.json().catch(() => ({}));
   if (body === null || typeof body !== "object" || Array.isArray(body))
     return {};

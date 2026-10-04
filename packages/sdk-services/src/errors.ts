@@ -4,8 +4,11 @@
  * Utilities for creating and handling service errors.
  */
 
+import { CAPABILITY_REGISTRY } from "@tinycloud/bootstrap";
+import { parseNetworkId } from "./encryption/networkId";
+
 import {
-  ServiceError,
+  type ServiceError,
   ErrorCodes,
   err,
   serviceError,
@@ -178,6 +181,118 @@ export function authUnauthorizedError(
  * - `"other"`: a non-authorization HTTP error status (4xx/5xx).
  */
 export type AuthorizationVerdict = "unauthenticated" | "forbidden" | "other";
+
+const grantableActions = new Set(
+  CAPABILITY_REGISTRY.map(({ urn }) => urn).filter((urn) => !urn.endsWith("/*"))
+);
+
+const capabilityServices = new Set(
+  CAPABILITY_REGISTRY.map(({ service }) => service.slice("tinycloud.".length))
+);
+
+/**
+ * Parse a canonical TinyCloud resource, keeping nested space names intact.
+ * The first registered service segment is authoritative: a later matching
+ * segment in the path cannot turn a different service into grant advice.
+ */
+export function parseCapabilityResource(
+  resource: string,
+  service: string
+): { space: string; path: string } | undefined {
+  if (
+    resource.length === 0 ||
+    resource.length > 1024 ||
+    !capabilityServices.has(service) ||
+    /[\s\p{C}*#]/u.test(resource) ||
+    resource.includes("://")
+  ) return undefined;
+
+  const segments = resource.split("/");
+  if (!/^tinycloud:[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(segments[0])) return undefined;
+  const serviceIndex = segments.findIndex((segment, index) =>
+    index > 0 && capabilityServices.has(segment)
+  );
+  if (serviceIndex < 1 || segments[serviceIndex] !== service) return undefined;
+  if (segments.slice(1, serviceIndex).some((segment) =>
+    segment.length === 0 || segment === "." || segment === ".."
+  )) return undefined;
+  const pathSegments = segments.slice(serviceIndex + 1);
+  if (pathSegments.some((segment) => segment === "." || segment === "..")) return undefined;
+  if (service !== "kv" && (pathSegments.length === 0 || pathSegments[pathSegments.length - 1] === "")) return undefined;
+
+  return {
+    space: segments.slice(0, serviceIndex).join("/"),
+    path: pathSegments.join("/"),
+  };
+}
+
+/** A capability resource is a canonical TinyCloud resource or encryption network, never a URL or expression. */
+function safeCapabilityResource(value: unknown, service: string, action: string): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) return false;
+  if (service === "encryption" && value.startsWith("urn:tinycloud:encryption:")) {
+    if (
+      !/^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$/.test(value) ||
+      value.includes("//") ||
+      value.split("/").some((segment) => segment === "." || segment === "..")
+    ) return false;
+    try {
+      parseNetworkId(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const parsed = parseCapabilityResource(value, service);
+  return parsed !== undefined &&
+    (!parsed.path.endsWith("/") || (service === "kv" && action === "tinycloud.kv/list")) &&
+    (parsed.path !== "" || (service === "kv" && action === "tinycloud.kv/list"));
+}
+
+/**
+ * Return a grantable missing capability only when typed authorization evidence
+ * and both safe, service-matched capability fields are present. Status alone,
+ * message text, wildcard actions and unrecognized actions cannot grant scope.
+ */
+export function validatedCapabilityOf(
+  error: unknown
+): { resource: string; requiredAction: string } | undefined {
+  const verdict = authorizationVerdictOf(error);
+  if (verdict !== "unauthenticated" && verdict !== "forbidden") return undefined;
+
+  const seen = new Set<unknown>();
+  let node: unknown = error;
+  for (
+    let depth = 0;
+    depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null && !seen.has(node);
+    depth += 1
+  ) {
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+    const status = errorStatusOf(record);
+    const meta = record.meta;
+    if (
+      (status === 401 || status === 403 || (status === undefined && record.code === ErrorCodes.AUTH_UNAUTHORIZED)) &&
+      typeof meta === "object" && meta !== null && !Array.isArray(meta)
+    ) {
+      const metadata = meta as Record<string, unknown>;
+      const { resource, requiredAction } = metadata;
+      if (typeof requiredAction === "string" && grantableActions.has(requiredAction)) {
+        const actionService = requiredAction.slice("tinycloud.".length, requiredAction.indexOf("/"));
+        const explicitService = record.service === undefined ? metadata.service : record.service;
+        if (
+          safeCapabilityResource(resource, actionService, requiredAction) &&
+          (explicitService === undefined ||
+            explicitService === actionService ||
+            explicitService === `tinycloud.${actionService}`)
+        ) {
+          return { resource, requiredAction };
+        }
+      }
+    }
+    node = record.cause;
+  }
+  return undefined;
+}
 
 const MAX_CAUSE_DEPTH = 8;
 

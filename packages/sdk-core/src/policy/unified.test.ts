@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { authorizationVerdictOf } from "@tinycloud/sdk-services";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
@@ -8,6 +9,7 @@ import {
   createCompactPolicyDescendant,
   createCompactPolicyInvocation,
   jcsCanonicalize,
+  getPolicyRootStatusV3,
   mintPolicySessionV3,
   normalizeUnifiedPolicyCapability,
   parsePolicySessionUcan,
@@ -15,6 +17,7 @@ import {
   policyDigestHex,
   policyIdForDigestHex,
   ROOT_REVOCATION_V1_DOMAIN,
+  requestPolicyChallengeV3,
   ROOT_STATUS_V1_DOMAIN,
   revokePolicyRootV3,
   signCompactPolicyDescendant,
@@ -456,4 +459,55 @@ describe("TC-405 unified policy contracts", () => {
     const refused = posted.map((body) => (body.revocation as Record<string, string>).revokedAt!).filter((stamp) => nodeFormat(stamp) !== stamp);
     expect(refused).toEqual([]);
   });
+  test("preserves status and server text from real policy challenge, mint, and root-status requests", async () => {
+    const fetch = (status: number, body: string) =>
+      // Bun's fetch type includes a preconnect method that this injected test callback never uses.
+      (async () => new Response(body, { status })) as unknown as typeof globalThis.fetch;
+    const challengeInput = {
+      nodeOrigin: "https://node.example",
+      policyCid: "bafy-policy",
+      recipientDid: "did:key:zHolder",
+      requestedCapabilities: [],
+    };
+    const challenge = {
+      challengeId: "challenge", nonce: "nonce",
+      policyCid: challengeInput.policyCid, recipientDid: challengeInput.recipientDid,
+    };
+    const operations = [
+      {
+        name: "challenge",
+        invoke: (status: number, body: string) => requestPolicyChallengeV3({
+          ...challengeInput, fetch: fetch(status, body),
+        }),
+      },
+      {
+        name: "delegation",
+        invoke: (status: number, body: string) => mintPolicySessionV3({
+          ...challengeInput, policyRootCid: "bafy-root", enforcementRootCid: "bafy-enforcement",
+          claim: {}, presentation: {}, challenge, fetch: fetch(status, body),
+        }),
+      },
+      {
+        name: "root status",
+        invoke: (status: number, body: string) => getPolicyRootStatusV3({
+          nodeOrigin: challengeInput.nodeOrigin, rootCid: "bafy-root", fetch: fetch(status, body),
+        }),
+      },
+    ];
+    for (const operation of operations) {
+      for (const [status, body, verdict] of [
+        [401, "Forbidden", "unauthenticated"],
+        [403, "session expired", "forbidden"],
+      ] as const) {
+        const error: unknown = await operation.invoke(status, body).catch((failure: unknown) => failure);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ status });
+        expect((error as Error).message).toContain(operation.name);
+        expect((error as Error).message).toContain(`${status}`);
+        expect((error as Error).message).toContain(body);
+        expect(authorizationVerdictOf(error)).toBe(verdict);
+      }
+    }
+  });
+
 });

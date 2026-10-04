@@ -36,6 +36,7 @@ import {
   TinyCloudSession,
   activateSessionWithHost,
   authorizationVerdictOf,
+  httpResponseError,
   type SpaceHostResult,
   KVService,
   IKVService,
@@ -1893,7 +1894,10 @@ export class TinyCloudNode {
       marker,
     );
     if (!written.ok) {
-      throw new Error(`Failed to write bootstrap completion marker: ${written.error.message}`);
+      throw Object.assign(
+        new Error(`Failed to write bootstrap completion marker: ${written.error.message}`),
+        { cause: written.error },
+      );
     }
   }
 
@@ -1957,9 +1961,12 @@ export class TinyCloudNode {
       } catch (err) {
         // Abort immediately — do not cascade into remaining bootstrap steps.
         // A single clear error is surfaced instead of one error per space.
-        throw new Error(
-          `Account bootstrap aborted: signature rejected for space "${step.space}". ` +
-          `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        throw Object.assign(
+          new Error(
+            `Account bootstrap aborted: signature rejected for space "${step.space}". ` +
+            `Cause: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+          { cause: err },
         );
       }
       sessions.set(step.space, session);
@@ -1967,9 +1974,12 @@ export class TinyCloudNode {
 
     for (const step of steps) {
       if (step.kind !== "host") continue;
-      const hosted = await auth.hostOwnedSpace(step.spaceId, "bootstrap-host");
-      if (!hosted) {
-        throw new Error(`Failed to host bootstrap space: ${step.spaceId}`);
+      const hosted = await auth.hostOwnedSpaceResult(step.spaceId, "bootstrap-host");
+      if (!hosted.success) {
+        throw Object.assign(
+          new Error(`Failed to host bootstrap space ${step.spaceId}: ${describeHostFailure(hosted)}`),
+          { cause: hosted },
+        );
       }
     }
 
@@ -1983,10 +1993,13 @@ export class TinyCloudNode {
       }
       const activated = await activateSessionWithHost(host, session.delegationHeader);
       if (!activated.success || activated.skipped?.includes(step.spaceId)) {
-        throw new Error(
-          `Failed to activate bootstrap session for ${step.spaceId}: ${
-            activated.error ?? "space was skipped"
-          }`,
+        throw Object.assign(
+          new Error(
+            `Failed to activate bootstrap session for ${step.spaceId}: ${
+              activated.success ? "space was skipped" : describeHostFailure(activated)
+            }`,
+          ),
+          { cause: activated },
         );
       }
       this.registerBootstrapRuntimeGrant(
@@ -2000,7 +2013,7 @@ export class TinyCloudNode {
       if (step.kind === "account-index-schema") {
         const ensured = await this.account.index.ensure();
         if (!ensured.ok) {
-          throw new Error(`Failed to create account index schema: ${ensured.error.message}`);
+          throw Object.assign(new Error(`Failed to create account index schema: ${ensured.error.message}`), { cause: ensured.error });
         }
       }
 
@@ -2018,8 +2031,9 @@ export class TinyCloudNode {
           })),
         );
         if (!registered.ok) {
-          throw new Error(
-            `Failed to seed account spaces: ${registered.error.message}`,
+          throw Object.assign(
+            new Error(`Failed to seed account spaces: ${registered.error.message}`),
+            { cause: registered.error },
           );
         }
         const batchError = registered.data.recoveredFromBatchError;
@@ -2043,7 +2057,7 @@ export class TinyCloudNode {
           { assumeUnregistered: true },
         );
         if (!registered.ok) {
-          throw new Error(`Failed to seed bootstrap applications: ${registered.error.message}`);
+          throw Object.assign(new Error(`Failed to seed bootstrap applications: ${registered.error.message}`), { cause: registered.error });
         }
       }
 
@@ -2065,8 +2079,9 @@ export class TinyCloudNode {
           ],
         });
         if (!migrated.ok) {
-          throw new Error(
-            `Failed to create secret_records schema: ${migrated.error.message}`,
+          throw Object.assign(
+            new Error(`Failed to create secret_records schema: ${migrated.error.message}`),
+            { cause: migrated.error },
           );
         }
       }
@@ -2553,11 +2568,12 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires a TinyCloud host");
     }
 
-    const hosted = await (this.auth as NodeUserAuthorization).hostOwnedSpace(
-      spaceId,
-    );
-    if (!hosted) {
-      throw new Error(`Failed to host owned space: ${spaceId}`);
+    const hosted = await (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
+    if (!hosted.success) {
+      throw Object.assign(
+        new Error(`Failed to host owned space ${spaceId}: ${describeHostFailure(hosted)}`),
+        { cause: hosted },
+      );
     }
 
     // Re-activate the session so it covers the newly hosted space, and prove
@@ -2569,10 +2585,13 @@ export class TinyCloudNode {
       session.delegationHeader,
     );
     if (!activation.success || activation.skipped?.includes(spaceId)) {
-      throw new Error(
-        `Failed to activate session for owned space ${spaceId}: ${
-          activation.error ?? "space was skipped"
-        }`,
+      throw Object.assign(
+        new Error(
+          `Failed to activate session for owned space ${spaceId}: ${
+            activation.success ? "space was skipped" : describeHostFailure(activation)
+          }`,
+        ),
+        { cause: activation },
       );
     }
 
@@ -3816,7 +3835,7 @@ export class TinyCloudNode {
 
     const response = await fetch(`${this.config.host}/info`);
     if (!response.ok) {
-      throw new Error(`Failed to fetch node info: HTTP ${response.status}`);
+      throw await httpResponseError(response, "Failed to fetch node info");
     }
     const info = (await response.json()) as { nodeId?: unknown };
     if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
@@ -3880,9 +3899,7 @@ export class TinyCloudNode {
     );
     if (response.status === 404) return null;
     if (!response.ok) {
-      throw new Error(
-        `Failed to fetch encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
-      );
+      throw await httpResponseError(response, `Failed to fetch encryption network ${networkId}`);
     }
     const body = (await response.json()) as {
       descriptor?: NetworkDescriptor;
@@ -4487,7 +4504,7 @@ export class TinyCloudNode {
       headers: { accept: "application/json", "content-type": "application/json", authorization },
       body: canonicalizeEncryptionJson(request),
     });
-    if (!response.ok) throw new Error(`V3 share delivery authorization failed: ${response.status}`);
+    if (!response.ok) throw await httpResponseError(response, "V3 share delivery authorization failed");
     const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
       senderKeyDid: this.credentialHolderDid,
@@ -4743,9 +4760,7 @@ export class TinyCloudNode {
       );
     }
     if (!response.ok) {
-      throw new Error(
-        `Failed to create encryption network ${networkId}: HTTP ${response.status} ${await response.text()}`,
-      );
+      throw await httpResponseError(response, `Failed to create encryption network ${networkId}`);
     }
     const created = (await response.json()) as { descriptor: NetworkDescriptor };
     return created.descriptor;
@@ -5113,8 +5128,9 @@ export class TinyCloudNode {
       delegation.delegationHeader,
     );
     if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate runtime permission delegation: ${activateResult.error}`,
+      throw Object.assign(
+        new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
       );
     }
 
@@ -5226,8 +5242,9 @@ export class TinyCloudNode {
         delegatedSession.delegationHeader,
       );
       if (!activateResult.success) {
-        throw new Error(
-          `Failed to activate runtime permission delegation: ${activateResult.error}`,
+        throw Object.assign(
+          new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
+          { cause: activateResult },
         );
       }
 
@@ -5440,7 +5457,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate public space delegation: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate public space delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     // Register the delegation in the capability registry so
@@ -5937,8 +5957,9 @@ export class TinyCloudNode {
       delegationHeader,
     );
     if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate delegation with host: ${activateResult.error}`,
+      throw Object.assign(
+        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
       );
     }
 
@@ -5983,8 +6004,9 @@ export class TinyCloudNode {
       delegationHeader,
     );
     if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate delegation with host: ${activateResult.error}`,
+      throw Object.assign(
+        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
       );
     }
 
@@ -6855,7 +6877,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate delegation: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     const result: PortableDelegation = {
@@ -7049,7 +7074,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate delegated session: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate delegated session: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     // Create TinyCloudSession for the delegated access
@@ -7219,7 +7247,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate sub-delegation: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate sub-delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     // Return the portable sub-delegation

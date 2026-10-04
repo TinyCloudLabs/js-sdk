@@ -2,7 +2,9 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   ErrorCodes,
   KVService,
+  authorizationVerdictOf,
   bootstrapSteps,
+  submitHostDelegation,
   err,
   serviceError,
   type BootstrapStep,
@@ -201,9 +203,9 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
       fake.at(`session:${name}`, () => fake.sessions.add(spaceId));
       return sessionFor(spaceId);
     },
-    async hostOwnedSpace(spaceId: string) {
+    async hostOwnedSpaceResult(spaceId: string) {
       fake.at(`host:${spaceName(spaceId)}`, () => fake.hostedSpaces.add(spaceId));
-      return true;
+      return { success: true, status: 200 };
     },
   };
   Reflect.set(node, "auth", auth);
@@ -633,5 +635,42 @@ test("real KVService 404 classification distinguishes unhosted default from miss
     ) => Promise<unknown>;
 
     await expect(resolve.call(node, bootstrapSteps(ADDRESS, 1))).resolves.toEqual(expected);
+  }
+});
+
+test("bootstrap host and activation failures retain the HTTP verdict", async () => {
+  const node = makeNode();
+  const spaceId = bootstrapSpaceId("default");
+  const session = {
+    spaceId,
+    delegationHeader: { Authorization: `Bearer ${spaceId}` },
+  };
+  Reflect.set(node, "auth", {
+    tinyCloudSession: undefined,
+    capabilityRequest: undefined,
+    createBootstrapSession: async () => session,
+    hostOwnedSpaceResult: async () => submitHostDelegation(HOST, {}),
+  });
+  const steps = bootstrapSteps(ADDRESS, 1);
+  const run = Reflect.get(node, "runAccountBootstrap");
+  const hostStep = steps.find((step) => step.kind === "host" && step.spaceId === spaceId)!;
+  globalThis.fetch = async () => new Response("Forbidden", { status: 403 });
+  try {
+    await run.call(node, [hostStep]);
+    throw new Error("expected bootstrap host to fail");
+  } catch (error) {
+    expect((error as Error).message).toContain("403 - Forbidden");
+    expect(authorizationVerdictOf(error)).toBe("forbidden");
+  }
+
+  globalThis.fetch = async () => new Response("session expired", { status: 401 });
+  const sessionStep = steps.find((step) => step.kind === "session" && step.spaceId === spaceId)!;
+  const activationStep = steps.find((step) => step.kind === "activate" && step.spaceId === spaceId)!;
+  try {
+    await run.call(node, [sessionStep, activationStep]);
+    throw new Error("expected bootstrap activation to fail");
+  } catch (error) {
+    expect((error as Error).message).toContain("401 - session expired");
+    expect(authorizationVerdictOf(error)).toBe("unauthenticated");
   }
 });

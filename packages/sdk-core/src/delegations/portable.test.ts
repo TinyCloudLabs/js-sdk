@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { authorizationVerdictOf } from "@tinycloud/sdk-services";
 import {
   importPortableDelegation,
   parsePortableDelegation,
@@ -58,4 +59,20 @@ describe("portable delegation admission", () => {
       delegation.delegationHeader.Authorization,
     );
   });
+  test.each([
+    [401, "", "unauthenticated"],
+    [401, "Forbidden", "unauthenticated"],
+    [403, "Unauthorized Action: docs/a", "forbidden"],
+    [403, "session expired", "forbidden"],
+  ] as const)("preserves HTTP %i and server body %s from /delegate", async (status, body, verdict) => {
+    const error: unknown = await importPortableDelegation(
+      async () => new Response(body, { status }), delegation.host, delegation,
+    ).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ status });
+    expect((error as Error).message).toContain(String(status));
+    if (body) expect((error as Error).message).toContain(body);
+    expect(authorizationVerdictOf(error)).toBe(verdict);
+  });
+
 });

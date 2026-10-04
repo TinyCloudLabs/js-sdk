@@ -393,6 +393,12 @@ async function verifyDetachedResponse(response: Response, trust: ShareNodeTrust)
   if (!ed25519.verify(bytes(proof.signature, "share read signature"), new TextEncoder().encode(`${SHARE_V2_PROTOCOL.readResponseDomain}${canonicalize(unsigned)}`), trustedPublicKey(trust))) throw new Error("share read detached proof is invalid");
 }
 
+/** A refusal must retain its HTTP status even when reading its body fails. */
+async function recipientHttpError(response: Response, context: string): Promise<Error & { status: number }> {
+  const body = (await response.text().catch(() => "")).trim().slice(0, 512);
+  return Object.assign(new Error(`${context} (${response.status})${body ? `: ${body}` : ""}`), { status: response.status });
+}
+
 async function post(fetchFn: typeof fetch, origin: string, path: string, body: unknown): Promise<unknown> {
   const response = await fetchFn(new URL(path, origin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error("share authority rejected the request");
@@ -486,7 +492,7 @@ export class ShareRecipientClient {
       body: JSON.stringify({ policyCid: envelope.policyCid, recipientDid: this.options.holderDid, requestedCapabilities: envelope.policy.capabilityCeiling }),
       ...(this.options.signal === undefined ? {} : { signal: this.options.signal }),
     });
-    if (!challengeResponse.ok) throw new Error(`v3 policy challenge rejected (${challengeResponse.status})`);
+    if (!challengeResponse.ok) throw await recipientHttpError(challengeResponse, "v3 policy challenge rejected");
     const challenge = object(await challengeResponse.json(), "v3 policy challenge");
     if (
       typeof challenge.challengeId !== "string" ||
@@ -525,14 +531,14 @@ export class ShareRecipientClient {
     const requestedExpiresAt = requestedSessionExpiry(envelope.expiry);
     let delegationResponse = await mint(requestedExpiresAt === undefined ? mintBody : { ...mintBody, requestedExpiresAt });
     if (requestedExpiresAt !== undefined && delegationResponse.status === 422) delegationResponse = await mint(mintBody);
-    if (!delegationResponse.ok) throw new Error(`v3 policy delegation rejected (${delegationResponse.status})`);
+    if (!delegationResponse.ok) throw await recipientHttpError(delegationResponse, "v3 policy delegation rejected");
     const delegation = object(await delegationResponse.json(), "v3 policy delegation");
     if (delegation.admitted !== true || typeof delegation.sessionCid !== "string" || typeof delegation.authorization !== "string") throw new Error("v3 policy delegation response is not admitted");
     const compact = verifyV3PolicyAuthorization({ authorization: delegation.authorization, cid: delegation.sessionCid, envelope, holderDid: this.options.holderDid });
     const fact = compact.payload.fct[0];
     this.options.onStage?.("delegation-import");
     const imported = await this.fetchFn(new URL("/delegate", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { Authorization: delegation.authorization }, ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
-    if (!imported.ok) throw new Error(`ordinary delegation import rejected (${imported.status})`);
+    if (!imported.ok) throw await recipientHttpError(imported, "ordinary delegation import rejected");
     this.signer = material.sign;
     this.v3Authorization = delegation.authorization;
     this.v3NodeAudience = fact.nodeAudience as string;
@@ -568,7 +574,7 @@ export class ShareRecipientClient {
     try {
       this.options.onStage?.("decryption");
       const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body), ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
-      if (!response.ok) throw new Error(`v3 decrypt invocation rejected (${response.status})`);
+      if (!response.ok) throw await recipientHttpError(response, "v3 decrypt invocation rejected");
       const value = object(await response.json(), "v3 decrypt response");
       const allowed = ["type", "targetNode", "networkId", "invocationCid", "encryptedSymmetricKeyHash", "receiverPublicKeyHash", "wrappedKey", "alg", "keyVersion", "requestHash", "nodeId", "nodeSignature"];
       if (Object.keys(value).length !== allowed.length || Object.keys(value).some((key) => !allowed.includes(key))

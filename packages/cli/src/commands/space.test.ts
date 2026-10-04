@@ -38,10 +38,10 @@ mock.module("../config/profiles.js", () => ({
 }));
 
 mock.module("../lib/sdk.js", () => ({
-  // host-request must NOT contact the node; fail loudly if it tries.
-  ensureAuthenticated: async () => {
-    throw new Error("host-request must not authenticate");
-  },
+  // Host-request stays local; authorization failures use a real service in authorization-errors.test.ts.
+  ensureAuthenticated: async () => ({
+    spaces: { list: async () => ({ ok: true, data: [] }) },
+  }),
 }));
 
 mock.module("../lib/host.js", () => ({
@@ -76,6 +76,8 @@ mock.module("../output/errors.js", () => ({
       super(message);
     }
   },
+  cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
+    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
   handleError: (error: unknown) => recorded.errors.push(error),
 }));
 

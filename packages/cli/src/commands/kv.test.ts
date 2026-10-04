@@ -79,6 +79,7 @@ function makeKv(handle: string) {
       recorded.gets.push({ handle, key, options: "head" });
       return errorFor(key) ?? { ok: true, data: { headers: {} } };
     },
+    list: async () => ({ ok: true, data: { data: [] } }),
   };
 }
 
@@ -141,10 +142,13 @@ mock.module("../output/errors.js", () => ({
       public code: string,
       message: string,
       public exitCode: number,
+      public metadata?: Record<string, unknown>,
     ) {
       super(message);
     }
   },
+  cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
+    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },
@@ -160,10 +164,7 @@ mock.module("../lib/host.js", () => ({
   ) => {
     if (!spaceUri) return null;
     if (error.meta?.status === 404 && /space not found/i.test(error.message)) {
-      const e: any = new Error("SPACE_NOT_HOSTED");
-      e.code = "SPACE_NOT_HOSTED";
-      e.exitCode = 1;
-      return e;
+      return Object.assign(new Error("SPACE_NOT_HOSTED"), { code: "SPACE_NOT_HOSTED", exitCode: 1 });
     }
     return null;
   },

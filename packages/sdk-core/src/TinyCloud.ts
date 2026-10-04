@@ -34,6 +34,7 @@ import {
   ErrorCodes,
 } from "@tinycloud/sdk-services";
 import { makePublicSpaceId } from "./spaces/SpaceService";
+import { serviceHttpError } from "./http-error";
 
 /**
  * Configuration for the TinyCloud SDK.
@@ -625,28 +626,18 @@ export class TinyCloud {
           if (createResponse.status === 409) {
             return ok(undefined);
           }
-          const errorText = await createResponse.text();
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to create public space: ${createResponse.status} - ${errorText}`,
-              "public-space",
-            ),
-          );
+          return err(await serviceHttpError(
+            createResponse, ErrorCodes.NETWORK_ERROR, "Failed to create public space", "public-space",
+          ));
         }
 
         return ok(undefined);
       }
 
       // Other error from info check
-      const errorText = await response.text();
-      return err(
-        serviceError(
-          ErrorCodes.NETWORK_ERROR,
-          `Failed to check public space: ${response.status} - ${errorText}`,
-          "public-space",
-        ),
-      );
+      return err(await serviceHttpError(
+        response, ErrorCodes.NETWORK_ERROR, "Failed to check public space", "public-space",
+      ));
     } catch (error) {
       return err(
         serviceError(
@@ -734,23 +725,13 @@ export class TinyCloud {
 
       if (!response.ok) {
         if (response.status === 404) {
-          return err(
-            serviceError(
-              ErrorCodes.NOT_FOUND,
-              `Key not found: ${key} in space ${spaceId}`,
-              "public-space",
-            ),
-          );
+          return err(await serviceHttpError(
+            response, ErrorCodes.NOT_FOUND, `Key not found: ${key} in space ${spaceId}`, "public-space",
+          ));
         }
-        const errorText = await response.text();
-        return err(
-          serviceError(
-            ErrorCodes.NETWORK_ERROR,
-            `Failed to read public space: ${response.status} - ${errorText}`,
-            "public-space",
-            { meta: { status: response.status } },
-          ),
-        );
+        return err(await serviceHttpError(
+          response, ErrorCodes.NETWORK_ERROR, "Failed to read public space", "public-space",
+        ));
       }
 
       const contentType = response.headers.get("content-type");

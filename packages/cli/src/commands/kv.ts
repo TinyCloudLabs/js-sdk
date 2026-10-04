@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes, formatTimeAgo } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
@@ -17,13 +17,13 @@ import type { TinyCloudNode } from "@tinycloud/node-sdk";
  * unhosted-space condition. Keeps the single error path consistent across kv.
  */
 async function throwKvError(
-  error: { code: string; message: string; meta?: { status?: number } },
+  error: { code: string; message: string; meta?: Record<string, unknown> },
   spaceUri: string | undefined,
   profileName: string,
 ): Promise<never> {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName);
   if (hosted) throw hosted;
-  throw new CLIError(error.code, error.message, ExitCode.ERROR);
+  throw cliErrorFromService(error);
 }
 
 function isByteCount(value: unknown): value is number {

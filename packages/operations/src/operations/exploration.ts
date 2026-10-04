@@ -1,4 +1,5 @@
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
+import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-services";
 import { z } from "zod";
 
 import type {
@@ -487,8 +488,8 @@ async function executeAccountSpacesList(
       .sort((left, right) => left.name.localeCompare(right.name) || left.spaceId.localeCompare(right.spaceId));
     const output = { spaces, count: spaces.length };
     return accountRegistryOutput(output);
-  } catch {
-    return nodeFailure("list account spaces");
+  } catch (error) {
+    return caughtKvFailure(error, "list account spaces");
   }
 }
 
@@ -504,8 +505,8 @@ async function executeAccountApplicationsList(
       .sort((left, right) => left.appId.localeCompare(right.appId));
     const output = { applications, count: applications.length };
     return accountRegistryOutput(output);
-  } catch {
-    return nodeFailure("list account applications");
+  } catch (error) {
+    return caughtKvFailure(error, "list account applications");
   }
 }
 
@@ -520,7 +521,7 @@ async function executeKvList(
       ...(input.prefix === undefined ? {} : { prefix: input.prefix }),
       limit: input.limit ?? DEFAULT_KV_LIST_LIMIT,
     });
-    if (!result.ok) return nodeFailure("list KV keys");
+    if (!result.ok) return kvFailure(result.error, "list KV keys");
     const keys = [...result.data.keys];
     return {
       status: "ok",
@@ -533,10 +534,7 @@ async function executeKvList(
       },
     };
   } catch (error) {
-    if (error instanceof OperationInvocationError) {
-      return { status: "error", error: error.operationError };
-    }
-    return nodeFailure("list KV keys");
+    return caughtKvFailure(error, "list KV keys");
   }
 }
 
@@ -570,10 +568,7 @@ async function executeKvGet(
       },
     };
   } catch (error) {
-    if (error instanceof OperationInvocationError) {
-      return { status: "error", error: error.operationError };
-    }
-    return nodeFailure("read the KV value");
+    return caughtKvFailure(error, "read the KV value");
   }
 }
 
@@ -691,7 +686,7 @@ async function readAccountRegistry(
   const accountSpace = resolveSpace(runtime, "account");
   const kv = runtimeNode(runtime).kvForSpace(accountSpace) as unknown as KvOperationHandle;
   const listed = await kv.list({ prefix, limit: MAX_ACCOUNT_REGISTRY_RECORDS });
-  if (!listed.ok) return { ok: false, outcome: nodeFailure("list the account registry") };
+  if (!listed.ok) return { ok: false, outcome: kvFailure(listed.error, "list the account registry") };
   if (listed.data.truncated === true) {
     return {
       ok: false,
@@ -905,7 +900,21 @@ function projectKvMetadata(headers: {
 
 function caughtKvFailure(error: unknown, action: string): OperationExecutionOutcome<never> {
   if (error instanceof OperationInvocationError) return { status: "error", error: error.operationError };
-  return nodeFailure(action);
+  return authorizationFailure(error, action) ?? nodeFailure(action);
+}
+
+export function authorizationFailure(error: unknown, action: string): OperationExecutionOutcome<never> | undefined {
+  const verdict = authorizationVerdictOf(error);
+  if (verdict === "unauthenticated") {
+    if (validatedCapabilityOf(error) !== undefined) {
+      return { status: "error", error: operationError("PERMISSION_DENIED", `Permission is denied to ${action}.`) };
+    }
+    return { status: "error", error: operationError("AUTH_REQUIRED", `Authentication is required to ${action}.`) };
+  }
+  if (verdict === "forbidden") {
+    return { status: "error", error: operationError("PERMISSION_DENIED", `Permission is denied to ${action}.`) };
+  }
+  return undefined;
 }
 
 function accountRegistryOutput<T>(output: T): OperationExecutionOutcome<T> {
@@ -925,6 +934,8 @@ function kvFailure(
   error: Readonly<{ code?: string; meta?: Readonly<Record<string, unknown>> }>,
   action: string,
 ): OperationExecutionOutcome<never> {
+  const auth = authorizationFailure(error, action);
+  if (auth !== undefined) return auth;
   if (error.code === "KV_NOT_FOUND") {
     return { status: "error", error: operationError("KV_NOT_FOUND", "The TinyCloud KV key was not found.") };
   }

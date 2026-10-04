@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatTable } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { isRootAuthority, ownerDidFromSpaceUri, resolveHostSpace, spaceNameFromUri, type HostRequestArtifact } from "../lib/host.js";
@@ -29,7 +29,7 @@ export function registerSpaceCommand(program: Command): void {
 
         const result = await node.spaces.list();
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         if (shouldOutputJson()) {
