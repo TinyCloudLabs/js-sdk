@@ -332,6 +332,38 @@ test("migration binds every bindable record when another cannot be bound, and st
   }
 });
 
+test("a runtime whose session was rotated after its restore leaves the migration to the new session", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const original = TinyCloudNode.prototype.restoreSession;
+  const restores = spyOn(TinyCloudNode.prototype, "restoreSession");
+  try {
+    const rotated = await fixture.hermetic.createRotatedRestorableSession();
+    const delegation = await fixture.hermetic.mintDelegationForAudience(
+      rotated.verificationMethod.split("#", 1)[0]!,
+    );
+    // After the stale runtime restores the old session, a writer rotates the
+    // session and stores an unbound delegation addressed to the new one.
+    let rotatedOnDisk = false;
+    restores.mockImplementation(async function (this: TinyCloudNode, session) {
+      await original.call(this, session);
+      if (rotatedOnDisk) return;
+      rotatedOnDisk = true;
+      await writeJsonAtomic(sessionPath(fixture.profile), rotated);
+      await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation, permissions: [] }]);
+    });
+
+    await authenticatedRuntime(fixture.profile);
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toBeNull();
+
+    const fresh = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(fresh)).toEqual([delegation.cid]);
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [delegation.cid] });
+  } finally {
+    restores.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
 test("a local sign-in without the profile's stored session never runs the migration", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {

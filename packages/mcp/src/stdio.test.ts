@@ -651,24 +651,13 @@ test("`tc kv get` never activates a stored compact delegation broader than its r
   const previousTcHome = process.env.TC_HOME;
   process.env.TC_HOME = home;
   const fixture = await hermeticFixture();
-  const delegationsPath = join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json");
   try {
     await disableLocalNodeDiscovery(home, fixture.profile);
     const kvOnly = (fixture.hermetic.permissions as Array<{ service: string }>)
       .filter((permission) => permission.service === "tinycloud.kv");
     // Signs KV get and network decrypt; the narrower binding covers only KV get.
     const delegation = await fixture.hermetic.mintDelegation();
-    // The loopback node does not hold reads to the delegation chain, so count
-    // the activations (`/delegate` calls) each `tc kv get` makes instead.
-    const activationsDuring = async (records: readonly unknown[]): Promise<number> => {
-      await writeFile(delegationsPath, JSON.stringify(records));
-      const before = fixture.hermetic.nativeBearerStats().delegations as number;
-      const result = await runTinyCloudCliExit(home, [
-        "--profile", fixture.profile, "kv", "get", "vault/secrets/HERMETIC_DELEGATION_CANARY",
-      ]);
-      expect(result.exitCode, result.stderr).toBe(0);
-      return (fixture.hermetic.nativeBearerStats().delegations as number) - before;
-    };
+    const activationsDuring = (records: readonly unknown[]) => kvGetActivations(home, fixture, records);
 
     // The first run also records the (empty) profile's binding migration.
     const baseline = await activationsDuring([]);
@@ -677,13 +666,18 @@ test("`tc kv get` never activates a stored compact delegation broader than its r
       permissions: kvOnly,
       authorityRequest: { requestId: "req_kv_only", requested: kvOnly },
     }])).toBe(baseline);
-    // Unbound after the migration, with a correct and a case-folded header.
+    // Unbound after the migration, with a correct header and with
+    // case-folded, upper-case and duplicated header names.
     const authorization = delegation.delegationHeader.Authorization as string;
-    expect(await activationsDuring([{ delegation, permissions: [] }])).toBe(baseline);
-    expect(await activationsDuring([{
-      delegation: { ...delegation, delegationHeader: { authorization } },
-      permissions: [],
-    }])).toBe(baseline);
+    for (const delegationHeader of [
+      { Authorization: authorization },
+      { authorization },
+      { AUTHORIZATION: authorization },
+      { Authorization: authorization, authorization },
+    ]) {
+      expect(await activationsDuring([{ delegation: { ...delegation, delegationHeader }, permissions: [] }]))
+        .toBe(baseline);
+    }
     // Not contained in its binding, with the header value in an array.
     expect(await activationsDuring([{
       delegation: { ...delegation, delegationHeader: { Authorization: [authorization] } },
@@ -702,6 +696,104 @@ test("`tc kv get` never activates a stored compact delegation broader than its r
     await rm(home, { recursive: true, force: true });
   }
 }, 300_000);
+
+test("the CLI's legacy replay installs an unbound signed-login grant, never one that carries a binding", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-cli-legacy-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+    // An owner-signed login (CACAO) for the delegate's session key, stored the
+    // way the CLI stores its own grants: no `siweProof`.
+    const { NodeWasmBindings, PrivateKeySigner } = await import("@tinycloud/node-sdk");
+    const wasm = new NodeWasmBindings();
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    const address = await signer.getAddress();
+    const spaceId = fixture.hermetic.restorableSession.spaceId as string;
+    const issuedAt = new Date();
+    const expiry = new Date(issuedAt.getTime() + 60 * 60_000);
+    const prepared = wasm.prepareSession({
+      abilities: { kv: { "vault/secrets/HERMETIC_DELEGATION_CANARY": ["tinycloud.kv/get"] } },
+      address,
+      chainId: 1,
+      domain: "openkey.test",
+      issuedAt: issuedAt.toISOString(),
+      expirationTime: expiry.toISOString(),
+      spaceId,
+      jwk: fixture.hermetic.restorableSession.jwk as object,
+    });
+    const session = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
+    const grant = {
+      cid: session.delegationCid,
+      delegationHeader: { Authorization: session.delegationHeader.Authorization },
+      spaceId,
+      path: "vault/secrets/HERMETIC_DELEGATION_CANARY",
+      actions: ["tinycloud.kv/get"],
+      delegateDID: fixture.sessionDid,
+      ownerAddress: address,
+      chainId: 1,
+      expiry: expiry.toISOString(),
+      host: fixture.hermetic.host,
+    };
+    const activationsDuring = (records: readonly unknown[]) => kvGetActivations(home, fixture, records);
+
+    const baseline = await activationsDuring([]);
+    expect(await activationsDuring([{ delegation: grant, permissions: [] }])).toBe(baseline + 1);
+    for (const authorityRequest of [{ requestId: "req_empty", requested: [] }, { requestId: "req_malformed" }]) {
+      expect(await activationsDuring([{ delegation: grant, permissions: [], authorityRequest }])).toBe(baseline);
+    }
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("an ordinary command on a local profile migrates it; one with another --private-key does not", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-local-migration-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  const marker = join(home, ".tinycloud/profiles", fixture.ownerProfile, "delegation-binding-migration.json");
+  const migrated = () => readFile(marker, "utf8").then(() => true, () => false);
+  try {
+    await disableLocalNodeDiscovery(home, fixture.ownerProfile);
+    await runTinyCloudCliExit(home, [
+      "--profile", fixture.ownerProfile, "secrets", "list",
+      "--private-key", "1111111111111111111111111111111111111111111111111111111111111111",
+    ]);
+    expect(await migrated()).toBe(false);
+
+    const caps = await runTinyCloudCliExit(home, ["--profile", fixture.ownerProfile, "auth", "caps"]);
+    expect(caps.exitCode, caps.stderr).toBe(0);
+    expect(await migrated()).toBe(true);
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+/**
+ * `/delegate` activations one `tc kv get` makes with `records` stored. The
+ * loopback node does not hold reads to the delegation chain, so activations
+ * are what shows which stored records the CLI installed; the command's own
+ * result is not (a read through an installed login grant fails on this node).
+ */
+async function kvGetActivations(home: string, fixture: any, records: readonly unknown[]): Promise<number> {
+  await writeFile(
+    join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"),
+    JSON.stringify(records),
+  );
+  const before = fixture.hermetic.nativeBearerStats().delegations as number;
+  await runTinyCloudCliExit(home, [
+    "--profile", fixture.profile, "kv", "get", "vault/secrets/HERMETIC_DELEGATION_CANARY",
+  ]);
+  return (fixture.hermetic.nativeBearerStats().delegations as number) - before;
+}
 
 async function hermeticFixture(options?: Record<string, unknown>): Promise<any> {
   const authSupport = await import(new URL(

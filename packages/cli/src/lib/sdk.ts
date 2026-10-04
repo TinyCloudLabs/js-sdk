@@ -304,9 +304,11 @@ export async function ensureAuthenticated(
 
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
 
-  // For local auth, we can sign in directly without a stored session
+  // For local auth, we can sign in directly without a stored session. The
+  // profile's own key is not an override: createSDKInstance reads it from the
+  // profile, so the profile's binding migration may run.
   if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+    return createSDKInstance(ctx);
   }
 
   const session = await ProfileManager.getSession(ctx.profile);

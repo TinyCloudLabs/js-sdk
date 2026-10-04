@@ -358,6 +358,12 @@ mock.module("../lib/permissions.js", () => ({
   ) => {
     importRecorded.appendedDelegations.push(entry);
   },
+  appendAdditionalDelegations: async (
+    _profile: string,
+    entries: Array<{ delegation: { cid: string }; permissions: unknown[] }>,
+  ) => {
+    importRecorded.appendedDelegations.push(...entries);
+  },
   appendPermissionRequestArtifact: async (_profile: string, artifact: Record<string, unknown>) => {
     importRecorded.appendedRequests.push(artifact);
   },
@@ -370,7 +376,6 @@ mock.module("../lib/permissions.js", () => ({
   appendGrantHistory: async () => {},
   compactPermission: () => "",
   loadAdditionalDelegations: async () => [],
-  saveAdditionalDelegations: async () => {},
   loadManifestPermissions: async () => [],
   loadPermissionRequest: async () => [],
   parseCapSpec: async () => ({

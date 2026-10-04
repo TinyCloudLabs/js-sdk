@@ -36,6 +36,7 @@ interface HermeticEncryptedNode {
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<StoredRuntimeDelegation>;
   mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;
+  mintDelegationForAudience(audience: string): Promise<StoredRuntimeDelegation>;
   readAndDecrypt(node: unknown, delegation: unknown): Promise<void>;
   assertNarrowDelegatedReadAndDecrypt(delegation: unknown, expectedSigningIssuer?: string): void;
   assertDelegatedKvResources(resources: readonly string[]): void;

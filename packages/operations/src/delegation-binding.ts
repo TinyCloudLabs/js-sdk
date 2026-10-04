@@ -16,6 +16,7 @@ import {
   profilePath,
   readAdditionalDelegations,
   readJson,
+  readSession,
   updateProfileStore,
   withProfileLock,
   writeJsonAtomic,
@@ -76,23 +77,27 @@ export function bindingMigrationPath(profile: string): string {
  *
  * - `compact` and `signed-login` records go through validated activation and
  *   the binding rule.
- * - `other` records (the CLI's own signed-login grants, a CACAO without
- *   `siweProof`) keep the CLI's legacy replay; the operations runtime never
- *   installs them.
- * - `malformed` records install nothing anywhere.
+ * - `other` records keep the CLI's legacy replay: an unbound record whose
+ *   bytes are not compact and that has no `siweProof`, which is how the CLI
+ *   stores its own signed-login grants. The operations runtime never installs
+ *   them.
+ * - `refused` records install nothing anywhere.
  *
- * A record is `malformed` unless its `delegationHeader` has exactly one own
+ * A record is `refused` unless its `delegationHeader` has exactly one own
  * key, `Authorization`, with a string value: header names are matched
  * case-insensitively on the wire, and other value types are stringified, so
  * any other shape could reach the node as authorization bytes this rule never
  * read. Bytes containing a `.` are never `other`: a CACAO has none, and
  * validated activation refuses anything compact-shaped that it cannot parse.
+ * A record with an `authorityRequest` (valid or not) is never `other`: the
+ * legacy path cannot hold it to a binding, so dropping a `siweProof` cannot
+ * route a bound signed-login delegation around its binding.
  */
 export function storedDelegationKind(
   entry: Record<string, unknown>,
-): "compact" | "signed-login" | "other" | "malformed" {
+): "compact" | "signed-login" | "other" | "refused" {
   const delegation = entry.delegation;
-  if (!isRecord(delegation)) return "malformed";
+  if (!isRecord(delegation)) return "refused";
   const header = delegation.delegationHeader;
   if (
     !isRecord(header) ||
@@ -100,10 +105,11 @@ export function storedDelegationKind(
     !Object.prototype.hasOwnProperty.call(header, "Authorization") ||
     typeof header.Authorization !== "string"
   ) {
-    return "malformed";
+    return "refused";
   }
   if ("siweProof" in delegation) return "signed-login";
-  return header.Authorization.includes(".") ? "compact" : "other";
+  if (header.Authorization.includes(".")) return "compact";
+  return "authorityRequest" in entry ? "refused" : "other";
 }
 
 /**
@@ -164,47 +170,51 @@ export async function activateUnboundCompactImport(
 }
 
 /**
- * Stores a record written without a stored request (by `tc auth import` or a
- * CLI grant). Any stored record for the same CID that carries a binding is
- * kept as it is, so this route never drops, replaces or weakens a binding;
- * otherwise the record replaces every row for its CID, at the first one's
- * position.
+ * The stored records after adding records written without a stored request
+ * (by `tc auth import` or a CLI grant). A stored record for the same CID that
+ * carries an `authorityRequest` is kept as it is, so this route never drops,
+ * replaces or weakens a binding; otherwise each record replaces every row for
+ * its CID, at the first one's position, or is appended. Callers write the
+ * result under the profile lock they already use for this store.
  */
-export async function storeDelegationWithoutRequest(
-  profile: string,
-  record: { readonly delegation: { readonly cid: string } } & Record<string, unknown>,
-): Promise<void> {
-  const cid = record.delegation.cid;
-  await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (records) => {
+export function mergeDelegationsWithoutRequest(
+  stored: readonly Record<string, unknown>[],
+  incoming: readonly ({ readonly delegation: { readonly cid: string } } & Record<string, unknown>)[],
+): Record<string, unknown>[] {
+  let records = [...stored];
+  for (const record of incoming) {
+    const cid = record.delegation.cid;
+    if (records.some((entry) => storedCid(entry) === cid && "authorityRequest" in entry)) continue;
     const position = records.findIndex((entry) => storedCid(entry) === cid);
-    if (records.some((entry) => storedCid(entry) === cid && "authorityRequest" in entry)) {
-      return { records, result: undefined };
-    }
     const others = records.filter((entry) => storedCid(entry) !== cid);
-    return {
-      records: position === -1
-        ? [...records, record]
-        : [...others.slice(0, position), record, ...others.slice(position)],
-      result: undefined,
-    };
-  });
+    records = position === -1
+      ? [...records, record]
+      : [...others.slice(0, position), record, ...others.slice(position)];
+  }
+  return records;
 }
 
 /**
  * Runs before replay reads the profile's records, so those records and the
  * migration marker agree. Returns whether the profile has migrated.
  *
- * Migration is one locked read-modify-write of the current records. Each
- * compact record with no `authorityRequest` is handled on its own: if
- * validated activation can read its signed capabilities (CID, expiry,
- * audience and declared resources checked, nothing activated) and they form a
- * valid binding, the record is bound to exactly those capabilities; otherwise
- * it stays unbound, is listed in the marker's `unbound`, and installs nothing
+ * Migration runs under the profile lock, and only while the profile's
+ * persisted session is still the one `node` restored: a session rotated since
+ * the restore leaves migration to a runtime of the new session. Each compact
+ * record with no `authorityRequest` is handled on its own: if validated
+ * activation can read its signed capabilities (CID, expiry, audience and
+ * declared resources checked, nothing activated) and they form a valid
+ * binding, the record is bound to exactly those capabilities; otherwise it
+ * stays unbound, is listed in the marker's `unbound`, and installs nothing
  * after migration. A compact record whose capabilities cannot be read could
- * not activate for this session either. The marker is written in the same
- * critical section. `migrate` must be false unless `node` holds the profile's
- * own restored session. If the lock is busy or a write fails, nothing is
- * written and this runtime replays under the pre-migration rule.
+ * not activate for this session either. `migrate` must be false unless `node`
+ * holds the profile's own restored session.
+ *
+ * Migration is best-effort and restartable. The bound records are written
+ * first and the marker last; a busy lock or any failure before the marker
+ * leaves the profile unmigrated, so this runtime replays under the
+ * pre-migration rule and the next one migrates again. Records already bound
+ * by an interrupted run keep their bindings.
  */
 export async function prepareStoredDelegationReplay(
   profile: string,
@@ -216,6 +226,11 @@ export async function prepareStoredDelegationReplay(
   try {
     return await withProfileLock(profile, async () => {
       if (await bindingMigrationRecorded(profile)) return true;
+      const persisted = await readSession<Record<string, unknown>>(profile);
+      const persistedKey = typeof persisted?.verificationMethod === "string"
+        ? persisted.verificationMethod.split("#", 1)[0]
+        : undefined;
+      if (persistedKey === undefined || persistedKey !== node.sessionDid.split("#", 1)[0]) return false;
       const recordedAt = new Date().toISOString();
       const bound = new Map<string, Record<string, unknown>>();
       const unbound: string[] = [];

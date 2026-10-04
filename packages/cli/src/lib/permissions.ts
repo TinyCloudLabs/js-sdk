@@ -11,6 +11,7 @@ import {
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
+  updateProfileStore,
   withProfileLock,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
@@ -138,25 +139,32 @@ export async function loadAdditionalDelegations(
   return readAdditionalDelegations<StoredAdditionalDelegation>(profile);
 }
 
-export async function saveAdditionalDelegations(
+/**
+ * Stores delegations that were not checked against a stored request, in one
+ * locked write. A stored record for the same CID that carries a request
+ * binding is kept as it is.
+ */
+export async function appendAdditionalDelegations(
   profile: string,
-  entries: StoredAdditionalDelegation[],
+  entries: readonly StoredAdditionalDelegation[],
 ): Promise<void> {
-  await replaceSharedRecords(profile, "additional-delegations", entries);
+  // Loaded on use: a static import would evaluate node-sdk in every command
+  // that only reads profile state through this module.
+  const { mergeDelegationsWithoutRequest } = await import("@tinycloud/operations/delegation-binding");
+  // The write goes through this module's state primitives so it takes the
+  // same (reentrant) profile lock as callers that already hold it.
+  await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (stored) => ({
+    records: mergeDelegationsWithoutRequest(stored, entries.map((entry) => ({ ...entry }))),
+    result: undefined,
+  }));
 }
 
-/**
- * Stores a delegation that was not checked against a stored request. A stored
- * record for the same CID that carries a request binding is kept as it is.
- */
+/** {@link appendAdditionalDelegations} for one delegation. */
 export async function appendAdditionalDelegation(
   profile: string,
   entry: StoredAdditionalDelegation,
 ): Promise<void> {
-  // Loaded on use: a static import would evaluate node-sdk in every command
-  // that only reads profile state through this module.
-  const { storeDelegationWithoutRequest } = await import("@tinycloud/operations/delegation-binding");
-  await storeDelegationWithoutRequest(profile, { ...entry });
+  await appendAdditionalDelegations(profile, [entry]);
 }
 
 export async function loadPermissionRequestArtifacts(
@@ -229,8 +237,9 @@ export async function getLastPermissionRequestArtifact(
  * signed-login records follow the operations runtime's binding rule
  * (validated activation, and a request binding the signed capabilities fit
  * inside); `migrate` is true only when `node` holds the profile's own session,
- * so the one-time binding migration may run. Other records (the CLI's own
- * signed-login grants) are installed as before.
+ * so the one-time binding migration may run. Unbound records of the CLI's
+ * own signed-login grants are installed as before; any other record installs
+ * nothing.
  */
 export async function replayAdditionalDelegations(
   node: TinyCloudNode,
@@ -265,9 +274,9 @@ export async function replayAdditionalDelegations(
       }
       continue;
     }
-    if (kind === "malformed") {
+    if (kind === "refused") {
       if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping ${String(entry.delegation?.cid)}: malformed delegation header\n`);
+        process.stderr.write(`[replay] skipping ${String(entry.delegation?.cid)}: malformed header or a binding it cannot be held to\n`);
       }
       continue;
     }

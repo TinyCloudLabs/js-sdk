@@ -70,6 +70,7 @@ import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
+  appendAdditionalDelegations,
   appendPermissionRequestArtifact,
   createPermissionRequestArtifact,
   getLastPermissionRequestArtifact,
@@ -79,7 +80,6 @@ import {
   appendGrantHistory,
   compactPermission,
   loadAdditionalDelegations,
-  saveAdditionalDelegations,
   loadManifestPermissions,
   loadPermissionRequest,
   parseCapSpec,
@@ -549,7 +549,7 @@ export function registerAuthCommand(program: Command): void {
           "@tinycloud/operations/delegation-binding"
         );
         const kind = storedDelegationKind({ delegation: imported.delegation });
-        if (kind === "malformed") {
+        if (kind === "refused") {
           throw new CLIError(
             "INVALID_AUTH_IMPORT",
             "Imported delegation must carry exactly one string Authorization header.",
@@ -1123,8 +1123,6 @@ async function activateAndStoreOpenKeyGrants(
   for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   if (grants.length === 0) return;
   await ProfileManager.withLock(profileName, async () => {
-    const existing = await loadAdditionalDelegations(profileName);
-    const replacing = new Set(grants.map(({ delegation }) => delegation.cid));
     for (const { delegation, effective } of grants) {
       await appendGrantHistory(profileName, {
         addedCaps: effective,
@@ -1133,10 +1131,11 @@ async function activateAndStoreOpenKeyGrants(
         expiry: delegation.expiry.toISOString(),
       });
     }
-    await saveAdditionalDelegations(profileName, [
-      ...existing.filter(({ delegation }) => !replacing.has(delegation.cid)),
-      ...grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
-    ]);
+    // A stored record for the same CID that carries a request binding is kept.
+    await appendAdditionalDelegations(
+      profileName,
+      grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
+    );
   });
 }
 

@@ -51,6 +51,7 @@ mock.module("../output/formatter.js", () => ({
 }));
 
 const { ProfileManager } = await import("../config/profiles.js");
+const { additionalDelegationsPath, writeJsonAtomic } = await import("@tinycloud/operations/state");
 const { loadAdditionalDelegations, readGrantHistory } = await import("../lib/permissions.js");
 const { ensureDelegationAuthority, portableFromOpenKeyDelegation, registerAuthCommand } = await import("./auth.js");
 const wasm = new NodeWasmBindings();
@@ -215,6 +216,26 @@ describe("signed portable OpenKey grants", () => {
     });
     expect(activated).toHaveLength(1);
     expect((await readGrantHistory(profileName))[0]?.addedCaps).toEqual(expect.arrayContaining(requested));
+  });
+
+  test("a grant never replaces a stored record for the same CID that carries a request binding", async () => {
+    const proof = await signedProof();
+    const bound = {
+      delegation: {
+        cid: proof.delegationCid,
+        delegationHeader: proof.delegationHeader,
+        expiry: new Date(Date.now() + 3_600_000).toISOString(),
+        siweProof: { siwe: proof.siwe, signature: proof.signature },
+      },
+      permissions: requested,
+      authorityRequest: { requestId: "req_bound", requested },
+    };
+    await writeJsonAtomic(additionalDelegationsPath(profileName), [bound]);
+
+    await escalate(proof);
+
+    expect(activated).toHaveLength(1);
+    expect(await loadAdditionalDelegations(profileName) as unknown[]).toEqual([bound]);
   });
 
   test("resolves a logical requested space to the signed space and refuses another space", async () => {
