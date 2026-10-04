@@ -1,4 +1,4 @@
-import { SharePublishAuthorityError } from "./errors.js";
+import { ShareHistoryRetryError, SharePublishAuthorityError } from "./errors.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -169,7 +169,13 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     const config = await ProfileManager.getProfile(profile);
     const localKey = typeof config.privateKey === "string" && config.privateKey.length > 0;
     const [key, session] = localKey ? [null, null] : await Promise.all([ProfileManager.getKey(profile), ProfileManager.getSession(profile)]);
-    const fingerprint = createHash("sha256").update(JSON.stringify([config, key, session])).digest("hex");
+    const sessionJwk = session !== null && "jwk" in session ? session.jwk : undefined;
+    const signerJwk = sessionJwk !== null && typeof sessionJwk === "object" && "d" in sessionJwk && typeof sessionJwk.d === "string" && sessionJwk.d.length > 0
+      ? sessionJwk : key;
+    const method = session !== null && "verificationMethod" in session ? session.verificationMethod ?? config.did : config.did;
+    const fingerprint = createHash("sha256").update(JSON.stringify(localKey
+      ? ["local", config.privateKey]
+      : ["openkey", sessionJwk, signerJwk, method])).digest("hex");
     return { config, fingerprint };
   };
   const prepareKeys = async (profile: string, snapshot: Awaited<ReturnType<typeof identity>>) => {
@@ -183,7 +189,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
       // initiate it from a profile-lock callback.
       secret = await sessionSigner(new TextEncoder().encode("xyz.tinycloud.share/history-key/v1"), profile);
     }
-    if (await profileName() !== profile || (await identity(profile)).fingerprint !== snapshot.fingerprint) throw identityChanged;
+    if ((await identity(profile)).fingerprint !== snapshot.fingerprint) throw identityChanged;
     const material = await crypto.subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]);
     const digest = await crypto.subtle.digest("SHA-256", secret);
     const legacyKey = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["decrypt"]);
@@ -239,33 +245,52 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     return next;
   };
   const locked = <T>(action: (profile: string, ready: { readonly salt: Uint8Array; readonly key: CryptoKey; readonly legacyKey: CryptoKey }) => Promise<T>, writing = false): Promise<T> => serial(async () => {
+    // An invocation may change its default profile while this operation waits.
+    // A salt retry must never move its record to that other profile.
+    const profile = await profileName();
+    let warned = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const profile = await profileName();
-      const snapshot = await identity(profile);
-      const keys = await prepareKeys(profile, snapshot);
-      const salt = await preparedSalt(profile);
-      const saltId = b64(salt);
-      const key = preparedKey?.profile === profile && preparedKey.identity === snapshot.fingerprint && preparedKey.salt === saltId
-        ? preparedKey.key
-        : await crypto.subtle.deriveKey(
-          { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
-          keys.material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
-        );
-      preparedKey = { profile, identity: snapshot.fingerprint, salt: saltId, key };
       try {
-        return await ProfileManager.withLock(profile, async () => {
-          if (await profileName() !== profile || (await identity(profile)).fingerprint !== snapshot.fingerprint) throw identityChanged;
-          return action(profile, { salt, key, legacyKey: keys.legacyKey });
-        }, writing ? { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS } : undefined);
+        const snapshot = await identity(profile);
+        const keys = await prepareKeys(profile, snapshot);
+        const salt = await preparedSalt(profile);
+        const saltId = b64(salt);
+        const key = preparedKey?.profile === profile && preparedKey.identity === snapshot.fingerprint && preparedKey.salt === saltId
+          ? preparedKey.key
+          : await crypto.subtle.deriveKey(
+            { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+            keys.material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+          );
+        preparedKey = { profile, identity: snapshot.fingerprint, salt: saltId, key };
+        // Warn only while waiting to acquire a write lock, not while decrypting
+        // or updating inside it. Salt retries emit at most one line altogether.
+        const warning = writing ? setTimeout(() => {
+          if (!warned) {
+            warned = true;
+            process.stderr.write(`Waiting for profile lock for ${JSON.stringify(profile)} before updating sender history.\n`);
+          }
+        }, 2_000) : undefined;
+        warning?.unref();
+        try {
+          return await ProfileManager.withLock(profile, async () => {
+            clearTimeout(warning);
+            if ((await identity(profile)).fingerprint !== snapshot.fingerprint) throw identityChanged;
+            return action(profile, { salt, key, legacyKey: keys.legacyKey });
+          }, writing ? { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS } : undefined);
+        } finally {
+          clearTimeout(warning);
+        }
       } catch (error) {
-        // Another process may have created the first history file while we
-        // derived its key. Release the lock before deriving for its salt.
-        if (error === saltChanged) continue;
-        if (error === identityChanged) throw new Error("share history profile or key changed; retry");
+        // Another process may have created the first file or changed this
+        // profile's signer inputs. Derive the new key outside the lock.
+        if (error === saltChanged || error === identityChanged) continue;
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "PROFILE_NOT_FOUND") {
+          throw new ShareHistoryRetryError(profile);
+        }
         throw error;
       }
     }
-    throw new Error("share history changed during update; retry");
+    throw new ShareHistoryRetryError(profile);
   });
   return {
     async put(record) { return locked(async (profile, ready) => { const values = await read(profile, ready); const index = values.findIndex((value) => value.shareId === record.shareId); if (index >= 0) values[index] = record; else values.push(record); await write(profile, values, ready); }, true); },
@@ -707,7 +732,6 @@ export function createShareAuthorityAdapters(input: {
       if (context.profile !== profile) throw new Error("share history profile or key changed; retry");
       const { ensureAuthenticated } = await import("../lib/sdk.js");
       const signer = await ensureAuthenticated(context);
-      if (await input.profileName!() !== profile) throw new Error("share history profile or key changed; retry");
       return signer.signSessionBytes(bytes);
     }),
     delivery,

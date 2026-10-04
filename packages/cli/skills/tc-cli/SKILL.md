@@ -66,6 +66,8 @@ Without `--to`, publish creates a bearer link: anyone holding the complete URL c
 
 After a share is published, a profile-lock or history-write failure warns without hiding the published link; later `share list`, `share notify <id>`, and `share revoke <id>` cannot find an unrecorded share. Standalone domain notification checks the recipient and local five-minute window before probing the node; an expired window stays a non-retryable partial failure even when `/info` is unreachable.
 
+History writes name the pinned profile on stderr after about 2 seconds waiting for its lock; they cannot switch profiles on a salt retry. If the profile disappears or its signing key keeps changing, `SHARE_HISTORY_RETRY` gives a retry hint. After a revoke reports this error, check the node's state before retrying because revocation may already have completed.
+
 ## Other operations
 
 App schemas, content parsing and retrieval helpers belong to the app's official skill pack. Read [INSTALL.md](INSTALL.md) for installing, updating and removing this skill for OpenCode, Codex and Claude Code. For storage writes, spaces, delegations, secrets and error codes, load [REFERENCE.md](REFERENCE.md). For integration code, load [SDK.md](SDK.md). Use only the authority the user's task needs; installing instructions grants no TinyCloud access.

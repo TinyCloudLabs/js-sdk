@@ -34,7 +34,7 @@ import { CLIError, handleError, wrapError } from "../output/errors.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
-import { SharePublishAuthorityError } from "../share/errors.js";
+import { ShareHistoryRetryError, SharePublishAuthorityError } from "../share/errors.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 
@@ -78,6 +78,14 @@ function canonicalMailboxTarget(target: Extract<ShareTarget, { readonly kind: "e
 export function shareCliError(error: unknown, operation: "publish" | "notify" = "publish"): CLIError {
   if (error instanceof CLIError) return error;
   if (error instanceof ProfileLockTimeoutError) return wrapError(error);
+  if (error instanceof ShareHistoryRetryError) {
+    return new CLIError(
+      "SHARE_HISTORY_RETRY",
+      `sender history for profile ${JSON.stringify(error.profile)} changed or disappeared during this command`,
+      1,
+      { hint: `Retry this command with --profile ${JSON.stringify(error.profile)}. If this was a revoke, check its node state first: revocation may already have succeeded.` },
+    );
+  }
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
     const profileName = "profileName" in failure ? failure.profileName : undefined;

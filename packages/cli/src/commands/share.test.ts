@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
-import { SharePublishAuthorityError } from "../share/errors.js";
+import { ShareHistoryRetryError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
 
@@ -350,6 +350,37 @@ describe("tc share command contract", () => {
       expect(output.stderr).toContain("share list");
       expect(output.stderr).toContain("share notify");
       expect(deliveries).toBe(1);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
+  });
+
+  test("revoke reports a retryable history race after node revocation already succeeded", async () => {
+    let revocations = 0;
+    configureShareCommandServices({
+      records: {
+        async put() {},
+        async get() { return reviewRecord; },
+        async list() { return [reviewRecord]; },
+        async delete() {},
+        async update() { throw new ShareHistoryRetryError("publisher"); },
+      },
+      revocation: {
+        async revokePolicyRoot() { revocations++; },
+      },
+    });
+    const originalExit = process.exit;
+    const exits: number[] = [];
+    process.exit = ((code?: number) => { exits.push(code ?? 0); }) as typeof process.exit;
+    try {
+      const output = await runShareCaptured(["share", "revoke", reviewRecord.shareId]);
+      expect(revocations).toBe(1);
+      expect(exits).toEqual([1]);
+      const failure = (JSON.parse(output.stderr) as { error: { code: string; hint: string } }).error;
+      expect(failure.code).toBe("SHARE_HISTORY_RETRY");
+      expect(failure.hint).toContain('--profile "publisher"');
+      expect(failure.hint).toContain("revocation may already have succeeded");
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});

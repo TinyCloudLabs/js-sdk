@@ -22,3 +22,13 @@ export class SharePublishAuthorityError extends Error {
     this.name = "SharePublishAuthorityError";
   }
 }
+
+/** The pinned sender-history profile changed keys or disappeared mid-operation. */
+export class ShareHistoryRetryError extends Error {
+  readonly code = "SHARE_HISTORY_RETRY" as const;
+
+  constructor(readonly profile: string) {
+    super("sender history changed during the operation");
+    this.name = "ShareHistoryRetryError";
+  }
+}
