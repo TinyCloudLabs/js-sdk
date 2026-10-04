@@ -115,7 +115,11 @@ export async function createAuthRuntimeFixture(
   return { profile, ownerProfile, sessionDid, hermetic };
 }
 
-/** Persist only real compact delegations; display metadata is deliberately not authority. */
+/**
+ * Persist real compact delegations as `tinycloud.auth.import` stores them:
+ * bound to a request for the fixture's full permission plan. Display metadata
+ * is deliberately not authority.
+ */
 export async function persistRuntimeDelegations(
   fixture: AuthRuntimeFixture,
   delegations: readonly StoredRuntimeDelegation[],
@@ -129,6 +133,10 @@ export async function persistRuntimeDelegations(
         path: "display-only",
         actions: ["tinycloud.kv/*"],
       }],
+      authorityRequest: {
+        requestId: "req_fixture_plan",
+        requested: fixture.hermetic.permissions,
+      },
     })),
   );
 }

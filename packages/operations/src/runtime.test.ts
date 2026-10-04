@@ -5,9 +5,16 @@ import { TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
-import type { OperationDefinition } from "./contract.js";
+import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
+import { BINDING_MIGRATION_NOTE, bindingMigrationPath } from "./delegation-binding.js";
 import { createInvocationRuntime } from "./runtime.js";
-import { profileConfigPath, writeJsonAtomic } from "./state.js";
+import {
+  additionalDelegationsPath,
+  profileConfigPath,
+  readAdditionalDelegations,
+  readJson,
+  writeJsonAtomic,
+} from "./state.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import {
   createAuthRuntimeFixture,
@@ -113,6 +120,89 @@ test("replay rejects expired and CID-tampered stored records instead of trusting
   }
 });
 
+test("replay refuses a compact record broader than its stored binding before activating it", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
+    const broader = await fixture.hermetic.mintDelegation();
+    const narrow = await fixture.hermetic.mintDelegationWithPermissions([...kvOnly]);
+    const binding = { requestId: "req_kv_only", requested: kvOnly };
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [
+      { delegation: broader, permissions: kvOnly, authorityRequest: binding },
+      { delegation: narrow, permissions: kvOnly, authorityRequest: binding },
+    ]);
+
+    const runtime = await authenticatedRuntime(fixture.profile);
+    expect(runtime.runtime.granted).toEqual(canonicalizeCapabilities(kvOnly));
+    expect(installedCids(runtime)).toEqual([narrow.cid]);
+    expect(activations.mock.calls.map(([delegation]) => delegation.cid)).toEqual([narrow.cid]);
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("after its migration a profile installs no unbound or malformed-binding compact record", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const delegation = await fixture.hermetic.mintDelegation();
+    // A binding that is present but invalid is refused, never migrated.
+    const malformed = { delegation, permissions: [], authorityRequest: { requestId: "req_without_requested" } };
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [malformed]);
+    const first = await authenticatedRuntime(fixture.profile);
+    expect(first.runtime.granted).toEqual([]);
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([JSON.parse(JSON.stringify(malformed))]);
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ formatVersion: 1, bound: [] });
+
+    // Planted after the migration, as an unbound `tc auth import` or a pasted record would be.
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation, permissions: [] }]);
+    const second = await authenticatedRuntime(fixture.profile);
+    expect(second.runtime.granted).toEqual([]);
+    expect(installedCids(second)).toEqual([]);
+    expect(activations).not.toHaveBeenCalled();
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("migration binds an existing unbound compact record to its own signed authority and never widens it", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
+    const delegation = await fixture.hermetic.mintDelegationWithPermissions([...kvOnly]);
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{
+      delegation,
+      // Display metadata claiming more is not what migration binds.
+      permissions: fixture.hermetic.permissions,
+    }]);
+
+    const first = await authenticatedRuntime(fixture.profile);
+    expect(first.runtime.granted).toEqual(canonicalizeCapabilities(kvOnly));
+    const [migrated] = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(migrated).toMatchObject({
+      authorityRequest: { requestId: `migrated:${delegation.cid}`, requested: canonicalizeCapabilities(kvOnly) },
+      authorityRequestMigration: { migratedAt: expect.any(String), note: BINDING_MIGRATION_NOTE },
+    });
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [delegation.cid] });
+
+    const second = await authenticatedRuntime(fixture.profile);
+    expect(second.runtime.granted).toEqual(canonicalizeCapabilities(kvOnly));
+    expect(installedCids(second)).toEqual([delegation.cid]);
+
+    // A broader delegation placed under the migrated binding is refused.
+    const broader = await fixture.hermetic.mintDelegation();
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ ...migrated, delegation: broader }]);
+    const third = await authenticatedRuntime(fixture.profile);
+    expect(third.runtime.granted).toEqual([]);
+    expect(installedCids(third)).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("never falls back to a configured profile when the pinned profile disappears", async () => {
   await writeJsonAtomic(profileConfigPath("fallback"), {
     name: "fallback",
@@ -192,6 +282,16 @@ function validatedDelegation(
     audience: delegation.delegateDID,
     host: delegation.host,
   };
+}
+
+async function authenticatedRuntime(profile: string): Promise<RuntimeOperationContext> {
+  const runtime = await createInvocationRuntime({ profile });
+  if (!runtime.ok) throw new Error(`expected a runtime: ${runtime.error.code}`);
+  return runtime.context;
+}
+
+function installedCids(context: RuntimeOperationContext): string[] {
+  return (context.runtime.node as RuntimeNode).getRuntimePermissionDelegations().map(({ cid }) => cid);
 }
 
 interface RuntimeNode {

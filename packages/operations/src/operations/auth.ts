@@ -9,7 +9,7 @@ import { z } from "zod";
 import {
   canonicalizeCapabilities,
   canonicalizeOperationCapabilities,
-  evaluateOperationAuthority,
+  delegationWithinRequest,
   evaluateAuthority,
   validateExactCapabilities,
 } from "../authority.js";
@@ -20,6 +20,7 @@ import {
   listPermissionRequests,
   PermissionEntrySchema,
   type DelegationImportArtifact,
+  type DelegationRequestBinding,
   type PermissionRequestArtifact,
 } from "../artifacts.js";
 import type {
@@ -39,6 +40,7 @@ import {
   updateProfileStore,
 } from "../state.js";
 import { operationSpaceResolver } from "../secrets.js";
+import { hasRequestBinding } from "../delegation-binding.js";
 
 type CapabilitiesInput = Record<never, never>;
 type CapabilitiesOutput = { readonly capabilities: readonly PermissionEntry[] };
@@ -369,11 +371,7 @@ async function importRequestBoundDelegation(
       context.runtime.node,
       context.summary.space,
     );
-    if (request.requested.length === 0 || !evaluateOperationAuthority(
-      request.requested,
-      effectivePermissions,
-      resolveSpace,
-    ).satisfied) {
+    if (!delegationWithinRequest(request.requested, effectivePermissions, resolveSpace)) {
       return operationFailure(
         "DELEGATION_REJECTED",
         "The delegation exceeds the stored authority request.",
@@ -406,14 +404,29 @@ async function importRequestBoundDelegation(
               ),
             };
           }
+          // Replay re-checks the delegation against this binding; the stored
+          // request itself may later be pruned.
+          const record = {
+            delegation: activated.delegation,
+            permissions: activated.effectivePermissions,
+            authorityRequest: {
+              requestId: request.requestId,
+              requested: request.requested,
+            } satisfies DelegationRequestBinding,
+          };
           const alreadyPresent = records.some((entry) => delegationCid(entry) === activated.cid);
+          // Once a profile's binding migration has run, a record without a
+          // valid binding (from an unbound `tc auth import`, say) installs
+          // nothing at replay. This validated import supplies the binding.
+          const repairBinding = alreadyPresent && records.some((entry) =>
+            delegationCid(entry) === activated.cid && !hasRequestBinding(entry)
+          );
           return {
-            records: alreadyPresent
-              ? records
-              : [...records, {
-                delegation: activated.delegation,
-                permissions: activated.effectivePermissions,
-              }],
+            records: !alreadyPresent
+              ? [...records, record]
+              : repairBinding
+              ? records.map((entry) => delegationCid(entry) === activated.cid ? record : entry)
+              : records,
             result: {
               status: "ok",
               output: {

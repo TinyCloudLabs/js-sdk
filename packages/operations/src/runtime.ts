@@ -13,9 +13,11 @@ import type {
   OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
-import { canonicalizeCapabilities } from "./authority.js";
+import { DelegationRequestBindingSchema } from "./artifacts.js";
+import { canonicalizeCapabilities, delegationWithinRequest } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { resolveInvocationProfile, resolvePosture } from "./profile.js";
+import { operationSpaceResolver } from "./secrets.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -23,6 +25,7 @@ import {
   readProfile,
   readSession,
 } from "./state.js";
+import { beginBindingMigration } from "./delegation-binding.js";
 
 export type InvocationRuntimeResolution =
   | Readonly<{ ok: true; context: OperationContext }>
@@ -47,6 +50,7 @@ interface StoredSession extends Record<string, unknown> {
 
 interface StoredAdditionalDelegation extends Record<string, unknown> {
   readonly delegation?: unknown;
+  readonly authorityRequest?: unknown;
 }
 
 /**
@@ -175,13 +179,32 @@ export async function createInvocationRuntime(
     // This API derives from the restored, verified base session rather than
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
+    const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
     const seenCids = new Set<string>();
+    // An explicit key is another identity: it neither replays nor migrates
+    // this profile's records.
+    const migration = explicitPrivateKeyOverride ? undefined : await beginBindingMigration(profileName);
     for (const entry of additionalDelegations) {
       const delegation = normalizeStoredDelegation(entry);
       if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) continue;
+      // The binding is local profile data. It keeps a delegation to the
+      // stored request it was imported against. Once the profile's one-time
+      // migration has run, a record written by any other path (CLI import of
+      // an unbound artifact, a copied or pasted record) installs nothing;
+      // before it, an unbound record replays as it always did and is bound to
+      // exactly the signed authority read here. It does not stop someone who
+      // can write this profile directory, who already holds the key and the
+      // signed bytes.
+      const binding = DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
+      const authorize = binding.success
+        ? (effective: readonly PermissionEntry[]) =>
+          delegationWithinRequest(binding.data.requested, effective, resolveSpace)
+        : migration?.authorizer(entry);
+      if (authorize === undefined) continue;
       try {
         const activated = await activateValidatedRuntimeDelegation(node as unknown as RuntimeDelegationActivator, delegation, {
           host: summary.host,
+          authorize,
         });
         if (!seenCids.has(activated.cid)) {
           seenCids.add(activated.cid);
@@ -193,6 +216,7 @@ export async function createInvocationRuntime(
         // or reveal its contents through a safe operation channel.
       }
     }
+    await migration?.commit();
 
     const runtime: OperationRuntime = {
       node,

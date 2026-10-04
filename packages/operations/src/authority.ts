@@ -102,6 +102,20 @@ export function evaluateOperationAuthority(
 }
 
 /**
+ * Whether a delegation's signed capabilities stay inside the stored request
+ * it answers. `tinycloud.auth.import` and runtime replay share this check, so
+ * a delegation import accepts is never one replay discards.
+ */
+export function delegationWithinRequest(
+  requested: readonly PermissionEntry[],
+  effective: readonly PermissionEntry[],
+  resolveSpace?: OperationSpaceResolver,
+): boolean {
+  return requested.length > 0 &&
+    evaluateOperationAuthority(requested, canonicalizeCapabilities(effective), resolveSpace).satisfied;
+}
+
+/**
  * Validate a runtime hint as an exact member of the registered plan. Runtime
  * nodes may report the one phase that failed, but they may not introduce a
  * broader, differently-owned, caveated, or otherwise new capability.
