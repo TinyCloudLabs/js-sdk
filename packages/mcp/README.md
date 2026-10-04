@@ -106,6 +106,18 @@ After bootstrap, MCP tools can create exact permission requests and import the
 request-bound delegations. Requests and imports persist, so approval and retry
 can happen in separate processes.
 
+Each imported delegation is stored with the request it was checked against.
+Every tool call reinstalls a stored compact-UCAN delegation only when its
+signed capabilities fit inside that request, so a delegation broader than its
+binding is refused before it is activated. `tc auth import` of an artifact
+with no request binds the delegation to exactly its own signed capabilities.
+Delegations stored by earlier releases are bound once, the same way, by the
+first command that restores the profile's session; after that, a record
+without a binding (from an older release or pasted into the profile) installs
+nothing until it is imported again. The binding is local profile data: it does
+not stop someone who can write the profile directory. See the CLI skill's
+`AUTH.md` for the full rules.
+
 Owner-profile data execution is disabled by default. It requires both an
 explicit owner profile and `--allow-owner-profile`.
 

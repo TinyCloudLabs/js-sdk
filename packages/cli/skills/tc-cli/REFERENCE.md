@@ -80,6 +80,8 @@ tc delegation revoke <cid>
 
 Actions are auto-prefixed with `tinycloud.` if not already.
 
+`tc auth import` stores delegations in the profile's `additional-delegations.json`; a compact-UCAN delegation addressed to the profile's session key is stored with an `authorityRequest` binding. Later commands install such a delegation only when its signed capabilities fit inside that binding. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) describes how each import route binds a delegation, the one-time migration of records from earlier releases, and how to recover a record that installs nothing.
+
 ## Spaces
 
 ```bash
@@ -230,6 +232,9 @@ KV keys cannot contain spaces or control characters: the SDK sends keys unescape
         ├── profile.json           # Host, DID, chainId, ownerDid, spaceId (0600)
         ├── key.json               # Ed25519 JWK keypair (0600)
         ├── session.json           # Delegation, spaceId (0600)
+        ├── additional-delegations.json        # Imported and granted delegations, with request bindings (0600)
+        ├── auth-requests.json                 # Stored permission requests (0600)
+        ├── delegation-binding-migration.json  # Present once unbound records were migrated (0600)
         └── cache/
 ```
 
