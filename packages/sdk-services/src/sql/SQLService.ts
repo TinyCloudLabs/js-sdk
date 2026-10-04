@@ -360,7 +360,12 @@ export class SQLService extends BaseService implements ISQLService {
         [options.namespace],
         { signal: options.signal },
       );
-      const tableMissing = !listed.ok && isMissingTableError(listed.error.message);
+      // A node may answer for a database that was never created with either
+      // "no such table" or "database not found"; both mean nothing is applied.
+      const tableMissing =
+        !listed.ok &&
+        (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND ||
+          isMissingTableError(listed.error.message));
       if (!listed.ok && !tableMissing) return listed;
 
       const appliedIds = new Set(

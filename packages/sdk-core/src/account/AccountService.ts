@@ -152,10 +152,10 @@ export class AccountService {
    * Per-account-space memo for {@link ensureAccountIndex}.
    *
    * Applying the index migration is a no-op once the schema exists, but the
-   * SQL service still spends two round trips discovering that (create the
-   * migrations table, then read the applied-migration rows). Account bootstrap
-   * touches the index eight times, so without a memo that is ~14 wasted
-   * requests on the cold sign-in path. The in-flight dedupe inside SQLService
+   * SQL service still spends a round trip discovering that (reading the
+   * applied-migration rows). Account bootstrap touches the index eight times,
+   * so without a memo that is ~7 wasted requests on the cold sign-in path.
+   * The in-flight dedupe inside SQLService
    * never helps here: the node SDK builds a fresh SQLService per
    * `getAccountDb()` call, so its lock map is always empty.
    *
@@ -304,10 +304,13 @@ export class AccountService {
         // Registering is a side effect of this read, so a full account space
         // must not fail the listing.
         const canonical = await this.syncAccessibleSpaces({ tolerateStorageFull: true });
-        if (canonical.ok && options.refreshIndex !== false) {
-          await this.replaceSpacesIndexQuietly(canonical.data);
+        if (!canonical.ok) return canonical;
+        // Index only a complete registry; otherwise the index would list
+        // spaces that have no registry record.
+        if (canonical.data.allRegistered && options.refreshIndex !== false) {
+          await this.replaceSpacesIndexQuietly(canonical.data.spaces);
         }
-        return canonical;
+        return ok(canonical.data.spaces);
       }
 
       const kvResult = this.accountKV();
@@ -429,8 +432,10 @@ export class AccountService {
       return ok({ spaces: registered, recoveredFromBatchError: batchResult.error });
     },
 
-    syncAccessible: async (): Promise<Result<AccountSpace[]>> =>
-      this.syncAccessibleSpaces({ tolerateStorageFull: false }),
+    syncAccessible: async (): Promise<Result<AccountSpace[]>> => {
+      const synced = await this.syncAccessibleSpaces({ tolerateStorageFull: false });
+      return synced.ok ? ok(synced.data.spaces) : synced;
+    },
 
     remove: async (spaceId: string): Promise<Result<void>> => {
       const kvResult = this.accountKV();
@@ -932,18 +937,18 @@ export class AccountService {
    * Register every space the session can reach and return them. With
    * `tolerateStorageFull`, a full account space stops the registration
    * writes but not the listing: the remaining spaces are returned as they
-   * would have been registered.
+   * would have been registered, and `allRegistered` is false.
    */
   private async syncAccessibleSpaces(options: {
     tolerateStorageFull: boolean;
-  }): Promise<Result<AccountSpace[]>> {
+  }): Promise<Result<{ spaces: AccountSpace[]; allRegistered: boolean }>> {
     const listed = await this.config.getSpaces().list();
     if (!listed.ok) return accountErr(listed.error);
 
     const spaces: AccountSpace[] = [];
-    let canWrite = true;
+    let allRegistered = true;
     for (const space of listed.data) {
-      if (canWrite) {
+      if (allRegistered) {
         const result = await this.spaces.register(space);
         if (result.ok) {
           spaces.push(result.data);
@@ -952,12 +957,12 @@ export class AccountService {
         if (!options.tolerateStorageFull || !isStorageFullError(result.error)) {
           return result;
         }
-        canWrite = false;
+        allRegistered = false;
       }
       const record = spaceRecordFromInput(space);
       spaces.push(spaceFromRecord(spaceKey(record.space_id), record));
     }
-    return ok(spaces);
+    return ok({ spaces, allRegistered });
   }
 
   private async resolveSpace(space: string): Promise<Result<SpaceInfo>> {

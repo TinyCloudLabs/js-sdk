@@ -381,6 +381,39 @@ describe("SQLService permissions", () => {
     });
   });
 
+  test("migrations.apply creates the metadata table when the database does not exist yet", async () => {
+    const bodies: any[] = [];
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async (_url, init) => {
+        const body = JSON.parse(init?.body as string);
+        bodies.push(body);
+
+        if (body.action === "query") {
+          return response(false, 404, "Database not found", "Not Found");
+        }
+
+        return response(true, 200, {
+          results: body.statements.map(() => ({ changes: 1, lastInsertRowId: null })),
+        });
+      }, []),
+    );
+
+    const result = await service.db("fresh.db").migrations.apply({
+      namespace: "com.example.app",
+      migrations: [
+        { id: "001_initial", sql: ["CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY)"] },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.applied).toEqual(["001_initial"]);
+    }
+    expect(bodies.map((body) => body.action)).toEqual(["query", "batch", "batch"]);
+  });
+
   test("migrations.apply reuses an existing metadata table for a new namespace", async () => {
     const bodies: any[] = [];
 

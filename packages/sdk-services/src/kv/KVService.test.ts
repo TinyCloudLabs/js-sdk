@@ -980,6 +980,22 @@ describe("KVService.put serialization", () => {
     expect(result.error.meta).toMatchObject({ status: 413, usedBytes: 900, limitBytes: 1000 });
   });
 
+  test("a proxy's own 413 is a failed write, not a storage rejection", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(false, 413, "<html><body>413 Request Entity Too Large</body></html>", "Payload Too Large")
+      )
+    );
+
+    const result = await service.put("files/video.mp4", "x".repeat(200));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_WRITE_FAILED);
+    expect(result.error.meta?.status).toBe(413);
+  });
+
   test("provides key and status when authorization response body is empty", async () => {
     const service = new KVService({});
     service.initialize(createContext(async () => response(false, 403, "", "Forbidden")));

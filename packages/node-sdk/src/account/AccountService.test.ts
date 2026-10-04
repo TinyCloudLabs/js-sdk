@@ -529,7 +529,7 @@ describe("AccountService index", () => {
   });
 
   test("still lists accessible spaces when the account space is full", async () => {
-    const { put, service } = makeAccountService({
+    const { batches, put, service } = makeAccountService({
       missingIndexTables: ["spaces"],
       storageFull: true,
     });
@@ -544,6 +544,8 @@ describe("AccountService index", () => {
       }),
     ]);
     expect(put).toHaveBeenCalledTimes(1);
+    // Unregistered spaces are not written into the index.
+    expect(batches).toEqual([]);
   });
 
   test("an explicit sync reports a full account space", async () => {

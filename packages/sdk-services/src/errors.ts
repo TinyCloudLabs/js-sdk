@@ -314,9 +314,10 @@ export function storageRejectionError(
 }
 
 /**
- * True when a write failed because the owner's TinyCloud storage is full.
- * Reads keep working in that state, so apps should switch to a read-only
- * view and point the user at freeing up space or upgrading.
+ * True when a write failed for storage: the owner's TinyCloud storage is full
+ * (`STORAGE_QUOTA_EXCEEDED`), or this write is larger than what is left
+ * (`STORAGE_LIMIT_REACHED`). Reads keep working in both cases, so apps should
+ * stay usable read-only and point the user at freeing up space or upgrading.
  */
 export function isStorageFullError(error: { code?: string } | null | undefined): boolean {
   return (
