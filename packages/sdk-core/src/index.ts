@@ -464,6 +464,9 @@ export {
   type ServiceError,
   authorizationVerdictOf,
   type AuthorizationVerdict,
+  isStorageFullError,
+  STORAGE_FULL_MESSAGE,
+  STORAGE_WRITE_TOO_LARGE_MESSAGE,
   // Session
   type ServiceSession,
   // Platform dependencies

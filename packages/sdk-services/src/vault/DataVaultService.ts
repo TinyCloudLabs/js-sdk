@@ -16,6 +16,7 @@ import {
   Result,
   ok,
   err,
+  ErrorCodes,
   serviceError,
   IServiceContext,
   ServiceSession,
@@ -188,6 +189,9 @@ function defaultVaultMessage(input: VaultErrorInput): string {
     case "VAULT_LOCKED": return input.message ?? "Vault is locked";
     case "PUBLIC_KEY_NOT_FOUND": return input.message ?? `Public key not found for ${input.did}`;
     case "STORAGE_ERROR": return input.message ?? input.cause.message;
+    case "STORAGE_QUOTA_EXCEEDED":
+    case "STORAGE_LIMIT_REACHED":
+      return input.message;
   }
 }
 
@@ -198,6 +202,26 @@ function vaultError(input: VaultErrorInput): Result<never, VaultError> {
     message: defaultVaultMessage(input),
   };
   return { ok: false, error };
+}
+
+/**
+ * Wrap a failed KV write. A storage rejection keeps its code, message and
+ * byte counts so callers can tell "storage full" from other failures.
+ */
+function kvWriteError(
+  context: string,
+  error: { code: string; message: string; meta?: Record<string, unknown> }
+): Result<never, VaultError> {
+  if (
+    error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED ||
+    error.code === ErrorCodes.STORAGE_LIMIT_REACHED
+  ) {
+    return vaultError({ code: error.code, message: error.message, meta: error.meta });
+  }
+  return vaultError({
+    code: "STORAGE_ERROR",
+    cause: new Error(`${context}: ${error.message}`),
+  });
 }
 
 // =============================================================================
@@ -593,12 +617,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         JSON.stringify(envelopeResult.data),
       );
       if (!valuePutResult.ok) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: new Error(
-            `Failed to store encrypted value: ${valuePutResult.error.message}`,
-          ),
-        });
+        return kvWriteError("Failed to store encrypted value", valuePutResult.error);
       }
 
       return { ok: true, data: undefined };
@@ -886,12 +905,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           keyPayload
         );
         if (!keyPutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store key blob: ${keyPutResult.error.message}`
-            ),
-          });
+          return kvWriteError("Failed to store key blob", keyPutResult.error);
         }
 
         // Store encrypted value in data space
@@ -904,12 +918,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           valuePayload
         );
         if (!valuePutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store encrypted value: ${valuePutResult.error.message}`
-            ),
-          });
+          return kvWriteError("Failed to store encrypted value", valuePutResult.error);
         }
 
         return ok(undefined);
@@ -1335,12 +1344,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           grantPayload
         );
         if (!grantPutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store grant: ${grantPutResult.error.message}`
-            ),
-          });
+          return kvWriteError("Failed to store grant", grantPutResult.error);
         }
 
         return ok(undefined);
@@ -1790,12 +1794,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           keyPayload
         );
         if (!keyPutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store rotated key blob: ${keyPutResult.error.message}`
-            ),
-          });
+          return kvWriteError("Failed to store rotated key blob", keyPutResult.error);
         }
 
         // Step 9: Store re-encrypted value
@@ -1808,12 +1807,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           valuePayload
         );
         if (!valuePutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store re-encrypted value: ${valuePutResult.error.message}`
-            ),
-          });
+          return kvWriteError("Failed to store re-encrypted value", valuePutResult.error);
         }
 
         // Step 10: Re-issue grants to remaining recipients

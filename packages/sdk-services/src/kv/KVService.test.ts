@@ -927,6 +927,75 @@ describe("KVService.put serialization", () => {
     });
   });
 
+  test("reports a full space as STORAGE_QUOTA_EXCEEDED with byte counts", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(
+          false,
+          402,
+          "Storage quota exceeded. Used: 155744 bytes, Limit: 0 bytes",
+          "Payment Required"
+        )
+      )
+    );
+
+    const result = await service.put("variables/API_URL", "value");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.STORAGE_QUOTA_EXCEEDED);
+    expect(result.error.message).toBe(
+      "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again."
+    );
+    expect(result.error.meta).toMatchObject({
+      status: 402,
+      key: "variables/API_URL",
+      usedBytes: 155744,
+      limitBytes: 0,
+    });
+  });
+
+  test("reports a write larger than the remaining storage as STORAGE_LIMIT_REACHED", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(
+          false,
+          413,
+          "Write exceeds remaining storage. Used: 900 bytes, Limit: 1000 bytes",
+          "Payload Too Large"
+        )
+      )
+    );
+
+    const result = await service.put("files/photo.jpg", "x".repeat(200));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.STORAGE_LIMIT_REACHED);
+    expect(result.error.message).toBe(
+      "This change is larger than the TinyCloud storage you have left, so it was not saved. Reading still works. Free up space or upgrade your plan to save it."
+    );
+    expect(result.error.meta).toMatchObject({ status: 413, usedBytes: 900, limitBytes: 1000 });
+  });
+
+  test("a proxy's own 413 is a failed write, not a storage rejection", async () => {
+    const service = new KVService({});
+    service.initialize(
+      createContext(async () =>
+        response(false, 413, "<html><body>413 Request Entity Too Large</body></html>", "Payload Too Large")
+      )
+    );
+
+    const result = await service.put("files/video.mp4", "x".repeat(200));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_WRITE_FAILED);
+    expect(result.error.meta?.status).toBe(413);
+  });
+
   test("provides key and status when authorization response body is empty", async () => {
     const service = new KVService({});
     service.initialize(createContext(async () => response(false, 403, "", "Forbidden")));

@@ -16,7 +16,12 @@ import {
   type ServiceHeaders,
   type ServiceSession,
 } from "../types";
-import { authRequiredError, wrapError, parseAuthError } from "../errors";
+import {
+  authRequiredError,
+  wrapError,
+  parseAuthError,
+  storageRejectionError,
+} from "../errors";
 import {
   formatServiceResponseError,
   parseServiceErrorBody,
@@ -346,19 +351,25 @@ export class SQLService extends BaseService implements ISQLService {
     options: SqlMigrationApplyOptions,
   ): Promise<Result<SqlMigrationApplyResponse>> {
     return this.withTelemetry("migrations.apply", dbName, async () => {
-      const created = await this.ensureMigrationsTable(dbName, options.signal);
-      if (!created.ok) return created;
-
+      // Read before writing: an up-to-date database must open with a single
+      // read, because writes fail once the owner's storage is full (402) and
+      // read-only sessions cannot write at all.
       const listed = await this.queryOnDb<{ id: string }>(
         dbName,
         `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
         [options.namespace],
         { signal: options.signal },
       );
-      if (!listed.ok) return listed;
+      // A node may answer for a database that was never created with either
+      // "no such table" or "database not found"; both mean nothing is applied.
+      const tableMissing =
+        !listed.ok &&
+        (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND ||
+          isMissingTableError(listed.error.message));
+      if (!listed.ok && !tableMissing) return listed;
 
       const appliedIds = new Set(
-        listed.data.rows
+        (listed.ok ? listed.data.rows : [])
           .map((row) => rowValue(row, 0))
           .filter((id): id is string => typeof id === "string"),
       );
@@ -367,6 +378,11 @@ export class SQLService extends BaseService implements ISQLService {
         .map((migration) => migration.id);
       const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
       const applied: string[] = [];
+
+      if (pending.length > 0 && tableMissing) {
+        const created = await this.ensureMigrationsTable(dbName, options.signal);
+        if (!created.ok) return created;
+      }
 
       for (const migration of pending) {
         const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
@@ -506,6 +522,12 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string
   ): Promise<Result<never>> {
     const errorText = await response.text();
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
+
+    // The node answers a write-class request on a full space with 402.
+    if (response.status === 402) {
+      return err(storageRejectionError("sql", 402, meta, errorText));
+    }
 
     const errorBody = parseServiceErrorBody(errorText);
 
@@ -520,8 +542,6 @@ export class SQLService extends BaseService implements ISQLService {
       errorText,
       errorBody,
     );
-
-    const meta = responseErrorMeta(response.status, response.statusText, errorText);
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
@@ -637,6 +657,10 @@ function serializeSqlValues(values: SqlValue[]): Array<null | number | string | 
   return values.map((value) =>
     value instanceof Uint8Array ? Array.from(value) : value,
   );
+}
+
+function isMissingTableError(message: string): boolean {
+  return /no such table/i.test(message);
 }
 
 function migrationKey(namespace: string, id: string): string {

@@ -458,6 +458,21 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
   }, 10_000);
 
+  test.each(["spaces.syncAccessible", "applications.register"] as const)(
+    "%s stops after one write rejected for a full account space",
+    async (wrapper) => {
+      const { failingCalls, warnSpy } = await runRegistrySync(
+        wrapper,
+        402,
+        "Storage quota exceeded. Used: 1880793 bytes, Limit: 0 bytes",
+      );
+
+      expect(failingCalls).toBe(1);
+      expect(warnedWith(warnSpy, "storage is full")).toBe(true);
+      expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
+    },
+  );
+
   test("generic error still retries the full budget (3 attempts)", async () => {
     const { node } = makeNode();
     const task = mock(async () => {

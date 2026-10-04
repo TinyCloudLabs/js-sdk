@@ -129,7 +129,12 @@ export type VaultErrorInput =
   | { code: "GRANT_NOT_FOUND"; grantor: string; key: string; message?: string }
   | { code: "VAULT_LOCKED"; message?: string }
   | { code: "PUBLIC_KEY_NOT_FOUND"; did: string; message?: string }
-  | { code: "STORAGE_ERROR"; cause: Error; message?: string };
+  | { code: "STORAGE_ERROR"; cause: Error; message?: string }
+  | {
+      code: "STORAGE_QUOTA_EXCEEDED" | "STORAGE_LIMIT_REACHED";
+      message: string;
+      meta?: Record<string, unknown>;
+    };
 
 /**
  * Vault error with service field (compatible with ServiceError).

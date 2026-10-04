@@ -145,6 +145,9 @@ export {
   getTinyCloudDebugLogs,
   clearTinyCloudDebugLogs,
   installTinyCloudDebugGlobals,
+  isStorageFullError,
+  STORAGE_FULL_MESSAGE,
+  STORAGE_WRITE_TOO_LARGE_MESSAGE,
 } from "@tinycloud/sdk-core";
 export type {
   OwnerShareAction,

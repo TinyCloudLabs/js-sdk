@@ -283,6 +283,31 @@ describe("DataVaultService network envelopes", () => {
     expect(encryption.decryptEnvelope).toHaveBeenCalledTimes(1);
   });
 
+  test("keeps the storage-full code and byte counts when the KV write is rejected", async () => {
+    const { vault, kv } = createNetworkVault();
+    const meta = { status: 402, usedBytes: 155744, limitBytes: 0 };
+    kv.put.mockImplementation(async () => ({
+      ok: false as const,
+      error: {
+        code: "STORAGE_QUOTA_EXCEEDED",
+        service: "kv",
+        message: "TinyCloud storage is full, so this change was not saved.",
+        meta,
+      },
+    }) as any);
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" });
+
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      service: "vault",
+      message: "TinyCloud storage is full, so this change was not saved.",
+      meta,
+    });
+  });
+
   test("does not create legacy grant blobs in network mode", async () => {
     const { vault, store } = createNetworkVault();
 

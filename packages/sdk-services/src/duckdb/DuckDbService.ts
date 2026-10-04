@@ -14,7 +14,12 @@ import {
   serviceError,
   type FetchResponse,
 } from "../types";
-import { authRequiredError, wrapError, parseAuthError } from "../errors";
+import {
+  authRequiredError,
+  wrapError,
+  parseAuthError,
+  storageRejectionError,
+} from "../errors";
 import {
   formatServiceResponseError,
   parseServiceErrorBody,
@@ -425,6 +430,12 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     operation: string
   ): Promise<Result<never>> {
     const errorText = await response.text();
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
+
+    // The node answers a write-class request on a full space with 402.
+    if (response.status === 402) {
+      return err(storageRejectionError("duckdb", 402, meta, errorText));
+    }
 
     const errorBody = parseServiceErrorBody(errorText);
 
@@ -439,8 +450,6 @@ export class DuckDbService extends BaseService implements IDuckDbService {
       errorText,
       errorBody,
     );
-
-    const meta = responseErrorMeta(response.status, response.statusText, errorText);
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);

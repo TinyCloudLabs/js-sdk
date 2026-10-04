@@ -18,8 +18,8 @@ import {
 import {
   authRequiredError,
   wrapError,
-  storageQuotaExceededError,
-  storageLimitReachedError,
+  storageRejectionError,
+  parseStorageQuotaBytes,
   parseAuthError,
   parsePermissionHintFromErrorText,
   authUnauthorizedError,
@@ -121,60 +121,27 @@ export class KVService extends BaseService implements IKVService {
     return this._config;
   }
 
-  // Parses "Used: X bytes, Limit: Y bytes" from tinycloud-node error responses
-  private parseQuotaInfo(
-    errorText: string
-  ): { usedBytes: number; limitBytes: number } | undefined {
-    const match = errorText.match(
-      /Used:\s*(\d+)\s*bytes,\s*Limit:\s*(\d+)\s*bytes/i
-    );
-    if (match) {
-      return {
-        usedBytes: parseInt(match[1], 10),
-        limitBytes: parseInt(match[2], 10),
-      };
-    }
-    return undefined;
-  }
-
   private handleQuotaErrorResponse(
     response: FetchResponse,
     errorText: string,
     key: string
   ): Result<never> | undefined {
-    if (response.status === 402) {
-      const quotaInfo = this.parseQuotaInfo(errorText);
-      return err(
-        storageQuotaExceededError(
-          "kv",
-          `Storage quota exceeded for key ${JSON.stringify(key)}: ${errorText}`,
-          {
-            status: response.status,
-            ...(quotaInfo
-              ? { usedBytes: quotaInfo.usedBytes, limitBytes: quotaInfo.limitBytes }
-              : {}),
-          }
-        )
-      );
+    if (response.status !== 402 && response.status !== 413) {
+      return undefined;
     }
-
-    if (response.status === 413) {
-      const quotaInfo = this.parseQuotaInfo(errorText);
-      return err(
-        storageLimitReachedError(
-          "kv",
-          `Storage limit reached for key ${JSON.stringify(key)}: ${errorText}`,
-          {
-            status: response.status,
-            ...(quotaInfo
-              ? { usedBytes: quotaInfo.usedBytes, limitBytes: quotaInfo.limitBytes }
-              : {}),
-          }
-        )
-      );
+    // A 413 is about storage only when the node says so. A proxy's own
+    // request-size limit (Cloudflare's HTML 413) is not.
+    if (response.status === 413 && !parseStorageQuotaBytes(errorText)) {
+      return undefined;
     }
-
-    return undefined;
+    return err(
+      storageRejectionError(
+        "kv",
+        response.status,
+        { status: response.status, statusText: response.statusText, key },
+        errorText
+      )
+    );
   }
 
   /**

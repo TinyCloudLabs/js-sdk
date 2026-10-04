@@ -158,6 +158,9 @@ import {
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
   type UnifiedPolicyCapability,
+  isStorageFullError,
+  STORAGE_FULL_MESSAGE,
+  STORAGE_WRITE_TOO_LARGE_MESSAGE,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -2385,6 +2388,18 @@ export class TinyCloudNode {
             "TinyCloud account registry sync stopped: authorization verdict is not retryable",
             error,
           );
+          return;
+        }
+        // A full account space stays full until the owner frees space or
+        // upgrades, so retrying only repeats a rejected write. The wrapped
+        // SDK error decides; the message is the fallback for untyped errors.
+        if (
+          isStorageFullError(error as { code?: string }) ||
+          isStorageFullError((error as { cause?: { code?: string } } | null)?.cause) ||
+          message.includes(STORAGE_FULL_MESSAGE) ||
+          message.includes(STORAGE_WRITE_TOO_LARGE_MESSAGE)
+        ) {
+          console.warn("TinyCloud account registry sync stopped: storage is full", error);
           return;
         }
         lastError = error;

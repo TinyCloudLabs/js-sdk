@@ -270,6 +270,62 @@ export function storageLimitReachedError(
   };
 }
 
+/** Shown when a write is rejected because the owner's storage is full. */
+export const STORAGE_FULL_MESSAGE =
+  "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again.";
+
+/** Shown when a write is larger than the storage the owner has left. */
+export const STORAGE_WRITE_TOO_LARGE_MESSAGE =
+  "This change is larger than the TinyCloud storage you have left, so it was not saved. Reading still works. Free up space or upgrade your plan to save it.";
+
+/**
+ * Parse the byte counts from a node storage rejection
+ * ("... Used: 155744 bytes, Limit: 0 bytes"). The limit is the share of the
+ * owner's account-wide budget left for this space, so it is 0 when the
+ * owner's other spaces already use the whole budget.
+ */
+export function parseStorageQuotaBytes(
+  responseText: string
+): { usedBytes: number; limitBytes: number } | undefined {
+  const match = responseText.match(/Used:\s*(\d+)\s*bytes,\s*Limit:\s*(\d+)\s*bytes/i);
+  if (!match) return undefined;
+  return {
+    usedBytes: parseInt(match[1], 10),
+    limitBytes: parseInt(match[2], 10),
+  };
+}
+
+/**
+ * Build the error for a write the node rejected for storage: 402 when storage
+ * is already full, 413 when this write is larger than what is left. KV, SQL
+ * and DuckDB all report it with the same codes and message so an app can
+ * detect "storage full" in one place with {@link isStorageFullError}.
+ */
+export function storageRejectionError(
+  service: string,
+  status: 402 | 413,
+  meta: Record<string, unknown>,
+  responseText: string
+): ServiceError {
+  const quotaMeta = { ...meta, ...parseStorageQuotaBytes(responseText) };
+  return status === 402
+    ? storageQuotaExceededError(service, STORAGE_FULL_MESSAGE, quotaMeta)
+    : storageLimitReachedError(service, STORAGE_WRITE_TOO_LARGE_MESSAGE, quotaMeta);
+}
+
+/**
+ * True when a write failed for storage: the owner's TinyCloud storage is full
+ * (`STORAGE_QUOTA_EXCEEDED`), or this write is larger than what is left
+ * (`STORAGE_LIMIT_REACHED`). Reads keep working in both cases, so apps should
+ * stay usable read-only and point the user at freeing up space or upgrading.
+ */
+export function isStorageFullError(error: { code?: string } | null | undefined): boolean {
+  return (
+    error?.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED ||
+    error?.code === ErrorCodes.STORAGE_LIMIT_REACHED
+  );
+}
+
 /**
  * Wrap an unknown error in a ServiceError.
  */
