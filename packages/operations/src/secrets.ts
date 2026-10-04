@@ -156,17 +156,20 @@ function canonicalizeSpaceUri(space: string): string {
   return space;
 }
 
-/** Builds a setup action URL without ever accepting a secret value. */
+/**
+ * Builds a setup action URL without ever accepting a secret value. It opens
+ * Secret Manager's app with the secret's name (and scope) filled in.
+ */
 export function buildSecretSetupUrl(reference: SecretReference): string {
   const parameters = [
-    ["name", reference.name],
+    ["secret", reference.name],
     ...(reference.scope === undefined ? [] : [["scope", reference.scope] as const]),
     ["space", reference.space],
   ] as const;
   const query = parameters
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&");
-  return `${SECRET_MANAGER_BASE_URL}?${query}`;
+  return `${SECRET_MANAGER_BASE_URL}/app?${query}`;
 }
 
 function canonicalizeSecretScope(scope: string | undefined): string | undefined {

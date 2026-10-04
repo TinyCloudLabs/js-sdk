@@ -176,7 +176,7 @@ describe("tinycloud.secrets.get", () => {
           scope: "food-drinks",
           space: TARGET_SPACE,
         },
-        url: `https://secrets.tinycloud.xyz?name=API_KEY&scope=food-drinks&space=${encodeURIComponent(TARGET_SPACE)}`,
+        url: `https://secrets.tinycloud.xyz/app?secret=API_KEY&scope=food-drinks&space=${encodeURIComponent(TARGET_SPACE)}`,
       },
     });
     expect(JSON.stringify(result)).not.toContain("value");
