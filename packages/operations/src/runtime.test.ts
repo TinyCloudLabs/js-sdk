@@ -13,6 +13,7 @@ import {
   profileConfigPath,
   readAdditionalDelegations,
   readJson,
+  sessionPath,
   upsertProfileRecord,
   withProfileLock,
   writeJsonAtomic,
@@ -21,6 +22,7 @@ import { authOperationDefinitions } from "./operations/auth.js";
 import {
   createAuthRuntimeFixture,
   persistRuntimeDelegations,
+  type AuthRuntimeFixture,
   type StoredRuntimeDelegation,
 } from "../test-support/auth-runtime.js";
 
@@ -302,6 +304,53 @@ test("a runtime that restores its session while another migrates replays the mig
   }
 });
 
+test("migration binds every bindable record when another cannot be bound, and still records the migration", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const good = await fixture.hermetic.mintDelegation();
+    // Unsigned bytes suffice: the node checks the signature only on activation.
+    const unbindable = await compactDelegationSigning(fixture, { "": [] });
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [
+      { delegation: unbindable, permissions: [] },
+      { delegation: good, permissions: [] },
+    ]);
+
+    const first = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(first)).toEqual([good.cid]);
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({
+      bound: [good.cid],
+      unbound: [unbindable.cid],
+    });
+    const records = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(records[0]).not.toHaveProperty("authorityRequest");
+    expect(records[1]).toMatchObject({ authorityRequest: { requestId: `migrated:${good.cid}` } });
+
+    const second = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(second)).toEqual([good.cid]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a local sign-in without the profile's stored session never runs the migration", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const delegation = await fixture.hermetic.mintDelegation();
+    await rm(sessionPath(fixture.ownerProfile), { force: true });
+    await writeJsonAtomic(additionalDelegationsPath(fixture.ownerProfile), [{ delegation, permissions: [] }]);
+
+    const runtime = await createInvocationRuntime({ profile: fixture.ownerProfile });
+    if (!runtime.ok) throw new Error(`expected a runtime: ${runtime.error.code}`);
+    expect(await readJson(bindingMigrationPath(fixture.ownerProfile))).toBeNull();
+    expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([JSON.parse(JSON.stringify({
+      delegation,
+      permissions: [],
+    }))]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("never falls back to a configured profile when the pinned profile disappears", async () => {
   await writeJsonAtomic(profileConfigPath("fallback"), {
     name: "fallback",
@@ -391,6 +440,43 @@ async function authenticatedRuntime(profile: string): Promise<RuntimeOperationCo
 
 function installedCids(context: RuntimeOperationContext): string[] {
   return (context.runtime.node as RuntimeNode).getRuntimePermissionDelegations().map(({ cid }) => cid);
+}
+
+/**
+ * A compact UCAN for the fixture's session key on `notes` in its space, with
+ * the given signed abilities and a placeholder signature.
+ */
+async function compactDelegationSigning(
+  fixture: AuthRuntimeFixture,
+  abilities: Record<string, unknown[]>,
+): Promise<StoredRuntimeDelegation & { resources: unknown[] }> {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const space = fixture.hermetic.restorableSession.spaceId;
+  const exp = Math.floor(Date.now() / 1000) + 3_600;
+  const authorization = [
+    encode({ alg: "EdDSA", typ: "JWT" }),
+    encode({
+      iss: fixture.hermetic.ownerDid,
+      aud: fixture.sessionDid,
+      exp,
+      prf: [],
+      att: { [`${space}/kv/notes`]: abilities },
+    }),
+    "c2lnbmF0dXJl",
+  ].join(".");
+  const actions = Object.keys(abilities).sort();
+  return {
+    cid: new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization),
+    delegationHeader: { Authorization: authorization },
+    spaceId: space,
+    path: "notes",
+    actions,
+    resources: [{ service: "kv", space, path: "notes", actions }],
+    ownerAddress: fixture.hermetic.restorableSession.address as string,
+    chainId: fixture.hermetic.restorableSession.chainId as number,
+    expiry: new Date(exp * 1000),
+    delegateDID: fixture.sessionDid,
+  };
 }
 
 interface RuntimeNode {

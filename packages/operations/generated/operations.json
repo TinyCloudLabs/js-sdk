@@ -5302,7 +5302,8 @@
           },
           "liveAdditionalDelegationCount": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Stored, unexpired delegations the replay rule accepts: compact-UCAN or signed-login records with a request binding, and unbound compact-UCAN records before the profile's one-time binding migration. Each is still validated, and checked against its binding, when a runtime installs it."
           }
         },
         "required": [
@@ -6139,7 +6140,8 @@
               },
               "liveAdditionalDelegationCount": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "description": "Stored, unexpired delegations the replay rule accepts: compact-UCAN or signed-login records with a request binding, and unbound compact-UCAN records before the profile's one-time binding migration. Each is still validated, and checked against its binding, when a runtime installs it."
               }
             },
             "required": [
@@ -15041,7 +15043,8 @@
           },
           "liveAdditionalDelegationCount": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Stored, unexpired delegations the replay rule accepts: compact-UCAN or signed-login records with a request binding, and unbound compact-UCAN records before the profile's one-time binding migration. Each is still validated, and checked against its binding, when a runtime installs it."
           }
         },
         "required": [
@@ -15878,7 +15881,8 @@
               },
               "liveAdditionalDelegationCount": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "description": "Stored, unexpired delegations the replay rule accepts: compact-UCAN or signed-login records with a request binding, and unbound compact-UCAN records before the profile's one-time binding migration. Each is still validated, and checked against its binding, when a runtime installs it."
               }
             },
             "required": [

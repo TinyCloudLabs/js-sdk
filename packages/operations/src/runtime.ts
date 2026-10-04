@@ -180,7 +180,9 @@ export async function createInvocationRuntime(
       // here and the migration marker agree.
       const migrated = await prepareStoredDelegationReplay(profileName, activator, {
         host: summary.host,
-        migrate: true,
+        // Only the profile's own restored session; a local sign-in without
+        // one uses a fresh session key the stored records do not address.
+        migrate: activeSession !== undefined,
       });
       for (const entry of await readAdditionalDelegations<Record<string, unknown>>(profileName)) {
         const activated = await replayStoredDelegation(activator, entry, {

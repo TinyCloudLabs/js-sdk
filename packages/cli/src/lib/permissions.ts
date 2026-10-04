@@ -253,7 +253,8 @@ export async function replayAdditionalDelegations(
   const entries = await loadAdditionalDelegations(profile);
   for (const entry of entries) {
     const record = { ...entry };
-    if (storedDelegationKind(record) !== "other") {
+    const kind = storedDelegationKind(record);
+    if (kind === "compact" || kind === "signed-login") {
       const installed = await replayStoredDelegation(activator, record, {
         host: options.host,
         migrated,
@@ -264,13 +265,24 @@ export async function replayAdditionalDelegations(
       }
       continue;
     }
+    if (kind === "malformed") {
+      if (process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping ${String(entry.delegation?.cid)}: malformed delegation header\n`);
+      }
+      continue;
+    }
     // Skip expired delegations rather than letting useRuntimeDelegation throw.
     const expiry = entry.delegation.expiry instanceof Date
       ? entry.delegation.expiry
       : new Date(entry.delegation.expiry as unknown as string);
     if (expiry.getTime() <= Date.now()) continue;
     try {
-      await node.useRuntimeDelegation({ ...entry.delegation, expiry });
+      // Only the one header `storedDelegationKind` read reaches the node.
+      await node.useRuntimeDelegation({
+        ...entry.delegation,
+        delegationHeader: { Authorization: entry.delegation.delegationHeader.Authorization },
+        expiry,
+      });
     } catch (err) {
       // A stored delegation can be invalid for several benign reasons (host
       // unreachable, key rotated). Don't fail the whole CLI invocation —

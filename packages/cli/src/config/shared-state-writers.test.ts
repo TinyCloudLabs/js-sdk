@@ -53,8 +53,6 @@ test("shared-state compatibility wrappers use operations state primitives", asyn
   expect(profiles).toMatch(/writeSession/);
   expect(profiles).toMatch(/removeSession/);
   expect(permissions).toContain('from "@tinycloud/operations/state"');
-  expect(permissions).toContain('import("@tinycloud/operations/delegation-binding")');
-  expect(permissions).toMatch(/storeDelegationWithoutRequest/);
   expect(permissions).toMatch(/withProfileLock/);
 });
 

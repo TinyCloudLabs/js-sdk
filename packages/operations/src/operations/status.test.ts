@@ -9,6 +9,7 @@ import type {
   OperationDefinition,
   OperationExecutionOutcome,
 } from "../contract.js";
+import { bindingMigrationPath } from "../delegation-binding.js";
 import {
   additionalDelegationsPath,
   profileConfigPath,
@@ -40,6 +41,10 @@ type StatusOutput = {
 const originalTcHome = process.env.TC_HOME;
 const originalHome = process.env.HOME;
 const homes: string[] = [];
+const BINDING = {
+  requestId: "req_status",
+  requested: [{ service: "tinycloud.kv", path: "notes/", actions: ["tinycloud.kv/get"] }],
+};
 
 afterEach(async () => {
   if (originalTcHome === undefined) delete process.env.TC_HOME;
@@ -214,6 +219,35 @@ test("counts only additional delegations whose expiry is strictly in the future"
   });
 });
 
+test("counts only stored delegations the replay rule accepts", async () => {
+  await isolatedHome();
+  await writeProfile("delegate");
+  const expiry = new Date(Date.now() + 60_000).toISOString();
+  const unbound = storedDelegation(expiry, "unbound");
+  delete unbound.authorityRequest;
+  const cliGrant = { ...unbound, delegation: { cid: "bafy-cli-grant", expiry, delegationHeader: { Authorization: "cacao" } } };
+  const misKeyed = {
+    ...storedDelegation(expiry, "mis-keyed"),
+    delegation: { cid: "bafy-mis-keyed", expiry, delegationHeader: { authorization: "header.payload.signature" } },
+  };
+  await writeJsonAtomic(additionalDelegationsPath("delegate"), [
+    storedDelegation(expiry, "bound"),
+    unbound,
+    cliGrant,
+    misKeyed,
+  ]);
+  const count = async () => {
+    const result = await execute(definition("tinycloud.status.get"), delegateContext());
+    if (result.status !== "ok") throw new Error("expected a status");
+    return result.output.liveAdditionalDelegationCount;
+  };
+
+  // Before the profile's migration, an unbound compact record still replays.
+  expect(await count()).toBe(2);
+  await writeJsonAtomic(bindingMigrationPath("delegate"), { formatVersion: 1, bound: [], unbound: [] });
+  expect(await count()).toBe(1);
+});
+
 test("refuses a deleted pinned profile without reading the configured fallback", async () => {
   await isolatedHome();
   await writeJsonAtomic(tinycloudConfigPath(), { defaultProfile: "fallback", version: 1 });
@@ -264,8 +298,9 @@ test("refuses malformed stores and never serializes stored secrets or raw artifa
       delegation: {
         expiry: new Date(Date.now() + 60_000).toISOString(),
         bytes: canaries.delegation,
-        delegationHeader: { Authorization: canaries.authorization },
+        delegationHeader: { Authorization: `header.${canaries.authorization}.signature` },
       },
+      authorityRequest: BINDING,
     },
   ]);
 
@@ -321,14 +356,16 @@ async function writeProfile(profile: string, extra: Record<string, unknown> = {}
   });
 }
 
+/** A stored compact-UCAN record with a request binding, as import writes it. */
 function storedDelegation(expiry: string, suffix: string): Record<string, unknown> {
   return {
     delegation: {
       cid: `bafy-${suffix}`,
       expiry,
-      delegationHeader: { Authorization: `authorization-${suffix}` },
+      delegationHeader: { Authorization: `header.authorization-${suffix}.signature` },
       bytes: `delegation-bytes-${suffix}`,
     },
+    authorityRequest: BINDING,
   };
 }
 

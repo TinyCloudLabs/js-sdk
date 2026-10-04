@@ -543,6 +543,19 @@ export function registerAuthCommand(program: Command): void {
         }
 
         const imported = normalizeDelegationImport(parsed);
+        // Loaded on use: a static import would evaluate the operations
+        // delegation-binding bundle in every command that registers `auth`.
+        const { activateUnboundCompactImport, storedDelegationKind } = await import(
+          "@tinycloud/operations/delegation-binding"
+        );
+        const kind = storedDelegationKind({ delegation: imported.delegation });
+        if (kind === "malformed") {
+          throw new CLIError(
+            "INVALID_AUTH_IMPORT",
+            "Imported delegation must carry exactly one string Authorization header.",
+            ExitCode.USAGE_ERROR,
+          );
+        }
         let node;
         try {
           node = await ensureAuthenticated(ctx);
@@ -563,12 +576,7 @@ export function registerAuthCommand(program: Command): void {
           principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
         let activated = false;
         let permissions = imported.permissions;
-        // Loaded on use: a static import would evaluate the operations
-        // delegation-binding bundle in every command that registers `auth`.
-        const { activateUnboundCompactImport, storedDelegationKind } = await import(
-          "@tinycloud/operations/delegation-binding"
-        );
-        if (targetsSessionKey && storedDelegationKind({ delegation: imported.delegation }) === "compact") {
+        if (targetsSessionKey && kind === "compact") {
           // No stored request contains this compact UCAN, so it is validated as
           // replay validates it and bound to exactly the capabilities it signs.
           // Replay then holds the stored record to that binding.
@@ -586,7 +594,10 @@ export function registerAuthCommand(program: Command): void {
             imported.permissions,
           ));
           if (targetsSessionKey) {
-            await node.useRuntimeDelegation(imported.delegation);
+            await node.useRuntimeDelegation({
+              ...imported.delegation,
+              delegationHeader: { Authorization: imported.delegation.delegationHeader.Authorization },
+            });
             activated = true;
           }
         }

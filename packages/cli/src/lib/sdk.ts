@@ -94,6 +94,7 @@ export async function createSDKInstance(
       privateKey: effectivePrivateKey,
     });
 
+    let restoredOwnSession = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
       await node.restoreSession({
         delegationHeader: session.delegationHeader as { Authorization: string },
@@ -106,15 +107,17 @@ export async function createSDKInstance(
         siwe: session.siwe as string | undefined,
         signature: session.signature as string | undefined,
       });
+      restoredOwnSession = true;
     } else {
       await node.signIn();
     }
-    // The profile's own key signs this session; an explicit key is another
-    // identity and must not migrate the profile's records.
+    // Only the profile's own restored session may migrate its records: a
+    // fresh sign-in uses a session key they do not address, and an explicit
+    // key is another identity.
     await replayAdditionalDelegations(node, ctx.profile, {
       host: ctx.host,
       ownerSpace: profile.spaceId,
-      migrate: options?.privateKey === undefined,
+      migrate: restoredOwnSession && options?.privateKey === undefined,
     });
     return node;
   }

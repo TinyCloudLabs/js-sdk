@@ -799,6 +799,27 @@ describe("CLI auth import command", () => {
     });
   });
 
+  test("refuses a delegation whose header is not a single string Authorization before storing or activating it", async () => {
+    for (const delegationHeader of [
+      { authorization: "header.payload.signature" },
+      { Authorization: ["header.payload.signature"] },
+      { Authorization: "header.payload.signature", authorization: "other" },
+    ]) {
+      const source = join(tempDir, "mis-keyed.json");
+      await writeFile(source, JSON.stringify({
+        ...makePortableDelegation({ delegateDID: "did:key:z6MkSession", cid: "bafy-mis-keyed" }),
+        delegationHeader,
+      }), "utf8");
+
+      await runAuthCommand(["auth", "import", source]);
+
+      expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT" });
+    }
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+  });
+
   test("installs a delegation that targets the active session key as a runtime grant", async () => {
     const delegation = makePortableDelegation({
       delegateDID: "did:key:z6MkSession",

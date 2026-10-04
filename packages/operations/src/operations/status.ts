@@ -8,6 +8,7 @@ import type {
   OperationSensitivity,
   TinyCloudPosture,
 } from "../contract.js";
+import { bindingMigrationRecorded, replayLimit } from "../delegation-binding.js";
 import { operationError } from "../errors.js";
 import {
   additionalDelegationsPath,
@@ -57,7 +58,11 @@ const StatusOutputSchema: z.ZodType<StatusOutput> = z.object({
     expired: z.boolean().nullable(),
     expiresAt: z.string().datetime({ offset: true }).nullable(),
   }).strict(),
-  liveAdditionalDelegationCount: z.number().int().nonnegative(),
+  liveAdditionalDelegationCount: z.number().int().nonnegative().describe(
+    "Stored, unexpired delegations the replay rule accepts: compact-UCAN or signed-login records with a request " +
+      "binding, and unbound compact-UCAN records before the profile's one-time binding migration. Each is still " +
+      "validated, and checked against its binding, when a runtime installs it.",
+  ),
 }).strict();
 
 const STATUS_POSTURES: readonly TinyCloudPosture[] = [
@@ -181,10 +186,13 @@ async function countLiveAdditionalDelegations(profile: string): Promise<number> 
   if (!Array.isArray(rawDelegations)) throw new TypeError("Invalid additional delegation store.");
 
   const now = Date.now();
+  const migrated = await bindingMigrationRecorded(profile);
   let count = 0;
   for (const entry of rawDelegations) {
     const expiry = storedDelegationExpiry(entry);
-    if (expiry.getTime() > now) count += 1;
+    // Records replay refuses outright (unbound after migration, malformed,
+    // or the CLI's own signed-login grants) are not runtime authority.
+    if (expiry.getTime() > now && replayLimit(entry as Record<string, unknown>, migrated) !== undefined) count += 1;
   }
   return count;
 }

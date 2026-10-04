@@ -72,21 +72,55 @@ export function bindingMigrationPath(profile: string): string {
 }
 
 /**
- * How replay treats a stored record: `compact` and `signed-login` records go
- * through validated activation and the binding rule; `other` records (the
- * CLI's own signed-login grants, malformed records) do not.
+ * How replay treats a stored record:
+ *
+ * - `compact` and `signed-login` records go through validated activation and
+ *   the binding rule.
+ * - `other` records (the CLI's own signed-login grants, a CACAO without
+ *   `siweProof`) keep the CLI's legacy replay; the operations runtime never
+ *   installs them.
+ * - `malformed` records install nothing anywhere.
+ *
+ * A record is `malformed` unless its `delegationHeader` has exactly one own
+ * key, `Authorization`, with a string value: header names are matched
+ * case-insensitively on the wire, and other value types are stringified, so
+ * any other shape could reach the node as authorization bytes this rule never
+ * read. Bytes containing a `.` are never `other`: a CACAO has none, and
+ * validated activation refuses anything compact-shaped that it cannot parse.
  */
-export function storedDelegationKind(entry: Record<string, unknown>): "compact" | "signed-login" | "other" {
+export function storedDelegationKind(
+  entry: Record<string, unknown>,
+): "compact" | "signed-login" | "other" | "malformed" {
   const delegation = entry.delegation;
-  if (!isRecord(delegation)) return "other";
+  if (!isRecord(delegation)) return "malformed";
+  const header = delegation.delegationHeader;
+  if (
+    !isRecord(header) ||
+    Object.keys(header).length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(header, "Authorization") ||
+    typeof header.Authorization !== "string"
+  ) {
+    return "malformed";
+  }
   if ("siweProof" in delegation) return "signed-login";
-  const authorization = isRecord(delegation.delegationHeader)
-    ? delegation.delegationHeader.Authorization
-    : undefined;
-  if (typeof authorization !== "string") return "other";
-  // The compact-UCAN shape validated activation derives signed authority from.
-  const parts = authorization.replace(/^Bearer /i, "").split(".");
-  return parts.length === 3 && parts.every((part) => part.length > 0) ? "compact" : "other";
+  return header.Authorization.includes(".") ? "compact" : "other";
+}
+
+/**
+ * What replay holds a stored record to: its binding's `requested`, `"signed"`
+ * for an unbound compact record before the profile has migrated (it installs
+ * with its own signed authority, as before bindings existed), or `undefined`
+ * when the record installs nothing.
+ */
+export function replayLimit(
+  entry: Record<string, unknown>,
+  migrated: boolean,
+): readonly PermissionEntry[] | "signed" | undefined {
+  const kind = storedDelegationKind(entry);
+  if (kind !== "compact" && kind !== "signed-login") return undefined;
+  const binding = DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
+  if (binding.success) return binding.data.requested;
+  return !migrated && kind === "compact" && !("authorityRequest" in entry) ? "signed" : undefined;
 }
 
 /**
@@ -160,35 +194,36 @@ export async function storeDelegationWithoutRequest(
  * Runs before replay reads the profile's records, so those records and the
  * migration marker agree. Returns whether the profile has migrated.
  *
- * Migration is one locked read-modify-write of the current records: every
- * compact record with no `authorityRequest` whose signed capabilities validated
- * activation can read (CID, expiry, audience and declared resources checked,
- * nothing activated) is bound to exactly those capabilities, and the marker is
- * written in the same critical section. A compact record it cannot read can
- * never activate for this session either. `migrate` must be false unless
- * `node` holds the profile's own session. If the lock is busy or any step
- * fails, nothing is written and this runtime replays under the pre-migration
- * rule.
+ * Migration is one locked read-modify-write of the current records. Each
+ * compact record with no `authorityRequest` is handled on its own: if
+ * validated activation can read its signed capabilities (CID, expiry,
+ * audience and declared resources checked, nothing activated) and they form a
+ * valid binding, the record is bound to exactly those capabilities; otherwise
+ * it stays unbound, is listed in the marker's `unbound`, and installs nothing
+ * after migration. A compact record whose capabilities cannot be read could
+ * not activate for this session either. The marker is written in the same
+ * critical section. `migrate` must be false unless `node` holds the profile's
+ * own restored session. If the lock is busy or a write fails, nothing is
+ * written and this runtime replays under the pre-migration rule.
  */
 export async function prepareStoredDelegationReplay(
   profile: string,
   node: RuntimeDelegationActivator,
   options: { readonly host: string; readonly migrate: boolean },
 ): Promise<boolean> {
-  if (await migrationRecorded(profile)) return true;
+  if (await bindingMigrationRecorded(profile)) return true;
   if (!options.migrate) return false;
   try {
     return await withProfileLock(profile, async () => {
-      if (await migrationRecorded(profile)) return true;
+      if (await bindingMigrationRecorded(profile)) return true;
       const recordedAt = new Date().toISOString();
       const bound = new Map<string, Record<string, unknown>>();
+      const unbound: string[] = [];
       for (const entry of await readAdditionalDelegations<Record<string, unknown>>(profile)) {
         if ("authorityRequest" in entry || storedDelegationKind(entry) !== "compact") continue;
-        const delegation = normalizeStoredDelegation(entry);
-        if (delegation === undefined) continue;
-        const signed = await signedCapabilities(node, delegation, options.host);
-        if (signed === undefined) continue;
-        bound.set(recordKey(entry)!, bindToSignedCapabilities(entry as typeof entry & { delegation: { cid: string } }, signed, "migration", recordedAt));
+        const migrated = await migratedRecord(node, entry, options.host, recordedAt);
+        if (migrated === undefined) unbound.push(String(storedCid(entry)));
+        else bound.set(recordKey(entry)!, migrated);
       }
       if (bound.size > 0) {
         await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (records) => ({
@@ -203,11 +238,32 @@ export async function prepareStoredDelegationReplay(
         formatVersion: 1,
         migratedAt: recordedAt,
         bound: [...bound.values()].map(storedCid),
+        unbound,
       });
       return true;
     }, { timeoutMs: MIGRATION_LOCK_TIMEOUT_MS });
   } catch {
     return false;
+  }
+}
+
+/** One record's migration: bound to its own signed capabilities, or `undefined` if it cannot be. */
+async function migratedRecord(
+  node: RuntimeDelegationActivator,
+  entry: Record<string, unknown>,
+  host: string,
+  recordedAt: string,
+): Promise<Record<string, unknown> | undefined> {
+  const delegation = normalizeStoredDelegation(entry);
+  if (delegation === undefined) return undefined;
+  const signed = await signedCapabilities(node, delegation, host);
+  if (signed === undefined) return undefined;
+  try {
+    // The stored delegation is kept exactly as it was; only the binding is added.
+    return bindToSignedCapabilities({ ...entry, delegation: { ...entry.delegation as object, cid: delegation.cid } }, signed, "migration", recordedAt);
+  } catch {
+    // Signed capabilities a request binding cannot hold (an empty action, say).
+    return undefined;
   }
 }
 
@@ -231,14 +287,11 @@ export async function replayStoredDelegation(
 ): Promise<ValidatedRuntimeDelegation | undefined> {
   const delegation = normalizeStoredDelegation(entry);
   if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) return undefined;
-  const binding = DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
-  const authorize = binding.success
-    ? (effective: readonly PermissionEntry[]) =>
-      delegationWithinRequest(binding.data.requested, effective, options.resolveSpace)
-    : !options.migrated && !("authorityRequest" in entry) && storedDelegationKind(entry) === "compact"
+  const limit = replayLimit(entry, options.migrated);
+  if (limit === undefined) return undefined;
+  const authorize = limit === "signed"
     ? () => true
-    : undefined;
-  if (authorize === undefined) return undefined;
+    : (effective: readonly PermissionEntry[]) => delegationWithinRequest(limit, effective, options.resolveSpace);
   try {
     return await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host: options.host, authorize });
   } catch {
@@ -249,7 +302,7 @@ export async function replayStoredDelegation(
 }
 
 /** An unreadable marker counts as migrated: a damaged marker never reopens migration. */
-async function migrationRecorded(profile: string): Promise<boolean> {
+export async function bindingMigrationRecorded(profile: string): Promise<boolean> {
   try {
     return await readJson<unknown>(bindingMigrationPath(profile)) !== null;
   } catch {

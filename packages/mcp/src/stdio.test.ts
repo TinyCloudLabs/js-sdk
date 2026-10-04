@@ -670,9 +670,23 @@ test("`tc kv get` never activates a stored compact delegation broader than its r
       return (fixture.hermetic.nativeBearerStats().delegations as number) - before;
     };
 
+    // The first run also records the (empty) profile's binding migration.
     const baseline = await activationsDuring([]);
     expect(await activationsDuring([{
       delegation,
+      permissions: kvOnly,
+      authorityRequest: { requestId: "req_kv_only", requested: kvOnly },
+    }])).toBe(baseline);
+    // Unbound after the migration, with a correct and a case-folded header.
+    const authorization = delegation.delegationHeader.Authorization as string;
+    expect(await activationsDuring([{ delegation, permissions: [] }])).toBe(baseline);
+    expect(await activationsDuring([{
+      delegation: { ...delegation, delegationHeader: { authorization } },
+      permissions: [],
+    }])).toBe(baseline);
+    // Not contained in its binding, with the header value in an array.
+    expect(await activationsDuring([{
+      delegation: { ...delegation, delegationHeader: { Authorization: [authorization] } },
       permissions: kvOnly,
       authorityRequest: { requestId: "req_kv_only", requested: kvOnly },
     }])).toBe(baseline);
