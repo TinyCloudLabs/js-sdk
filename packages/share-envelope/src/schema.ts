@@ -333,11 +333,23 @@ export const contentMetadataSchema = z.object({
   artifact: z.literal("html").optional(),
 }).strict();
 
+/**
+ * The rule every v2/v3 envelope applies to `deliveryEmail`. Deployed viewers
+ * validate with it, so senders must not sign an address it rejects; it is
+ * stricter than `canonicalMailbox` (for example `a/b@example.com`).
+ */
+const deliveryEmailSchema = z.string().email();
+
+/** Whether `value` may be signed as an envelope's `deliveryEmail`. */
+export function isEnvelopeDeliveryEmail(value: string): boolean {
+  return deliveryEmailSchema.safeParse(value).success;
+}
+
 const unsignedShareEnvelopeV2BaseSchema = z.object({
   version: z.literal(2),
   shareId: z.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: z.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: z.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v2TargetSchema,
@@ -495,7 +507,7 @@ const unsignedShareEnvelopeV3BaseSchema = z.object({
   version: z.literal(3),
   shareId: z.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: z.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: z.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v3TargetSchema,

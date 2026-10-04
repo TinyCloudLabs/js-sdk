@@ -77,6 +77,15 @@ describe("addressed publication preflight", () => {
     expect(() => prepareAddressedShare({ ...request, policyActions: ["tinycloud.kv/get", "tinycloud.kv/delete" as never] })).toThrow("not supported");
     expect(() => prepareAddressedShare({ ...request, filename: "../readme.md" })).toThrow("addressed filename is invalid");
   });
+
+  it("refuses a delivery address the envelope schema would reject before any side effect", () => {
+    const request = { actions: ["read"] as const, policyActions: ["tinycloud.kv/get"] as const, filename: "readme.md" };
+    // Mailboxes the issuer accepts but deployed viewers' envelope schema does not.
+    for (const address of ["a/b@tinycloud.xyz", "reader@tinycloud.xn--p1ai"]) {
+      expect(() => prepareAddressedShare({ ...request, target: { kind: "email", address }, deliveryEmail: address }), address).toThrow("delivery email is not a valid envelope address");
+    }
+    expect(prepareAddressedShare({ ...request, target: { kind: "email", address: "reader@tinycloud.xyz" }, deliveryEmail: "reader@tinycloud.xyz" }).target).toEqual({ kind: "email", address: "reader@tinycloud.xyz" });
+  });
 });
 
 describe("exact-email publication guards", () => {
