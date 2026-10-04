@@ -12,6 +12,7 @@ import type {
 
 import { DelegationRequestBindingSchema } from "./artifacts.js";
 import { delegationWithinRequest, type OperationSpaceResolver } from "./authority.js";
+import { STORED_GRANT_SKIP_REASONS, type StoredGrantSkipReason } from "./contract.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -299,13 +300,30 @@ async function migratedRecord(
 }
 
 /**
+ * What replay did with one stored record. `skipped` records grant nothing and
+ * carry a fixed reason code that is safe to publish; `not-replayed` records
+ * are routine (expired) and give nothing to act on.
+ */
+export type StoredDelegationReplay =
+  | { readonly status: "installed"; readonly delegation: ValidatedRuntimeDelegation }
+  | { readonly status: "skipped"; readonly reason: StoredGrantSkipReason }
+  | { readonly status: "not-replayed" };
+
+const NOT_REPLAYED: StoredDelegationReplay = { status: "not-replayed" };
+
+function skipped(reason: StoredGrantSkipReason): StoredDelegationReplay {
+  return { status: "skipped", reason };
+}
+
+/**
  * Replays one stored record under the binding rule. A record with a valid
  * binding installs only if its signed capabilities fit inside it. Before the
  * profile has migrated, an unbound compact record installs with its signed
  * authority as it always did; after, it installs nothing. A signed-login
- * record installs only with a binding. Returns the installed delegation, or
- * `undefined` when the record installs nothing. Never throws: stored data is
- * untrusted transport material.
+ * record installs only with a binding. A record with neither compact bytes
+ * nor a `siweProof` cannot be verified here and installs nothing. Never
+ * throws, and never reports exception text: stored data is untrusted
+ * transport material, and messages can quote it or a node's response.
  */
 export async function replayStoredDelegation(
   node: RuntimeDelegationActivator,
@@ -315,21 +333,37 @@ export async function replayStoredDelegation(
     readonly migrated: boolean;
     readonly resolveSpace: OperationSpaceResolver;
   },
-): Promise<ValidatedRuntimeDelegation | undefined> {
+): Promise<StoredDelegationReplay> {
+  const kind = storedDelegationKind(entry);
   const delegation = normalizeStoredDelegation(entry);
-  if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) return undefined;
+  if (kind === "refused" || delegation === undefined) return skipped("malformed");
+  if (delegation.expiry.getTime() <= Date.now()) return NOT_REPLAYED;
+  if (kind === "other") return skipped("proof_missing");
   const limit = replayLimit(entry, options.migrated);
-  if (limit === undefined) return undefined;
+  if (limit === undefined) return skipped("unbound");
+  let outsideRequest = false;
   const authorize = limit === "signed"
     ? () => true
-    : (effective: readonly PermissionEntry[]) => delegationWithinRequest(limit, effective, options.resolveSpace);
+    : (effective: readonly PermissionEntry[]) => {
+      outsideRequest = __omp_shell("delegationWithinRequest(limit, effective, options.resolveSpace);")
+      return !outsideRequest;
+    };
   try {
-    return await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host: options.host, authorize });
-  } catch {
-    // An invalid, stale, wrong-session, or rejected record grants nothing and
-    // must not reveal its contents through a safe operation channel.
-    return undefined;
+    return {
+      status: "installed",
+      delegation: await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host: options.host, authorize }),
+    };
+  } catch (error) {
+    return skipped(outsideRequest ? "outside_request" : rejectionReason(error));
   }
+}
+
+/** The published reason node-sdk attached to a refused delegation, else `invalid`. */
+function rejectionReason(error: unknown): StoredGrantSkipReason {
+  const reason = isRecord(error) ? error.reason : undefined;
+  return typeof reason === "string" && (STORED_GRANT_SKIP_REASONS as readonly string[]).includes(reason)
+    ? reason as StoredGrantSkipReason
+    : "invalid";
 }
 
 /** An unreadable marker counts as migrated: a damaged marker never reopens migration. */

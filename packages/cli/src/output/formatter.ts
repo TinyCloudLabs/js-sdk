@@ -5,7 +5,31 @@ export function outputJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
 
-export function outputError(code: string, message: string, hint?: string, meta?: Record<string, unknown>): void {
+/** A skipped-grant (or other) diagnostic from an operation result: fixed codes only. */
+export interface OperationWarningOutput {
+  readonly code: string;
+  readonly reason: string;
+  readonly grantCid?: string;
+}
+
+function warningLine(warnings: readonly OperationWarningOutput[]): string {
+  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; the old grant expires on its own.`;
+}
+
+/**
+ * Write a command error to stderr. `meta` (validated authorization fields)
+ * and `warnings` (fixed-code diagnostics) appear only in the JSON form; the
+ * human form adds one warnings line.
+ */
+export function outputError(
+  code: string,
+  message: string,
+  hint?: string,
+  details: { readonly meta?: Record<string, unknown>; readonly warnings?: readonly OperationWarningOutput[] } = {},
+): void {
+  const { meta, warnings = [] } = details;
   if (isInteractive()) {
     process.stderr.write(
       `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
@@ -15,14 +39,46 @@ export function outputError(code: string, message: string, hint?: string, meta?:
         process.stderr.write(`  ${theme.hint(line)}\n`);
       }
     }
+    if (warnings.length > 0) process.stderr.write(`  ${theme.warn(warningLine(warnings))}\n`);
   } else {
-    const payload: { error: { code: string; message: string; hint?: string; meta?: Record<string, unknown> } } = {
+    const payload: {
+      error: {
+        code: string;
+        message: string;
+        hint?: string;
+        meta?: Record<string, unknown>;
+        warnings?: readonly OperationWarningOutput[];
+      };
+    } = {
       error: { code, message },
     };
     if (hint) payload.error.hint = hint;
     if (meta) payload.error.meta = meta;
+    if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+}
+
+/**
+ * Report diagnostics of a successful command on stderr without breaking
+ * machine-readable output: one JSON line in JSON mode, one line otherwise.
+ */
+export function outputWarnings(warnings: readonly OperationWarningOutput[]): void {
+  if (warnings.length === 0) return;
+  process.stderr.write(isInteractive()
+    ? `${theme.warn("!")} ${warningLine(warnings)}\n`
+    : `${JSON.stringify({ warnings })}\n`);
+}
+
+/** The well-formed warnings of an operation result (or error metadata); anything else is dropped. */
+export function operationWarnings(value: unknown): OperationWarningOutput[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((warning: unknown): OperationWarningOutput[] => {
+    if (warning === null || typeof warning !== "object") return [];
+    const { code, reason, grantCid } = warning as Record<string, unknown>;
+    if (typeof code !== "string" || typeof reason !== "string") return [];
+    return [{ code, reason, ...(typeof grantCid === "string" ? { grantCid } : {}) }];
+  });
 }
 
 export function isInteractive(): boolean {

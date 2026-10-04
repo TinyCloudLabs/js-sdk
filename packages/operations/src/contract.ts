@@ -59,6 +59,45 @@ export interface OperationContext {
 export interface OperationRuntime {
   readonly node: unknown;
   readonly granted: readonly CapabilityRequirement[];
+  /** Diagnostics gathered while building the runtime, attached to the result. */
+  readonly warnings?: readonly OperationWarning[];
+}
+
+/**
+ * Why a stored grant was not used. A fixed vocabulary: diagnostics never
+ * carry exception text, node responses, URLs or other stored transport data.
+ * `unbound`: the record has no valid request binding where one is required;
+ * `outside_request`: its signed authority exceeds its binding.
+ */
+export const STORED_GRANT_SKIP_REASONS = [
+  "malformed",
+  "unbound",
+  "outside_request",
+  "host_mismatch",
+  "expired",
+  "cid_mismatch",
+  "authority_invalid",
+  "proof_missing",
+  "proof_invalid",
+  "owner_mismatch",
+  "audience_mismatch",
+  "resources_mismatch",
+  "unsupported",
+  "activation_rejected",
+  "invalid",
+] as const;
+
+export type StoredGrantSkipReason = typeof STORED_GRANT_SKIP_REASONS[number];
+
+/**
+ * A non-fatal diagnostic attached to a result. `STORED_GRANT_SKIPPED`: a
+ * stored grant failed validation and gave no authority; `grantCid` is present
+ * only when the stored CID is a well-formed identifier.
+ */
+export interface OperationWarning {
+  readonly code: "STORED_GRANT_SKIPPED";
+  readonly reason: StoredGrantSkipReason;
+  readonly grantCid?: string;
 }
 
 /** Context given to planners and handlers after runtime authentication. */
@@ -126,6 +165,7 @@ export interface OperationOkResult<O> {
   readonly operation: OperationRef;
   readonly context: OperationContextSummary;
   readonly output: O;
+  readonly warnings?: readonly OperationWarning[];
 }
 
 export interface OperationAuthorityRequiredResult {
@@ -136,6 +176,7 @@ export interface OperationAuthorityRequiredResult {
   readonly request: PermissionRequestArtifact;
   readonly approval: ApprovalAction;
   readonly retry: RetryDescriptor;
+  readonly warnings?: readonly OperationWarning[];
 }
 
 export interface OperationSetupRequiredResult {
@@ -144,6 +185,7 @@ export interface OperationSetupRequiredResult {
   readonly context: OperationContextSummary;
   readonly setup: SetupAction;
   readonly retry: RetryDescriptor;
+  readonly warnings?: readonly OperationWarning[];
 }
 
 export interface OperationErrorResult {
@@ -151,6 +193,7 @@ export interface OperationErrorResult {
   readonly operation: OperationRef;
   readonly context: OperationContextSummary;
   readonly error: OperationError;
+  readonly warnings?: readonly OperationWarning[];
 }
 
 export type OperationResult<O> =

@@ -15,7 +15,15 @@ import {
 } from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 import { ProfileManager } from "../config/profiles.js";
-import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
+import {
+  formatCheck,
+  formatSection,
+  operationWarnings,
+  outputJson,
+  outputWarnings,
+  shouldOutputJson,
+  withSpinner,
+} from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -392,7 +400,36 @@ async function runSecretOperationAttempt<T>(
   }
 }
 
-async function invokeCanonicalSecretGet(params: {
+type CanonicalSecretGetWarning = NonNullable<CanonicalSecretGetResult["warnings"]>[number];
+
+/** Carry an operation's warnings on the CLI error that reports it, so handleError renders them. */
+function withOperationWarnings(error: unknown, warnings: readonly CanonicalSecretGetWarning[] | undefined): unknown {
+  if (error instanceof CLIError && warnings !== undefined && warnings.length > 0) {
+    error.metadata = { ...error.metadata, warnings };
+  }
+  return error;
+}
+
+/**
+ * The canonical read, possibly after a session refresh or an approved
+ * escalation. Warnings from every invocation are kept, deduplicated, on the
+ * returned envelope or on the error that ends the command.
+ */
+async function invokeCanonicalSecretGet(params: CanonicalSecretGetParams): Promise<CanonicalSecretGetResult> {
+  const warnings = new Map<string, CanonicalSecretGetWarning>();
+  const collect = (result: CanonicalSecretGetResult): CanonicalSecretGetResult => {
+    for (const warning of result.warnings ?? []) warnings.set(JSON.stringify(warning), warning);
+    return result;
+  };
+  try {
+    const result = await canonicalSecretGet(params, collect);
+    return warnings.size === 0 ? result : { ...result, warnings: [...warnings.values()] };
+  } catch (error) {
+    throw withOperationWarnings(error, [...warnings.values()]);
+  }
+}
+
+interface CanonicalSecretGetParams {
   ctx: CLIContext;
   node?: TinyCloudNode;
   name: string;
@@ -401,7 +438,12 @@ async function invokeCanonicalSecretGet(params: {
   options: { privateKey?: string };
   label: string;
   openKeyAcquisition?: OpenKeyAcquisition;
-}): Promise<CanonicalSecretGetResult> {
+}
+
+async function canonicalSecretGet(
+  params: CanonicalSecretGetParams,
+  collect: (result: CanonicalSecretGetResult) => CanonicalSecretGetResult,
+): Promise<CanonicalSecretGetResult> {
   const auth = authOptions(params.options);
   let ownerNode: TinyCloudNode | undefined;
   if (!auth?.privateKey) {
@@ -425,12 +467,12 @@ async function invokeCanonicalSecretGet(params: {
     ...(params.space === undefined ? {} : { space: params.space }),
   };
 
-  const invoke = () => withSpinner(
+  const invoke = async () => collect(await withSpinner(
     params.label,
     () => auth?.privateKey
       ? invokeSecretsGetWithLocalAuthorityRetry(target, input)
       : invokeOperation("tinycloud.secrets.get", 1, target, input),
-  );
+  ));
   let first = await invoke();
   if (first.status === "error" &&
     first.error.code === "SESSION_NOT_FOUND" &&
@@ -1363,8 +1405,13 @@ export function registerSecretsCommand(
         });
 
         if (result.status !== "ok") {
-          throwCanonicalSecretGetError(result, name);
+          try {
+            throwCanonicalSecretGetError(result, name);
+          } catch (error) {
+            throw withOperationWarnings(error, result.warnings);
+          }
         }
+        outputWarnings(operationWarnings(result.warnings));
 
         const value = result.output.value;
 

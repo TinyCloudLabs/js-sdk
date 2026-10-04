@@ -9,7 +9,16 @@ import type { IncomingMessage } from "node:http";
 import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
-import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
+import {
+  outputJson,
+  outputWarnings,
+  operationWarnings,
+  shouldOutputJson,
+  formatField,
+  formatTable,
+  isInteractive,
+  withSpinner,
+} from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
@@ -1044,9 +1053,12 @@ async function importRequestBoundDelegation(
     artifact,
   );
 
+  const warnings = operationWarnings(result.warnings);
+  const metadata = warnings.length === 0 ? undefined : { warnings };
   switch (result.status) {
     case "ok": {
       const output = result.output as AuthImportOutput;
+      outputWarnings(warnings);
       outputJson({
         imported: true,
         activated: output.activated,
@@ -1066,16 +1078,18 @@ async function importRequestBoundDelegation(
         "AUTHORITY_REQUIRED",
         "The active session requires additional authority before importing this delegation.",
         ExitCode.PERMISSION_DENIED,
+        metadata,
       );
     case "setup_required":
       throw new CLIError(
         "SETUP_REQUIRED",
         "The active profile requires setup before importing this delegation.",
         ExitCode.ERROR,
+        metadata,
       );
     case "error":
       if (result.error.code === "SESSION_EXPIRED") throw sessionExpiredError(ctx.profile, result.context.posture);
-      throw cliErrorFromService(result.error);
+      throw cliErrorFromService({ ...result.error, meta: metadata });
   }
 }
 

@@ -8,7 +8,9 @@ import { openKeyDelegate } from "../test-support/openkey-delegate.js";
 
 const TEST_HOME = await mkdtemp(join(tmpdir(), "tc-secrets-owner-retry-"));
 const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_TC_HOME = process.env.TC_HOME;
 process.env.HOME = TEST_HOME;
+process.env.TC_HOME = TEST_HOME;
 
 const SECRET_VALUE_CANARY = "tc-191-owner-secret-value-canary";
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -170,6 +172,8 @@ afterAll(async () => {
   } else {
     process.env.HOME = ORIGINAL_HOME;
   }
+  if (ORIGINAL_TC_HOME === undefined) delete process.env.TC_HOME;
+  else process.env.TC_HOME = ORIGINAL_TC_HOME;
   await rm(TEST_HOME, { recursive: true, force: true });
 });
 

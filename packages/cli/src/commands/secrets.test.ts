@@ -522,6 +522,9 @@ mock.module("./auth.js", () => ({
 }));
 
 mock.module("../output/formatter.js", () => ({
+  // Warning rendering is covered end to end in stored-grant-warnings.test.ts.
+  operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
+  outputWarnings: () => {},
   formatCheck: (ok: boolean | "warn", label: string, detail?: string) =>
     `${String(ok)} ${label}${detail ? ` (${detail})` : ""}`,
   formatSection: (title: string) => title,
@@ -753,7 +756,7 @@ describe("CLI secrets commands", () => {
         "not-a-secret",
       ], {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home },
+        env: { ...process.env, HOME: home, TC_HOME: home },
         stdout: "pipe",
         stderr: "pipe",
       });

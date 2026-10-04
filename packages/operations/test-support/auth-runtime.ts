@@ -37,6 +37,8 @@ interface HermeticEncryptedNode {
   mintDelegation(): Promise<StoredRuntimeDelegation>;
   mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;
   mintDelegationForAudience(audience: string): Promise<StoredRuntimeDelegation>;
+  /** A real delegation the loopback node refuses to activate. */
+  mintUntrustedDelegation(): Promise<StoredRuntimeDelegation>;
   readAndDecrypt(node: unknown, delegation: unknown): Promise<void>;
   assertNarrowDelegatedReadAndDecrypt(delegation: unknown, expectedSigningIssuer?: string): void;
   assertDelegatedKvResources(resources: readonly string[]): void;

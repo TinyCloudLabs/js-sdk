@@ -5,12 +5,14 @@ import type {
 } from "@tinycloud/node-sdk";
 import * as nodeSdk from "@tinycloud/node-sdk";
 
-import type {
-  InvocationTarget,
-  OperationContext,
-  OperationRuntime,
-  OperationRuntimeRequirement,
-  RuntimeOperationContext,
+import {
+  type InvocationTarget,
+  type OperationContext,
+  type OperationRuntime,
+  type OperationRuntimeRequirement,
+  type OperationWarning,
+  type RuntimeOperationContext,
+  type StoredGrantSkipReason,
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
@@ -185,6 +187,7 @@ export async function createInvocationRuntime(
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
     const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
     const seenCids = new Set<string>();
+    const warnings: OperationWarning[] = [];
     // An explicit key is another identity: it neither replays nor migrates
     // this profile's records.
     if (!explicitPrivateKeyOverride) {
@@ -200,14 +203,22 @@ export async function createInvocationRuntime(
       // Elements are untrusted and may not even be objects; the shared rule
       // classifies each before reading any field.
       for (const entry of await readAdditionalDelegations<unknown>(profileName)) {
-        const activated = await replayStoredDelegation(activator, entry, {
+        const replay = await replayStoredDelegation(activator, entry, {
           host: summary.host,
           migrated,
           resolveSpace,
         });
-        if (activated !== undefined && !seenCids.has(activated.cid)) {
-          seenCids.add(activated.cid);
-          livePermissions.push(...activated.effectivePermissions);
+        if (replay.status === "installed") {
+          if (!seenCids.has(replay.delegation.cid)) {
+            seenCids.add(replay.delegation.cid);
+            livePermissions.push(...replay.delegation.effectivePermissions);
+          }
+        } else if (replay.status === "skipped") {
+          // A skipped record never grants authority. Skipping (not failing)
+          // keeps one stale record from blocking what the session or other
+          // grants cover; the result says which grant and why, in fixed
+          // codes only. An expired grant is routine and is not reported.
+          warnings.push(skippedGrantWarning(entry, replay.reason));
         }
       }
     }
@@ -215,6 +226,7 @@ export async function createInvocationRuntime(
     const runtime: OperationRuntime = {
       node,
       granted: canonicalizeCapabilities(livePermissions),
+      ...(warnings.length === 0 ? {} : { warnings }),
     };
     return {
       ok: true,
@@ -239,6 +251,15 @@ export async function createInvocationRuntime(
       { retryable: true },
     ));
   }
+}
+
+function skippedGrantWarning(entry: unknown, reason: StoredGrantSkipReason): OperationWarning {
+  const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+  return {
+    code: "STORED_GRANT_SKIPPED",
+    reason,
+    ...(typeof cid === "string" && /^[A-Za-z0-9]{1,128}$/.test(cid) ? { grantCid: cid } : {}),
+  };
 }
 
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {

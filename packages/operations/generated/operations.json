@@ -175,6 +175,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -261,6 +300,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -415,6 +493,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -576,6 +693,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -1128,6 +1284,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -1214,6 +1409,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -1368,6 +1602,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -1529,6 +1802,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -2090,6 +2402,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -2176,6 +2527,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -2330,6 +2720,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -2491,6 +2920,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -3235,6 +3703,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -3321,6 +3828,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -3475,6 +4021,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -3636,6 +4221,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -4347,6 +4971,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -4433,6 +5096,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -4587,6 +5289,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -4748,6 +5489,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -5428,6 +6208,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -5514,6 +6333,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -5668,6 +6526,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -5829,6 +6726,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -6390,6 +7326,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -6476,6 +7451,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -6630,6 +7644,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -6791,6 +7844,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -7344,6 +8436,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -7430,6 +8561,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -7584,6 +8754,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -7745,6 +8954,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -8302,6 +9550,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -8388,6 +9675,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -8542,6 +9868,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -8703,6 +10068,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -9219,6 +10623,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -9305,6 +10748,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -9459,6 +10941,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -9620,6 +11141,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -10304,6 +11864,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -10390,6 +11989,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -10544,6 +12182,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -10705,6 +12382,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -11211,6 +12927,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -11297,6 +13052,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -11451,6 +13245,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -11612,6 +13445,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -12165,6 +14037,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -12251,6 +14162,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -12405,6 +14355,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -12566,6 +14555,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -13206,6 +15234,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -13292,6 +15359,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -13446,6 +15552,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -13607,6 +15752,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -14228,6 +16412,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -14314,6 +16537,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -14468,6 +16730,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -14629,6 +16930,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",
@@ -15229,6 +17569,45 @@
                 ],
                 "additionalProperties": false
               },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "output": {
                 "$ref": "#/$defs/output"
               }
@@ -15315,6 +17694,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "missing": {
                 "type": "array",
@@ -15469,6 +17887,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "setup": {
                 "type": "object",
@@ -15630,6 +18087,45 @@
                   "posture"
                 ],
                 "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "const": "STORED_GRANT_SKIPPED"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "malformed",
+                        "host_mismatch",
+                        "expired",
+                        "cid_mismatch",
+                        "authority_invalid",
+                        "proof_missing",
+                        "proof_invalid",
+                        "owner_mismatch",
+                        "audience_mismatch",
+                        "resources_mismatch",
+                        "unsupported",
+                        "activation_rejected",
+                        "invalid"
+                      ]
+                    },
+                    "grantCid": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9]{1,128}$"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "error": {
                 "type": "object",

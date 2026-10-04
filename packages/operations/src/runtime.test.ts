@@ -109,7 +109,7 @@ test("includes cryptographically restored base-session ReCap authority in runtim
 
 test("replay skips expired and CID-tampered stored records, reporting the invalid one", async () => {
   const fixture = await createAuthRuntimeFixture();
-  const warnings = spyOn(process, "emitWarning").mockImplementation(() => undefined);
+  const processWarnings = spyOn(process, "emitWarning");
   try {
     const delegation = await fixture.hermetic.mintDelegation();
     await persistRuntimeDelegations(fixture, [
@@ -122,13 +122,40 @@ test("replay skips expired and CID-tampered stored records, reporting the invali
     if (!runtime.ok) throw new Error("expected a runtime");
     expect(runtime.context.runtime.granted).toEqual([]);
     expect((runtime.context.runtime.node as RuntimeNode).getRuntimePermissionDelegations()).toEqual([]);
-    // Only the record that failed validation is reported; an expired grant is routine.
-    expect(warnings.mock.calls).toEqual([[
-      `TinyCloud profile "${fixture.profile}" did not use stored grant (unidentified): Runtime delegation CID does not match authorization bytes.`,
-      { code: "TINYCLOUD_GRANT_SKIPPED" },
-    ]]);
+    // Only the record that failed validation is reported, as data; an expired
+    // grant is routine. A malformed stored CID is not echoed.
+    expect(runtime.context.runtime.warnings).toEqual([{ code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" }]);
+    expect(processWarnings).not.toHaveBeenCalled();
   } finally {
-    warnings.mockRestore();
+    processWarnings.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("skipped-grant warnings publish fixed codes, never a node response or a stored host", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  // The loopback node answers a refused activation with this body.
+  const responseCanary = "delegation chain rejected by loopback transport";
+  const userinfoCanary = "tc-grant-userinfo-canary";
+  try {
+    const refused = await fixture.hermetic.mintUntrustedDelegation();
+    const foreignHost = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [
+      refused,
+      { ...foreignHost, host: `https://agent:${userinfoCanary}@evil.example` },
+    ]);
+
+    const result = await invokeOperation("tinycloud.secrets.get", 1, { profile: fixture.profile }, { name: "KEY" });
+
+    expect(result.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: refused.cid },
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: foreignHost.cid },
+    ]);
+    const published = JSON.stringify(result);
+    expect(published).not.toContain(responseCanary);
+    expect(published).not.toContain(userinfoCanary);
+    expect(published).not.toContain("evil.example");
+  } finally {
     fixture.hermetic.stop();
   }
 });

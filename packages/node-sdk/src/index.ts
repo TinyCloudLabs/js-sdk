@@ -240,6 +240,8 @@ export {
   grantAuthRequest,
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
+  RUNTIME_DELEGATION_REJECTIONS,
+  RuntimeDelegationRejectedError,
 } from "./delegation";
 export type {
   PortableDelegation,
@@ -247,6 +249,7 @@ export type {
   AuthDelegationArtifact,
   DelegationAuthority,
   CompactRuntimeDelegationInput,
+  RuntimeDelegationRejection,
   RuntimeDelegationActivator,
   SessionGrantProof,
   ValidatedRuntimeDelegation,

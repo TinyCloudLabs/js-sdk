@@ -34,8 +34,15 @@ const hermeticModule = await import(
   new URL("../../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href
 ) as { createHermeticEncryptedNode(options: { secretPayloadValue: string }): Promise<HermeticNode> };
 // Profile state paths resolve at module load, after TC_HOME points at the test home.
-const { profileConfigPath, profilePath, sessionPath, tinycloudConfigPath, writeJsonAtomic, readAdditionalDelegations } =
-  await import("@tinycloud/operations/state");
+const {
+  additionalDelegationsPath,
+  profileConfigPath,
+  profilePath,
+  readAdditionalDelegations,
+  sessionPath,
+  tinycloudConfigPath,
+  writeJsonAtomic,
+} = await import("@tinycloud/operations/state");
 const { registerSecretsCommand } = await import("./secrets.js");
 
 let hermetic: HermeticNode;
@@ -122,7 +129,7 @@ test("an approved escalation authorizes secrets get in the same process and in a
   // One approval, then the immediate canonical retry read the value.
   expect(acquisitions).toBe(1);
   expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
-  const stored = await readAdditionalDelegations<{ delegation: { sessionProof?: unknown } }>("owner");
+  const stored = await readAdditionalDelegations<{ delegation: { cid: string; sessionProof?: unknown } }>("owner");
   expect(stored).toHaveLength(1);
   expect(stored[0]!.delegation.sessionProof).toEqual({
     siwe: expect.any(String),
@@ -130,19 +137,34 @@ test("an approved escalation authorizes secrets get in the same process and in a
   });
 
   // A new process has only the stored grant; it must replay it, not ask again.
-  const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
-  delete env.TC_HOST;
-  delete env.TC_PRIVATE_KEY;
-  const child = Bun.spawn([
-    process.execPath,
-    join(import.meta.dir, "../../test-support/secrets-json-error.ts"),
-    "--profile", "owner", "--json", "secrets", "get", SECRET,
-  ], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [childStdout, childStderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  expect({ exitCode, stderr: childStderr }).toEqual({ exitCode: 0, stderr: "" });
-  expect(JSON.parse(childStdout)).toEqual({ name: SECRET, value: CANARY });
+  const freshRead = async () => {
+    const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
+    delete env.TC_HOST;
+    delete env.TC_PRIVATE_KEY;
+    const child = Bun.spawn([
+      process.execPath,
+      join(import.meta.dir, "../../test-support/secrets-json-error.ts"),
+      "--profile", "owner", "--json", "secrets", "get", SECRET,
+    ], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [childStdout, childStderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { exitCode, stdout: childStdout, stderr: childStderr };
+  };
+  const fresh = await freshRead();
+  expect({ exitCode: fresh.exitCode, stderr: fresh.stderr }).toEqual({ exitCode: 0, stderr: "" });
+  expect(JSON.parse(fresh.stdout)).toEqual({ name: SECRET, value: CANARY });
+
+  // A copy left by an earlier release, without its proof, is skipped; the read
+  // still succeeds and stderr stays machine-readable.
+  const { sessionProof: _proof, ...proofless } = stored[0]!.delegation;
+  await writeJsonAtomic(additionalDelegationsPath("owner"), [stored[0], { ...stored[0], delegation: proofless }]);
+  const upgraded = await freshRead();
+  expect(upgraded.exitCode).toBe(0);
+  expect(JSON.parse(upgraded.stdout)).toEqual({ name: SECRET, value: CANARY });
+  expect(JSON.parse(upgraded.stderr)).toEqual({
+    warnings: [{ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: stored[0]!.delegation.cid }],
+  });
 });

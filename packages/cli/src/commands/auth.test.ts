@@ -399,6 +399,9 @@ mock.module("../lib/permissions.js", () => ({
 }));
 
 mock.module("../output/formatter.js", () => ({
+  // Warning rendering is covered end to end in stored-grant-warnings.test.ts.
+  operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
+  outputWarnings: () => {},
   formatField: (label: string, value: unknown) => `${label}: ${String(value)}`,
   formatTable: (_headers: string[], rows: string[][]) =>
     rows.map((row) => row.join("  ")).join("\n"),

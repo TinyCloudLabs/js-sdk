@@ -47,6 +47,9 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 mock.module("../output/formatter.js", () => ({
+  // Warning rendering is covered end to end in stored-grant-warnings.test.ts.
+  operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
+  outputWarnings: () => {},
   isInteractive: () => false,
   shouldOutputJson: () => true,
   withSpinner: async (_label: string, action: () => Promise<unknown>) => action(),

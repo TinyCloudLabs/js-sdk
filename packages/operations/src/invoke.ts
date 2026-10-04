@@ -70,7 +70,7 @@ export async function invokeOperation(
       unknownInput,
     );
     if (isPreparedError(prepared)) return prepared.result;
-    return executePreparedInvocation(prepared);
+    return withRuntimeWarnings(await executePreparedInvocation(prepared), prepared);
   });
 }
 
@@ -128,7 +128,12 @@ async function invokeLocalAuthorityRetry(
     unknownInput,
   );
   if (isPreparedError(prepared)) return prepared.result;
+  return withRuntimeWarnings(await retryWithLocalAuthority(prepared), prepared);
+}
 
+async function retryWithLocalAuthority(
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+): Promise<OperationResult<unknown>> {
   if (
     prepared.operation.operationId !== "tinycloud.secrets.get" ||
     prepared.operation.operationVersion !== 1
@@ -244,6 +249,15 @@ async function invokeLocalAuthorityRetry(
   } catch {
     return localAuthorityFailure(prepared);
   }
+}
+
+/** Diagnostics from building the runtime belong to the invocation's result. */
+function withRuntimeWarnings(
+  result: OperationResult<unknown>,
+  prepared: Exclude<PreparedInvocation, { status: "error" }>,
+): OperationResult<unknown> {
+  const warnings = prepared.runtimeResolution.context.runtime?.warnings;
+  return warnings === undefined || warnings.length === 0 ? result : { ...result, warnings: [...warnings] };
 }
 
 type PreparedInvocation = Readonly<{

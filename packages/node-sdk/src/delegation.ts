@@ -177,6 +177,41 @@ export interface VerifiedSessionGrant {
   readonly expiresAt: Date;
 }
 
+/**
+ * Stable reasons {@link activateValidatedRuntimeDelegation} refuses a
+ * delegation for. The error message is for the caller and may quote
+ * transport fields or a node's response; the reason is safe to publish.
+ */
+export const RUNTIME_DELEGATION_REJECTIONS = [
+  "host_mismatch",
+  "expired",
+  "cid_mismatch",
+  "authority_invalid",
+  "proof_missing",
+  "proof_invalid",
+  "owner_mismatch",
+  "audience_mismatch",
+  "resources_mismatch",
+  "unsupported",
+  "activation_rejected",
+] as const;
+
+export type RuntimeDelegationRejection = typeof RUNTIME_DELEGATION_REJECTIONS[number];
+
+export class RuntimeDelegationRejectedError extends Error {
+  readonly reason: RuntimeDelegationRejection;
+
+  constructor(reason: RuntimeDelegationRejection, message: string) {
+    super(message);
+    this.name = "RuntimeDelegationRejectedError";
+    this.reason = reason;
+  }
+}
+
+function reject(reason: RuntimeDelegationRejection, message: string): never {
+  throw new RuntimeDelegationRejectedError(reason, message);
+}
+
 interface SignedRuntimeAuthority {
   readonly issuer: string;
   readonly audience: string;
@@ -433,31 +468,37 @@ function signedAuthorityFromSessionGrant(
     proof === undefined || proof === null || typeof proof !== "object" ||
     typeof proof.siwe !== "string" || typeof proof.signature !== "string"
   ) {
-    throw new Error(
+    reject(
+      "proof_missing",
       "Runtime delegation is a wallet-signed session grant stored without its signed SIWE proof, so its authority cannot be verified.",
     );
   }
   if (typeof node.verifySessionGrant !== "function") {
-    throw new Error("This runtime cannot verify wallet-signed session grants.");
+    reject("unsupported", "This runtime cannot verify wallet-signed session grants.");
   }
   const owner = `did:pkh:eip155:${delegation.chainId}:${delegation.ownerAddress}`;
   if (typeof node.did !== "string" || !didPrincipalsMatch(owner, node.did)) {
-    throw new Error("Runtime delegation is not signed by this session's owner.");
+    reject("owner_mismatch", "Runtime delegation is not signed by this session's owner.");
   }
-  const verified = node.verifySessionGrant({
-    delegationHeader: { Authorization: authorization },
-    delegationCid: cid,
-    spaceId: delegation.spaceId,
-    address: delegation.ownerAddress,
-    chainId: delegation.chainId,
-    siwe: proof.siwe,
-    signature: proof.signature,
-  });
+  let verified: VerifiedSessionGrant;
+  try {
+    verified = node.verifySessionGrant({
+      delegationHeader: { Authorization: authorization },
+      delegationCid: cid,
+      spaceId: delegation.spaceId,
+      address: delegation.ownerAddress,
+      chainId: delegation.chainId,
+      siwe: proof.siwe,
+      signature: proof.signature,
+    });
+  } catch (error) {
+    reject("proof_invalid", error instanceof Error ? error.message : String(error));
+  }
 
   const space = comparableSpace(delegation.spaceId);
   const spaceOwner = PKH_SPACE.exec(delegation.spaceId);
   if (!spaceOwner || !didPrincipalsMatch(`did:pkh:eip155:${spaceOwner[1]}:${spaceOwner[2]}`, owner)) {
-    throw new Error("Runtime delegation space is not owned by its signer.");
+    reject("authority_invalid", "Runtime delegation space is not owned by its signer.");
   }
   const groups = new Map<string, PermissionEntry>();
   for (const entry of verified.recap) {
@@ -465,16 +506,16 @@ function signedAuthorityFromSessionGrant(
     const raw = entry.space === "encryption";
     if (raw) {
       if (service !== "tinycloud.encryption" || !entry.path.startsWith(RAW_ENCRYPTION_PREFIX)) {
-        throw new Error("Runtime delegation has an unsupported signed raw resource.");
+        reject("authority_invalid", "Runtime delegation has an unsupported signed raw resource.");
       }
       const networkOwner = entry.path.slice(RAW_ENCRYPTION_PREFIX.length, entry.path.lastIndexOf(":"));
       if (!didPrincipalsMatch(networkOwner, owner)) {
-        throw new Error("Runtime delegation names an encryption network its signer does not own.");
+        reject("authority_invalid", "Runtime delegation names an encryption network its signer does not own.");
       }
     } else if (service === "tinycloud.encryption" || comparableSpace(entry.space) !== space) {
       // Decrypt signed inside a space (older OpenKey) is not a usable network
       // grant, and one grant covers one space.
-      throw new Error("Runtime delegation has signed authority outside its space.");
+      reject("authority_invalid", "Runtime delegation has signed authority outside its space.");
     }
     const caveats = signedCaveats(entry.caveats ?? []);
     const key = JSON.stringify([service, raw ? "" : entry.space, entry.path, canonicalizeRecapCaveats(caveats)]);
@@ -573,47 +614,55 @@ export async function activateValidatedRuntimeDelegation(
 ): Promise<ValidatedRuntimeDelegation> {
   const host = normalizedHost(options.host);
   if (delegation.host !== undefined && normalizedHost(delegation.host) !== host) {
-    throw new Error(
+    reject(
+      "host_mismatch",
       `Runtime delegation host '${delegation.host}' does not match expected host '${options.host}'.`,
     );
   }
   if (!(delegation.expiry instanceof Date) || Number.isNaN(delegation.expiry.getTime())) {
-    throw new Error("Runtime delegation has an invalid expiry.");
+    reject("authority_invalid", "Runtime delegation has an invalid expiry.");
   }
   if (delegation.expiry.getTime() <= Date.now()) {
-    throw new Error("Runtime delegation is expired.");
+    reject("expired", "Runtime delegation is expired.");
   }
 
   const authorization = delegation.delegationHeader?.Authorization;
   if (typeof authorization !== "string" || authorization.length === 0) {
-    throw new Error("Runtime delegation is missing authorization bytes.");
+    reject("authority_invalid", "Runtime delegation is missing authorization bytes.");
   }
   const cid = node.computeDelegationCid(authorization);
   if (cid !== delegation.cid) {
-    throw new Error("Runtime delegation CID does not match authorization bytes.");
+    reject("cid_mismatch", "Runtime delegation CID does not match authorization bytes.");
   }
 
   const compact = authorizationWithoutBearer(authorization).split(".").length === 3;
-  const signed = compact
-    ? signedAuthorityFromCompactUcan(authorization)
-    : signedAuthorityFromSessionGrant(node, delegation, authorization, cid);
+  let signed: SignedRuntimeAuthority;
+  try {
+    signed = compact
+      ? signedAuthorityFromCompactUcan(authorization)
+      : signedAuthorityFromSessionGrant(node, delegation, authorization, cid);
+  } catch (error) {
+    if (error instanceof RuntimeDelegationRejectedError) throw error;
+    reject("authority_invalid", error instanceof Error ? error.message : String(error));
+  }
   if (signed.expiry.getTime() <= Date.now()) {
-    throw new Error("Runtime delegation is expired.");
+    reject("expired", "Runtime delegation is expired.");
   }
   if (delegation.expiry.getTime() !== signed.expiry.getTime()) {
-    throw new Error("Runtime delegation expiry does not match signed authority.");
+    reject("authority_invalid", "Runtime delegation expiry does not match signed authority.");
   }
   if (!didPrincipalsMatch(signed.audience, node.sessionDid)) {
-    throw new Error(
+    reject(
+      "audience_mismatch",
       `Runtime delegation targets ${signed.audience} but this session is ${node.sessionDid}.`,
     );
   }
   if (!didPrincipalsMatch(delegation.delegateDID, signed.audience)) {
-    throw new Error("Runtime delegation audience does not match signed authority.");
+    reject("audience_mismatch", "Runtime delegation audience does not match signed authority.");
   }
 
   if (compact && !resourcesMatch(canonicalResourcesFromPortableDelegation(delegation), signed.resources)) {
-    throw new Error("Runtime delegation resources do not match signed authority.");
+    reject("resources_mismatch", "Runtime delegation resources do not match signed authority.");
   }
   if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
     throw new Error("Runtime delegation is not authorized for this runtime.");
@@ -625,7 +674,8 @@ export async function activateValidatedRuntimeDelegation(
     previouslyInstalled !== undefined &&
     previouslyInstalled.delegationHeader.Authorization !== authorization
   ) {
-    throw new Error(
+    reject(
+      "cid_mismatch",
       "A different authorization is already installed for this runtime delegation CID.",
     );
   }
@@ -661,21 +711,25 @@ export async function activateValidatedRuntimeDelegation(
     ...(compact ? {} : { sessionProof: delegation.sessionProof }),
   };
 
-  if (
-    node.isSessionOnly === true &&
-    typeof node.did === "string" &&
-    principalDidEquals(node.did, node.sessionDid) &&
-    typeof node.useDelegation === "function"
-  ) {
-    await node.useDelegation(installedCandidate);
-  } else {
-    await node.useRuntimeDelegation(installedCandidate);
+  try {
+    if (
+      node.isSessionOnly === true &&
+      typeof node.did === "string" &&
+      principalDidEquals(node.did, node.sessionDid) &&
+      typeof node.useDelegation === "function"
+    ) {
+      await node.useDelegation(installedCandidate);
+    } else {
+      await node.useRuntimeDelegation(installedCandidate);
+    }
+  } catch (error) {
+    reject("activation_rejected", error instanceof Error ? error.message : String(error));
   }
   const installed = node
     .getRuntimePermissionDelegations()
     .find((candidate) => candidate.cid === cid);
   if (!installed) {
-    throw new Error("Runtime delegation activation did not install the validated authority.");
+    reject("activation_rejected", "Runtime delegation activation did not install the validated authority.");
   }
   if (
     installed.delegationHeader.Authorization !== authorization ||
@@ -687,7 +741,8 @@ export async function activateValidatedRuntimeDelegation(
     ) ||
     normalizedHost(installed.host ?? "") !== host
   ) {
-    throw new Error(
+    reject(
+      "activation_rejected",
       "Runtime delegation activation installed authority that differs from the validated authority.",
     );
   }

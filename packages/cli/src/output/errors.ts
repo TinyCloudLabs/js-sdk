@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { outputError } from "./formatter.js";
+import { operationWarnings, outputError } from "./formatter.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 
 let activeProfileName: string | undefined;
@@ -138,7 +138,10 @@ export function handleError(error: unknown): never {
     meta.resource = capability.resource;
     meta.requiredAction = capability.requiredAction;
   }
-  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : undefined);
+  outputError(cliError.code, cliError.message, hint, {
+    ...(Object.keys(meta).length ? { meta } : {}),
+    warnings: operationWarnings(cliError.metadata?.warnings),
+  });
   process.exit(cliError.exitCode);
 }
 

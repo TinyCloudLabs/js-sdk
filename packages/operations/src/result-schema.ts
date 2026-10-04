@@ -1,6 +1,7 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { PermissionEntrySchema, PermissionRequestArtifactSchema } from "./artifacts.js";
+import { STORED_GRANT_SKIP_REASONS } from "./contract.js";
 import { OPERATION_ERROR_CODES } from "./errors.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -70,6 +71,21 @@ const errorSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+const warningsSchema: JsonSchema = {
+  type: "array",
+  minItems: 1,
+  items: {
+    type: "object",
+    properties: {
+      code: { const: "STORED_GRANT_SKIPPED" },
+      reason: { type: "string", enum: [...STORED_GRANT_SKIP_REASONS] },
+      grantCid: { type: "string", pattern: "^[A-Za-z0-9]{1,128}$" },
+    },
+    required: ["code", "reason"],
+    additionalProperties: false,
+  },
+};
+
 const permissionEntrySchema = zodToJsonSchema(PermissionEntrySchema, {
   target: "jsonSchema7",
 }) as JsonSchema;
@@ -119,6 +135,7 @@ export function canonicalResultJsonSchema(
   const base = {
     operation: operationRef,
     context: contextSchema,
+    warnings: warningsSchema,
   };
 
   return {
