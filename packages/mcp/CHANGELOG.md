@@ -1,5 +1,12 @@
 # @tinycloud/mcp
 
+## 0.3.4-beta.8
+
+### Patch Changes
+
+- Updated dependencies [7edc599]
+  - @tinycloud/operations@0.4.0-beta.8
+
 ## 0.3.4-beta.7
 
 ### Patch Changes

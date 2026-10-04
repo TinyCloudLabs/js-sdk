@@ -260,7 +260,7 @@ var init_formatter = __esm({
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
 import { join as join2 } from "path";
-import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -285,6 +285,9 @@ function wrapError(error) {
       ExitCode.ERROR,
       { hint: "Wait for the other command to finish and retry. A crashed process's lock is reclaimed automatically after 30 s." }
     );
+  }
+  if (error instanceof ProfileDeletedError) {
+    return new CLIError("PROFILE_NOT_FOUND", message);
   }
   if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
@@ -644,6 +647,8 @@ import { join as join3 } from "path";
 import {
   profilePath,
   readSession,
+  recordProfileDeletion,
+  refuseWriteToDeletedProfile,
   removeSession,
   withProfileLock,
   writeSession
@@ -758,10 +763,12 @@ var init_profiles = __esm({
        * removed while holding the profile lock, so another writer's critical
        * section never sees them vanish midway: session and key first, settings
        * last, so a crash midway never leaves a session or key without its
-       * profile. `.lock` itself is left to the lock's release; the then-empty
-       * directory is removed afterwards unless another writer took the lock (or
-       * wrote) meanwhile. A profile directory that is a symlink is unlinked, its
-       * target left alone.
+       * profile. The deletion is then recorded, so a store write that waited for
+       * the lock meanwhile refuses rather than recreating a profile with only a
+       * session in it. `.lock` itself is left to the lock's release; the
+       * then-empty directory is removed afterwards unless another writer took
+       * the lock (or wrote) meanwhile. A profile directory that is a symlink is
+       * unlinked, its target left alone.
        * Throws if the name is not one path segment or names the default profile.
        */
       static async deleteProfile(name) {
@@ -782,11 +789,12 @@ var init_profiles = __esm({
             `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`
           );
         }
-        const isLink = await lstat(profileDir).then((stats) => stats.isSymbolicLink(), (error) => {
-          if (error.code === "ENOENT") return false;
+        const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
+          if (error.code === "ENOENT") return "missing";
           throw error;
         });
-        if (isLink) {
+        if (kind === "missing") return;
+        if (kind === "link") {
           await rm2(profileDir, { force: true });
           return;
         }
@@ -796,6 +804,7 @@ var init_profiles = __esm({
             if (entry !== ".lock" && entry !== "profile.json") await rm2(join3(profileDir, entry), { recursive: true, force: true });
           }
           await rm2(join3(profileDir, "profile.json"), { force: true });
+          await recordProfileDeletion(name);
         });
         await rmdir(profileDir).catch((error) => {
           if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
@@ -808,9 +817,14 @@ var init_profiles = __esm({
       static async getKey(name) {
         return readJson(join3(PROFILES_DIR, name, "key.json"));
       }
-      /** Saves a JWK key under the profile lock (0600, in an owner-only profile directory). */
+      /**
+       * Saves a JWK key under the profile lock (0600, in an owner-only profile
+       * directory). Refused (PROFILE_NOT_FOUND) if the profile was deleted while
+       * this waited for the lock, rather than leaving a key-only profile.
+       */
       static async setKey(name, jwk) {
         await _ProfileManager.withLock(name, async () => {
+          await refuseWriteToDeletedProfile(name);
           await writeJson(join3(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
         });
       }
@@ -1779,6 +1793,7 @@ import {
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
+  refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
   updateProfileStore,
   withProfileLock as withProfileLock2,
   writeJsonAtomic
@@ -13146,6 +13161,7 @@ async function appendPermissionRequestArtifact(profile, artifact) {
   });
 }
 async function writeSharedRecords(profile, store, entries) {
+  await refuseWriteToDeletedProfile2(profile);
   const path = store === "additional-delegations" ? additionalDelegationsPath(profile) : permissionRequestsPath(profile);
   await writeJsonAtomic(path, entries);
   await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
@@ -13556,6 +13572,7 @@ async function createSDKInstance(ctx, options) {
   });
   return node;
 }
+var BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
 async function bootstrapDelegatedSession(ctx, delegation) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
@@ -13605,13 +13622,13 @@ async function bootstrapDelegatedSession(ctx, delegation) {
         throw error;
       });
       const session = await ProfileManager.getSession(ctx.profile);
-      if (JSON.stringify(profile) !== JSON.stringify(written.profile) || JSON.stringify(session) !== JSON.stringify(written.session)) {
+      if (profile === null || BOOTSTRAP_PROFILE_FIELDS.some((field) => profile[field] !== written.profile[field]) || JSON.stringify(session) !== JSON.stringify(written.session)) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
       return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
-      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${error instanceof Error ? error.message : String(error)}); check \`tc --profile ${ctx.profile} context\`.`
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`
     ));
     throw annotate(cause, note);
   };
@@ -13627,14 +13644,26 @@ async function restoreBeforeBootstrap(profileName, previousProfile) {
   const failures = [];
   for (const write of [
     () => ProfileManager.clearSession(profileName),
-    () => ProfileManager.setProfile(profileName, previousProfile)
+    () => ProfileManager.updateProfile(profileName, (current) => {
+      const restored = { ...current };
+      for (const field of BOOTSTRAP_PROFILE_FIELDS) {
+        if (previousProfile[field] === void 0) delete restored[field];
+        else restored[field] = previousProfile[field];
+      }
+      return restored;
+    })
   ]) {
     await write().catch((error) => {
-      failures.push(error instanceof Error ? error.message : String(error));
+      failures.push(failureName(error));
     });
   }
   if (failures.length === 0) return void 0;
   return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+}
+function failureName(error) {
+  if (error instanceof SyntaxError) return "a profile file is not valid JSON";
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
+  return error instanceof Error ? error.name : "unknown error";
 }
 function annotate(error, note) {
   if (note === void 0) return error;
