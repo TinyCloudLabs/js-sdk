@@ -36,6 +36,7 @@ import {
   TinyCloudSession,
   activateSessionWithHost,
   authorizationVerdictOf,
+  httpResponseError,
   type SpaceHostResult,
   KVService,
   IKVService,
@@ -600,15 +601,6 @@ function sameInstant(left: Date, right: Date): boolean {
 function describeHostFailure(result: SpaceHostResult): string {
   const text = result.error?.trim();
   return text ? `${result.status} - ${text}` : `${result.status}`;
-}
-
-/** Preserve both the HTTP verdict and the server's diagnostic body. */
-async function httpResponseError(response: Pick<Response, "status" | "statusText" | "text">, context: string): Promise<Error & { status: number }> {
-  const body = (await response.text().catch(() => response.statusText)).trim();
-  return Object.assign(
-    new Error(`${context}: HTTP ${response.status}${body ? ` - ${body}` : ""}`),
-    { status: response.status },
-  );
 }
 
 function ownerDelegationPermissions(
@@ -5136,8 +5128,9 @@ export class TinyCloudNode {
       delegation.delegationHeader,
     );
     if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate runtime permission delegation: ${activateResult.error}`,
+      throw Object.assign(
+        new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
       );
     }
 
@@ -5249,8 +5242,9 @@ export class TinyCloudNode {
         delegatedSession.delegationHeader,
       );
       if (!activateResult.success) {
-        throw new Error(
-          `Failed to activate runtime permission delegation: ${activateResult.error}`,
+        throw Object.assign(
+          new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
+          { cause: activateResult },
         );
       }
 
@@ -5463,7 +5457,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate public space delegation: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate public space delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     // Register the delegation in the capability registry so
@@ -5960,8 +5957,9 @@ export class TinyCloudNode {
       delegationHeader,
     );
     if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate delegation with host: ${activateResult.error}`,
+      throw Object.assign(
+        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
       );
     }
 
@@ -6006,8 +6004,9 @@ export class TinyCloudNode {
       delegationHeader,
     );
     if (!activateResult.success) {
-      throw new Error(
-        `Failed to activate delegation with host: ${activateResult.error}`,
+      throw Object.assign(
+        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
       );
     }
 
@@ -6878,7 +6877,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate delegation: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     const result: PortableDelegation = {
@@ -7072,7 +7074,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate delegated session: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate delegated session: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     // Create TinyCloudSession for the delegated access
@@ -7242,7 +7247,10 @@ export class TinyCloudNode {
     );
 
     if (!activateResult.success) {
-      throw new Error(`Failed to activate sub-delegation: ${activateResult.error}`);
+      throw Object.assign(
+        new Error(`Failed to activate sub-delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
     }
 
     // Return the portable sub-delegation

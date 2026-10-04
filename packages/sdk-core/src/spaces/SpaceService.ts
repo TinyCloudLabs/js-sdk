@@ -18,7 +18,7 @@ import type {
   FetchFunction,
   InvokeFunction,
 } from "@tinycloud/sdk-services";
-import { ok, err, serviceError } from "@tinycloud/sdk-services";
+import { ok, err, serviceError, authorizationVerdictOf } from "@tinycloud/sdk-services";
 import { serviceHttpError } from "../http-error";
 import type {
   SpaceInfo,
@@ -488,6 +488,10 @@ export class SpaceService implements ISpaceService {
       const ownedResult = await this.listOwnedSpaces();
       if (ownedResult.ok) {
         spaces.push(...ownedResult.data);
+      } else {
+        const verdict = authorizationVerdictOf(ownedResult.error);
+        // An authorization failure cannot be represented as a successful (possibly partial) list.
+        if (verdict === "unauthenticated" || verdict === "forbidden") return err(ownedResult.error);
       }
 
       // 2. Get delegated spaces from capability registry

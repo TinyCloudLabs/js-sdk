@@ -258,6 +258,8 @@ On either recovery path, an orphaned `.recover-*` claim can hold a replacement o
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
 - **Owner DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
 
-Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?}}`. Inspect the structured code, not only the exit status.
+Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?, meta?}}`. `meta` contains a typed HTTP `status` and, only when validated as a TinyCloud capability (and against the KV request when available), a `resource` and `requiredAction`. Inspect the structured code, not only the exit status.
 
 General storage/auth exit codes: 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error. `tc share` uses its own: 1 profile lock timeout or sender-history retry (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`), 3 upload authority required, 4 unavailable, expired, storage quota exceeded or upload failed, 5 permission denied (`PERMISSION_DENIED`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success.
+
+For `tc kv get|put|head|list|delete`, `tc space list|host`, and `tc sql`, a plain HTTP 401 is `AUTH_REQUIRED` (exit 3); a 403 is `PERMISSION_DENIED` (exit 5). A 401 that identifies a validated missing capability is also `PERMISSION_DENIED` (exit 5), with a `tc auth request --cap` hint rather than a sign-in hint. Other HTTP failures retain their service-specific codes. `tc share` has separate exit mappings below.

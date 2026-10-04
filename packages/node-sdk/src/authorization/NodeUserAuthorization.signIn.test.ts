@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
+  authorizationVerdictOf,
   DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
   type IWasmBindings,
   type ISessionManager,
@@ -590,4 +591,130 @@ test("ensureSpaceExists surfaces a space-creation handler rejection", async () =
   );
   // The space was never hosted, so no wallet signature was requested.
   expect(signedMessages.length).toBe(0);
+});
+
+test("ensureSpaceExists preserves the failed activation status and body", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("Unauthorized Action: denied", { status: 403 });
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings([]),
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+  });
+  auth.setRestoredTinyCloudSession(restoredTinyCloudSession());
+
+  try {
+    await auth.ensureSpaceExists().then(
+      () => { throw new Error("expected activation failure"); },
+      (error: unknown) => {
+        expect((error as Error).message).toContain("403 - Unauthorized Action: denied");
+        expect((error as Error & { cause: { status: number; error: string } }).cause).toMatchObject({
+          success: false,
+          status: 403,
+          error: "Unauthorized Action: denied",
+        });
+        expect(authorizationVerdictOf(error)).toBe("forbidden");
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ensureSpaceExists retains the failed retry verdict after creating a skipped space", async () => {
+  const session = restoredTinyCloudSession();
+  const originalFetch = globalThis.fetch;
+  let activations = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/peer/generate/")) {
+      return new Response("peer-id");
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      activations++;
+      if (activations === 1) {
+        return new Response(JSON.stringify({ activated: [], skipped: [session.spaceId] }), { status: 200 });
+      }
+      if (activations === 2) {
+        return new Response(JSON.stringify({ activated: [session.spaceId], skipped: [] }), { status: 200 });
+      }
+      return new Response("session expired", { status: 401 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings([]),
+    domain: "example.com",
+    signStrategy: { type: "auto-sign" },
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spaceCreationHandler: { confirmSpaceCreation: async () => true },
+  });
+  auth.setRestoredTinyCloudSession(session);
+
+  try {
+    await auth.ensureSpaceExists().then(
+      () => { throw new Error("expected activation failure"); },
+      (error: unknown) => {
+        expect((error as Error).message).toContain("401 - session expired");
+        expect((error as Error & { cause: { status: number; error: string } }).cause).toMatchObject({
+          success: false,
+          status: 401,
+          error: "session expired",
+        });
+        expect(authorizationVerdictOf(error)).toBe("unauthenticated");
+      },
+    );
+    expect(activations).toBe(3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ensureSpaceExists preserves a failed host result instead of collapsing it to a boolean", async () => {
+  const session = restoredTinyCloudSession();
+  const originalFetch = globalThis.fetch;
+  let activations = 0;
+  let notified = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      activations++;
+      if (activations === 1) {
+        return new Response(JSON.stringify({ activated: [], skipped: [session.spaceId] }), { status: 200 });
+      }
+      return new Response("host forbidden", { status: 403 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings([]),
+    domain: "example.com",
+    signStrategy: { type: "auto-sign" },
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spaceCreationHandler: {
+      confirmSpaceCreation: async () => true,
+      onSpaceCreationFailed: () => { notified++; },
+    },
+  });
+  auth.setRestoredTinyCloudSession(session);
+  try {
+    await auth.ensureSpaceExists().then(
+      () => { throw new Error("expected host failure"); },
+      (error: unknown) => {
+        expect((error as Error).message).toContain("403 - host forbidden");
+        expect((error as Error & { cause: { status: number } }).cause).toMatchObject({ status: 403, success: false });
+        expect(authorizationVerdictOf(error)).toBe("forbidden");
+      },
+    );
+    expect(notified).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

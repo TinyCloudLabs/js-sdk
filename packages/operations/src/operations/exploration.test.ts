@@ -440,6 +440,34 @@ describe("generic KV exploration operations", () => {
     }
   });
 
+  test("distinguishes a validated missing KV capability from a missing session", async () => {
+    const operation = definition("tinycloud.kv.get");
+    const input = operation.input.parse({ space: "applications", key: "documents/one" });
+    for (const [body, expected] of [
+      ["Unauthorized Action: documents/one / tinycloud.kv/get", "PERMISSION_DENIED"],
+      ["Unauthorized Action: documents/one / tinycloud.sql/read", "AUTH_REQUIRED"],
+      ["Unauthorized Action: documents/one;echo private / tinycloud.kv/get", "AUTH_REQUIRED"],
+      ["Unauthorized Action: documents/one / tinycloud.kv/get;echo private", "AUTH_REQUIRED"],
+      ["Unauthorized", "AUTH_REQUIRED"],
+    ] as const) {
+      const service = new KVService();
+      service.initialize({
+        session: {
+          delegationHeader: { Authorization: "Bearer fixture" },
+          spaceId: OWNER_APPLICATIONS,
+        },
+        isAuthenticated: true,
+        invoke: () => ({ Authorization: "Bearer fixture" }),
+        fetch: async () => new Response(body, { status: 401 }),
+        hosts: ["https://node.tinycloud.test"],
+        emit: () => undefined,
+      } as unknown as Parameters<KVService["initialize"]>[0]);
+      const result = await operation.execute(context({ kvForSpace: () => service }), input);
+      expect(result).toMatchObject({ status: "error", error: { code: expected, retryable: false } });
+      expect(JSON.stringify(result)).not.toContain("documents/one");
+    }
+  });
+
   test("retains typed authorization through thrown KV wrappers but keeps outer 5xx retryable", async () => {
     const operation = definition("tinycloud.kv.get");
     for (const [outer, cause, expected] of [

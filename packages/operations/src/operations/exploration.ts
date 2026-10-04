@@ -1,5 +1,5 @@
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-import { authorizationVerdictOf } from "@tinycloud/sdk-services";
+import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-services";
 import { z } from "zod";
 
 import type {
@@ -903,9 +903,12 @@ function caughtKvFailure(error: unknown, action: string): OperationExecutionOutc
   return authorizationFailure(error, action) ?? nodeFailure(action);
 }
 
-function authorizationFailure(error: unknown, action: string): OperationExecutionOutcome<never> | undefined {
+export function authorizationFailure(error: unknown, action: string): OperationExecutionOutcome<never> | undefined {
   const verdict = authorizationVerdictOf(error);
   if (verdict === "unauthenticated") {
+    if (validatedCapabilityOf(error) !== undefined) {
+      return { status: "error", error: operationError("PERMISSION_DENIED", `Permission is denied to ${action}.`) };
+    }
     return { status: "error", error: operationError("AUTH_REQUIRED", `Authentication is required to ${action}.`) };
   }
   if (verdict === "forbidden") {

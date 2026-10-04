@@ -4,12 +4,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatTable } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { isRootAuthority, ownerDidFromSpaceUri, resolveHostSpace, spaceNameFromUri, type HostRequestArtifact } from "../lib/host.js";
 import { theme } from "../output/theme.js";
-import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 
 function didWithoutFragment(did: string): string {
   const fragment = did.indexOf("#");
@@ -30,13 +29,7 @@ export function registerSpaceCommand(program: Command): void {
 
         const result = await node.spaces.list();
         if (!result.ok) {
-          const verdict = authorizationVerdictOf(result.error);
-          throw new CLIError(
-            verdict === "unauthenticated" ? "AUTH_REQUIRED" : verdict === "forbidden" ? "PERMISSION_DENIED" : result.error.code,
-            result.error.message,
-            verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : verdict === "forbidden" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR,
-            result.error.meta,
-          );
+          throw cliErrorFromService(result.error);
         }
 
         if (shouldOutputJson()) {

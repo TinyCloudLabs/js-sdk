@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 
@@ -54,7 +54,7 @@ export function registerVarsCommand(program: Command): void {
         const result = await withSpinner("Listing variables...", () => prefixedKv.list()) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const rawData = result.data.data ?? result.data;
@@ -90,7 +90,7 @@ export function registerVarsCommand(program: Command): void {
           if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
             throw new CLIError("NOT_FOUND", `Variable "${name}" not found`, ExitCode.NOT_FOUND);
           }
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const data = result.data.data;
@@ -169,7 +169,7 @@ export function registerVarsCommand(program: Command): void {
         const result = await withSpinner(`Setting variable ${name}...`, () => prefixedKv.put(name, payload)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ name, written: true });
@@ -194,7 +194,7 @@ export function registerVarsCommand(program: Command): void {
         const result = await withSpinner(`Deleting variable ${name}...`, () => prefixedKv.delete(name)) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ name, deleted: true });

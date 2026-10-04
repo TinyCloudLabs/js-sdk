@@ -161,6 +161,7 @@ export {
   parseAuthError,
   authUnauthorizedError,
   authorizationVerdictOf,
+  validatedCapabilityOf,
   type AuthorizationVerdict,
   parsePermissionHint,
   parsePermissionHintFromErrorText,

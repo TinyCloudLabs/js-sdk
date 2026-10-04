@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { authorizationVerdictOf, authUnauthorizedError } from "./errors";
+import { authorizationVerdictOf, authUnauthorizedError, validatedCapabilityOf } from "./errors";
 import { ErrorCodes, serviceError } from "./types";
 
 /** Nest `inner` under `depth` plain wrapper errors linked by `cause`. */
@@ -86,5 +86,76 @@ describe("authorizationVerdictOf", () => {
     const coded: Record<string, unknown> = { code: ErrorCodes.AUTH_UNAUTHORIZED };
     coded.cause = coded;
     expect(authorizationVerdictOf(coded)).toBe("forbidden");
+  });
+});
+
+describe("validatedCapabilityOf", () => {
+  const kvResource = "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/secrets/API_KEY";
+  const capability = {
+    service: "kv",
+    code: ErrorCodes.AUTH_UNAUTHORIZED,
+    meta: {
+      status: 401,
+      resource: kvResource,
+      requiredAction: "tinycloud.kv/get",
+    },
+  };
+
+  test("only typed authorization errors with a safe, grantable service action identify a missing capability", () => {
+    const expected = { resource: kvResource, requiredAction: "tinycloud.kv/get" };
+    expect(validatedCapabilityOf(capability)).toEqual(expected);
+    expect(validatedCapabilityOf(wrapped(capability, 2))).toEqual(expected);
+    expect(validatedCapabilityOf({ ...capability, meta: { ...capability.meta, status: 403 } })).toEqual(expected);
+    expect(validatedCapabilityOf({ ...capability, meta: { status: 401 } })).toBeUndefined();
+    expect(validatedCapabilityOf({ ...capability, meta: { ...capability.meta, status: 500 } })).toBeUndefined();
+  });
+
+  test("service-less CLI errors infer only a TinyCloud resource's matching service", () => {
+    const resource = "tinycloud:pkh:eip155:1:0xabc:applications/notes/sql/default";
+    const meta = { status: 401, resource, requiredAction: "tinycloud.sql/write" };
+    expect(validatedCapabilityOf({ meta })).toEqual({
+      resource,
+      requiredAction: "tinycloud.sql/write",
+    });
+    expect(validatedCapabilityOf({ meta: { ...meta, requiredAction: "tinycloud.kv/put" } })).toBeUndefined();
+    expect(validatedCapabilityOf({ meta: { ...meta, service: "kv" } })).toBeUndefined();
+    expect(validatedCapabilityOf({ meta: { status: 401, resource: "vault/secrets/API_KEY", requiredAction: "tinycloud.kv/get" } })).toBeUndefined();
+    expect(validatedCapabilityOf({ service: "kv", meta: { status: 401, resource: "vault/secrets/API_KEY", requiredAction: "tinycloud.kv/get" } })).toBeUndefined();
+  });
+
+  test("accepts a documented encryption network URN without accepting an arbitrary URN", () => {
+    const resource = "urn:tinycloud:encryption:did:pkh:eip155:1:0xabc:dev";
+    const meta = { status: 403, resource, requiredAction: "tinycloud.encryption/decrypt" };
+    expect(validatedCapabilityOf({ service: "encryption", meta })).toEqual({
+      resource,
+      requiredAction: "tinycloud.encryption/decrypt",
+    });
+    expect(validatedCapabilityOf({ service: "kv", meta })).toBeUndefined();
+    expect(validatedCapabilityOf({ service: "encryption", meta: { ...meta, resource: "urn:tinycloud:encryption:other" } })).toBeUndefined();
+  });
+
+  test.each([
+    ["URL", "https://attacker.example/grant", "tinycloud.kv/get", "kv"],
+    ["non-HTTP URL", "ftp:attacker.example/grant", "tinycloud.kv/get", "kv"],
+    ["fragment", `${kvResource}#other`, "tinycloud.kv/get", "kv"],
+    ["shell expansion", "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/${HOME}", "tinycloud.kv/get", "kv"],
+    ["control character", "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/key\nnext", "tinycloud.kv/get", "kv"],
+    ["path traversal", "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/../secrets", "tinycloud.kv/get", "kv"],
+    ["cross-service action", kvResource, "tinycloud.sql/read", "kv"],
+    ["non-grantable action", kvResource, "tinycloud.kv/get;curl", "kv"],
+    ["wildcard action", kvResource, "tinycloud.kv/*", "kv"],
+    ["action suffix", kvResource, "tinycloud.kv/get/other", "kv"],
+    ["unknown action", kvResource, "tinycloud.kv/execute", "kv"],
+  ] as const)("rejects %s metadata", (_kind, resource, requiredAction, service) => {
+    expect(validatedCapabilityOf({
+      service,
+      code: ErrorCodes.AUTH_UNAUTHORIZED,
+      meta: { status: 403, resource, requiredAction },
+    })).toBeUndefined();
+  });
+
+  test("outer errors retain authority over a cause carrying capability metadata", () => {
+    expect(validatedCapabilityOf({ status: 502, cause: capability })).toBeUndefined();
+    expect(validatedCapabilityOf({ status: 403, cause: { ...capability, meta: { ...capability.meta, status: 500 } } })).toBeUndefined();
   });
 });

@@ -23,6 +23,7 @@ import {
   parseAuthError,
   parsePermissionHintFromErrorText,
   authUnauthorizedError,
+  validatedCapabilityOf,
 } from "../errors";
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
@@ -521,12 +522,16 @@ export class KVService extends BaseService implements IKVService {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = response.status === 401 || response.status === 403
+          ? await this.readAuthorizationText(response)
+          : await response.text();
         if (response.status === 401 || response.status === 403) {
           return this.authorizationFailure(
             `Failed to batch read ${keys.length} key(s)`,
             response,
-            errorText
+            errorText,
+            paths,
+            action
           );
         }
         if (response.status === 413) {
@@ -633,7 +638,8 @@ export class KVService extends BaseService implements IKVService {
 
   private async createSignedReadUrlError(
     response: FetchResponse,
-    key: string
+    key: string,
+    path: string
   ): Promise<Result<never>> {
     let errorText = response.statusText;
     try {
@@ -649,7 +655,9 @@ export class KVService extends BaseService implements IKVService {
       return this.authorizationFailure(
         `Failed to create signed read URL for key ${JSON.stringify(key)}`,
         response,
-        errorText
+        errorText,
+        [path],
+        KVAction.GET
       );
     }
 
@@ -665,28 +673,55 @@ export class KVService extends BaseService implements IKVService {
     );
   }
 
+  /** A known 401/403 keeps its typed status even if reading its body fails. */
+  private async readAuthorizationText(response: FetchResponse): Promise<string> {
+    try {
+      return await response.text();
+    } catch {
+      return "";
+    }
+  }
+
   /**
    * AUTH_UNAUTHORIZED for a 401/403 response. The message keeps the HTTP
    * status and the server text (`<context>: <status> - <text>`, the same
    * shape as every other KV failure) so callers that rethrow only the message
    * still see the status; `meta.status` carries it for typed callers.
-   * Resource/ability hints are parsed from the raw body, never the message.
+   * Server hints must match the requested path/action (whether the node sends
+   * a relative path or full resource); metadata uses only the request-derived
+   * canonical resource under the authenticated session's space.
    */
   private authorizationFailure(
     context: string,
     response: FetchResponse,
     errorText: string,
+    paths: readonly string[],
+    expectedAction: string,
     extraMeta: Record<string, unknown> = {}
   ): Result<never> {
     const { resource, action } = parseAuthError(errorText);
+    const requestedPath = paths.find((path) =>
+      resource === path ||
+      resource === `${this.context.session!.spaceId}/kv/${path}`
+    );
+    const capability = requestedPath !== undefined && action === expectedAction
+      ? validatedCapabilityOf({
+          service: "kv",
+          code: ErrorCodes.AUTH_UNAUTHORIZED,
+          meta: {
+            status: response.status,
+            resource: `${this.context.session!.spaceId}/kv/${requestedPath}`,
+            requiredAction: action,
+          },
+        })
+      : undefined;
     const detail = errorText.trim().length > 0
       ? errorText
       : response.statusText || "authorization failed";
     return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
       status: response.status,
-      ...(action && { requiredAction: action }),
-      ...(resource && { resource }),
       ...extraMeta,
+      ...capability,
     }));
   }
 
@@ -752,13 +787,28 @@ export class KVService extends BaseService implements IKVService {
 
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
-            const errorText = await response.text();
+            const errorText = await this.readAuthorizationText(response);
             const permissionHint = parsePermissionHintFromErrorText(errorText);
             return this.authorizationFailure(
               `Failed to get key ${JSON.stringify(key)}`,
               response,
               errorText,
-              permissionHint === undefined ? {} : { permissionHint }
+              [path],
+              KVAction.GET,
+              permissionHint?.service === "tinycloud.kv" &&
+              permissionHint.space === this.context.session!.spaceId &&
+              permissionHint.path === path &&
+              validatedCapabilityOf({
+                service: "kv",
+                code: ErrorCodes.AUTH_UNAUTHORIZED,
+                meta: {
+                  status: response.status,
+                  resource: `${this.context.session!.spaceId}/kv/${path}`,
+                  requiredAction: KVAction.GET,
+                },
+              })
+                ? { permissionHint }
+                : {}
             );
           }
 
@@ -853,7 +903,9 @@ export class KVService extends BaseService implements IKVService {
           return this.authorizationFailure(
             `Failed to put key ${JSON.stringify(key)}`,
             response,
-            await response.text()
+            await this.readAuthorizationText(response),
+            [path],
+            KVAction.PUT
           );
         }
 
@@ -1032,7 +1084,9 @@ export class KVService extends BaseService implements IKVService {
             return this.authorizationFailure(
               `Failed to batch put ${items.length} key(s)`,
               response,
-              errorText
+              errorText,
+              paths,
+              KVAction.PUT
             );
           }
 
@@ -1200,11 +1254,13 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
               "Failed to list keys",
               response,
-              await response.text()
+              await this.readAuthorizationText(response),
+              [listPath],
+              KVAction.LIST
             );
           }
 
@@ -1275,11 +1331,13 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
               `Failed to delete key ${JSON.stringify(key)}`,
               response,
-              await response.text()
+              await this.readAuthorizationText(response),
+              [path],
+              KVAction.DELETE
             );
           }
 
@@ -1347,11 +1405,13 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
               `Failed to get metadata for key ${JSON.stringify(key)}`,
               response,
-              await response.text()
+              await this.readAuthorizationText(response),
+              [path],
+              KVAction.HEAD
             );
           }
 
@@ -1440,7 +1500,7 @@ export class KVService extends BaseService implements IKVService {
         });
 
         if (!response.ok) {
-          return this.createSignedReadUrlError(response, key);
+          return this.createSignedReadUrlError(response, key, path);
         }
 
         const signedUrl = this.normalizeSignedReadUrlResponse(

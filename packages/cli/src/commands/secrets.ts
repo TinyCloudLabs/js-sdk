@@ -17,7 +17,7 @@ import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/c
 import { ProfileManager } from "../config/profiles.js";
 import { formatCheck, formatSection, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -1263,7 +1263,7 @@ export function registerSecretsCommand(
         });
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const secretNames = Array.isArray(result.data) ? result.data : [];
@@ -1428,7 +1428,7 @@ export function registerSecretsCommand(
         });
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ name, written: true });
@@ -1464,7 +1464,7 @@ export function registerSecretsCommand(
         });
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ name, deleted: true });

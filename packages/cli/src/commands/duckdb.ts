@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { theme } from "../output/theme.js";
@@ -30,7 +30,7 @@ export function registerDuckdbCommand(program: Command): void {
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const { columns, rows, rowCount } = result.data;
@@ -72,7 +72,7 @@ export function registerDuckdbCommand(program: Command): void {
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({ changes: result.data.changes });
@@ -97,7 +97,7 @@ export function registerDuckdbCommand(program: Command): void {
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const schema = result.data;
@@ -154,7 +154,7 @@ export function registerDuckdbCommand(program: Command): void {
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         const blob: Blob = result.data;
@@ -191,7 +191,7 @@ export function registerDuckdbCommand(program: Command): void {
         ) as any;
 
         if (!result.ok) {
-          throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+          throw cliErrorFromService(result.error);
         }
 
         outputJson({

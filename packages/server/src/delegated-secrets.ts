@@ -13,7 +13,7 @@ type KvLike = {
   get<T = unknown>(
     key: string,
     options: { raw: true; prefix: string },
-  ): Promise<{ ok: true; data: T | unknown } | { ok: false; error?: { message?: string } }>;
+  ): Promise<{ ok: true; data: T | unknown } | { ok: false; error?: { message?: string; meta?: Record<string, unknown> } }>;
 };
 
 type DelegatedAccessLike = {
@@ -106,7 +106,7 @@ export async function readDelegatedSecret(
   const result = await access.kv.get<unknown>(secretKey, { raw: true, prefix: "" });
   if (!result.ok) {
     const message = result.error?.message ?? `failed to read ${secretKey}`;
-    throw new Error(`delegated secret ${name} KV get failed: ${message}`);
+    throw Object.assign(new Error(`delegated secret ${name} KV get failed: ${message}`), { cause: result.error });
   }
 
   const envelope = parseEncryptedEnvelope(

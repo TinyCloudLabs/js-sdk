@@ -3,14 +3,13 @@ import { readFile } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes, formatTimeAgo } from "../output/formatter.js";
-import { handleError, CLIError } from "../output/errors.js";
+import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { unhostedSpaceError } from "../lib/host.js";
 import { theme } from "../output/theme.js";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 
 /**
  * Throw the kv/sql service error, normalized to SPACE_NOT_HOSTED with an
@@ -24,13 +23,7 @@ async function throwKvError(
 ): Promise<never> {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName);
   if (hosted) throw hosted;
-  const verdict = authorizationVerdictOf(error);
-  throw new CLIError(
-    verdict === "unauthenticated" ? "AUTH_REQUIRED" : verdict === "forbidden" ? "PERMISSION_DENIED" : error.code,
-    error.message,
-    verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : verdict === "forbidden" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR,
-    error.meta,
-  );
+  throw cliErrorFromService(error);
 }
 
 function isByteCount(value: unknown): value is number {

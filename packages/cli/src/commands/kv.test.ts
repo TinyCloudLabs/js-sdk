@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import * as fsPromises from "node:fs/promises";
-import { KVService } from "@tinycloud/sdk-core";
 
 type PutCall = { handle: string; key: string; value: unknown };
 type DeleteCall = { handle: string; key: string };
@@ -22,7 +21,6 @@ const recorded = {
   stdoutWrites: [] as Uint8Array[],
   fileWrites: [] as Array<{ path: string; data: Uint8Array }>,
 };
-let authorizationService: KVService | undefined;
 
 function resetState(): void {
   recorded.outputs = [];
@@ -34,7 +32,6 @@ function resetState(): void {
   recorded.kvForSpace = [];
   recorded.stdoutWrites = [];
   recorded.fileWrites = [];
-  authorizationService = undefined;
 }
 
 function toBytes(chunk: unknown): Uint8Array {
@@ -66,29 +63,23 @@ function errorFor(key: string) {
 function makeKv(handle: string) {
   return {
     put: async (key: string, value: unknown) => {
-      if (authorizationService) return authorizationService.put(key, value);
       recorded.puts.push({ handle, key, value });
       return errorFor(key) ?? { ok: true, data: { data: undefined, headers: {} } };
     },
     delete: async (key: string) => {
       recorded.deletes.push({ handle, key });
-      if (authorizationService) return authorizationService.delete(key);
       return errorFor(key) ?? { ok: true, data: undefined };
     },
     get: async (key: string, options: unknown) => {
       recorded.gets.push({ handle, key, options });
-      if (authorizationService) return authorizationService.get(key, options as Parameters<KVService["get"]>[1]);
       // Mirror the SDK: when { binary: true }, data is the raw bytes.
       return errorFor(key) ?? { ok: true, data: { data: GET_BYTES, headers: {} } };
     },
     head: async (key: string) => {
       recorded.gets.push({ handle, key, options: "head" });
-      if (authorizationService) return authorizationService.head(key);
       return errorFor(key) ?? { ok: true, data: { headers: {} } };
     },
-    list: async (options: unknown) => authorizationService
-      ? authorizationService.list(options as Parameters<KVService["list"]>[0])
-      : { ok: true, data: { data: [] } },
+    list: async () => ({ ok: true, data: { data: [] } }),
   };
 }
 
@@ -156,6 +147,8 @@ mock.module("../output/errors.js", () => ({
       super(message);
     }
   },
+  cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
+    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },
@@ -184,58 +177,6 @@ async function runKv(args: string[]): Promise<void> {
   registerKvCommand(program);
   await program.parseAsync(["node", "tc", "kv", ...args], { from: "node" });
 }
-
-describe("CLI KV authorization failures from KVService", () => {
-  beforeEach(resetState);
-
-  test.each([401, 403].flatMap((status) =>
-    ["", "Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:default/kv/vault/record / tinycloud.kv/put", "Forbidden", "session expired"]
-      .map((body) => ({ status, body }))
-  ))("$status with body $body classifies every KV command without losing capability metadata", async ({ status, body }) => {
-    authorizationService = new KVService({});
-    authorizationService.initialize({
-      session: {
-        delegationHeader: { Authorization: "Bearer test" },
-        delegationCid: "test",
-        spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
-        verificationMethod: "did:key:test",
-        jwk: {},
-      },
-      isAuthenticated: true,
-      invoke: () => ({ Authorization: "Bearer test" }),
-      fetch: async () => new Response(body, { status }),
-      hosts: ["https://node.test"],
-      getService: () => undefined,
-      emit: () => undefined,
-      on: () => () => undefined,
-      abortSignal: new AbortController().signal,
-      retryPolicy: { maxAttempts: 1, backoff: "exponential", baseDelayMs: 1, maxDelayMs: 1, retryableErrors: [] },
-    } as unknown as Parameters<KVService["initialize"]>[0]);
-
-    for (const args of [
-      ["get", "vault/record"],
-      ["put", "vault/record", "value"],
-      ["delete", "vault/record"],
-      ["list"],
-      ["head", "vault/record"],
-    ]) await runKv(args);
-
-    expect(recorded.errors).toHaveLength(5);
-    for (const error of recorded.errors) {
-      expect(error).toMatchObject({
-        code: status === 401 ? "AUTH_REQUIRED" : "PERMISSION_DENIED",
-        exitCode: status === 401 ? 3 : 5,
-        metadata: { status },
-      });
-    }
-    if (body.startsWith("Unauthorized Action:")) {
-      expect(recorded.errors[1]).toMatchObject({ metadata: {
-        resource: "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/record",
-        requiredAction: "tinycloud.kv/put",
-      } });
-    }
-  });
-});
 
 describe("CLI kv put --space", () => {
   beforeEach(resetState);

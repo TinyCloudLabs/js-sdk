@@ -6,8 +6,14 @@ export async function httpResponseError(
   response: Pick<Response, "status" | "statusText" | "text">,
   context: string,
 ): Promise<Error & { status: number }> {
-  const body = await response.text().catch(() => response.statusText);
-  return Object.assign(new Error(`${context} (${response.status}) - ${body}`), {
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    body = response.statusText;
+  }
+  body = body.trim().slice(0, 512);
+  return Object.assign(new Error(`${context}: HTTP ${response.status}${body ? ` - ${body}` : ""}`), {
     status: response.status,
   });
 }
@@ -19,12 +25,12 @@ export async function serviceHttpError(
   context: string,
   service: string,
 ): Promise<ServiceError> {
-  const body = await response.text().catch(() => response.statusText);
+  const failure = await httpResponseError(response, context);
   return serviceError(
     response.status === 401 || response.status === 403
       ? ErrorCodes.AUTH_UNAUTHORIZED
       : code,
-    `${context}: ${response.status} - ${body}`,
+    failure.message,
     service,
     { meta: { status: response.status } },
   );

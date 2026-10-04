@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SQLService } from "@tinycloud/node-sdk";
 
 import type { RuntimeOperationContext } from "../contract.js";
 import { sqlOperationDefinitions } from "./sql.js";
@@ -225,6 +226,54 @@ describe("SQLite read operations", () => {
       error: { code: "SQL_RESULT_LIMIT_EXCEEDED" },
     });
   });
+
+  test("classifies real SQL service HTTP refusals separately from retryable node errors", async () => {
+    for (const [id, raw] of [
+      ["tinycloud.sql.query", { space: "applications", database: "notes", sql: "SELECT value FROM notes" }],
+      ["tinycloud.sql.schema.inspect", { space: "applications", database: "notes" }],
+    ] as const) {
+      const operation = definition(id);
+      const input = operation.input.parse(raw);
+      for (const [status, body, expected, retryable] of [
+        [401, "Unauthorized", "AUTH_REQUIRED", false],
+        [401, "Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:applications/sql/notes / tinycloud.sql/read", "PERMISSION_DENIED", false],
+        [401, "Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:applications/sql/notes / tinycloud.kv/get", "AUTH_REQUIRED", false],
+        [403, "Forbidden: private SQL", "PERMISSION_DENIED", false],
+        [502, "upstream private SQL", "NODE_ERROR", true],
+      ] as const) {
+        const service = new SQLService();
+        service.initialize({
+          session: { delegationHeader: { Authorization: "Bearer fixture" }, spaceId: OWNER_APPLICATIONS },
+          isAuthenticated: true,
+          invoke: () => ({ Authorization: "Bearer fixture" }),
+          fetch: async () => new Response(body, { status }),
+          hosts: ["https://node.tinycloud.test"],
+          emit: () => undefined,
+        } as unknown as Parameters<SQLService["initialize"]>[0]);
+        const result = await operation.execute(context({ sqlForSpace: () => service }), input);
+        expect(result).toMatchObject({ status: "error", error: { code: expected, retryable } });
+        expect(JSON.stringify(result)).not.toContain("private SQL");
+        expect(JSON.stringify(result)).not.toContain("tinycloud:pkh:eip155:1:0xabc:applications/notes");
+      }
+    }
+  });
+
+  test("keeps typed SQL authorization through thrown wrappers without reclassifying outer 5xx", async () => {
+    const operation = definition("tinycloud.sql.query");
+    const input = operation.input.parse({ space: "applications", database: "notes", sql: "SELECT value FROM notes" });
+    for (const [outer, cause, expected, retryable] of [
+      [undefined, { statusCode: 401 }, "AUTH_REQUIRED", false],
+      [undefined, { service: "sql", meta: { status: 401, resource: "tinycloud:pkh:eip155:1:0xabc:applications/sql/notes", requiredAction: "tinycloud.sql/read" } }, "PERMISSION_DENIED", false],
+      [undefined, { meta: { status: 403 } }, "PERMISSION_DENIED", false],
+      [{ status: 502 }, { status: 401 }, "NODE_ERROR", true],
+    ] as const) {
+      const thrown = Object.assign(new Error("private transport response"), { ...outer, cause });
+      const result = await operation.execute(context(sqlNode(async () => { throw thrown; })), input);
+      expect(result).toMatchObject({ status: "error", error: { code: expected, retryable } });
+      expect(JSON.stringify(result)).not.toContain("private transport response");
+      expect(JSON.stringify(result)).not.toContain("tinycloud:pkh:eip155:1:0xabc:applications/notes");
+    }
+  });
 });
 
 describe("SQLite DML operation", () => {
@@ -372,6 +421,49 @@ describe("SQLite DML operation", () => {
         status: "error",
         error: { code: "SQL_EXECUTION_FAILED", retryable: false },
       });
+    }
+  });
+
+  test("classifies SQL write authorization refusals without retrying uncertain mutations", async () => {
+    const operation = definition("tinycloud.sql.execute");
+    const input = operation.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "DELETE FROM notes WHERE id = ?",
+      params: [1],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    for (const [status, body, expected] of [
+      [401, "Unauthorized", "AUTH_REQUIRED"],
+      [401, "Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:applications/sql/notes / tinycloud.sql/write", "PERMISSION_DENIED"],
+      [403, "Forbidden: private write", "PERMISSION_DENIED"],
+      [502, "private write outcome", "SQL_EXECUTION_FAILED"],
+    ] as const) {
+      const service = new SQLService();
+      service.initialize({
+        session: { delegationHeader: { Authorization: "Bearer fixture" }, spaceId: OWNER_APPLICATIONS },
+        isAuthenticated: true,
+        invoke: () => ({ Authorization: "Bearer fixture" }),
+        fetch: async () => new Response(body, { status }),
+        hosts: ["https://node.tinycloud.test"],
+        emit: () => undefined,
+      } as unknown as Parameters<SQLService["initialize"]>[0]);
+      const result = await operation.execute(context({ sqlForSpace: () => service }), input);
+      expect(result).toMatchObject({ status: "error", error: { code: expected, retryable: false } });
+      expect(JSON.stringify(result)).not.toContain("private write");
+      expect(JSON.stringify(result)).not.toContain("tinycloud:pkh:eip155:1:0xabc:applications/notes");
+    }
+
+    for (const [cause, expected] of [
+      [{ status: 401 }, "AUTH_REQUIRED"],
+      [{ status: 403 }, "PERMISSION_DENIED"],
+      [{ status: 502 }, "SQL_EXECUTION_FAILED"],
+      [undefined, "SQL_EXECUTION_FAILED"],
+    ] as const) {
+      const thrown = Object.assign(new Error("private mutation outcome"), { cause });
+      const result = await operation.execute(context(sqlWriteNode(async () => { throw thrown; })), input);
+      expect(result).toMatchObject({ status: "error", error: { code: expected, retryable: false } });
+      expect(JSON.stringify(result)).not.toContain("private mutation outcome");
     }
   });
 });

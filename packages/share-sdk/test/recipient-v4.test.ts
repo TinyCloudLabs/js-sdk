@@ -6,6 +6,7 @@ import {
   didKeyFromEd25519PublicKey,
   signCompactUcanAuthorization,
   toBase64Url,
+  type ShareEnvelopeV3,
   verifyCompactUcanAuthorization,
 } from "@tinycloud/share-envelope";
 import { ShareRecipientClient } from "../src/recipient.js";
@@ -82,6 +83,28 @@ describe("TC-500 accountless v4 recipient", () => {
     expect(presentations).toBe(0);
   });
 
+  test("keeps the challenge refusal status when its response body cannot be read", async () => {
+    const receiverDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(64)));
+    const nodeDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(65)));
+    const enforcerDid = didKeyFromEd25519PublicKey(ed25519.getPublicKey(new Uint8Array(32).fill(66)));
+    const client = new ShareRecipientClient({
+      nodeOrigin: "https://node.example",
+      holderDid: receiverDid,
+      envelope: {
+        version: 3, target: { origin: "https://node.example", nodeAudience: enforcerDid },
+        attestedEnforcerBinding: { enforcerDid, nodeAudience: nodeDid },
+        policyCid: "policy", policy: { capabilityCeiling: [] },
+      } as unknown as ShareEnvelopeV3,
+      fetchFn: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.error(new Error("body stream failed")); },
+      }), { status: 401 }),
+      buildPresentation: async () => { throw new Error("must not present after refusal"); },
+    });
+    await expect(client.establishPolicySession()).rejects.toMatchObject({
+      status: 401, message: "v3 policy challenge rejected (401)",
+    });
+  });
+
   test("posts only v4 evidence, imports the ordinary delegation, and invokes with the receiver signer", async () => {
     const receiverKey = new Uint8Array(32).fill(51);
     const nodeKey = new Uint8Array(32).fill(52);
@@ -116,8 +139,10 @@ describe("TC-500 accountless v4 recipient", () => {
     let invocationAuthorization = "";
     let decryptAuthorization = "";
     let decryptBody: Record<string, unknown> | undefined;
+    let refusal: { path: string; response: () => Response } | undefined;
     const fetchFn: typeof fetch = async (input, init) => {
       const path = new URL(String(input)).pathname;
+      if (refusal?.path === path) return refusal.response();
       if (path === "/policy/v3/challenges") return Response.json({ challengeId: "challenge-500", nonce: "nonce-500", policyCid, recipientDid: receiverDid, nodeAudience: nodeDid, expiresAt: new Date((now + 60) * 1000).toISOString() });
       if (path === "/policy/v3/delegations") {
         delegationRequest = JSON.parse(String(init?.body));
@@ -132,7 +157,7 @@ describe("TC-500 accountless v4 recipient", () => {
         if (init?.body !== undefined) {
           decryptAuthorization = authorization;
           decryptBody = JSON.parse(String(init.body));
-          return new Response(null, { status: 400 });
+          return new Response("decrypt permission denied", { status: 403 });
         }
         invocationAuthorization = authorization;
         return new Response(new Uint8Array([1, 2, 3]));
@@ -198,7 +223,9 @@ describe("TC-500 accountless v4 recipient", () => {
     }));
     envelope.contentSource.initialCiphertextDigestHex = [...sha256(encryptedEnvelope)]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    await expect(client.decryptV3Content(encryptedEnvelope)).rejects.toThrow("decrypt invocation rejected");
+    await expect(client.decryptV3Content(encryptedEnvelope)).rejects.toMatchObject({
+      status: 403, message: "v3 decrypt invocation rejected (403): decrypt permission denied",
+    });
     expect(decryptBody?.targetNode).toBe(nodeDid);
     expect(verifyCompactUcanAuthorization(decryptAuthorization).payload.aud).toBe(nodeDid);
     expect(signerCalls).toBeGreaterThan(0);
@@ -213,6 +240,24 @@ describe("TC-500 accountless v4 recipient", () => {
       policyAuthorization: { authorization: session.authorization, cid: session.cid },
     });
     expect((await fastPath.establishPolicySession()).sessionId).toBe(session.cid);
+
+    refusal = { path: "/policy/v3/delegations", response: () => new Response("credential rejected", { status: 403 }) };
+    await expect(new ShareRecipientClient({
+      nodeOrigin: "https://node.example", holderDid: receiverDid, envelope, fetchFn, sign,
+      buildPresentation: async () => ({ holderDid: receiverDid, credential: "not-sent", holderBinding: {}, proof: {}, sign, presentation, credentialEnvelope: credential, requirement }),
+    }).establishPolicySession()).rejects.toMatchObject({
+      status: 403, message: "v3 policy delegation rejected (403): credential rejected",
+    });
+
+    refusal = { path: "/delegate", response: () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error("body stream failed")); },
+    }), { status: 401 }) };
+    await expect(new ShareRecipientClient({
+      nodeOrigin: "https://node.example", holderDid: receiverDid, envelope, fetchFn, sign,
+      buildPresentation: async () => ({ holderDid: receiverDid, credential: "not-sent", holderBinding: {}, proof: {}, sign, presentation, credentialEnvelope: credential, requirement }),
+    }).establishPolicySession()).rejects.toMatchObject({
+      status: 401, message: "ordinary delegation import rejected (401)",
+    });
   });
 
   test("rejects substituted, inactive, or overbroad S0 authority before import", async () => {

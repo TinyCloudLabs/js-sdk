@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
-import { authorizationVerdictOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-core";
 
 let activeProfileName: string | undefined;
 
@@ -13,6 +13,8 @@ export function setActiveProfileName(name: string): void {
 }
 
 export class CLIError extends Error {
+  readonly status?: number;
+
   constructor(
     public code: string,
     message: string,
@@ -21,10 +23,34 @@ export class CLIError extends Error {
   ) {
     super(message);
     this.name = "CLIError";
+    if (typeof metadata?.status === "number" && Number.isInteger(metadata.status) &&
+      metadata.status >= 400 && metadata.status <= 599) this.status = metadata.status;
   }
 }
 
+/** Convert a service result once, before the CLI's own errors become immutable decisions. */
+export function cliErrorFromService(
+  error: { code: string; message: string; meta?: Record<string, unknown>; status?: number; statusCode?: number },
+  message = error.message,
+): CLIError {
+  const meta = { ...error.meta };
+  // Service metadata is not allowed to supply an arbitrary displayed command hint.
+  delete meta.hint;
+  const status = error.status ?? error.statusCode;
+  if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
+  const verdict = authorizationVerdictOf({ ...error, meta });
+  const missingCapability = validatedCapabilityOf({ ...error, meta }) !== undefined;
+  const denied = verdict === "forbidden" || (verdict === "unauthenticated" && missingCapability);
+  return new CLIError(
+    denied ? "PERMISSION_DENIED" : verdict === "unauthenticated" ? "AUTH_REQUIRED" : error.code,
+    message,
+    denied ? ExitCode.PERMISSION_DENIED : verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
+    meta,
+  );
+}
+
 export function wrapError(error: unknown): CLIError {
+  if (error instanceof CLIError) return error;
   const message = error instanceof Error ? error.message : String(error);
 
   // A typed HTTP refusal wins over misleading response text, including text
@@ -37,11 +63,9 @@ export function wrapError(error: unknown): CLIError {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
 
-  // A signer cannot make a request without private key material. Some SDK
-  // service paths historically wrapped that local restore/signing failure as
-  // NETWORK_ERROR, which led the CLI to suggest switching hosts. Classify the
-  // underlying auth-state problem before preserving an existing CLIError.
-  if (message.includes("Missing private key parameter in JWK")) {
+  // A genuinely untyped signer restore failure is local auth state. Never
+  // interpret HTTP response text (or a command's deliberate CLIError) as JWK state.
+  if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
     const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
     return new CLIError(
       "AUTH_REQUIRED",
@@ -52,8 +76,6 @@ export function wrapError(error: unknown): CLIError {
       },
     );
   }
-
-  if (error instanceof CLIError) return error;
 
   // Any profile write (session, key, profile settings, stores) waits on the
   // profile lock; a timeout means another tc/MCP process held it, not that
@@ -104,21 +126,21 @@ export function handleError(error: unknown): never {
     ? cliError.metadata
     : undefined;
   const meta: Record<string, unknown> = {};
-  if (typeof authMeta?.status === "number") meta.status = authMeta.status;
-  if (typeof authMeta?.resource === "string") meta.resource = authMeta.resource;
-  if (typeof authMeta?.requiredAction === "string") meta.requiredAction = authMeta.requiredAction;
+  if (cliError.status !== undefined && authMeta !== undefined) meta.status = cliError.status;
+  const capability = validatedCapabilityOf({ meta: authMeta });
+  if (capability) {
+    meta.resource = capability.resource;
+    meta.requiredAction = capability.requiredAction;
+  }
   outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : undefined);
   process.exit(cliError.exitCode);
 }
 
 function buildAuthHint(error: CLIError): string | undefined {
-  const resource = error.metadata?.resource;
-  const requiredAction = error.metadata?.requiredAction;
-  if (typeof resource !== "string" || typeof requiredAction !== "string") {
-    return undefined;
-  }
+  const capability = validatedCapabilityOf({ meta: error.metadata });
+  if (!capability) return undefined;
 
-  const spec = capSpecFromAuthMeta(resource, requiredAction);
+  const spec = capSpecFromAuthMeta(capability.resource, capability.requiredAction);
   if (!spec) return undefined;
   return [
     "The active session is missing a TinyCloud capability.",

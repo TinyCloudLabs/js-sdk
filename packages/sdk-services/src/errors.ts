@@ -4,8 +4,11 @@
  * Utilities for creating and handling service errors.
  */
 
+import { CAPABILITY_REGISTRY } from "@tinycloud/bootstrap";
+import { parseNetworkId } from "./encryption/networkId";
+
 import {
-  ServiceError,
+  type ServiceError,
   ErrorCodes,
   err,
   serviceError,
@@ -178,6 +181,78 @@ export function authUnauthorizedError(
  * - `"other"`: a non-authorization HTTP error status (4xx/5xx).
  */
 export type AuthorizationVerdict = "unauthenticated" | "forbidden" | "other";
+
+const grantableActions = new Set(
+  CAPABILITY_REGISTRY.map(({ urn }) => urn).filter((urn) => !urn.endsWith("/*"))
+);
+
+/** A capability resource is a canonical TinyCloud resource or encryption network, never a URL or expression. */
+function safeCapabilityResource(value: unknown, service: string): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 1024 ||
+    !/^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$/.test(value) ||
+    value.includes("//") ||
+    value.split("/").some((segment) => segment === "." || segment === "..")
+  ) return false;
+  if (service === "encryption" && value.startsWith("urn:tinycloud:encryption:")) {
+    try {
+      parseNetworkId(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return /^tinycloud:[A-Za-z0-9][A-Za-z0-9:._-]*(?:\/[A-Za-z0-9_.:-]+)+$/.test(value) &&
+    value.includes(`/${service}/`);
+}
+
+/**
+ * Return a grantable missing capability only when typed authorization evidence
+ * and both safe, service-matched capability fields are present. Status alone,
+ * message text, wildcard actions and unrecognized actions cannot grant scope.
+ */
+export function validatedCapabilityOf(
+  error: unknown
+): { resource: string; requiredAction: string } | undefined {
+  const verdict = authorizationVerdictOf(error);
+  if (verdict !== "unauthenticated" && verdict !== "forbidden") return undefined;
+
+  const seen = new Set<unknown>();
+  let node: unknown = error;
+  for (
+    let depth = 0;
+    depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null && !seen.has(node);
+    depth += 1
+  ) {
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+    const status = errorStatusOf(record);
+    const meta = record.meta;
+    if (
+      (status === 401 || status === 403 || (status === undefined && record.code === ErrorCodes.AUTH_UNAUTHORIZED)) &&
+      typeof meta === "object" && meta !== null && !Array.isArray(meta)
+    ) {
+      const metadata = meta as Record<string, unknown>;
+      const { resource, requiredAction } = metadata;
+      if (typeof requiredAction === "string" && grantableActions.has(requiredAction)) {
+        const actionService = requiredAction.slice("tinycloud.".length, requiredAction.indexOf("/"));
+        const explicitService = record.service === undefined ? metadata.service : record.service;
+        if (
+          safeCapabilityResource(resource, actionService) &&
+          (explicitService === undefined ||
+            explicitService === actionService ||
+            explicitService === `tinycloud.${actionService}`)
+        ) {
+          return { resource, requiredAction };
+        }
+      }
+    }
+    node = record.cause;
+  }
+  return undefined;
+}
 
 const MAX_CAUSE_DEPTH = 8;
 

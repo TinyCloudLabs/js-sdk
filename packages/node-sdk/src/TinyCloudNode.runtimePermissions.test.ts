@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 
 import {
+  authorizationVerdictOf,
   CaveatedDelegationUnsupportedError,
   canonicalHashHex,
   hexEncode,
@@ -461,6 +462,35 @@ describe("TinyCloudNode runtime permission delegations", () => {
           actions: ["tinycloud.encryption/decrypt"],
         },
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("failed runtime grant activation preserves the host verdict and diagnostic", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () =>
+      new Response("Unauthorized Action: missing capability", { status: 403 }),
+    ) as unknown as typeof fetch;
+    try {
+      await node.grantRuntimePermissions([{
+        service: "tinycloud.kv",
+        space: "secrets",
+        path: "vault/secrets/API_KEY",
+        actions: ["tinycloud.kv/get"],
+      }]).then(
+        () => { throw new Error("expected activation failure"); },
+        (error: unknown) => {
+          expect((error as Error).message).toContain("403 - Unauthorized Action: missing capability");
+          expect((error as Error & { cause: { status: number; error: string } }).cause).toMatchObject({
+            success: false,
+            status: 403,
+            error: "Unauthorized Action: missing capability",
+          });
+          expect(authorizationVerdictOf(error)).toBe("forbidden");
+        },
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

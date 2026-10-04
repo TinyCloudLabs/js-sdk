@@ -318,6 +318,25 @@ test("node-info and encryption network HTTP failures keep typed status and serve
   }
 });
 
+test("node-info HTTP failure bounds the diagnostic without losing the verdict", async () => {
+  const node = makeNode();
+  const body = `  ${"x".repeat(700)}  `;
+  await withRecordedFetch(
+    (method, url) => method === "GET" && url === `${HOST}/info`
+      ? new Response(body, { status: 403 })
+      : undefined,
+    async () => {
+      await node.activeNodeIdentity().then(
+        () => { throw new Error("expected HTTP failure"); },
+        (error: unknown) => {
+          expect((error as Error).message).toBe(`Failed to fetch node info: HTTP 403 - ${"x".repeat(512)}`);
+          expect(authorizationVerdictOf(error)).toBe("forbidden");
+        },
+      );
+    },
+  );
+});
+
 test("without assumeMissing a 404 probe still falls through to create", async () => {
   const node = makeNode({ cachedNodeIdHost: HOST });
 

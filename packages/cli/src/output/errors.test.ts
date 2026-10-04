@@ -11,11 +11,7 @@ describe("wrapError", () => {
     setActiveProfileName("feed-migration-owner");
 
     const error = wrapError(
-      new CLIError(
-        "NETWORK_ERROR",
-        "Missing private key parameter in JWK",
-        6,
-      ),
+      new Error("Missing private key parameter in JWK"),
     );
 
     expect(error.code).toBe("AUTH_REQUIRED");
@@ -55,12 +51,24 @@ describe("wrapError", () => {
     expect(error.metadata?.hint).toContain("retry");
   });
 
-  test("preserves an existing CLI error without claiming arbitrary-message redaction", () => {
+  test("preserves deliberate CLI errors and their metadata despite conflicting text or verdict", () => {
     const canary = "tc-191-secret-value-canary";
-    const error = wrapError(new CLIError("NODE_ERROR", `node rejected request: ${canary}`, 7));
-    expect(error.code).toBe("NODE_ERROR");
-    expect(error.exitCode).toBe(7);
-    expect(error.message).toBe(`node rejected request: ${canary}`);
+    const original = new CLIError("AUTH_UNAUTHORIZED", `Missing private key parameter in JWK: ${canary}`, 1, {
+      status: 401,
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/default",
+      requiredAction: "tinycloud.sql/read",
+    });
+    const error = wrapError(original);
+    expect(error).toBe(original);
+    expect(error.code).toBe("AUTH_UNAUTHORIZED");
+    expect(error.exitCode).toBe(1);
+    expect(error.metadata).toEqual(original.metadata);
+    expect(error.status).toBe(401);
+  });
+
+  test("does not interpret a typed 500 containing JWK wording as missing local key material", () => {
+    const error = wrapError(Object.assign(new Error("Missing private key parameter in JWK"), { status: 500 }));
+    expect(error).toMatchObject({ code: "ERROR", exitCode: 1 });
   });
 
   test("emits exact public error output and exit code without private metadata", () => {
@@ -136,5 +144,60 @@ describe("wrapError", () => {
       requiredAction: "tinycloud.kv/get",
     });
     expect(rendered).not.toContain(canary);
+  });
+});
+
+function captureHandleError(error: unknown): { code: number | undefined; rendered: string } {
+  const stderr = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+  const originalWrite = stderr.write;
+  const originalExit = process.exit;
+  let rendered = "";
+  let code: number | undefined;
+  stderr.write = (chunk: unknown) => { rendered += String(chunk); return true; };
+  process.exit = ((exitCode?: number): never => {
+    code = exitCode;
+    throw new Error("expected process exit");
+  }) as typeof process.exit;
+  try {
+    expect(() => handleError(error)).toThrow("expected process exit");
+  } finally {
+    stderr.write = originalWrite;
+    process.exit = originalExit;
+  }
+  return { code, rendered };
+}
+
+describe("handleError authorization output", () => {
+  test("SQL 401 with a validated missing capability preserves its request hint", () => {
+    const result = captureHandleError(new CLIError("PERMISSION_DENIED", "Unauthorized Action", 5, {
+      status: 401,
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/default",
+      requiredAction: "tinycloud.sql/read",
+    }));
+    const output = JSON.parse(result.rendered);
+    expect(result.code).toBe(5);
+    expect(output.error.hint).toContain("tinycloud.sql:default:default:read");
+    expect(output.error.meta).toEqual({
+      status: 401,
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/sql/default",
+      requiredAction: "tinycloud.sql/read",
+    });
+  });
+
+  test("rejects server-controlled URL fragments and unsafe action values inside allowed meta fields", () => {
+    for (const [resource, requiredAction] of [
+      ["https://example.invalid/private#canary/kv/item", "tinycloud.kv/get"],
+      ["tinycloud:pkh:eip155:1:0xabc:default/kv/item", "tinycloud.kv/get\"$(secret)"],
+    ]) {
+      const result = captureHandleError(new CLIError("PERMISSION_DENIED", "Forbidden", 5, {
+        status: 403, resource, requiredAction,
+      }));
+      const output = JSON.parse(result.rendered);
+      expect(result.code).toBe(5);
+      expect(output.error.meta).toEqual({ status: 403 });
+      expect(output.error.hint).toBeUndefined();
+      expect(result.rendered).not.toContain(resource);
+      expect(result.rendered).not.toContain(requiredAction);
+    }
   });
 });

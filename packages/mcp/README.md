@@ -87,6 +87,13 @@ Results use canonical structured envelopes with `ok`, `authority_required`,
 exact space and key, prefix, or database supplied by the caller. Missing
 authority returns an exact, resumable request instead of widening access.
 
+KV and SQLite HTTP authorization refusals are nonretryable structured errors:
+plain 401 is `AUTH_REQUIRED`, 403 is `PERMISSION_DENIED`, and 401 naming a
+validated missing capability is `PERMISSION_DENIED` rather than a request to
+sign in again. Node/transport failures such as HTTP 502 remain retryable
+`NODE_ERROR` (except uncertain SQL mutations, which must not be blindly retried).
+The node's response text and capability metadata are not returned in MCP errors.
+
 KV values support text, JSON, and lossless base64 content. Conditional replace
 and delete use the strong ETag returned by `tinycloud_kv_head`. SQLite queries
 are read-only and bounded; SQL execution accepts one parameterized `INSERT`,

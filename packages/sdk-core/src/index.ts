@@ -463,6 +463,7 @@ export {
   type ErrorCode,
   type ServiceError,
   authorizationVerdictOf,
+  validatedCapabilityOf,
   type AuthorizationVerdict,
   isStorageFullError,
   STORAGE_FULL_MESSAGE,
@@ -648,6 +649,8 @@ export {
   type NodeDescriptorFetcher,
   type WellKnownDescriptorFetcher,
 } from "@tinycloud/sdk-services";
+
+export { httpResponseError } from "./http-error";
 
 // Space utilities
 export {

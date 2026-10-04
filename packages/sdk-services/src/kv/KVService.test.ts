@@ -7,6 +7,7 @@ import type {
   ServiceHeaders,
 } from "../types";
 import { ErrorCodes } from "../types";
+import { authorizationVerdictOf, validatedCapabilityOf } from "../errors";
 import { KVService } from "./KVService";
 import {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
@@ -922,7 +923,7 @@ describe("KVService.put serialization", () => {
     expect(result.error.message).toBe(`Failed to put key "vault/API_KEY": ${status} - ${serverMessage}`);
     expect(result.error.meta).toMatchObject({
       status,
-      resource: "vault/API_KEY",
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/kv/vault/API_KEY",
       requiredAction: "tinycloud.kv/put",
     });
   });
@@ -1220,4 +1221,148 @@ describe("KVService 404 classification (unhosted space vs missing key)", () => {
       }
     });
   }
+});
+
+describe("KVService authorization responses", () => {
+  const path = "vault/secrets/API_KEY";
+  const canonicalResource = `tinycloud:pkh:eip155:1:0xabc:default/kv/${path}`;
+  const operations = [
+    { name: "get", action: KVAction.GET, run: (service: KVService) => service.get(path) },
+    { name: "put", action: KVAction.PUT, run: (service: KVService) => service.put(path, "value") },
+    { name: "list", action: KVAction.LIST, run: (service: KVService) => service.list({ prefix: "vault/secrets", path: "API_KEY" }) },
+    { name: "head", action: KVAction.HEAD, run: (service: KVService) => service.head(path) },
+    { name: "delete", action: KVAction.DELETE, run: (service: KVService) => service.delete(path) },
+  ];
+
+  for (const operation of operations) {
+    test.each([401, 403])(`${operation.name}: status %i preserves valid capability and authorization`, async (status) => {
+      const body = `Unauthorized Action: ${path} / ${operation.action}`;
+      const service = new KVService({});
+      service.initialize(createContext(async () => response(false, status, body)));
+
+      const result = await operation.run(service);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+      expect(result.error.meta?.status).toBe(status);
+      expect(authorizationVerdictOf(result.error)).toBe(status === 401 ? "unauthenticated" : "forbidden");
+      expect(validatedCapabilityOf(result.error)).toEqual({
+        resource: canonicalResource,
+        requiredAction: operation.action,
+      });
+    });
+
+    test(`${operation.name}: mismatched server capability cannot become grant advice`, async () => {
+      const service = new KVService({});
+      service.initialize(createContext(async () =>
+        response(false, 403, `Unauthorized Action: vault/other / ${operation.action}`)
+      ));
+
+      const result = await operation.run(service);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+      expect(result.error.meta?.status).toBe(403);
+      expect(result.error.meta?.resource).toBeUndefined();
+      expect(validatedCapabilityOf(result.error)).toBeUndefined();
+    });
+
+    test(`${operation.name}: unreadable 403 body retains typed authorization status without inventing a capability`, async () => {
+      const service = new KVService({});
+      service.initialize(createContext(async () => ({
+        ...response(false, 403, "", "Forbidden"),
+        text: async () => { throw new Error("body stream failed"); },
+      })));
+
+      const result = await operation.run(service);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+      expect(result.error.meta?.status).toBe(403);
+      expect(authorizationVerdictOf(result.error)).toBe("forbidden");
+      expect(validatedCapabilityOf(result.error)).toBeUndefined();
+    });
+  }
+
+  test.each([401, 403])("get: full canonical node resource at status %i maps to the requested capability", async (status) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, status, `Unauthorized Action: ${canonicalResource} / ${KVAction.GET}`)
+    ));
+    const result = await service.get(path);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.meta?.status).toBe(status);
+    expect(validatedCapabilityOf(result.error)).toEqual({
+      resource: canonicalResource,
+      requiredAction: KVAction.GET,
+    });
+  });
+
+  test("get: a full node resource for another space cannot become grant advice", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 403, `Unauthorized Action: tinycloud:pkh:eip155:1:0xdef:default/kv/${path} / ${KVAction.GET}`)
+    ));
+    const result = await service.get(path);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.meta?.status).toBe(403);
+    expect(validatedCapabilityOf(result.error)).toBeUndefined();
+  });
+
+  test.each([
+    ["URL resource", "https://attacker.example/grant", KVAction.PUT],
+    ["fragment resource", "vault/secrets/API_KEY#all", KVAction.PUT],
+    ["shell interpolation", "vault/${HOME}", KVAction.PUT],
+    ["invalid action", path, "tinycloud.kv/put;curl"],
+    ["action suffix", path, "tinycloud.kv/put/anything"],
+    ["wrong service action", path, "tinycloud.sql/write"],
+  ])("put: server %s is never promoted to capability metadata", async (_kind, resource, action) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 403, `Unauthorized Action: ${resource} / ${action}`)
+    ));
+
+    const result = await service.put(path, "value");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.meta?.status).toBe(403);
+    expect(result.error.meta?.resource).toBeUndefined();
+    expect(result.error.meta?.requiredAction).toBeUndefined();
+    expect(validatedCapabilityOf(result.error)).toBeUndefined();
+  });
+
+  test("get preserves a structured hint only for its actual space and key", async () => {
+    const permissionHint = {
+      service: "tinycloud.kv",
+      space: "tinycloud:pkh:eip155:1:0xabc:default",
+      path,
+      actions: [KVAction.GET],
+    };
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 403, { permissionHint })));
+    const result = await service.get(path);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.meta?.permissionHint).toEqual(permissionHint);
+    expect(result.error.meta?.status).toBe(403);
+  });
+
+  test("get does not pass through a structured hint for a different request path", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 403, {
+      permissionHint: {
+        service: "tinycloud.kv",
+        space: "tinycloud:pkh:eip155:1:0xabc:default",
+        path: "vault/secrets/OTHER_KEY",
+        actions: [KVAction.GET],
+      },
+    })));
+    const result = await service.get(path);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.meta?.status).toBe(403);
+    expect(result.error.meta?.permissionHint).toBeUndefined();
+  });
 });

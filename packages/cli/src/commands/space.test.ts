@@ -16,14 +16,12 @@ const recorded = {
 // Controls whether the resolved space is owned by the active profile.
 let owner = false;
 let profile: Record<string, unknown> = {};
-let spaceListError: { code: string; message: string; meta: { status: number } } | undefined;
 
 function resetState(): void {
   recorded.outputs = [];
   recorded.errors = [];
   recorded.fileWrites = [];
   owner = false;
-  spaceListError = undefined;
   profile = {
     name: "agent-test",
     chainId: 1,
@@ -40,11 +38,9 @@ mock.module("../config/profiles.js", () => ({
 }));
 
 mock.module("../lib/sdk.js", () => ({
-  // host-request stays local; list uses the controlled service response below.
+  // Host-request stays local; authorization failures use a real service in authorization-errors.test.ts.
   ensureAuthenticated: async () => ({
-    spaces: { list: async () => spaceListError
-      ? { ok: false, error: spaceListError }
-      : { ok: true, data: [] } },
+    spaces: { list: async () => ({ ok: true, data: [] }) },
   }),
 }));
 
@@ -80,6 +76,8 @@ mock.module("../output/errors.js", () => ({
       super(message);
     }
   },
+  cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
+    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
   handleError: (error: unknown) => recorded.errors.push(error),
 }));
 
@@ -100,21 +98,6 @@ async function runSpace(args: string[]): Promise<void> {
   registerSpaceCommand(program);
   await program.parseAsync(["node", "tc", "space", ...args], { from: "node" });
 }
-
-describe("tc space list authorization", () => {
-  beforeEach(resetState);
-
-  test.each([401, 403])("preserves status and exit code for HTTP %i despite misleading text", async (status) => {
-    spaceListError = { code: "NETWORK_ERROR", message: `${status} - session expired`, meta: { status } };
-    await runSpace(["list"]);
-    expect(recorded.errors).toHaveLength(1);
-    expect(recorded.errors[0]).toMatchObject({
-      code: status === 401 ? "AUTH_REQUIRED" : "PERMISSION_DENIED",
-      exitCode: status === 401 ? 3 : 5,
-      metadata: { status },
-    });
-  });
-});
 
 describe("tc space host-request", () => {
   beforeEach(resetState);
