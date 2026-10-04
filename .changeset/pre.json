@@ -29,6 +29,7 @@
   "changesets": [
     "tc-548-profile-lock-writers",
     "tc-550-typed-auth-verdicts",
-    "tc-571-share-notify-delivery-email"
+    "tc-571-share-notify-delivery-email",
+    "tc-619-storage-full-reads"
   ]
 }

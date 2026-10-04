@@ -6888,6 +6888,20 @@ function storageLimitReachedError(service, message, meta) {
     meta
   };
 }
+var STORAGE_FULL_MESSAGE = "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again.";
+var STORAGE_WRITE_TOO_LARGE_MESSAGE = "This change is larger than the TinyCloud storage you have left, so it was not saved. Reading still works. Free up space or upgrade your plan to save it.";
+function parseStorageQuotaBytes(responseText) {
+  const match = responseText.match(/Used:\s*(\d+)\s*bytes,\s*Limit:\s*(\d+)\s*bytes/i);
+  if (!match) return void 0;
+  return {
+    usedBytes: parseInt(match[1], 10),
+    limitBytes: parseInt(match[2], 10)
+  };
+}
+function storageRejectionError(service, status, meta, responseText) {
+  const quotaMeta = { ...meta, ...parseStorageQuotaBytes(responseText) };
+  return status === 402 ? storageQuotaExceededError(service, STORAGE_FULL_MESSAGE, quotaMeta) : storageLimitReachedError(service, STORAGE_WRITE_TOO_LARGE_MESSAGE, quotaMeta);
+}
 function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
   if (error instanceof Error) {
     if (error.name === "AbortError") {
@@ -7263,47 +7277,21 @@ var KVService = class extends BaseService {
   get config() {
     return this._config;
   }
-  // Parses "Used: X bytes, Limit: Y bytes" from tinycloud-node error responses
-  parseQuotaInfo(errorText) {
-    const match = errorText.match(
-      /Used:\s*(\d+)\s*bytes,\s*Limit:\s*(\d+)\s*bytes/i
-    );
-    if (match) {
-      return {
-        usedBytes: parseInt(match[1], 10),
-        limitBytes: parseInt(match[2], 10)
-      };
-    }
-    return void 0;
-  }
   handleQuotaErrorResponse(response, errorText, key) {
-    if (response.status === 402) {
-      const quotaInfo = this.parseQuotaInfo(errorText);
-      return err(
-        storageQuotaExceededError(
-          "kv",
-          `Storage quota exceeded for key ${JSON.stringify(key)}: ${errorText}`,
-          {
-            status: response.status,
-            ...quotaInfo ? { usedBytes: quotaInfo.usedBytes, limitBytes: quotaInfo.limitBytes } : {}
-          }
-        )
-      );
+    if (response.status !== 402 && response.status !== 413) {
+      return void 0;
     }
-    if (response.status === 413) {
-      const quotaInfo = this.parseQuotaInfo(errorText);
-      return err(
-        storageLimitReachedError(
-          "kv",
-          `Storage limit reached for key ${JSON.stringify(key)}: ${errorText}`,
-          {
-            status: response.status,
-            ...quotaInfo ? { usedBytes: quotaInfo.usedBytes, limitBytes: quotaInfo.limitBytes } : {}
-          }
-        )
-      );
+    if (response.status === 413 && !parseStorageQuotaBytes(errorText)) {
+      return void 0;
     }
-    return void 0;
+    return err(
+      storageRejectionError(
+        "kv",
+        response.status,
+        { status: response.status, statusText: response.statusText, key },
+        errorText
+      )
+    );
   }
   /**
    * Classify a KV 404 by reading the response body once.
@@ -8626,21 +8614,24 @@ var SQLService = class extends BaseService {
   }
   async applyMigrationsOnDbUnlocked(dbName, options) {
     return this.withTelemetry("migrations.apply", dbName, async () => {
-      const created = await this.ensureMigrationsTable(dbName, options.signal);
-      if (!created.ok) return created;
       const listed = await this.queryOnDb(
         dbName,
         `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
         [options.namespace],
         { signal: options.signal }
       );
-      if (!listed.ok) return listed;
+      const tableMissing = !listed.ok && (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND || isMissingTableError(listed.error.message));
+      if (!listed.ok && !tableMissing) return listed;
       const appliedIds = new Set(
-        listed.data.rows.map((row) => rowValue(row, 0)).filter((id) => typeof id === "string")
+        (listed.ok ? listed.data.rows : []).map((row) => rowValue(row, 0)).filter((id) => typeof id === "string")
       );
       const skipped = options.migrations.filter((migration) => appliedIds.has(migration.id)).map((migration) => migration.id);
       const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
       const applied = [];
+      if (pending.length > 0 && tableMissing) {
+        const created = await this.ensureMigrationsTable(dbName, options.signal);
+        if (!created.ok) return created;
+      }
       for (const migration of pending) {
         const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
         if (!result.ok) return result;
@@ -8743,6 +8734,10 @@ var SQLService = class extends BaseService {
   }
   async handleErrorResponse(response, operation) {
     const errorText = await response.text();
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
+    if (response.status === 402) {
+      return err(storageRejectionError("sql", 402, meta, errorText));
+    }
     const errorBody = parseServiceErrorBody(errorText);
     const errorCode2 = this.mapHttpStatusToErrorCode(
       response.status,
@@ -8755,7 +8750,6 @@ var SQLService = class extends BaseService {
       errorText,
       errorBody
     );
-    const meta = responseErrorMeta(response.status, response.statusText, errorText);
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
       if (action) meta.requiredAction = action;
@@ -8855,6 +8849,9 @@ function serializeSqlValues(values) {
   return values.map(
     (value) => value instanceof Uint8Array ? Array.from(value) : value
   );
+}
+function isMissingTableError(message) {
+  return /no such table/i.test(message);
 }
 function migrationKey(namespace, id) {
   return `${encodeURIComponent(namespace)}:${encodeURIComponent(id)}`;
@@ -9170,6 +9167,10 @@ var DuckDbService = class extends BaseService {
   }
   async handleErrorResponse(response, operation) {
     const errorText = await response.text();
+    const meta = responseErrorMeta(response.status, response.statusText, errorText);
+    if (response.status === 402) {
+      return err(storageRejectionError("duckdb", 402, meta, errorText));
+    }
     const errorBody = parseServiceErrorBody(errorText);
     const errorCode2 = this.mapHttpStatusToErrorCode(
       response.status,
@@ -9182,7 +9183,6 @@ var DuckDbService = class extends BaseService {
       errorText,
       errorBody
     );
-    const meta = responseErrorMeta(response.status, response.statusText, errorText);
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
       if (action) meta.requiredAction = action;
@@ -10109,6 +10109,9 @@ function defaultVaultMessage(input) {
       return input.message ?? `Public key not found for ${input.did}`;
     case "STORAGE_ERROR":
       return input.message ?? input.cause.message;
+    case "STORAGE_QUOTA_EXCEEDED":
+    case "STORAGE_LIMIT_REACHED":
+      return input.message;
   }
 }
 function vaultError(input) {
@@ -10118,6 +10121,15 @@ function vaultError(input) {
     message: defaultVaultMessage(input)
   };
   return { ok: false, error };
+}
+function kvWriteError(context, error) {
+  if (error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED || error.code === ErrorCodes.STORAGE_LIMIT_REACHED) {
+    return vaultError({ code: error.code, message: error.message, meta: error.meta });
+  }
+  return vaultError({
+    code: "STORAGE_ERROR",
+    cause: new Error(`${context}: ${error.message}`)
+  });
 }
 var DataVaultService = class extends BaseService {
   /**
@@ -10401,12 +10413,7 @@ var DataVaultService = class extends BaseService {
         JSON.stringify(envelopeResult.data)
       );
       if (!valuePutResult.ok) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: new Error(
-            `Failed to store encrypted value: ${valuePutResult.error.message}`
-          )
-        });
+        return kvWriteError("Failed to store encrypted value", valuePutResult.error);
       }
       return { ok: true, data: void 0 };
     } catch (error) {
@@ -10624,12 +10631,7 @@ var DataVaultService = class extends BaseService {
           keyPayload
         );
         if (!keyPutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store key blob: ${keyPutResult.error.message}`
-            )
-          });
+          return kvWriteError("Failed to store key blob", keyPutResult.error);
         }
         const valuePayload = JSON.stringify({
           data: base64Encode(encrypted),
@@ -10640,12 +10642,7 @@ var DataVaultService = class extends BaseService {
           valuePayload
         );
         if (!valuePutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store encrypted value: ${valuePutResult.error.message}`
-            )
-          });
+          return kvWriteError("Failed to store encrypted value", valuePutResult.error);
         }
         return ok(void 0);
       } catch (error) {
@@ -10976,12 +10973,7 @@ var DataVaultService = class extends BaseService {
           grantPayload
         );
         if (!grantPutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store grant: ${grantPutResult.error.message}`
-            )
-          });
+          return kvWriteError("Failed to store grant", grantPutResult.error);
         }
         return ok(void 0);
       } catch (error) {
@@ -11326,12 +11318,7 @@ var DataVaultService = class extends BaseService {
           keyPayload
         );
         if (!keyPutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store rotated key blob: ${keyPutResult.error.message}`
-            )
-          });
+          return kvWriteError("Failed to store rotated key blob", keyPutResult.error);
         }
         const valuePayload = JSON.stringify({
           data: base64Encode(encrypted),
@@ -11342,12 +11329,7 @@ var DataVaultService = class extends BaseService {
           valuePayload
         );
         if (!valuePutResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to store re-encrypted value: ${valuePutResult.error.message}`
-            )
-          });
+          return kvWriteError("Failed to store re-encrypted value", valuePutResult.error);
         }
         for (const did of remainingGrantees) {
           const grantResult = await this.reencrypt(key, did);
