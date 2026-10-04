@@ -1779,7 +1779,7 @@ import {
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
-  upsertProfileRecord,
+  updateProfileStore,
   withProfileLock as withProfileLock2,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
@@ -13123,17 +13123,15 @@ function didWithoutFragment(did) {
 async function loadAdditionalDelegations(profile) {
   return readAdditionalDelegations(profile);
 }
-async function saveAdditionalDelegations(profile, entries) {
-  await replaceSharedRecords(profile, "additional-delegations", entries);
+async function appendAdditionalDelegations(profile, entries) {
+  const { mergeDelegationsWithoutRequest } = await import("@tinycloud/operations/delegation-binding");
+  await updateProfileStore(profile, "additional-delegations", (stored) => ({
+    records: mergeDelegationsWithoutRequest(stored, entries.map((entry) => ({ ...entry }))),
+    result: void 0
+  }));
 }
 async function appendAdditionalDelegation(profile, entry) {
-  await upsertProfileRecord(
-    profile,
-    "additional-delegations",
-    entry.delegation.cid,
-    entry,
-    (candidate) => candidate.delegation.cid
-  );
+  await appendAdditionalDelegations(profile, [entry]);
 }
 async function loadPermissionRequestArtifacts(profile) {
   const raw = await readAuthRequests(profile);
@@ -13146,9 +13144,6 @@ async function appendPermissionRequestArtifact(profile, artifact) {
     next.push(artifact);
     await writeSharedRecords(profile, "auth-requests", next);
   });
-}
-async function replaceSharedRecords(profile, store, entries) {
-  await withProfileLock2(profile, () => writeSharedRecords(profile, store, entries));
 }
 async function writeSharedRecords(profile, store, entries) {
   const path = store === "additional-delegations" ? additionalDelegationsPath(profile) : permissionRequestsPath(profile);
@@ -13163,13 +13158,48 @@ async function getLastPermissionRequestArtifact(profile) {
   const existing = await loadPermissionRequestArtifacts(profile);
   return existing.at(-1) ?? null;
 }
-async function replayAdditionalDelegations(node, profile) {
+async function replayAdditionalDelegations(node, profile, options) {
+  const {
+    operationSpaceResolver,
+    prepareStoredDelegationReplay,
+    replayStoredDelegation,
+    storedDelegationKind
+  } = await import("@tinycloud/operations/delegation-binding");
+  const activator = node;
+  const migrated = await prepareStoredDelegationReplay(profile, activator, {
+    host: options.host,
+    migrate: options.migrate
+  });
+  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
   const entries = await loadAdditionalDelegations(profile);
-  for (const entry of entries) {
+  for (const stored of entries) {
+    const kind = storedDelegationKind(stored);
+    if (kind === "compact" || kind === "signed-login") {
+      const installed = await replayStoredDelegation(activator, stored, {
+        host: options.host,
+        migrated,
+        resolveSpace
+      });
+      if (installed === void 0 && process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write("[replay] skipping a stored delegation refused by validation or its request binding\n");
+      }
+      continue;
+    }
+    if (kind === "refused") {
+      if (process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write("[replay] skipping a malformed stored record or one bound to a request it cannot be held to\n");
+      }
+      continue;
+    }
+    const entry = stored;
     const expiry = entry.delegation.expiry instanceof Date ? entry.delegation.expiry : new Date(entry.delegation.expiry);
     if (expiry.getTime() <= Date.now()) continue;
     try {
-      await node.useRuntimeDelegation({ ...entry.delegation, expiry });
+      await node.useRuntimeDelegation({
+        ...entry.delegation,
+        delegationHeader: { Authorization: entry.delegation.delegationHeader.Authorization },
+        expiry
+      });
     } catch (err2) {
       if (process.env.TC_DEBUG_REPLAY === "1") {
         process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${err2.message}
@@ -13474,6 +13504,7 @@ async function createSDKInstance(ctx, options) {
       host: ctx.host,
       privateKey: effectivePrivateKey
     });
+    let restoredOwnSession2 = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
       await node2.restoreSession({
         delegationHeader: session.delegationHeader,
@@ -13486,16 +13517,22 @@ async function createSDKInstance(ctx, options) {
         siwe: session.siwe,
         signature: session.signature
       });
+      restoredOwnSession2 = true;
     } else {
       await node2.signIn();
     }
-    await replayAdditionalDelegations(node2, ctx.profile);
+    await replayAdditionalDelegations(node2, ctx.profile, {
+      host: ctx.host,
+      ownerSpace: profile.spaceId,
+      migrate: restoredOwnSession2 && options?.privateKey === void 0
+    });
     return node2;
   }
   const node = new TinyCloudNode({
     host: ctx.host,
     privateKey: options?.privateKey
   });
+  let restoredOwnSession = false;
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
@@ -13510,8 +13547,13 @@ async function createSDKInstance(ctx, options) {
       siwe: session.siwe,
       signature: session.signature
     });
+    restoredOwnSession = true;
   }
-  await replayAdditionalDelegations(node, ctx.profile);
+  await replayAdditionalDelegations(node, ctx.profile, {
+    host: ctx.host,
+    ownerSpace: profile?.spaceId,
+    migrate: restoredOwnSession
+  });
   return node;
 }
 async function bootstrapDelegatedSession(ctx, delegation) {
@@ -13605,7 +13647,7 @@ async function ensureAuthenticated(ctx, options) {
   }
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+    return createSDKInstance(ctx);
   }
   const session = await ProfileManager.getSession(ctx.profile);
   if (!session) {
@@ -15496,6 +15538,15 @@ function registerAuthCommand(program) {
         return;
       }
       const imported = normalizeDelegationImport(parsed);
+      const { activateUnboundCompactImport, storedDelegationKind } = await import("@tinycloud/operations/delegation-binding");
+      const kind = storedDelegationKind({ delegation: imported.delegation });
+      if (kind === "refused") {
+        throw new CLIError(
+          "INVALID_AUTH_IMPORT",
+          "Imported delegation must carry exactly one string Authorization header.",
+          ExitCode.USAGE_ERROR
+        );
+      }
       let node;
       try {
         node = await ensureAuthenticated(ctx);
@@ -15505,18 +15556,33 @@ function registerAuthCommand(program) {
         if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
         node = (await bootstrapDelegatedSession(ctx, imported.delegation)).node;
       }
-      await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
-        imported.delegation,
-        imported.permissions
-      ));
       const targetsSessionKey = typeof imported.delegation.delegateDID === "string" && principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
       let activated = false;
-      if (targetsSessionKey) {
-        await node.useRuntimeDelegation(imported.delegation);
+      let permissions = imported.permissions;
+      if (targetsSessionKey && kind === "compact") {
+        const record = await activateUnboundCompactImport(
+          node,
+          imported.delegation,
+          ctx.host
+        );
+        await appendAdditionalDelegation(ctx.profile, record);
+        permissions = record.permissions;
         activated = true;
+      } else {
+        await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
+          imported.delegation,
+          imported.permissions
+        ));
+        if (targetsSessionKey) {
+          await node.useRuntimeDelegation({
+            ...imported.delegation,
+            delegationHeader: { Authorization: imported.delegation.delegationHeader.Authorization }
+          });
+          activated = true;
+        }
       }
       await appendGrantHistory(ctx.profile, {
-        addedCaps: imported.permissions,
+        addedCaps: permissions,
         source: "cli",
         delegationCid: imported.delegation.cid,
         expiry: imported.delegation.expiry.toISOString()
@@ -15527,7 +15593,7 @@ function registerAuthCommand(program) {
         kind: "tinycloud.auth.delegation",
         requestId: imported.requestId ?? null,
         delegationCid: imported.delegation.cid,
-        permissions: imported.permissions,
+        permissions,
         expiry: imported.delegation.expiry.toISOString()
       });
     } catch (error) {
@@ -15901,8 +15967,6 @@ async function activateAndStoreOpenKeyGrants(profileName, node, grants, source) 
   for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   if (grants.length === 0) return;
   await ProfileManager.withLock(profileName, async () => {
-    const existing = await loadAdditionalDelegations(profileName);
-    const replacing = new Set(grants.map(({ delegation }) => delegation.cid));
     for (const { delegation, effective } of grants) {
       await appendGrantHistory(profileName, {
         addedCaps: effective,
@@ -15911,10 +15975,10 @@ async function activateAndStoreOpenKeyGrants(profileName, node, grants, source) 
         expiry: delegation.expiry.toISOString()
       });
     }
-    await saveAdditionalDelegations(profileName, [
-      ...existing.filter(({ delegation }) => !replacing.has(delegation.cid)),
-      ...grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective))
-    ]);
+    await appendAdditionalDelegations(
+      profileName,
+      grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective))
+    );
   });
 }
 async function ensureDelegationAuthority(params) {
@@ -29981,7 +30045,13 @@ async function readHasKey(name, issues) {
 }
 async function readDelegations(name, issues) {
   try {
-    return await loadAdditionalDelegations(name);
+    const entries = await loadAdditionalDelegations(name);
+    const { storedDelegationKind } = await import("@tinycloud/operations/delegation-binding");
+    const readable = entries.filter((entry) => storedDelegationKind(entry) !== "refused");
+    if (readable.length < entries.length) {
+      issues.push(`delegations: ${entries.length - readable.length} unreadable stored record(s) skipped`);
+    }
+    return readable;
   } catch (error) {
     issues.push(`delegations: ${messageFromError(error)}`);
     return [];

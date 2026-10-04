@@ -5659,20 +5659,55 @@ import {
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
-  upsertProfileRecord,
+  updateProfileStore,
   withProfileLock as withProfileLock2,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
 async function loadAdditionalDelegations(profile) {
   return readAdditionalDelegations(profile);
 }
-async function replayAdditionalDelegations(node, profile) {
+async function replayAdditionalDelegations(node, profile, options) {
+  const {
+    operationSpaceResolver,
+    prepareStoredDelegationReplay,
+    replayStoredDelegation,
+    storedDelegationKind
+  } = await import("@tinycloud/operations/delegation-binding");
+  const activator = node;
+  const migrated = await prepareStoredDelegationReplay(profile, activator, {
+    host: options.host,
+    migrate: options.migrate
+  });
+  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
   const entries = await loadAdditionalDelegations(profile);
-  for (const entry of entries) {
+  for (const stored of entries) {
+    const kind = storedDelegationKind(stored);
+    if (kind === "compact" || kind === "signed-login") {
+      const installed = await replayStoredDelegation(activator, stored, {
+        host: options.host,
+        migrated,
+        resolveSpace
+      });
+      if (installed === void 0 && process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write("[replay] skipping a stored delegation refused by validation or its request binding\n");
+      }
+      continue;
+    }
+    if (kind === "refused") {
+      if (process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write("[replay] skipping a malformed stored record or one bound to a request it cannot be held to\n");
+      }
+      continue;
+    }
+    const entry = stored;
     const expiry = entry.delegation.expiry instanceof Date ? entry.delegation.expiry : new Date(entry.delegation.expiry);
     if (expiry.getTime() <= Date.now()) continue;
     try {
-      await node.useRuntimeDelegation({ ...entry.delegation, expiry });
+      await node.useRuntimeDelegation({
+        ...entry.delegation,
+        delegationHeader: { Authorization: entry.delegation.delegationHeader.Authorization },
+        expiry
+      });
     } catch (err) {
       if (process.env.TC_DEBUG_REPLAY === "1") {
         process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${err.message}
@@ -5749,6 +5784,7 @@ async function createSDKInstance(ctx, options) {
       host: ctx.host,
       privateKey: effectivePrivateKey
     });
+    let restoredOwnSession2 = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
       await node2.restoreSession({
         delegationHeader: session.delegationHeader,
@@ -5761,16 +5797,22 @@ async function createSDKInstance(ctx, options) {
         siwe: session.siwe,
         signature: session.signature
       });
+      restoredOwnSession2 = true;
     } else {
       await node2.signIn();
     }
-    await replayAdditionalDelegations(node2, ctx.profile);
+    await replayAdditionalDelegations(node2, ctx.profile, {
+      host: ctx.host,
+      ownerSpace: profile.spaceId,
+      migrate: restoredOwnSession2 && options?.privateKey === void 0
+    });
     return node2;
   }
   const node = new TinyCloudNode({
     host: ctx.host,
     privateKey: options?.privateKey
   });
+  let restoredOwnSession = false;
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
@@ -5785,8 +5827,13 @@ async function createSDKInstance(ctx, options) {
       siwe: session.siwe,
       signature: session.signature
     });
+    restoredOwnSession = true;
   }
-  await replayAdditionalDelegations(node, ctx.profile);
+  await replayAdditionalDelegations(node, ctx.profile, {
+    host: ctx.host,
+    ownerSpace: profile?.spaceId,
+    migrate: restoredOwnSession
+  });
   return node;
 }
 async function bootstrapDelegatedSession(ctx, delegation) {
@@ -5880,7 +5927,7 @@ async function ensureAuthenticated(ctx, options) {
   }
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+    return createSDKInstance(ctx);
   }
   const session = await ProfileManager.getSession(ctx.profile);
   if (!session) {

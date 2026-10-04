@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 3.1.0-beta.5
+
+### Minor Changes
+
+- b7fd979: `activateValidatedRuntimeDelegation` takes a new `authorize` option. It sees the capabilities read from the signed delegation before anything is activated or installed, and returning `false` refuses the delegation.
+
 ## 3.1.0-beta.4
 
 ### Patch Changes

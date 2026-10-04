@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/cli",
-  "version": "1.1.0-beta.6",
+  "version": "1.1.0-beta.7",
   "description": "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -31,10 +31,10 @@
   "dependencies": {
     "@tinycloud/share-sdk": "1.1.0-beta.1",
     "@tinycloud/share-envelope": "1.1.0-beta.0",
-    "@tinycloud/node-sdk": "3.1.0-beta.4",
+    "@tinycloud/node-sdk": "3.1.0-beta.5",
     "@tinycloud/node-sdk-wasm": "1.7.6",
     "@tinycloud/sdk-core": "3.1.0-beta.4",
-    "@tinycloud/operations": "0.3.4-beta.6",
+    "@tinycloud/operations": "0.4.0-beta.7",
     "chalk": "^5.3.0",
     "commander": "^14.0.0",
     "open": "^11.0.0",

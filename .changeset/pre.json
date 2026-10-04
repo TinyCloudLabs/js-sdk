@@ -31,6 +31,10 @@
     "tc-550-typed-auth-verdicts",
     "tc-571-share-notify-delivery-email",
     "tc-601-revocation-whole-seconds",
+    "tc-602-cli-compact-bindings",
+    "tc-602-mcp-binding-docs",
+    "tc-602-node-sdk-authorize",
+    "tc-602-operations-compact-bindings",
     "tc-619-storage-full-reads",
     "tc-635-share-notify-followups",
     "tc-649-secret-setup-link"

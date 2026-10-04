@@ -1,5 +1,15 @@
 # @tinycloud/mcp
 
+## 0.3.4-beta.7
+
+### Patch Changes
+
+- b7fd979: The README describes how imported delegations are bound to their requests, how delegations stored by earlier releases are migrated once, and what a record without a binding does.
+- Updated dependencies [b7fd979]
+- Updated dependencies [b7fd979]
+  - @tinycloud/node-sdk@3.1.0-beta.5
+  - @tinycloud/operations@0.4.0-beta.7
+
 ## 0.3.4-beta.6
 
 ### Patch Changes
