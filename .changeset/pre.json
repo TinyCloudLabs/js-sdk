@@ -27,6 +27,7 @@
     "@tinycloud/sdk-services-test": "16.0.0"
   },
   "changesets": [
+    "tc-548-profile-lock-writers",
     "tc-571-share-notify-delivery-email"
   ]
 }
