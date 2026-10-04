@@ -62,7 +62,7 @@ tc --profile publisher share publish ./note.md --json
 tc --profile publisher share publish ./note.md --to email:alice@example.com --notify --json
 ```
 
-Without `--to`, publish creates a bearer link: anyone holding the complete URL can read it. `--to email:`, `--to did:` and `--to domain:` create addressed links that only the named recipient can open after proving who they are. Keep complete URLs, including the `#` fragment, out of logs. The default lifetime is seven days, clamped to the verified session expiry; JSON output reports `expiryClamped`. Explicit `--expires` values beyond the session end fail instead of being silently shortened. See [REFERENCE.md](REFERENCE.md) for inspect, receive, list, show and revoke.
+Without `--to`, publish creates a bearer link: anyone holding the complete URL can read it. `--to email:`, `--to did:` and `--to domain:` create addressed links that only the named recipient can open after proving who they are. Keep complete URLs, including the `#` fragment, out of logs. `--notify` requires `read`; domain invitations also require `--notify-to <email>` at the exact domain, an owner-key profile and node 1.17.3+. `tc share notify <id> --to <email>` retries within 5 minutes of publication; after that it reports a non-retryable `partial-failure` (exit 9), and the sender must publish a new share to invite again. A confirmed repeat reports `already-delivered`. The default lifetime is seven days, clamped to the verified session expiry; JSON output reports `expiryClamped`. Explicit `--expires` values beyond the session end fail instead of being silently shortened. See [REFERENCE.md](REFERENCE.md) for inspect, receive, list, show and revoke.
 
 ## Other operations
 

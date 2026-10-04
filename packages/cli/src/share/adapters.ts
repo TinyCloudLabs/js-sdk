@@ -20,6 +20,7 @@ import {
   type ShareRevocationAdapter,
   type TargetPublishOutcome,
   type TargetPublishInput,
+  ShareNotifyError,
   deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
 import { canonicalize, isEnvelopeDeliveryEmail } from "@tinycloud/share-envelope";
@@ -311,6 +312,28 @@ export function createShareAuthorityAdapters(input: {
       });
     }
     const activeNode = await node.activeNodeIdentity();
+    if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
+      if (node.isSessionOnly) {
+        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "--notify for a domain share requires an owner-key profile on tinycloud-node 1.17.3 or later" });
+      }
+      let version: unknown;
+      try {
+        const response = await fetchFn(`${activeNode.origin}/info`, { signal: AbortSignal.timeout(5000), redirect: "error" });
+        if (!response.ok) throw new Error("node info unavailable");
+        const info: unknown = await response.json();
+        version = typeof info === "object" && info !== null && "version" in info ? info.version : undefined;
+      } catch {
+        throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+      }
+      const parsed = typeof version === "string" ? /^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/.exec(version) : null;
+      if (parsed === null) throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+      const major = Number(parsed[1]);
+      const minor = Number(parsed[2]);
+      const patch = Number(parsed[3]);
+      if (major < 1 || (major === 1 && (minor < 17 || (minor === 17 && patch < 3)))) {
+        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "--notify for a domain share requires tinycloud-node 1.17.3 or later and an owner-key profile; publish without --notify on this node" });
+      }
+    }
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
       ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }]
@@ -499,7 +522,6 @@ export function createShareAuthorityAdapters(input: {
       || record.deliveryMaterial === undefined
       || request.idempotencyKey === undefined
     ) throw new Error("share delivery history is incomplete");
-    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     // Bind the JTI to a process-stable body for the full Node retry window.
     // `registeredAt` is persisted before notification starts, so a recreated
     // adapter derives the same expiry without retaining unbounded local state.
@@ -507,7 +529,8 @@ export function createShareAuthorityAdapters(input: {
       Date.parse(record.expiresAt),
       Date.parse(record.registeredAt) + 5 * 60 * 1000,
     )).toISOString();
-    if (Date.parse(authorizationExpiresAt) <= Date.now()) throw new Error("share delivery authorization retry window has expired");
+    if (Date.parse(authorizationExpiresAt) <= Date.now()) throw new ShareNotifyError("share delivery authorization window has expired", "delivery-window-expired");
+    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
       sealedEnvelope: record.deliveryMaterial.sealedEnvelope,

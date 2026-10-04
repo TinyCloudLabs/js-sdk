@@ -29,6 +29,7 @@ let authenticationError: unknown;
 let registryError: unknown;
 let sharingPreflight: "ok" | "caveated" | "not-covered" = "ok";
 let nodeContract: "1.17.2" | "1.17.3" = "1.17.2";
+let advertisedNodeVersion: string | undefined;
 const preflightRequests: Array<{ readonly path: string; readonly actions?: string[]; readonly expiry?: Date }> = [];
 
 /** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
@@ -59,25 +60,33 @@ function nodeDeliveryEmail(value: unknown): string | undefined {
  *   envelope must pin `deliveryEmail` byte-equal to the request (TC-571),
  *   the matcher must be `exactEmail`, and actions must be exactly `read`.
  * - "1.17.3": node `05c6a93`. The pin is optional but byte-equal when present;
- *   any action set that includes `read` is accepted. (It also admits
- *   owner-key `emailDomain` delivery, which this fake does not model.)
+ *   actions must include `read`. Domain invitations additionally require the
+ *   owner key, a canonical mailbox at the exact domain and the domain-proof profile.
  */
 function nodeRefusesDelivery(input: Record<string, unknown>): boolean {
   const envelope = input.envelope as Record<string, unknown> | undefined;
   const matcher = envelope?.recipientMatcher as Record<string, unknown> | undefined;
   const display = envelope?.display as Record<string, unknown> | undefined;
-  const policy = envelope?.policy as { readonly credentialRequirement?: { readonly credentialType?: { readonly id?: unknown } } } | undefined;
+  const policy = envelope?.policy as { readonly credentialRequirement?: { readonly credentialType?: { readonly id?: unknown }; readonly profile?: { readonly id?: unknown } } } | undefined;
   const actions = Array.isArray(envelope?.actions) ? envelope.actions : [];
+  const canonicalRecipient = nodeDeliveryEmail(input.recipientEmail);
   const expected = nodeDeliveryEmail(matcher?.value);
   const pinRefused = nodeContract === "1.17.2"
     ? envelope?.deliveryEmail !== input.recipientEmail
     : envelope?.deliveryEmail !== undefined && envelope.deliveryEmail !== input.recipientEmail;
   const actionsRefused = nodeContract === "1.17.2" ? JSON.stringify(actions) !== JSON.stringify(["read"]) : !actions.includes("read");
+  const domain = matcher?.kind === "emailDomain";
+  const matcherRefused = domain
+    ? nodeContract !== "1.17.3"
+      || sessionOnly
+      || policy?.credentialRequirement?.profile?.id !== "tinycloud.email-domain-proof/v1"
+      || typeof matcher.value !== "string"
+      || canonicalRecipient !== input.recipientEmail
+      || canonicalRecipient?.split("@").at(-1) !== matcher.value
+    : matcher?.kind !== "exactEmail" || expected === undefined || expected !== canonicalRecipient;
   return matcher === undefined
     || Object.keys(matcher).length !== 2
-    || matcher.kind !== "exactEmail"
-    || expected === undefined
-    || expected !== nodeDeliveryEmail(input.recipientEmail)
+    || matcherRefused
     || pinRefused
     || display?.filename !== input.documentName
     || actionsRefused
@@ -226,6 +235,7 @@ afterEach(() => {
   registryError = undefined;
   sharingPreflight = "ok";
   nodeContract = "1.17.2";
+  advertisedNodeVersion = undefined;
   preflightRequests.length = 0;
 });
 
@@ -797,6 +807,14 @@ describe("TinyCloud share authority adapter", () => {
       expect(Date.parse(String(deliveryAuthorizationInputs[1]?.expiresAt)) - now).toBe(298_000);
       expect(deliveryAuthorizationConflicts).toBe(0);
       expect(invitationBodies[1]).toBe(invitationBodies[0]);
+      now = Date.parse("2026-09-15T01:05:00.000Z");
+      await expect(notifyShare({
+        shareId: record.shareId,
+        recipient: "alice@example.com",
+        record,
+        adapter: createDelivery(),
+      })).resolves.toMatchObject({ state: "partial-failure", attempts: 1, retryable: false, reason: "delivery-window-expired" });
+      expect(deliveryAuthorizationInputs).toHaveLength(2);
     } finally {
       Date.now = originalNow;
     }
@@ -811,6 +829,7 @@ describe("TinyCloud share authority adapter", () => {
         invitations.push(String(init?.body));
         return Response.json({ status: "accepted" }, { status: 202 });
       }
+      if (url === "https://node.example/info") return Response.json({ version: advertisedNodeVersion ?? nodeContract });
       return Response.json({
         version: "tinycloud.share/config-v2",
         shareOrigin: "https://share.example",
@@ -820,6 +839,37 @@ describe("TinyCloud share authority adapter", () => {
     }) as unknown as typeof globalThis.fetch;
     return { invitations, ...createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn }) };
   };
+
+  it("gates domain invitations on node 1.17.3 and an owner-key sender before publication", async () => {
+    sessionOnly = false;
+    nodeContract = "1.17.2";
+    const adapters = deliveringAdapters();
+    const domain = { ...addressedInput({ kind: "emailDomain", domain: "example.com" }, ["read", "edit"]), notify: true };
+    await expect(adapters.targetAdapter.publish(domain))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: expect.stringContaining("1.17.3") } });
+    expect(publishEvents).toEqual([]);
+    expect(registeredPolicies).toHaveLength(0);
+
+    nodeContract = "1.17.3";
+    sessionOnly = true;
+    await expect(adapters.targetAdapter.publish(domain))
+      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: expect.stringContaining("owner-key") } });
+    expect(publishEvents).toEqual([]);
+
+    sessionOnly = false;
+    advertisedNodeVersion = "1.17.3-rc.1";
+    await expect(adapters.targetAdapter.publish(domain))
+      .rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
+    expect(publishEvents).toEqual([]);
+    advertisedNodeVersion = undefined;
+    const published = await adapters.targetAdapter.publish(domain);
+    if ("state" in published) throw new Error("expected addressed publication");
+    const record = historyRecordForPublishedShare(published);
+    const result = await notifyShare({ shareId: record.shareId, recipient: "Bob@Example.COM", record, adapter: adapters.delivery });
+    expect(result.state).toBe("delivered");
+    expect(deliveryAuthorizationInputs[0]?.recipientEmail).toBe("bob@example.com");
+    expect(adapters.invitations).toHaveLength(1);
+  });
 
   it("publishes an email share whose --notify invitation the Node authorizes and delivers (TC-571)", async () => {
     const adapters = deliveringAdapters();

@@ -11,6 +11,7 @@ export interface ShareNotifyResult {
   readonly idempotencyKey: string;
   readonly attempts: number;
   readonly retryable?: boolean;
+  readonly reason?: "delivery-window-expired";
 }
 
 export interface ShareNotifyInput {
@@ -27,8 +28,10 @@ export interface ShareDeliveryAdapter {
 }
 
 export class ShareNotifyError extends Error {
-  readonly code = "delivery-failed" as const;
-  constructor(message = "share delivery did not complete") {
+  constructor(
+    message = "share delivery did not complete",
+    readonly code: "delivery-failed" | "delivery-window-expired" = "delivery-failed",
+  ) {
     super(message);
     this.name = "ShareNotifyError";
   }
@@ -79,8 +82,19 @@ export async function notifyShare(input: {
     attempts += 1;
     try {
       const state = await input.adapter.deliver({ shareId: input.shareId, recipient, idempotencyKey, ...(input.record === undefined ? {} : { record: input.record }), ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state, idempotencyKey, attempts };
+      return {
+        protocol: "tinycloud-share", version: 1, shareId: input.shareId,
+        state: state === "delivered" && input.record?.deliveredRecipients?.includes(recipient) ? "already-delivered" : state,
+        idempotencyKey, attempts,
+      };
     } catch (error) {
+      if (error instanceof ShareNotifyError && error.code === "delivery-window-expired") {
+        return {
+          protocol: "tinycloud-share", version: 1, shareId: input.shareId,
+          state: "partial-failure", idempotencyKey, attempts,
+          retryable: false, reason: "delivery-window-expired",
+        };
+      }
       lastError = error;
     }
   }

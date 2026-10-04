@@ -8,6 +8,8 @@ export type SharePublishFailure =
   | { readonly kind: "invalid-request"; readonly reason: string }
   /** Network failure, 5xx, 408 or 429: a retry can succeed. */
   | { readonly kind: "registry-unavailable" }
+  /** The node's version cannot be verified for domain invite delivery. */
+  | { readonly kind: "node-info-unavailable" }
   /** The registry refused the record (other 4xx, or an invalid record): a retry cannot succeed. */
   | { readonly kind: "registry-rejected" }
   /** Sizes are present only when the Node reported them. */

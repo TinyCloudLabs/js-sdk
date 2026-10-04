@@ -46,6 +46,8 @@ export interface SenderShareRecord {
   readonly filename?: string;
   /** Policy/v3 delivery material. The containing history record must remain encrypted at rest. */
   readonly deliveryMaterial?: PublishedShareDeliveryMaterial;
+  /** Canonical mailboxes whose invitation delivery was confirmed; history is encrypted at rest. */
+  readonly deliveredRecipients?: readonly string[];
 }
 
 /** Create the durable encrypted-history shape from canonical publication receipts. */

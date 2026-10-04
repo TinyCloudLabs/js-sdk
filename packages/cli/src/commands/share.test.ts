@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PublishedShare, SenderShareRecord, ShareTarget } from "@tinycloud/share-sdk";
+import { ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
 import { SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
@@ -142,6 +142,45 @@ describe("tc share command contract", () => {
     ]);
   });
 
+  test("--notify without read refuses before publishing or recording anything", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-no-read-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    let publishes = 0;
+    let records = 0;
+    configureShareCommandServices({
+      targetAdapter: { async publish() { publishes++; throw new Error("must not publish"); } },
+      records: {
+        async put() { records++; },
+        async get() { return undefined; },
+        async list() { return []; },
+        async delete() {},
+      },
+    });
+    const originalExit = process.exit;
+    const originalExitCode = process.exitCode;
+    const originalError = process.stderr.write;
+    const errors: string[] = [];
+    let exitCode: number | undefined;
+    process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+    process.stderr.write = ((chunk: string | Uint8Array) => { errors.push(String(chunk)); return true; }) as typeof process.stderr.write;
+    try {
+      const program = new Command();
+      registerShareCommand(program);
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "email:alice@example.com", "--notify", "--action", "edit"]);
+    } finally {
+      process.exit = originalExit;
+      process.exitCode = originalExitCode;
+      process.stderr.write = originalError;
+      configureShareCommandServices({});
+    }
+    expect(errors.join("")).toContain("INVALID_ARGUMENT");
+    expect(errors.join("")).toContain("read");
+    expect(exitCode).toBe(2);
+    expect(publishes).toBe(0);
+    expect(records).toBe(0);
+  });
+
   test("a mixed-case --notify publish delivers to the canonical recipient and prints the link", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-notify-"));
     const file = join(directory, "note.md");
@@ -180,14 +219,108 @@ describe("tc share command contract", () => {
       const program = new Command();
       registerShareCommand(program);
       await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "email:Foo@X.com", "--notify"]);
+      await program.parseAsync(["node", "tc", "share", "notify", "share-notify", "--to", "FOO@X.COM"]);
     } finally {
       process.stdout.write = write;
       configureShareCommandServices({});
     }
     expect(process.exitCode ?? 0).toBe(0);
     expect(records.get("share-notify")?.recipientMatcher).toEqual({ kind: "exactEmail", value: "foo@x.com" });
-    expect(delivered).toEqual(["foo@x.com"]);
+    expect(records.get("share-notify")?.deliveredRecipients).toEqual(["foo@x.com"]);
+    expect(delivered).toEqual(["foo@x.com", "foo@x.com"]);
     expect(written.join("")).toContain("https://share.example/s/inline#v=2&p=sealed");
+    expect(written.at(-1)).toBe("already-delivered\n");
+  });
+
+  test("domain --notify requires a matching mailbox and passes read+edit to publication", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-domain-notify-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    const published: Array<{ readonly target: ShareTarget; readonly actions?: readonly string[]; readonly notify?: boolean }> = [];
+    const deliveries: string[] = [];
+    configureShareCommandServices({
+      targetAdapter: { async publish(input) {
+        published.push({ target: input.target, actions: input.actions, notify: input.notify });
+        return {
+          protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+          link: { kind: "policy", cid: "bafy-domain" },
+          metadata: {
+            protocol: "tinycloud-share", version: 1, shareId: "share-domain", origin: "https://share.example",
+            target: { kind: "emailDomain", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+            resource: { kind: "exact", path: "shares/share-domain/note.md" }, actions: ["read", "edit"],
+            expiresAt: "2030-01-01T00:00:00.000Z", display: { filename: "note.md" },
+            recipientMatcher: { kind: "emailDomain", value: "example.com" },
+          },
+        } satisfies PublishedShare;
+      } },
+      delivery: { async deliver(input) { deliveries.push(input.recipient); return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    const originalWrite = process.stdout.write;
+    const originalError = process.stderr.write;
+    const originalExitCode = process.exitCode;
+    const errors: string[] = [];
+    process.exit = (() => {}) as typeof process.exit;
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => { errors.push(String(chunk)); return true; }) as typeof process.stderr.write;
+    try {
+      const program = new Command();
+      registerShareCommand(program);
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "domain:example.com", "--notify"]);
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "bob@other.com"]);
+      expect(published).toHaveLength(0);
+      expect(errors.join("")).toContain("INVALID_ARGUMENT");
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "Bob@Example.COM", "--action", "read", "edit"]);
+    } finally {
+      process.exit = originalExit;
+      process.stdout.write = originalWrite;
+      process.stderr.write = originalError;
+      process.exitCode = originalExitCode;
+      configureShareCommandServices({});
+    }
+    expect(published).toEqual([{ target: { kind: "emailDomain", domain: "example.com" }, actions: ["read", "edit"], notify: true }]);
+    expect(deliveries).toEqual(["bob@example.com"]);
+  });
+
+  test("an expired notify window reports non-retryable partial success and a republish hint", async () => {
+    const record: SenderShareRecord = {
+      shareId: "share-expired",
+      target: { origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+      resource: { kind: "exact", path: "shares/share-expired/note.md" },
+      actions: ["tinycloud.kv/get"],
+      recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+      registeredAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    };
+    configureShareCommandServices({
+      records: {
+        async put() {},
+        async get() { return record; },
+        async list() { return [record]; },
+        async delete() {},
+      },
+      delivery: { async deliver() { throw new ShareNotifyError("window expired", "delivery-window-expired"); } },
+    });
+    const written: string[] = [];
+    const warnings: string[] = [];
+    const stdout = process.stdout.write;
+    const stderr = process.stderr.write;
+    const exitCode = process.exitCode;
+    process.stdout.write = ((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => { warnings.push(String(chunk)); return true; }) as typeof process.stderr.write;
+    try {
+      const program = new Command();
+      registerShareCommand(program);
+      await program.parseAsync(["node", "tc", "share", "notify", record.shareId, "--to", "alice@example.com", "--json"]);
+      expect(process.exitCode).toBe(9);
+    } finally {
+      process.stdout.write = stdout;
+      process.stderr.write = stderr;
+      process.exitCode = exitCode ?? 0;
+      configureShareCommandServices({});
+    }
+    expect(JSON.parse(written.join(""))).toMatchObject({ state: "partial-failure", retryable: false, reason: "delivery-window-expired", attempts: 1 });
+    expect(warnings.join("")).toContain("publish a new share");
   });
 
   test("inspect consumes an addressed URL from stdin exactly once", async () => {
