@@ -218,11 +218,10 @@ test.skipIf(process.getuid?.() === 0).each(cliRuntimes)(
   },
 );
 
-test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps the warning machine-readable", async (_runtime, command) => {
-  expect(staleGrantCid).toBeDefined();
+/** Run the CLI with stdout on a pseudo-terminal and stderr on a pipe. */
+async function ptyRun(command: string[], args: string[]): Promise<{ exit: number; stdout: string; stderr: string }> {
   const runner = Bun.spawn([
-    "python3", join(import.meta.dir, "../../test-support/pty-run.py"),
-    ...command, "--quiet", "--json", "--profile", "owner", "secrets", "get", SECRET,
+    "python3", join(import.meta.dir, "../../test-support/pty-run.py"), ...command, ...args,
   ], { env: cliEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [report, runnerStderr, runnerExit] = await Promise.all([
     new Response(runner.stdout).text(),
@@ -230,10 +229,33 @@ test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps the war
     runner.exited,
   ]);
   expect({ runnerExit, runnerStderr }).toEqual({ runnerExit: 0, runnerStderr: "" });
-  const { exit, stdout, stderr } = JSON.parse(report) as { exit: number; stdout: string; stderr: string };
-  expect(exit).toBe(0);
-  expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
-  expect(JSON.parse(stderr)).toEqual({ warnings: [staleWarning()] });
+  return JSON.parse(report) as { exit: number; stdout: string; stderr: string };
+}
+
+test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps stderr machine-readable", async (_runtime, command) => {
+  expect(staleGrantCid).toBeDefined();
+  for (const quiet of [["--quiet"], []]) {
+    // No banner, notice or spinner: stderr is only the warnings line.
+    const read = await ptyRun(command, [...quiet, "--json", "--profile", "owner", "secrets", "get", SECRET]);
+    expect(read.exit).toBe(0);
+    expect(JSON.parse(read.stdout)).toEqual({ name: SECRET, value: CANARY });
+    expect(JSON.parse(read.stderr)).toEqual({ warnings: [staleWarning()] });
+  }
+
+  const shown = await ptyRun(command, ["--json", "--profile", "owner", "profile", "show", "owner"]);
+  expect({ exit: shown.exit, stderr: shown.stderr }).toEqual({ exit: 0, stderr: "" });
+  expect(JSON.parse(shown.stdout)).toMatchObject({ name: "owner" });
+
+  // A profile that does not exist would also get the "No profile configured" notice.
+  const missing = await ptyRun(command, ["--json", "--profile", "nobody", "profile", "show", "nobody"]);
+  expect(missing.exit).not.toBe(0);
+  expect(JSON.parse(missing.stderr)).toMatchObject({ error: { code: expect.any(String) } });
+
+  // `--json` after `--` is an operand, not the option: errors stay human-readable.
+  const operand = await ptyRun(command, ["--quiet", "profile", "show", "--", "--json"]);
+  expect(operand.exit).not.toBe(0);
+  expect(() => JSON.parse(operand.stderr)).toThrow();
+  expect(operand.stderr).toContain("✗");
 });
 
 test("a plain error from browser approval still carries the skipped grant", async () => {

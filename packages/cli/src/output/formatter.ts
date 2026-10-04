@@ -113,9 +113,27 @@ export async function withSpinner<T>(label: string, fn: () => Promise<T>): Promi
   }
 }
 
-/** Check if output should be JSON (non-TTY or --json flag) */
+// The published CLI is two bundles (the entry and the lazily loaded command
+// graph), each with its own copy of this module, so the flag lives on the
+// process rather than in module state.
+const JSON_REQUESTED = Symbol.for("tinycloud.cli.jsonOutputRequested");
+type JsonFlagHolder = { [JSON_REQUESTED]?: boolean };
+
+/**
+ * Record the `--json` option as commander parsed it, so an operand after `--`
+ * that happens to read `--json` does not switch the output mode.
+ */
+export function setJsonOutputRequested(requested: boolean): void {
+  (globalThis as JsonFlagHolder)[JSON_REQUESTED] = requested;
+}
+
+/**
+ * Whether output should be JSON: stdout is not a terminal, or `--json` was
+ * given. Entry points that never record the parsed option fall back to argv.
+ */
 export function shouldOutputJson(): boolean {
-  return !isInteractive() || process.argv.includes("--json");
+  return !isInteractive() ||
+    ((globalThis as JsonFlagHolder)[JSON_REQUESTED] ?? process.argv.includes("--json"));
 }
 
 /** Format a key-value pair for human display */

@@ -1,4 +1,4 @@
-import { isInteractive } from "./formatter.js";
+import { isInteractive, shouldOutputJson } from "./formatter.js";
 import { pickTagline } from "./taglines.js";
 import { theme } from "./theme.js";
 import { execSync } from "node:child_process";
@@ -42,7 +42,8 @@ function formatBannerLine(version: string): string {
 
 export function emitBanner(version: string): void {
   if (bannerEmitted) return;
-  if (!isInteractive()) return;
+  // JSON mode (including `--json` on a terminal) keeps stderr machine-readable.
+  if (shouldOutputJson()) return;
   if (process.env.TC_HIDE_BANNER === "1") return;
 
   bannerEmitted = true;
