@@ -10,6 +10,8 @@ import {
   showShare,
   notifyShare,
   normalizeShareTarget,
+  recipientMatchesShareRecord,
+  shareDeliveryWindowExpiresAt,
   ShareNotifyError,
   revokeShare,
   redactPublishedShare,
@@ -25,9 +27,10 @@ import {
   type ShareNotifyResult,
 } from "@tinycloud/share-sdk";
 import { canonicalMailbox } from "@tinycloud/share-envelope";
+import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
 import { formatBytes } from "../output/formatter.js";
-import { CLIError, handleError } from "../output/errors.js";
+import { CLIError, handleError, wrapError } from "../output/errors.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 
@@ -71,9 +74,10 @@ function canonicalMailboxTarget(target: Extract<ShareTarget, { readonly kind: "e
   }
 }
 
-/** @internal Map publish authority failures without echoing remote error text. */
-export function shareCliError(error: unknown): CLIError {
+/** @internal Map share failures without echoing remote error text. */
+export function shareCliError(error: unknown, operation: "publish" | "notify" = "publish"): CLIError {
   if (error instanceof CLIError) return error;
+  if (error instanceof ProfileLockTimeoutError) return wrapError(error);
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
     const profileName = "profileName" in failure ? failure.profileName : undefined;
@@ -122,7 +126,8 @@ export function shareCliError(error: unknown): CLIError {
       return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
     }
     if (failure.kind === "node-info-unavailable") {
-      return new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent. Check the node and retry", 4);
+      const outcome = operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent";
+      return new CLIError("UNAVAILABLE", `could not verify TinyCloud node 1.17.3 domain delivery support; ${outcome}. Check the node and retry`, 4);
     }
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
@@ -211,13 +216,19 @@ function expires(value: string): Date {
   catch { throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2); }
 }
 
-async function rememberPublishedShare(result: PublishedShare): Promise<SenderShareRecord> {
+async function rememberPublishedShare(result: PublishedShare): Promise<{ record: SenderShareRecord; recorded: boolean }> {
   const record = historyRecordForPublishedShare(result);
-  if (shareServices.records !== undefined) await shareServices.records.put(record);
-  return record;
+  if (shareServices.records === undefined) return { record, recorded: false };
+  try {
+    await shareServices.records.put(record);
+    return { record, recorded: true };
+  } catch {
+    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
+    return { record, recorded: false };
+  }
 }
 async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage): Promise<ShareNotifyResult> {
-  const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter });
+  const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== undefined) {
     const mailbox = canonicalMailbox(recipient)!.email;
     if (!record.deliveredRecipients?.includes(mailbox)) {
@@ -342,11 +353,11 @@ export function registerShareCommand(program: Command): void {
           }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
-        const record = await rememberPublishedShare(result);
+        const { record, recorded } = await rememberPublishedShare(result);
         let notification: ShareNotifyResult | undefined;
         if (notifyRecipient !== undefined) {
           if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, shareServices.records);
+          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : undefined);
           if (notification.state === "partial-failure") process.exitCode = 9;
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
@@ -461,7 +472,10 @@ export function registerShareCommand(program: Command): void {
         if (!record.actions.includes("tinycloud.kv/get")) {
           throw new CLIError("INVALID_ARGUMENT", "share notify requires a stored share with the read action; no invitation was sent", 2);
         }
-        if (record.recipientMatcher.kind === "emailDomain") {
+        const mailbox = canonicalMailbox(options.to);
+        if (mailbox === undefined) throw new ShareNotifyError("recipient is invalid");
+        if (!recipientMatchesShareRecord(record, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
+        if (record.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record) > Date.now()) {
           if (shareServices.assertDomainDelivery === undefined) throw new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent", 4);
           await shareServices.assertDomainDelivery();
         }
@@ -469,7 +483,7 @@ export function registerShareCommand(program: Command): void {
         if (json) writeJson(result); else process.stdout.write(`${result.state}\n`);
         if (result.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         if (result.state === "partial-failure") process.exitCode = 9;
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) { handleError(shareCliError(error, "notify")); }
     });
 
   share.command("revoke <id>")

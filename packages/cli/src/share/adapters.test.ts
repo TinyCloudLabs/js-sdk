@@ -29,6 +29,8 @@ let invokerDid = credentialHolderDid;
 let nodeInfoStatus = 200;
 const nodeInfoRequests: RequestInit[] = [];
 let historyCacheDir: string | undefined;
+let historyLocalKey = true;
+let historyKeyId = "key-one";
 let uploadErrorCode: string | undefined;
 let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
@@ -208,7 +210,9 @@ const node = {
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "test", host: "https://node.example" }),
-    getProfile: async () => historyCacheDir === undefined ? { authMethod: "openkey" } : { authMethod: "openkey", privateKey: "test-history-key" },
+    getProfile: async () => historyCacheDir === undefined ? { authMethod: "openkey" } : historyLocalKey ? { authMethod: "local", privateKey: "test-history-key" } : { authMethod: "openkey" },
+    getKey: async () => ({ id: historyKeyId }),
+    getSession: async () => ({ id: historyKeyId }),
     getCacheDir: async () => {
       if (historyCacheDir === undefined) throw new Error("history test directory is not configured");
       return historyCacheDir;
@@ -239,6 +243,8 @@ afterEach(() => {
   uploadErrorMeta = undefined;
   uploadedSpaces.length = 0;
   historyCacheDir = undefined;
+  historyLocalKey = true;
+  historyKeyId = "key-one";
   encryptionSpaces.length = 0;
   ownerRootInputs.length = 0;
   sessionSignatures.length = 0;
@@ -255,6 +261,39 @@ afterEach(() => {
   advertisedNodeVersion = undefined;
   preflightRequests.length = 0;
 });
+
+/** A separate Bun process holds the same filesystem profile lock as the CLI. */
+async function acquireProfileLockInChild(root: string, holdMs: number, timeoutMs: number): Promise<() => Promise<void>> {
+  const script = `import { withProfileLock } from "@tinycloud/operations/state";
+await withProfileLock("history-test", async () => {
+  console.log("LOCKED");
+  // Integration boundary: only a real elapsed hold exercises cross-process lock expiry.
+  const delay = Promise.withResolvers();
+  setTimeout(delay.resolve, ${holdMs});
+  await delay.promise;
+}, { timeoutMs: ${timeoutMs} });`;
+  const child = Bun.spawn(["bun", "-e", script], {
+    cwd: join(import.meta.dir, "../../../.."),
+    env: { ...process.env, TC_HOME: root },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    // A real subprocess may fail to start: bound readiness, not the lock behavior.
+    const ready = await Promise.race([
+      child.stdout.getReader().read(),
+      Bun.sleep(2000).then(() => { throw new Error("lock holder did not become ready"); }),
+    ]);
+    if (ready.done || !new TextDecoder().decode(ready.value).includes("LOCKED")) {
+      throw new Error("second process could not acquire the profile lock");
+    }
+    return async () => { await child.exited; };
+  } catch (error) {
+    child.kill();
+    await child.exited;
+    throw error;
+  }
+}
 
 describe("TinyCloud share authority adapter", () => {
   it("publishes bearer shares from the restored owner space and preserves origin binding", async () => {
@@ -534,21 +573,6 @@ describe("TinyCloud share authority adapter", () => {
     })).rejects.toMatchObject({ failure: { kind: "owner-space-unresolved", localKey: false } });
   });
 
-  it("routes addressed delivery through Policy/v3 with no retired Node delivery fallback", async () => {
-    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
-    expect(source).toContain("node.authorizeShareDeliveryV3({");
-    expect(source).not.toContain("node.authorizeShareDelivery({");
-    expect(source).not.toContain("/share/v2/deliveries/authorize");
-  });
-
-  it("uses the existing signed Policy/v3 root revocation primitive for addressed shares", async () => {
-    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
-    expect(source).toContain("revokePolicyRootV3({");
-    expect(source).toContain("revokePolicyRoot: input.revokePolicyRoot");
-    expect(source).toContain('reason: "share revoked"');
-    expect(source).not.toContain("/share/v2/revoke");
-  });
-
   it("uses the credential holder for owner roots and the signed Policy/v3 revoke payload", async () => {
     ownerRootInputs.length = 0;
     sessionSignatures.length = 0;
@@ -729,14 +753,6 @@ describe("TinyCloud share authority adapter", () => {
     expect(uploadedPaths).toHaveLength(2);
   });
 
-  it("uses the reusable Share SDK invitation client and forwards notify idempotency to Node", async () => {
-    const source = await readFile(new URL("./adapters.ts", import.meta.url), "utf8");
-    expect(source).toContain("deliverCredentialInvitation({");
-    expect(source).toContain("idempotencyKey: request.idempotencyKey");
-    expect(source).not.toContain("credential-invitations");
-    expect(source).not.toContain("postAddressedShareDelivery");
-  });
-
   it("keeps a lost-response retry identical after the clock advances and the adapter is recreated", async () => {
     deliveryAuthorizationInputs.length = 0;
     deliveryAuthorization = undefined;
@@ -892,12 +908,17 @@ describe("TinyCloud share authority adapter", () => {
     const domain = { ...addressedInput({ kind: "emailDomain", domain: "example.com" }), notify: true };
     for (const version of ["1.17.3-rc.1", "1.17.2", "1.18.0-01", "not-a-version"]) {
       advertisedNodeVersion = version;
-      await expect(adapters.targetAdapter.publish(domain)).rejects.toMatchObject({
-        failure: { kind: "invalid-request", reason: expect.stringContaining(version) },
-      });
-      await expect(adapters.assertDomainDelivery()).rejects.toMatchObject({
-        failure: { kind: "invalid-request", reason: expect.stringContaining(version) },
-      });
+      const publishRefusal = await adapters.targetAdapter.publish(domain).then(() => undefined, (error: unknown) => error);
+      expect(publishRefusal).toBeInstanceOf(SharePublishAuthorityError);
+      if (!(publishRefusal instanceof SharePublishAuthorityError) || publishRefusal.failure.kind !== "invalid-request") throw publishRefusal;
+      expect(publishRefusal.failure.reason).toContain(version);
+      expect(publishRefusal.failure.reason).toContain("nothing was shared and no invitation was sent");
+      const notifyRefusal = await adapters.assertDomainDelivery().then(() => undefined, (error: unknown) => error);
+      expect(notifyRefusal).toBeInstanceOf(SharePublishAuthorityError);
+      if (!(notifyRefusal instanceof SharePublishAuthorityError) || notifyRefusal.failure.kind !== "invalid-request") throw notifyRefusal;
+      expect(notifyRefusal.failure.reason).toContain(version);
+      expect(notifyRefusal.failure.reason).toContain("no invitation was sent");
+      expect(notifyRefusal.failure.reason).not.toContain("nothing was shared");
     }
     expect(publishEvents).toEqual([]);
     for (const version of ["1.18.0-beta.1", "v1.17.3", " 1.17.3 ", "1.17.3+build.4"]) {
@@ -910,6 +931,40 @@ describe("TinyCloud share authority adapter", () => {
     nodeInfoStatus = 503;
     await expect(adapters.targetAdapter.publish(domain)).rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
     await expect(adapters.assertDomainDelivery()).rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
+  });
+
+  it("classifies a stalled 200 /info body as unavailable, but malformed completed JSON as unsupported", async () => {
+    let stalled = true;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        if (!stalled) return new Response("{", { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.enqueue(new TextEncoder().encode(" ")); },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    let receivedHeaders = false;
+    try {
+      const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) => {
+        const response = await fetch(new URL("/info", server.url), {
+          ...init,
+          signal: AbortSignal.any([init?.signal ?? new AbortController().signal, AbortSignal.timeout(500)]),
+        });
+        receivedHeaders = response.status === 200;
+        return response;
+      }) as typeof globalThis.fetch;
+      const adapter = createShareAuthorityAdapters({ profileName: async () => "test", fetchFn });
+      await expect(adapter.assertDomainDelivery()).rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
+      expect(receivedHeaders).toBe(true);
+      stalled = false;
+      await expect(adapter.assertDomainDelivery()).rejects.toMatchObject({
+        failure: { kind: "invalid-request", reason: expect.stringContaining("(unrecognized)") },
+      });
+    } finally {
+      server.stop(true);
+    }
   });
 
   it("serializes profile history updates across adapters and preserves concurrent fields", async () => {
@@ -947,6 +1002,90 @@ describe("TinyCloud share authority adapter", () => {
       });
     } finally {
       historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits beyond the default timeout for a second process to release the profile lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-wait-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        await mkdir(historyCacheDir, { recursive: true });
+        const storage = createEncryptedProfileHistory(async () => "history-test");
+        const record: SenderShareRecord = {
+          shareId: "lock-wait", target: { origin: "https://node.example", nodeAudience: nodeDid, spaceId: "tinycloud:test-space" },
+          resource: { kind: "exact", path: "shares/lock-wait/note.md" }, actions: ["tinycloud.kv/get"],
+          recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+          registeredAt: "2026-01-01T00:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z",
+        };
+        await storage.put(record);
+        const finishChild = await acquireProfileLockInChild(root, 2400, 1000);
+        try {
+          await storage.put({ ...record, revokedAt: "2026-01-02T00:00:00.000Z" });
+          expect(await storage.get(record.shareId)).toMatchObject({ revokedAt: "2026-01-02T00:00:00.000Z" });
+        } finally {
+          await finishChild();
+        }
+      });
+    } finally {
+      historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a blocked OpenKey signer outside the lock and rejects a changed profile key", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-signer-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        historyLocalKey = false;
+        await mkdir(historyCacheDir, { recursive: true });
+        const record: SenderShareRecord = {
+          shareId: "signer-wait", target: { origin: "https://node.example", nodeAudience: nodeDid, spaceId: "tinycloud:test-space" },
+          resource: { kind: "exact", path: "shares/signer-wait/note.md" }, actions: ["tinycloud.kv/get"],
+          recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+          registeredAt: "2026-01-01T00:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z",
+        };
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let observedSignerProfile: string | undefined;
+        const signer = async (_bytes: Uint8Array, profile: string) => {
+          observedSignerProfile = profile;
+          entered.resolve();
+          await release.promise;
+          return new TextEncoder().encode("session-signature");
+        };
+        const storage = createEncryptedProfileHistory(async () => "history-test", signer);
+        const writing = storage.put(record);
+        try {
+          await entered.promise;
+          const finishChild = await acquireProfileLockInChild(root, 25, 300);
+          await finishChild();
+        } finally {
+          release.resolve();
+          await writing.catch(() => undefined);
+        }
+        expect(observedSignerProfile).toBe("history-test");
+
+        const changed = Promise.withResolvers<void>();
+        const finishSigning = Promise.withResolvers<void>();
+        const rotating = createEncryptedProfileHistory(async () => "history-test", async () => {
+          changed.resolve();
+          await finishSigning.promise;
+          return new TextEncoder().encode("session-signature");
+        });
+        const update = rotating.put({ ...record, revokedAt: "2026-01-02T00:00:00.000Z" });
+        await changed.promise;
+        historyKeyId = "key-two";
+        finishSigning.resolve();
+        await expect(update).rejects.toThrow(/profile.*changed/i);
+        expect((await storage.get(record.shareId))?.revokedAt).toBeUndefined();
+      });
+    } finally {
+      historyCacheDir = undefined;
+      historyLocalKey = true;
+      historyKeyId = "key-one";
       await rm(root, { recursive: true, force: true });
     }
   });

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
+import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
 import { SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
@@ -18,7 +19,7 @@ describe("tc share command contract", () => {
     recipientMatcher: { kind: "emailDomain", value: "example.com" },
     ownerDid: "did:key:z6Mkowner",
     enforcementDelegationCid: "bafy-enforcement",
-    registeredAt: "2026-01-01T00:00:00.000Z",
+    registeredAt: new Date().toISOString(),
     expiresAt: "2030-01-01T00:00:00.000Z",
   };
   const reviewPublished: PublishedShare = {
@@ -154,6 +155,14 @@ describe("tc share command contract", () => {
     expect([missingNodeInfo.code, missingNodeInfo.exitCode]).toEqual(["UNAVAILABLE", 4]);
     const unavailable = shareCliError(new SharePublishAuthorityError({ kind: "registry-unavailable" }));
     expect([unavailable.code, unavailable.exitCode]).toEqual(["UNAVAILABLE", 4]);
+    const publishInfo = shareCliError(new SharePublishAuthorityError({ kind: "node-info-unavailable" }));
+    expect(publishInfo.message).toContain("nothing was shared and no invitation was sent");
+    const notifyInfo = shareCliError(new SharePublishAuthorityError({ kind: "node-info-unavailable" }), "notify");
+    expect(notifyInfo.message).toContain("no invitation was sent");
+    expect(notifyInfo.message).not.toContain("nothing was shared");
+    const locked = shareCliError(new ProfileLockTimeoutError("publisher", 2000));
+    expect([locked.code, locked.exitCode]).toEqual(["PROFILE_LOCK_TIMEOUT", 1]);
+    expect(locked.metadata?.hint).toContain("retry");
     expect(unavailable.message).toContain("try again");
     const rejected = shareCliError(new SharePublishAuthorityError({ kind: "registry-rejected" }));
     expect([rejected.code, rejected.exitCode]).toEqual(["REGISTRY_REJECTED", 6]);
@@ -314,6 +323,37 @@ describe("tc share command contract", () => {
     }
     expect(published).toEqual([{ target: { kind: "emailDomain", domain: "example.com" }, actions: ["read", "edit"], notify: true }]);
     expect(deliveries).toEqual(["bob@example.com"]);
+  });
+
+  test("publish keeps its link and immediate invitation when initial sender history cannot be written", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-initial-history-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    let deliveries = 0;
+    configureShareCommandServices({
+      targetAdapter: { async publish() { return reviewPublished; } },
+      records: {
+        async put() { throw new ProfileLockTimeoutError("publisher", 45000); },
+        async get() { return undefined; },
+        async list() { return []; },
+        async delete() {},
+      },
+      delivery: { async deliver() { deliveries++; return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    process.exit = (() => {}) as typeof process.exit;
+    try {
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      expect(output.exitCode).toBe(0);
+      expect(output.stdout).toBe(`${reviewPublished.url}\n`);
+      expect(output.stderr).toContain("published but not recorded");
+      expect(output.stderr).toContain("share list");
+      expect(output.stderr).toContain("share notify");
+      expect(deliveries).toBe(1);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
   });
 
   test("publish and standalone notify retain success when delivery confirmation cannot be persisted", async () => {
@@ -478,6 +518,46 @@ describe("tc share command contract", () => {
     } finally {
       both.resolve();
       releaseFirst.resolve();
+      configureShareCommandServices({});
+    }
+  });
+
+  test("domain notify validates recipient and expired window before querying node info", async () => {
+    let record: SenderShareRecord = { ...reviewRecord, registeredAt: "2020-01-01T00:00:00.000Z" };
+    let probes = 0;
+    let deliveries = 0;
+    configureShareCommandServices({
+      records: {
+        async put() {},
+        async get() { return record; },
+        async list() { return [record]; },
+        async delete() {},
+      },
+      assertDomainDelivery: async () => {
+        probes++;
+        throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+      },
+      delivery: { async deliver() { deliveries++; throw new Error("must not deliver"); } },
+    });
+    const originalExit = process.exit;
+    const exits: number[] = [];
+    process.exit = ((code?: number) => { exits.push(code ?? 0); }) as typeof process.exit;
+    try {
+      const expired = await runShareCaptured(["share", "notify", record.shareId, "--to", "alice@example.com", "--json"]);
+      expect(expired.exitCode).toBe(9);
+      expect(JSON.parse(expired.stdout)).toMatchObject({
+        state: "partial-failure", retryable: false, reason: "delivery-window-expired", attempts: 1,
+      });
+      expect(expired.stderr).toContain("publish a new share");
+      expect([probes, deliveries]).toEqual([0, 0]);
+
+      record = { ...reviewRecord };
+      const mismatch = await runShareCaptured(["share", "notify", record.shareId, "--to", "alice@other.example"]);
+      expect(mismatch.stderr).toContain("recipient does not match");
+      expect(exits.at(-1)).toBe(2);
+      expect([probes, deliveries]).toEqual([0, 0]);
+    } finally {
+      process.exit = originalExit;
       configureShareCommandServices({});
     }
   });
