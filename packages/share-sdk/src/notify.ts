@@ -11,6 +11,7 @@ export interface ShareNotifyResult {
   readonly idempotencyKey: string;
   readonly attempts: number;
   readonly retryable?: boolean;
+  readonly reason?: "delivery-window-expired";
 }
 
 export interface ShareNotifyInput {
@@ -28,7 +29,10 @@ export interface ShareDeliveryAdapter {
 
 export class ShareNotifyError extends Error {
   readonly code = "delivery-failed" as const;
-  constructor(message = "share delivery did not complete") {
+  constructor(
+    message = "share delivery did not complete",
+    readonly reason?: "delivery-window-expired",
+  ) {
     super(message);
     this.name = "ShareNotifyError";
   }
@@ -47,6 +51,12 @@ export function recipientMatchesShareRecord(record: SenderShareRecord, recipient
   if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
   return false;
 }
+/** The sender can authorize a fresh invitation only until this persisted deadline. */
+export function shareDeliveryWindowExpiresAt(record: SenderShareRecord): number {
+  const expiresAt = Math.min(Date.parse(record.expiresAt), Date.parse(record.registeredAt) + 5 * 60 * 1000);
+  if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
+  return expiresAt;
+}
 
 /**
  * Delivery is deliberately separate from publication. A failed notification
@@ -60,6 +70,8 @@ export async function notifyShare(input: {
   readonly idempotencyKey?: string;
   readonly maxAttempts?: number;
   readonly signal?: AbortSignal;
+  /** Check the persisted delivery window locally before calling the adapter. */
+  readonly checkDeliveryWindow?: boolean;
 }): Promise<ShareNotifyResult> {
   const mailbox = canonicalMailbox(input.recipient);
   if (!input.shareId || mailbox === undefined) throw new ShareNotifyError("recipient is invalid");
@@ -72,6 +84,14 @@ export async function notifyShare(input: {
   const idempotencyKey = input.idempotencyKey ?? await defaultIdempotencyKey(input.shareId, recipient);
   const attemptsLimit = input.maxAttempts ?? 3;
   if (!Number.isSafeInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 8) throw new ShareNotifyError("maxAttempts is invalid");
+  if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
+  if (input.checkDeliveryWindow && input.record !== undefined && shareDeliveryWindowExpiresAt(input.record) <= Date.now()) {
+    return {
+      protocol: "tinycloud-share", version: 1, shareId: input.shareId,
+      state: "partial-failure", idempotencyKey, attempts: 1,
+      retryable: false, reason: "delivery-window-expired",
+    };
+  }
   let attempts = 0;
   let lastError: unknown;
   while (attempts < attemptsLimit) {
@@ -79,8 +99,19 @@ export async function notifyShare(input: {
     attempts += 1;
     try {
       const state = await input.adapter.deliver({ shareId: input.shareId, recipient, idempotencyKey, ...(input.record === undefined ? {} : { record: input.record }), ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state, idempotencyKey, attempts };
+      return {
+        protocol: "tinycloud-share", version: 1, shareId: input.shareId,
+        state: state === "delivered" && input.record?.deliveredRecipients?.includes(recipient) ? "already-delivered" : state,
+        idempotencyKey, attempts,
+      };
     } catch (error) {
+      if (error instanceof ShareNotifyError && error.reason === "delivery-window-expired") {
+        return {
+          protocol: "tinycloud-share", version: 1, shareId: input.shareId,
+          state: "partial-failure", idempotencyKey, attempts,
+          retryable: false, reason: "delivery-window-expired",
+        };
+      }
       lastError = error;
     }
   }

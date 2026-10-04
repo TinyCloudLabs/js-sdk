@@ -46,6 +46,8 @@ export interface SenderShareRecord {
   readonly filename?: string;
   /** Policy/v3 delivery material. The containing history record must remain encrypted at rest. */
   readonly deliveryMaterial?: PublishedShareDeliveryMaterial;
+  /** Canonical mailboxes whose invitation delivery was confirmed; history is encrypted at rest. */
+  readonly deliveredRecipients?: readonly string[];
 }
 
 /** Create the durable encrypted-history shape from canonical publication receipts. */
@@ -98,6 +100,9 @@ export type SenderShareRevocationScope = "direct" | "ancestor";
 
 export interface SenderShareRecordStorage {
   put(record: SenderShareRecord): Promise<void>;
+  /** Atomically transform the latest record, if present. Implementations that
+   * provide this must serialize the read and write with every other writer. */
+  update?(shareId: string, change: (record: SenderShareRecord) => SenderShareRecord | Promise<SenderShareRecord>): Promise<SenderShareRecord | undefined>;
   list(): Promise<readonly SenderShareRecord[]>;
   get(shareId: string): Promise<SenderShareRecord | undefined>;
   delete(shareId: string): Promise<void>;
@@ -118,9 +123,25 @@ export interface SenderShareKeyStorage {
 /** In-memory reference implementation. Real deployments back these with IndexedDB so the non-extractable `CryptoKey` survives a reload via structured clone. */
 export class MemorySenderShareRecordStorage implements SenderShareRecordStorage {
   private readonly records = new Map<string, SenderShareRecord>();
+  private operation: Promise<void> = Promise.resolve();
+
+  private serialize<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.operation.then(action, action);
+    this.operation = next.then(() => undefined, () => undefined);
+    return next;
+  }
 
   async put(record: SenderShareRecord): Promise<void> {
-    this.records.set(record.shareId, record);
+    return this.serialize(async () => { this.records.set(record.shareId, record); });
+  }
+  async update(shareId: string, change: (record: SenderShareRecord) => SenderShareRecord | Promise<SenderShareRecord>): Promise<SenderShareRecord | undefined> {
+    return this.serialize(async () => {
+      const current = this.records.get(shareId);
+      if (current === undefined) return undefined;
+      const updated = await change(current);
+      this.records.set(shareId, updated);
+      return updated;
+    });
   }
 
   async list(): Promise<readonly SenderShareRecord[]> {
@@ -132,7 +153,7 @@ export class MemorySenderShareRecordStorage implements SenderShareRecordStorage 
   }
 
   async delete(shareId: string): Promise<void> {
-    this.records.delete(shareId);
+    return this.serialize(async () => { this.records.delete(shareId); });
   }
 }
 
@@ -245,6 +266,11 @@ export class SenderShareStore {
 
   /** Mark a share revoked locally after the caller's node-side revoke call succeeds. */
   async markRevoked(shareId: string, revokedAt: string = this.now().toISOString()): Promise<SenderShareRecord> {
+    if (this.records.update !== undefined) {
+      const updated = await this.records.update(shareId, (record) => ({ ...record, revokedAt }));
+      if (updated === undefined) throw new Error(`Unknown share: ${shareId}`);
+      return updated;
+    }
     const record = await this.records.get(shareId);
     if (record === undefined) throw new Error(`Unknown share: ${shareId}`);
     const revoked: SenderShareRecord = { ...record, revokedAt };

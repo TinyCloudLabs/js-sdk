@@ -5,6 +5,7 @@ import {
   authorizeShare,
   listShares,
   notifyShare,
+  ShareNotifyError,
   recipientMatchesShareRecord,
   revokeShare,
   normalizeShareTarget,
@@ -64,6 +65,37 @@ describe("Share lifecycle and authorization parity", () => {
     });
     expect(other.state).toBe("partial-failure");
     expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("stops retrying a permanently expired delivery window", async () => {
+    let attempts = 0;
+    const result = await notifyShare({
+      shareId: "share-1",
+      recipient: "person@example.com",
+      adapter: { async deliver() {
+        attempts++;
+        throw new ShareNotifyError("share delivery authorization window has expired", "delivery-window-expired");
+      } },
+    });
+    expect(result).toMatchObject({ state: "partial-failure", attempts: 1, retryable: false, reason: "delivery-window-expired" });
+    const error = new ShareNotifyError("window expired", "delivery-window-expired");
+    const compatibleCode: "delivery-failed" = error.code;
+    expect(compatibleCode).toBe("delivery-failed");
+    expect(error.reason).toBe("delivery-window-expired");
+    expect(attempts).toBe(1);
+  });
+
+  it("reports a confirmed prior delivery only after a successful repeat", async () => {
+    const email = { ...record, recipientMatcher: { kind: "exactEmail" as const, value: "foo@x.com" }, deliveredRecipients: ["foo@x.com"] };
+    let attempts = 0;
+    const adapter = { async deliver() { attempts++; return "delivered" as const; } };
+    await expect(notifyShare({ shareId: email.shareId, recipient: "Foo@X.com", record: email, adapter }))
+      .resolves.toMatchObject({ state: "already-delivered", attempts: 1 });
+    expect(attempts).toBe(1);
+    await expect(notifyShare({
+      shareId: email.shareId, recipient: "foo@x.com", record: email,
+      adapter: { async deliver() { throw new Error("offline"); } }, maxAttempts: 1,
+    })).resolves.toMatchObject({ state: "partial-failure", retryable: true });
   });
 
   it("derives notification recipients from the stored matcher", async () => {
