@@ -28,9 +28,10 @@ export interface ShareDeliveryAdapter {
 }
 
 export class ShareNotifyError extends Error {
+  readonly code = "delivery-failed" as const;
   constructor(
     message = "share delivery did not complete",
-    readonly code: "delivery-failed" | "delivery-window-expired" = "delivery-failed",
+    readonly reason?: "delivery-window-expired",
   ) {
     super(message);
     this.name = "ShareNotifyError";
@@ -88,7 +89,7 @@ export async function notifyShare(input: {
         idempotencyKey, attempts,
       };
     } catch (error) {
-      if (error instanceof ShareNotifyError && error.code === "delivery-window-expired") {
+      if (error instanceof ShareNotifyError && error.reason === "delivery-window-expired") {
         return {
           protocol: "tinycloud-share", version: 1, shareId: input.shareId,
           state: "partial-failure", idempotencyKey, attempts,

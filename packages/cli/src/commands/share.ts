@@ -41,6 +41,8 @@ export interface ShareCommandServices {
   readonly records?: SenderShareRecordStorage;
   readonly delivery?: ShareDeliveryAdapter;
   readonly revocation?: ShareRevocationAdapter;
+  /** Probe the authenticated node before a standalone domain invitation. */
+  readonly assertDomainDelivery?: () => Promise<void>;
   readonly getRecord?: (shareId: string) => Promise<SenderShareRecord | undefined>;
   readonly linkFor?: (shareId: string) => Promise<string | undefined>;
 }
@@ -120,7 +122,7 @@ export function shareCliError(error: unknown): CLIError {
       return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
     }
     if (failure.kind === "node-info-unavailable") {
-      return new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; nothing was shared. Check the node and retry", 4);
+      return new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent. Check the node and retry", 4);
     }
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
@@ -219,7 +221,18 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
   if (result.state !== "partial-failure" && storage !== undefined) {
     const mailbox = canonicalMailbox(recipient)!.email;
     if (!record.deliveredRecipients?.includes(mailbox)) {
-      await storage.put({ ...record, deliveredRecipients: [...(record.deliveredRecipients ?? []), mailbox] });
+      try {
+        if (storage.update === undefined) throw new Error("atomic sender history update is unavailable");
+        const updated = await storage.update(record.shareId, (current) => ({
+          ...current,
+          deliveredRecipients: current.deliveredRecipients?.includes(mailbox)
+            ? current.deliveredRecipients
+            : [...(current.deliveredRecipients ?? []), mailbox],
+        }));
+        if (updated === undefined) throw new Error("sender history record was removed");
+      } catch {
+        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      }
     }
   }
   return result;
@@ -265,8 +278,8 @@ export function registerShareCommand(program: Command): void {
     .description("Publish one or more bounded files as a Share")
     .option("--name <filename>", "Filename for stdin input")
     .option("--to <target>", "Share target", "anyone")
-    .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+ with an owner-key profile")
-    .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+, owner-key profile)")
+    .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
+    .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
     .option("--expires <duration>", "Share lifetime")
     .option("--max-bytes <bytes>", "Bound input bytes")
     .option("--media-type <type>", "Media type for a single input")
@@ -299,11 +312,11 @@ export function registerShareCommand(program: Command): void {
         else if (options.notify === true && target.kind === "emailDomain") {
           const mailbox = options.notifyTo === undefined ? undefined : canonicalMailbox(options.notifyTo);
           if (mailbox === undefined || mailbox.domain !== target.domain) {
-            throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+, owner-key profile)", 2);
+            throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+)", 2);
           }
           notifyRecipient = mailbox.email;
         } else if (options.notify === true) {
-          throw new CLIError("INVALID_ARGUMENT", "--notify requires an email target, or a domain target with --notify-to on node 1.17.3+ using an owner-key profile", 2);
+          throw new CLIError("INVALID_ARGUMENT", "--notify requires an email target, or a domain target with --notify-to on node 1.17.3+", 2);
         }
         const result = await publishTargetShare({
           source: inputs[0]!.bytes,
@@ -330,14 +343,15 @@ export function registerShareCommand(program: Command): void {
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
         const record = await rememberPublishedShare(result);
+        let notification: ShareNotifyResult | undefined;
         if (notifyRecipient !== undefined) {
           if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-          const delivery = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, shareServices.records);
-          if (delivery.state === "partial-failure") process.exitCode = 9;
-          if (delivery.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
+          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, shareServices.records);
+          if (notification.state === "partial-failure") process.exitCode = 9;
+          if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
-        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true });
+        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(notification === undefined ? {} : { notification }) });
         else publishHuman(result);
       } catch (error) { handleError(shareCliError(error)); }
     });
@@ -444,6 +458,13 @@ export function registerShareCommand(program: Command): void {
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
         const record = await shareServices.records.get(id);
         if (record === undefined) throw new CLIError("NOT_FOUND", "share not found", 4);
+        if (!record.actions.includes("tinycloud.kv/get")) {
+          throw new CLIError("INVALID_ARGUMENT", "share notify requires a stored share with the read action; no invitation was sent", 2);
+        }
+        if (record.recipientMatcher.kind === "emailDomain") {
+          if (shareServices.assertDomainDelivery === undefined) throw new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent", 4);
+          await shareServices.assertDomainDelivery();
+        }
         const result = await notifyRecordedShare(record, options.to, shareServices.delivery, shareServices.records);
         if (json) writeJson(result); else process.stdout.write(`${result.state}\n`);
         if (result.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);

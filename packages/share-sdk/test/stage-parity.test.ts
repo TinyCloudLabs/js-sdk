@@ -78,6 +78,10 @@ describe("Share lifecycle and authorization parity", () => {
       } },
     });
     expect(result).toMatchObject({ state: "partial-failure", attempts: 1, retryable: false, reason: "delivery-window-expired" });
+    const error = new ShareNotifyError("window expired", "delivery-window-expired");
+    const compatibleCode: "delivery-failed" = error.code;
+    expect(compatibleCode).toBe("delivery-failed");
+    expect(error.reason).toBe("delivery-window-expired");
     expect(attempts).toBe(1);
   });
 

@@ -75,6 +75,7 @@ configureShareCommandServices({
   targetAdapter: shareAuthority.targetAdapter,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
+  assertDomainDelivery: shareAuthority.assertDomainDelivery,
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader,
 });

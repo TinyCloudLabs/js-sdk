@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
 import { historyRecordForPublishedShare, notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
@@ -22,6 +25,10 @@ const uploadedSpaces: string[] = [];
 const uploadedPaths: string[] = [];
 const encryptionSpaces: string[] = [];
 let sessionOnly = true;
+let invokerDid = credentialHolderDid;
+let nodeInfoStatus = 200;
+const nodeInfoRequests: RequestInit[] = [];
+let historyCacheDir: string | undefined;
 let uploadErrorCode: string | undefined;
 let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
@@ -61,7 +68,8 @@ function nodeDeliveryEmail(value: unknown): string | undefined {
  *   the matcher must be `exactEmail`, and actions must be exactly `read`.
  * - "1.17.3": node `05c6a93`. The pin is optional but byte-equal when present;
  *   actions must include `read`. Domain invitations additionally require the
- *   owner key, a canonical mailbox at the exact domain and the domain-proof profile.
+ *   invoking DID (without a fragment) to equal the policy owner DID, a canonical
+ *   mailbox at the exact domain and the domain-proof profile.
  */
 function nodeRefusesDelivery(input: Record<string, unknown>): boolean {
   const envelope = input.envelope as Record<string, unknown> | undefined;
@@ -78,7 +86,7 @@ function nodeRefusesDelivery(input: Record<string, unknown>): boolean {
   const domain = matcher?.kind === "emailDomain";
   const matcherRefused = domain
     ? nodeContract !== "1.17.3"
-      || sessionOnly
+      || invokerDid.split("#", 1)[0] !== (envelope?.signature as { readonly signerDid?: string } | undefined)?.signerDid
       || policy?.credentialRequirement?.profile?.id !== "tinycloud.email-domain-proof/v1"
       || typeof matcher.value !== "string"
       || canonicalRecipient !== input.recipientEmail
@@ -95,7 +103,7 @@ function nodeRefusesDelivery(input: Record<string, unknown>): boolean {
 }
 const node = {
   did: transportDid,
-  credentialHolderDid,
+  get credentialHolderDid() { return invokerDid.split("#", 1)[0]; },
   get spaceId() { return nodeSpaceId; },
   get isSessionOnly() { return sessionOnly; },
   get restorableSession() {
@@ -200,7 +208,12 @@ const node = {
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "test", host: "https://node.example" }),
-    getProfile: async () => ({ authMethod: "openkey" }),
+    getProfile: async () => historyCacheDir === undefined ? { authMethod: "openkey" } : { authMethod: "openkey", privateKey: "test-history-key" },
+    getCacheDir: async () => {
+      if (historyCacheDir === undefined) throw new Error("history test directory is not configured");
+      return historyCacheDir;
+    },
+    withLock: withProfileLock,
   },
 }));
 mock.module("../lib/sdk.js", () => ({
@@ -210,7 +223,7 @@ mock.module("../lib/sdk.js", () => ({
   },
 }));
 
-const { createShareAuthorityAdapters } = await import("./adapters.js");
+const { createEncryptedProfileHistory, createShareAuthorityAdapters } = await import("./adapters.js");
 const { SharePublishAuthorityError } = await import("./errors.js");
 
 afterEach(() => {
@@ -219,9 +232,13 @@ afterEach(() => {
   nativeSpaceId = "tinycloud:test-space";
   uploadedPaths.length = 0;
   sessionOnly = true;
+  invokerDid = credentialHolderDid;
+  nodeInfoStatus = 200;
+  nodeInfoRequests.length = 0;
   uploadErrorCode = undefined;
   uploadErrorMeta = undefined;
   uploadedSpaces.length = 0;
+  historyCacheDir = undefined;
   encryptionSpaces.length = 0;
   ownerRootInputs.length = 0;
   sessionSignatures.length = 0;
@@ -829,7 +846,10 @@ describe("TinyCloud share authority adapter", () => {
         invitations.push(String(init?.body));
         return Response.json({ status: "accepted" }, { status: 202 });
       }
-      if (url === "https://node.example/info") return Response.json({ version: advertisedNodeVersion ?? nodeContract });
+      if (url === "https://node.example/info") {
+        nodeInfoRequests.push(init ?? {});
+        return Response.json({ version: advertisedNodeVersion ?? nodeContract }, { status: nodeInfoStatus });
+      }
       return Response.json({
         version: "tinycloud.share/config-v2",
         shareOrigin: "https://share.example",
@@ -840,8 +860,7 @@ describe("TinyCloud share authority adapter", () => {
     return { invitations, ...createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn }) };
   };
 
-  it("gates domain invitations on node 1.17.3 and an owner-key sender before publication", async () => {
-    sessionOnly = false;
+  it("gates domain invitations by version but admits a session-only publisher's own policy", async () => {
     nodeContract = "1.17.2";
     const adapters = deliveringAdapters();
     const domain = { ...addressedInput({ kind: "emailDomain", domain: "example.com" }, ["read", "edit"]), notify: true };
@@ -852,23 +871,84 @@ describe("TinyCloud share authority adapter", () => {
 
     nodeContract = "1.17.3";
     sessionOnly = true;
-    await expect(adapters.targetAdapter.publish(domain))
-      .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: expect.stringContaining("owner-key") } });
-    expect(publishEvents).toEqual([]);
-
-    sessionOnly = false;
-    advertisedNodeVersion = "1.17.3-rc.1";
-    await expect(adapters.targetAdapter.publish(domain))
-      .rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
-    expect(publishEvents).toEqual([]);
-    advertisedNodeVersion = undefined;
     const published = await adapters.targetAdapter.publish(domain);
     if ("state" in published) throw new Error("expected addressed publication");
     const record = historyRecordForPublishedShare(published);
+    expect(record.ownerDid).toBe(credentialHolderDid);
     const result = await notifyShare({ shareId: record.shareId, recipient: "Bob@Example.COM", record, adapter: adapters.delivery });
     expect(result.state).toBe("delivered");
     expect(deliveryAuthorizationInputs[0]?.recipientEmail).toBe("bob@example.com");
     expect(adapters.invitations).toHaveLength(1);
+
+    invokerDid = `${transportDid}#session`;
+    await expect(notifyShare({ shareId: record.shareId, recipient: "alice@example.com", record, adapter: adapters.delivery, maxAttempts: 1 }))
+      .resolves.toMatchObject({ state: "partial-failure", attempts: 1 });
+    expect(adapters.invitations).toHaveLength(1);
+  });
+
+  it("compares node semver and follows the SDK's /info redirects", async () => {
+    nodeContract = "1.17.3";
+    const adapters = deliveringAdapters();
+    const domain = { ...addressedInput({ kind: "emailDomain", domain: "example.com" }), notify: true };
+    for (const version of ["1.17.3-rc.1", "1.17.2", "1.18.0-01", "not-a-version"]) {
+      advertisedNodeVersion = version;
+      await expect(adapters.targetAdapter.publish(domain)).rejects.toMatchObject({
+        failure: { kind: "invalid-request", reason: expect.stringContaining(version) },
+      });
+      await expect(adapters.assertDomainDelivery()).rejects.toMatchObject({
+        failure: { kind: "invalid-request", reason: expect.stringContaining(version) },
+      });
+    }
+    expect(publishEvents).toEqual([]);
+    for (const version of ["1.18.0-beta.1", "v1.17.3", " 1.17.3 ", "1.17.3+build.4"]) {
+      advertisedNodeVersion = version;
+      const published = await adapters.targetAdapter.publish(domain);
+      expect("state" in published).toBe(false);
+      await expect(adapters.assertDomainDelivery()).resolves.toBeUndefined();
+    }
+    expect(nodeInfoRequests.every((options) => options.redirect !== "error")).toBe(true);
+    nodeInfoStatus = 503;
+    await expect(adapters.targetAdapter.publish(domain)).rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
+    await expect(adapters.assertDomainDelivery()).rejects.toMatchObject({ failure: { kind: "node-info-unavailable" } });
+  });
+
+  it("serializes profile history updates across adapters and preserves concurrent fields", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-lock-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        await mkdir(historyCacheDir, { recursive: true });
+        const first = createEncryptedProfileHistory(async () => "history-test");
+        const second = createEncryptedProfileHistory(async () => "history-test");
+        const base: SenderShareRecord = {
+          shareId: "share-history",
+          target: { origin: "https://node.example", nodeAudience: nodeDid, spaceId: "tinycloud:test-space" },
+          resource: { kind: "exact", path: "shares/share-history/note.md" },
+          actions: ["tinycloud.kv/get"],
+          recipientMatcher: { kind: "emailDomain", value: "example.com" },
+          registeredAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2030-01-01T00:00:00.000Z",
+        };
+        await first.put(base);
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const revoke = first.update!("share-history", async (current) => {
+          entered.resolve();
+          await release.promise;
+          return { ...current, revokedAt: "2026-01-02T00:00:00.000Z" };
+        });
+        await entered.promise;
+        const notify = second.update!("share-history", (current) => ({ ...current, deliveredRecipients: ["alice@example.com"] }));
+        release.resolve();
+        await Promise.all([revoke, notify]);
+        expect(await first.get("share-history")).toMatchObject({
+          revokedAt: "2026-01-02T00:00:00.000Z", deliveredRecipients: ["alice@example.com"],
+        });
+      });
+    } finally {
+      historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("publishes an email share whose --notify invitation the Node authorizes and delivers (TC-571)", async () => {

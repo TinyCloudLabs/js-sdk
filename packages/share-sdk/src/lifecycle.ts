@@ -66,7 +66,11 @@ export async function revokeShare(input: {
     });
   }
   const revokedAt = (input.now?.() ?? new Date()).toISOString();
-  if (input.records !== undefined) await input.records.put({ ...input.record, revokedAt });
+  if (input.records?.update !== undefined) {
+    await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt }));
+  } else if (input.records !== undefined) {
+    await input.records.put({ ...input.record, revokedAt });
+  }
   return { state: "revoked", target: target as "bearer" | "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt };
 }
 

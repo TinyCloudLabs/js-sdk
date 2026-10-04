@@ -4,7 +4,7 @@ export type SharePublishFailure =
   | { readonly kind: "caveated-session"; readonly profileName?: string }
   | { readonly kind: "lifetime-exceeds-session"; readonly sessionExpiresAt: Date; readonly reason: "beyond-session" | "below-minimum" | "session-too-close"; readonly localKey?: boolean; readonly profileName?: string }
   | { readonly kind: "origin-mismatch" }
-  /** A share-sdk preflight refusal; `reason` is a fixed SDK message, never remote text. */
+  /** Preflight detail; any included node version must be sanitized. */
   | { readonly kind: "invalid-request"; readonly reason: string }
   /** Network failure, 5xx, 408 or 429: a retry can succeed. */
   | { readonly kind: "registry-unavailable" }

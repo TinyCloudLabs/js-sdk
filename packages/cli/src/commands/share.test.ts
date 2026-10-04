@@ -3,12 +3,35 @@ import { Command } from "commander";
 import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
+import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError } from "./share.js";
 import { SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
+import { runShareCaptured } from "./share.integration-harness.js";
 
 describe("tc share command contract", () => {
+  const reviewRecord: SenderShareRecord = {
+    shareId: "review-share",
+    target: { origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+    resource: { kind: "exact", path: "shares/review-share/note.md" },
+    actions: ["tinycloud.kv/get"],
+    recipientMatcher: { kind: "emailDomain", value: "example.com" },
+    ownerDid: "did:key:z6Mkowner",
+    enforcementDelegationCid: "bafy-enforcement",
+    registeredAt: "2026-01-01T00:00:00.000Z",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+  };
+  const reviewPublished: PublishedShare = {
+    protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+    link: { kind: "policy", cid: "bafy-review" },
+    metadata: {
+      protocol: "tinycloud-share", version: 1, shareId: reviewRecord.shareId, origin: "https://share.example",
+      target: { kind: "email", ...reviewRecord.target },
+      resource: reviewRecord.resource, actions: ["read"],
+      expiresAt: reviewRecord.expiresAt, display: { filename: "note.md" },
+      recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+    },
+  };
   test("parses every target spelling without accepting an unknown target", () => {
     expect(parseShareTarget("anyone")).toEqual({ kind: "bearer" });
     expect(parseShareTarget("did:key:z6Mkexample")).toEqual({ kind: "recipientDid", did: "did:key:z6Mkexample" });
@@ -125,6 +148,10 @@ describe("tc share command contract", () => {
   test("names a refused addressed request and separates retryable from rejected registry failures", () => {
     const invalid = shareCliError(new SharePublishAuthorityError({ kind: "invalid-request", reason: "email-domain shares are view-only" }));
     expect([invalid.code, invalid.message, invalid.exitCode]).toEqual(["INVALID_ARGUMENT", "email-domain shares are view-only", 2]);
+    const unsupportedVersion = shareCliError(new SharePublishAuthorityError({ kind: "invalid-request", reason: "node reports version 1.17.2" }));
+    expect([unsupportedVersion.code, unsupportedVersion.exitCode, unsupportedVersion.message]).toEqual(["INVALID_ARGUMENT", 2, "node reports version 1.17.2"]);
+    const missingNodeInfo = shareCliError(new SharePublishAuthorityError({ kind: "node-info-unavailable" }));
+    expect([missingNodeInfo.code, missingNodeInfo.exitCode]).toEqual(["UNAVAILABLE", 4]);
     const unavailable = shareCliError(new SharePublishAuthorityError({ kind: "registry-unavailable" }));
     expect([unavailable.code, unavailable.exitCode]).toEqual(["UNAVAILABLE", 4]);
     expect(unavailable.message).toContain("try again");
@@ -206,6 +233,13 @@ describe("tc share command contract", () => {
       } },
       records: {
         async put(record) { records.set(record.shareId, record); },
+        async update(shareId, change) {
+          const current = records.get(shareId);
+          if (current === undefined) return undefined;
+          const updated = await change(current);
+          records.set(shareId, updated);
+          return updated;
+        },
         async get(shareId) { return records.get(shareId); },
         async list() { return [...records.values()]; },
         async delete(shareId) { records.delete(shareId); },
@@ -280,6 +314,172 @@ describe("tc share command contract", () => {
     }
     expect(published).toEqual([{ target: { kind: "emailDomain", domain: "example.com" }, actions: ["read", "edit"], notify: true }]);
     expect(deliveries).toEqual(["bob@example.com"]);
+  });
+
+  test("publish and standalone notify retain success when delivery confirmation cannot be persisted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-confirmation-failure-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    let persisted: SenderShareRecord | undefined;
+    let writes = 0;
+    configureShareCommandServices({
+      targetAdapter: { async publish() { return reviewPublished; } },
+      records: {
+        async put(record) {
+          writes++;
+          if (writes > 1) throw new Error("sender history disk is full");
+          persisted = record;
+        },
+        async get() { return persisted; },
+        async list() { return persisted === undefined ? [] : [persisted]; },
+        async delete() {},
+        async update() { throw new Error("sender history disk is full"); },
+      },
+      delivery: { async deliver() { return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    process.exit = (() => {}) as typeof process.exit;
+    try {
+      const published = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      expect(published).toMatchObject({ exitCode: 0, stdout: `${reviewPublished.url}\n` });
+      expect(published.stderr).toContain("could not record");
+      expect(persisted?.deliveredRecipients).toBeUndefined();
+      const notified = await runShareCaptured(["share", "notify", reviewPublished.metadata.shareId, "--to", "alice@example.com", "--json"]);
+      expect(notified.exitCode).toBe(0);
+      expect(JSON.parse(notified.stdout)).toMatchObject({ state: "delivered" });
+      expect(notified.stderr).toContain("could not record");
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
+  });
+
+  test("publish JSON includes its notification outcome without changing publication fields", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-publish-json-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    configureShareCommandServices({
+      targetAdapter: { async publish() { return reviewPublished; } },
+      records: new MemorySenderShareRecordStorage(),
+      delivery: { async deliver() { throw new ShareNotifyError("window expired", "delivery-window-expired"); } },
+    });
+    try {
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      expect(output.exitCode).toBe(9);
+      expect(JSON.parse(output.stdout)).toMatchObject({
+        protocol: "tinycloud-share", version: 1, link: reviewPublished.link,
+        metadata: { shareId: reviewPublished.metadata.shareId },
+        notification: { state: "partial-failure", retryable: false, reason: "delivery-window-expired", attempts: 1 },
+      });
+    } finally {
+      configureShareCommandServices({});
+    }
+  });
+
+  test("standalone notify refuses records without read and unsupported domain delivery before sending", async () => {
+    let deliveries = 0;
+    let probes = 0;
+    let record: SenderShareRecord = { ...reviewRecord, actions: ["tinycloud.kv/put"] };
+    configureShareCommandServices({
+      records: {
+        async put() {},
+        async get() { return record; },
+        async list() { return [record]; },
+        async delete() {},
+      },
+      delivery: { async deliver() { deliveries++; return "delivered"; } },
+      assertDomainDelivery: async () => {
+        probes++;
+        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "node version 1.17.2 is below 1.17.3" });
+      },
+    });
+    const originalExit = process.exit;
+    const exits: number[] = [];
+    process.exit = ((code?: number) => { exits.push(code ?? 0); }) as typeof process.exit;
+    try {
+      const readless = await runShareCaptured(["share", "notify", record.shareId, "--to", "alice@example.com"]);
+      expect(readless.stderr).toContain("read");
+      expect(exits.at(-1)).toBe(2);
+      expect(probes).toBe(0);
+      record = { ...reviewRecord };
+      const unsupported = await runShareCaptured(["share", "notify", record.shareId, "--to", "alice@example.com"]);
+      expect(unsupported.stderr).toContain("1.17.2");
+      expect(exits.at(-1)).toBe(2);
+      expect(probes).toBe(1);
+      expect(deliveries).toBe(0);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+    }
+  });
+
+  test("notification confirmation preserves a revocation committed during delivery", async () => {
+    const storage = new MemorySenderShareRecordStorage();
+    await storage.put(reviewRecord);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let deliveries = 0;
+    configureShareCommandServices({
+      records: storage,
+      assertDomainDelivery: async () => {},
+      delivery: { async deliver() {
+        deliveries++;
+        if (deliveries === 1) { entered.resolve(); await release.promise; }
+        return "delivered";
+      } },
+    });
+    try {
+      const notifying = runShareCaptured(["share", "notify", reviewRecord.shareId, "--to", "alice@example.com"]);
+      await entered.promise;
+      await revokeShare({
+        record: reviewRecord, records: storage, adapter: { async revokePolicyRoot() {} },
+      });
+      release.resolve();
+      expect((await notifying).exitCode).toBe(0);
+      expect(await storage.get(reviewRecord.shareId)).toMatchObject({
+        revokedAt: expect.any(String), deliveredRecipients: ["alice@example.com"],
+      });
+
+    } finally {
+      release.resolve();
+      configureShareCommandServices({});
+    }
+  });
+
+  test("two overlapping notifications retain both confirmations", async () => {
+    const storage = new MemorySenderShareRecordStorage();
+    await storage.put({ ...reviewRecord, deliveredRecipients: ["alice@example.com"] });
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const both = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    let waiting = 0;
+    configureShareCommandServices({
+      records: storage,
+      assertDomainDelivery: async () => {},
+      delivery: { async deliver() {
+        waiting++;
+        if (waiting === 1) { first.resolve(); await both.promise; await releaseFirst.promise; }
+        if (waiting === 2) { second.resolve(); both.resolve(); }
+        return "delivered";
+      } },
+    });
+    try {
+      const firstNotify = runShareCaptured(["share", "notify", reviewRecord.shareId, "--to", "bob@example.com", "--json"]);
+      await first.promise;
+      const secondNotify = runShareCaptured(["share", "notify", reviewRecord.shareId, "--to", "carol@example.com", "--json"]);
+      await second.promise;
+      expect((await secondNotify).exitCode).toBe(0);
+      releaseFirst.resolve();
+      expect((await firstNotify).exitCode).toBe(0);
+      expect([...(await storage.get(reviewRecord.shareId))?.deliveredRecipients ?? []].sort()).toEqual([
+        "alice@example.com", "bob@example.com", "carol@example.com",
+      ]);
+    } finally {
+      both.resolve();
+      releaseFirst.resolve();
+      configureShareCommandServices({});
+    }
   });
 
   test("an expired notify window reports non-retryable partial success and a republish hint", async () => {

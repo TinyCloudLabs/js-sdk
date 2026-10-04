@@ -1,8 +1,9 @@
 import { SharePublishAuthorityError } from "./errors.js";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
+import { writeJsonAtomic } from "@tinycloud/operations/state";
 import {
   createNativeShare,
   parseNativeShareUrl,
@@ -47,6 +48,30 @@ function throwKvUploadFailure(error: unknown): never {
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+const MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
+/** Compared with a release threshold: equal numeric prereleases sort below it. */
+function supportsDomainDelivery(version: unknown): boolean {
+  if (typeof version !== "string") return false;
+  const normalized = version.trim();
+  if (normalized.length > 128) return false;
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(normalized);
+  if (match === null) return false;
+  if (match[4] !== undefined && /(?:^|\.)0[0-9]+(?:\.|$)/.test(match[4])) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)) return false;
+  if (major !== 1) return major > 1;
+  if (minor !== 17) return minor > 17;
+  if (patch !== 3) return patch > 3;
+  return match[4] === undefined;
+}
+
+function displayedNodeVersion(version: unknown): string {
+  if (typeof version !== "string") return "(unrecognized)";
+  const trimmed = version.trim();
+  return /^[A-Za-z0-9.+_-]{1,64}$/.test(trimmed) ? trimmed : "(unrecognized)";
+}
 const URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /**
  * The SDK puts KV keys unescaped into the Node resource URI, so a stored name
@@ -92,6 +117,8 @@ interface SharePublicConfig {
  */
 export function createEncryptedSessionHistory(): SenderShareRecordStorage {
   const records = new Map<string, Uint8Array>();
+  let operation = Promise.resolve();
+  const serial = <T>(action: () => Promise<T>): Promise<T> => { const next = operation.then(action, action); operation = next.then(() => undefined, () => undefined); return next; };
   let keyPromise: Promise<CryptoKey> | undefined;
   const key = async (): Promise<CryptoKey> => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]) as Promise<CryptoKey>;
   const encode = async (record: SenderShareRecord): Promise<Uint8Array> => {
@@ -102,12 +129,19 @@ export function createEncryptedSessionHistory(): SenderShareRecordStorage {
   };
   const decode = async (value: Uint8Array): Promise<SenderShareRecord> => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12)))) as SenderShareRecord;
   return {
-    async put(record) {
-      records.set(record.shareId, await encode(record));
+    async put(record) { return serial(async () => { records.set(record.shareId, await encode(record)); }); },
+    async update(shareId, change) {
+      return serial(async () => {
+        const value = records.get(shareId);
+        if (value === undefined) return undefined;
+        const updated = await change(await decode(value));
+        records.set(shareId, await encode(updated));
+        return updated;
+      });
     },
-    async list() { return Promise.all([...records.values()].map(decode)); },
-    async get(shareId) { const value = records.get(shareId); return value === undefined ? undefined : decode(value); },
-    async delete(shareId) { records.delete(shareId); },
+    async list() { return serial(() => Promise.all([...records.values()].map(decode))); },
+    async get(shareId) { return serial(async () => { const value = records.get(shareId); return value === undefined ? undefined : decode(value); }); },
+    async delete(shareId) { return serial(async () => { records.delete(shareId); }); },
   };
 }
 
@@ -174,15 +208,27 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const bytes = new TextEncoder().encode(JSON.stringify(values));
     const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await derive(salt), bytes));
-    const output = new TextEncoder().encode(JSON.stringify({ version: HISTORY_VERSION, kdfSalt: b64(salt), iv: b64(iv), ciphertext: b64(encrypted) }));
-    await writeFile(await path(), output, { mode: 0o600 });
+    await writeJsonAtomic(await path(), { version: HISTORY_VERSION, kdfSalt: b64(salt), iv: b64(iv), ciphertext: b64(encrypted) });
   };
   const serial = <T>(operationFn: () => Promise<T>): Promise<T> => { const next = operation.then(operationFn, operationFn); operation = next.then(() => undefined, () => undefined); return next; };
+  const locked = <T>(action: () => Promise<T>): Promise<T> => serial(async () => ProfileManager.withLock(await profileName(), action));
   return {
-    async put(record) { return serial(async () => { const state = await read(); const values = [...state.values]; const index = values.findIndex((value) => value.shareId === record.shareId); if (index >= 0) values[index] = record; else values.push(record); await write(values, state.salt); }); },
-    async list() { return serial(async () => (await read()).values); },
-    async get(shareId) { return serial(async () => (await read()).values.find((record) => record.shareId === shareId)); },
-    async delete(shareId) { return serial(async () => { const state = await read(); await write(state.values.filter((record) => record.shareId !== shareId), state.salt); }); },
+    async put(record) { return locked(async () => { const state = await read(); const values = [...state.values]; const index = values.findIndex((value) => value.shareId === record.shareId); if (index >= 0) values[index] = record; else values.push(record); await write(values, state.salt); }); },
+    async update(shareId, change) {
+      return locked(async () => {
+        const state = await read();
+        const index = state.values.findIndex((record) => record.shareId === shareId);
+        if (index < 0) return undefined;
+        const updated = await change(state.values[index]!);
+        const values = [...state.values];
+        values[index] = updated;
+        await write(values, state.salt);
+        return updated;
+      });
+    },
+    async list() { return locked(async () => (await read()).values); },
+    async get(shareId) { return locked(async () => (await read()).values.find((record) => record.shareId === shareId)); },
+    async delete(shareId) { return locked(async () => { const state = await read(); await write(state.values.filter((record) => record.shareId !== shareId), state.salt); }); },
   };
 }
 
@@ -205,6 +251,7 @@ export function createShareAuthorityAdapters(input: {
   readonly records: SenderShareRecordStorage;
   readonly delivery: ShareDeliveryAdapter;
   readonly revocation: ShareRevocationAdapter;
+  readonly assertDomainDelivery: () => Promise<void>;
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
@@ -257,6 +304,28 @@ export function createShareAuthorityAdapters(input: {
       throw error;
     }
   })();
+  const assertDomainDeliveryForOrigin = async (nodeOrigin: string): Promise<void> => {
+    let response: Response;
+    try {
+      // Match sdk-core's /info request: redirects follow the authenticated Node origin.
+      response = await fetchFn(`${nodeOrigin}/info`, { signal: AbortSignal.timeout(5000) });
+    } catch {
+      throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+    const info: unknown = await response.json().catch(() => undefined);
+    const version = typeof info === "object" && info !== null && "version" in info ? info.version : undefined;
+    if (!supportsDomainDelivery(version)) {
+      throw new SharePublishAuthorityError({
+        kind: "invalid-request",
+        reason: `domain notifications require tinycloud-node ${MIN_DOMAIN_DELIVERY_VERSION} or later; node reports version ${displayedNodeVersion(version)}. Upgrade the node before inviting`,
+      });
+    }
+  };
+  const assertDomainDelivery = async (): Promise<void> => {
+    const node = await authenticatedNode();
+    await assertDomainDeliveryForOrigin((await node.activeNodeIdentity()).origin);
+  };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -313,26 +382,7 @@ export function createShareAuthorityAdapters(input: {
     }
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
-      if (node.isSessionOnly) {
-        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "--notify for a domain share requires an owner-key profile on tinycloud-node 1.17.3 or later" });
-      }
-      let version: unknown;
-      try {
-        const response = await fetchFn(`${activeNode.origin}/info`, { signal: AbortSignal.timeout(5000), redirect: "error" });
-        if (!response.ok) throw new Error("node info unavailable");
-        const info: unknown = await response.json();
-        version = typeof info === "object" && info !== null && "version" in info ? info.version : undefined;
-      } catch {
-        throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
-      }
-      const parsed = typeof version === "string" ? /^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/.exec(version) : null;
-      if (parsed === null) throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
-      const major = Number(parsed[1]);
-      const minor = Number(parsed[2]);
-      const patch = Number(parsed[3]);
-      if (major < 1 || (major === 1 && (minor < 17 || (minor === 17 && patch < 3)))) {
-        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "--notify for a domain share requires tinycloud-node 1.17.3 or later and an owner-key profile; publish without --notify on this node" });
-      }
+      await assertDomainDeliveryForOrigin(activeNode.origin);
     }
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
@@ -602,6 +652,7 @@ export function createShareAuthorityAdapters(input: {
     }),
     delivery,
     revocation,
+    assertDomainDelivery,
     nativeReader,
   };
 }
