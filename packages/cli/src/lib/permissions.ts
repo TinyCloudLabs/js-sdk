@@ -11,6 +11,7 @@ import {
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
+  refuseWriteToDeletedProfile,
   updateProfileStore,
   withProfileLock,
   writeJsonAtomic,
@@ -205,11 +206,13 @@ async function replaceSharedRecords<T>(
   await withProfileLock(profile, () => writeSharedRecords(profile, store, entries));
 }
 
+/** The caller holds the profile lock. */
 async function writeSharedRecords<T>(
   profile: string,
   store: "additional-delegations" | "auth-requests",
   entries: T[],
 ): Promise<void> {
+  await refuseWriteToDeletedProfile(profile);
   const path = store === "additional-delegations"
     ? additionalDelegationsPath(profile)
     : permissionRequestsPath(profile);

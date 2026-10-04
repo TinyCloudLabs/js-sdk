@@ -1,7 +1,8 @@
 // Takes one profile lock `iterations` times, recording overlapping holders.
+// The lock is the release TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts).
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { withProfileLock } from "../src/state.js";
+import { withFixtureLock } from "./lock-protocol.js";
 
 const [profile, holdersDir, iterations, staleAfterMs] = process.argv.slice(2);
 if (!profile || !holdersDir || !iterations || !staleAfterMs) {
@@ -11,7 +12,7 @@ if (!profile || !holdersDir || !iterations || !staleAfterMs) {
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 for (let index = 0; index < Number(iterations); index++) {
-  await withProfileLock(profile, async () => {
+  await withFixtureLock(profile, async () => {
     const active = join(holdersDir, "active");
     try {
       await writeFile(active, `${process.pid}\n`, { encoding: "utf8", flag: "wx" });

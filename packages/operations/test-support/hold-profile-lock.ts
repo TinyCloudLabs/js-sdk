@@ -1,8 +1,10 @@
 // Holds one profile lock in a child process and records overlapping holders.
+// The lock is the release TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts).
 // Exit 0: held and released. Exit 3: timed out without ever holding it.
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ProfileLockTimeoutError, withProfileLock } from "../src/state.js";
+import { ProfileLockTimeoutError } from "../src/state.js";
+import { withFixtureLock } from "./lock-protocol.js";
 import {
   PROFILE_LOCK_HOLDER_RELEASE_TIMEOUT_MS,
   signalProfileLockProtocol,
@@ -15,7 +17,7 @@ if (!profile || !holdersDir || !readyPath || !releasePath || !timeoutMs || !stal
 }
 
 try {
-  await withProfileLock(profile, async () => {
+  await withFixtureLock(profile, async () => {
     const active = join(holdersDir, "active");
     try {
       await writeFile(active, `${process.pid}\n`, { encoding: "utf8", flag: "wx" });
