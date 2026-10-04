@@ -12,7 +12,7 @@ const cycleFixture = new URL("../../test-support/cycle-profile-lock.ts", import.
 export const appendFixture = new URL("../../test-support/append-profile-record.ts", import.meta.url).pathname;
 
 const LOCK_TEST_ENVIRONMENT = [
-  ...["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY", "CLAIM", "CLAIMED", "FENCED", "VERIFIED", "TURN_PUBLISH", "TURN_SETTLE", "TURN_COLLECT", "PRE_TC540_OWNER"]
+  ...["OWNERLESS", "PUBLISH", "RELEASE", "RECOVERY", "CLAIM", "CLAIMED", "FENCED", "VERIFIED", "MOVED", "TURN_PUBLISH", "TURN_SETTLE", "TURN_COLLECT", "PRE_TC540_OWNER"]
     .map((name) => `TC_TEST_PROFILE_LOCK_${name}_BARRIER_DIR`),
   "TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH",
   "TC_TEST_LOCK_PROTOCOL",

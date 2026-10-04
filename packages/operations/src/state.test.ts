@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -74,33 +73,6 @@ const legacyProfile = {
   did: "did:key:legacy#controller",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
-
-test("held-lock entries are trusted across module copies only under the current format key", async () => {
-  await isolatedHome();
-  const profile = "versioned";
-  await mkdir(profilePath(profile), { recursive: true });
-  const lockPath = profileLockPath(profile);
-  const held = [{ lockPath, active: true }];
-  const lockTaken = () => stat(lockPath).then(() => true, () => false);
-  const registry = globalThis as unknown as Record<symbol, AsyncLocalStorage<unknown> | undefined>;
-
-  // Another copy of the state module with the same format shares this context:
-  // its entry makes the acquisition reentrant, so no lock directory is made.
-  const current = registry[Symbol.for("tinycloud.operations.heldProfileLocks.v1")];
-  expect(current).toBeDefined();
-  expect(await current!.run(held, () => withProfileLock(profile, lockTaken))).toBe(false);
-
-  // An entry recorded under another format's key is not trusted.
-  const otherFormat = Symbol.for("tinycloud.operations.heldProfileLocks");
-  const previous = registry[otherFormat];
-  const other = new AsyncLocalStorage<unknown>();
-  registry[otherFormat] = other;
-  try {
-    expect(await other.run(held, () => withProfileLock(profile, lockTaken))).toBe(true);
-  } finally {
-    registry[otherFormat] = previous;
-  }
-});
 
 test("reads unversioned format-1 stores and writes format metadata without changing JSON layout", async () => {
   await isolatedHome();

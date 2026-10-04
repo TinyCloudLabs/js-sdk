@@ -32,6 +32,7 @@ const TEST_LOCK_RELEASE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR"
 const TEST_LOCK_CLAIM_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR";
 const TEST_LOCK_CLAIMED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR";
 const TEST_LOCK_VERIFIED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR";
+const TEST_LOCK_MOVED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_MOVED_BARRIER_DIR";
 const TEST_LOCK_TURN_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_PUBLISH_BARRIER_DIR";
 const TEST_LOCK_TURN_SETTLE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_SETTLE_BARRIER_DIR";
 const TEST_LOCK_TURN_COLLECT_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR";
@@ -49,15 +50,13 @@ interface HeldProfileLock {
  * bundled operations entry point (`state`, `delegation-binding`, the root)
  * carries its own copy, so module-level context would make lock reentrancy and
  * the invocation state root stop at an entry-point boundary.
- *
- * The `.v1` in each key is the format version shared by every copy that reads
- * it. Bump it whenever the `HeldProfileLock` entry shape or the on-disk lock
- * protocol changes, so copies with different formats (two operations versions
- * in one process) stop trusting each other's held-lock entries and simply
- * wait for the lock instead. TC-633 changes the held-lock shape and adds a
- * per-process `turnsInProgress` set: whichever of TC-602 and TC-633 lands
- * second bumps these keys to `.v2` and makes that set process-wide under the
- * same version.
+ * Each key is independently versioned for the shape and meaning of the
+ * value it stores. Held-lock entries gained `turnSlot` and
+ * `deletedWhileWaiting` in TC-633, so `.v2` must not read TC-602's `.v1`
+ * entries. The invocation root remains a string path with unchanged
+ * semantics and stays `.v1`. Relinquished turn tokens use a separate
+ * versioned process-wide key: only an explicitly given-up turn of this PID
+ * may be settled across separately bundled entry points.
  */
 function processWideContext<T>(key: string): AsyncLocalStorage<T> {
   const registry = globalThis as unknown as Record<symbol, AsyncLocalStorage<T> | undefined>;
@@ -65,7 +64,7 @@ function processWideContext<T>(key: string): AsyncLocalStorage<T> {
 }
 const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot.v1");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
-const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v1");
+const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v2");
 
 export type ProfileStoreName =
   | "session"
@@ -1091,15 +1090,14 @@ async function signalTestLockContention(profile: string): Promise<void> {
 }
 
 /**
- * Reclaims a `.lock` with no owner record, while holding a turn. Claims of
- * this release's recovery (`.recover-*`) are then orphans of a crashed
- * recoverer, so a directory holding nothing else is removed at once.
- * Otherwise the directory must be older than the stale threshold: one left by
- * a crash, or by an older release, whose `.stale-*` / `.release-*` claim
- * files are removed too. owner.json is never touched, and the directory
- * itself is only `rmdir`ed, which succeeds only while it is empty, so a
- * published lock is never removed; a 1.0.0-beta.17+ release whose
- * unpublished directory this was sees its `link` fail and retries.
+ * Reclaims a `.lock` with no owner record, while holding a turn. A
+ * `.recover-*` claim may contain a live legacy owner's record moved by a
+ * no-hard-links recoverer just before it crashed. Restore that record first;
+ * only orphaned claims holding dead or malformed records can be removed.
+ * Otherwise the directory must be older than the stale threshold: one left
+ * by a crash, or by an older release, whose `.stale-*` / `.release-*` claim
+ * files are removed too. owner.json is never unlinked, and the directory
+ * itself is only `rmdir`ed, which succeeds only while it is empty.
  *
  * Holding a turn, no other process of this release reclaims concurrently.
  * That closes the race in which two reclaimers' age checks let the later one
@@ -1125,7 +1123,17 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
     if (entries.includes("owner.json")) return false;
     const onlyOrphanedClaims = entries.length > 0 && entries.every((entry) => RECOVERY_CLAIM.test(entry));
     if (!onlyOrphanedClaims && (!aged || recoveryFenced(checkedAt, staleAfterMs))) return false;
-    for (const name of entries.filter((entry) => RECOVERY_CLAIM.test(entry) || ABANDONED_CLAIM.test(entry))) {
+    for (const name of entries.filter((entry) => RECOVERY_CLAIM.test(entry))) {
+      const claimPath = join(lockPath, name);
+      if (await hasLiveRecoveryOwner(claimPath)) {
+        // The claim keeps the directory in place. Only the original mkdir
+        // owner could publish owner.json here; never overwrite that record.
+        if (!await exists(join(lockPath, "owner.json"))) await rename(claimPath, join(lockPath, "owner.json"));
+        return false;
+      }
+      await rm(claimPath, { force: true });
+    }
+    for (const name of entries.filter((entry) => ABANDONED_CLAIM.test(entry))) {
       await rm(join(lockPath, name), { force: true });
     }
     await rmdir(lockPath);
@@ -1134,6 +1142,25 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   }
   await removeAgedOwnerFiles(lockPath, staleAfterMs);
   return true;
+}
+
+/** A no-hard-links claim may contain a live owner's record moved before a crash. */
+async function hasLiveRecoveryOwner(claimPath: string): Promise<boolean> {
+  let contents: string;
+  try {
+    contents = await readFile(claimPath, "utf8");
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return false;
+    throw error; // An I/O failure is not evidence that the holder is gone.
+  }
+  let owner: unknown;
+  try {
+    owner = JSON.parse(contents);
+  } catch {
+    return false;
+  }
+  const pid = typeof owner === "object" && owner !== null && "pid" in owner ? owner.pid : null;
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 0 && isProcessAlive(pid);
 }
 
 /**
@@ -1221,6 +1248,7 @@ async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs:
       return false;
     }
   }
+  if (moved) await waitForTestBarrier(TEST_LOCK_MOVED_BARRIER_DIR, profile);
   const sameInstance = await readFile(claimPath, "utf8").then((claimed) => claimed === observed, () => false);
   await waitForTestBarrier(TEST_LOCK_VERIFIED_BARRIER_DIR, profile);
   if (!sameInstance) {

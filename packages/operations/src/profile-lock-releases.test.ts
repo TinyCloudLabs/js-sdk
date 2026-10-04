@@ -3,7 +3,7 @@
 // code of their release (test-support/released-locks). These tests use only
 // state.ts exports that predate TC-633, so they run against earlier code too.
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, rmdir, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileLockMetadataPath, profileLockPath, profilePath, writeJsonAtomic } from "./state.js";
@@ -192,64 +192,71 @@ test("a paused recoverer never moves a live owner aside for older cleanup", asyn
   const verified = join(home, "verified-barrier");
   const claimed = join(home, "claim-barrier");
   await Promise.all([mkdir(verified), mkdir(claimed)]);
-  const recoverer = spawnLockHolder(home, holders, PROFILE, "recoverer", {
-    timeoutMs: 20_000, staleAfterMs: 600_000,
-    env: { TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR: verified, TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR: claimed },
-  });
-  await waitForProfileLockProtocol(join(verified, `ready-${recoverer.pid}-${PROFILE}`), "R after checking its claim");
+  const children: ReturnType<typeof spawnLockHolder>[] = [];
+  const completions = new Map<ReturnType<typeof spawnLockHolder>, Promise<[number, string]>>();
+  const track = (holder: ReturnType<typeof spawnLockHolder>) => {
+    children.push(holder);
+    completions.set(holder, holder.finished());
+    return holder;
+  };
 
-  // On the broken protocol, T1 removes R's aged .stale-* probe, recovers
-  // the dead record, then holds a live owner.json. With .recover-* R's claim
-  // cannot be removed by T1, irrespective of its stale threshold.
-  const first = spawnLockHolder(home, holders, PROFILE, "first-older", {
-    timeoutMs: 20_000, staleAfterMs: 20, env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
-  });
-  await Bun.sleep(500);
-  const firstHeldWhileVerified = await exists(first.readyPath);
-  await writeFile(join(verified, "release"), "release\n", "utf8");
-  await waitForProfileLockProtocol(join(claimed, `ready-${recoverer.pid}-${PROFILE}`), "R at its owner removal");
+  try {
+    const recoverer = track(spawnLockHolder(home, holders, PROFILE, "recoverer", {
+      timeoutMs: 20_000, staleAfterMs: 600_000,
+      env: { TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR: verified, TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR: claimed },
+    }));
+    await waitForProfileLockProtocol(join(verified, `ready-${recoverer.pid}-${PROFILE}`), "R after checking its claim");
 
-  // With the broken protocol, R moved T1's live owner record into .stale-*.
-  // T2 ages that claim out and takes the lock while T1 still holds it.
-  const second = spawnLockHolder(home, holders, PROFILE, "second-older", {
-    timeoutMs: 20_000, staleAfterMs: 20, env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
-  });
-  await Bun.sleep(500);
-  const secondHeldWhilePaused = await exists(second.readyPath);
-  await writeFile(join(claimed, "release"), "release\n", "utf8");
-  if (firstHeldWhileVerified) {
-    await first.release();
-    const [exit, stderr] = await first.finished();
-    expect(exit, stderr).toBe(0);
+    // On the broken protocol, T1 removes R's aged .stale-* probe, recovers
+    // the dead record, then holds a live owner.json. With .recover-* R's
+    // claim cannot be removed by T1, irrespective of its stale threshold.
+    const first = track(spawnLockHolder(home, holders, PROFILE, "first-older", {
+      timeoutMs: 20_000, staleAfterMs: 20, env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
+    }));
+    await Bun.sleep(500);
+    const firstHeldWhileVerified = await exists(first.readyPath);
+    await writeFile(join(verified, "release"), "release\n", "utf8");
+    await waitForProfileLockProtocol(join(claimed, `ready-${recoverer.pid}-${PROFILE}`), "R at its owner removal");
+
+    // With the broken protocol, R moved T1's live owner record into .stale-*.
+    // T2 ages that claim out and takes the lock while T1 still holds it.
+    const second = track(spawnLockHolder(home, holders, PROFILE, "second-older", {
+      timeoutMs: 20_000, staleAfterMs: 20, env: { TC_TEST_LOCK_PROTOCOL: "tc540" },
+    }));
+    await Bun.sleep(500);
+    const secondHeldWhilePaused = await exists(second.readyPath);
+    await writeFile(join(claimed, "release"), "release\n", "utf8");
+
+    // An older waiter can win the next acquisition. Release whichever holder
+    // enters next, not R first, and join each child exactly once.
+    const pending = new Set(children);
+    while (pending.size > 0) {
+      await waitUntil(async () => {
+        for (const holder of pending) if (await exists(holder.readyPath)) return true;
+        return false;
+      }, "the next holder to acquire");
+      const holder = (await Promise.all([...pending].map(async (child) => [child, await exists(child.readyPath)] as const)))
+        .find(([, ready]) => ready)?.[0];
+      if (!holder) continue;
+      await holder.release();
+      const [exit, stderr] = await completions.get(holder)!;
+      expect(exit, stderr).toBe(0);
+      pending.delete(holder);
+    }
+    expect(firstHeldWhileVerified).toBe(false);
+    expect(secondHeldWhilePaused).toBe(false);
+    expect(await violations(holders)).toEqual([]);
+  } finally {
+    // Never leave a child holding the lock or waiting at a test barrier if
+    // setup, a signal wait, or an assertion fails.
+    await Promise.all([verified, claimed].map((barrier) =>
+      writeFile(join(barrier, "release"), "release\n", "utf8").catch(() => undefined)));
+    for (const child of children) {
+      if (await exists(child.readyPath)) await child.release().catch(() => undefined);
+      else try { child.kill(); } catch { /* Already exited. */ }
+    }
+    await Promise.all([...completions.values()].map((completion) => completion.catch(() => undefined)));
   }
-  if (secondHeldWhilePaused) {
-    await second.release();
-    const [exit, stderr] = await second.finished();
-    expect(exit, stderr).toBe(0);
-  }
-  await waitForProfileLockProtocol(recoverer.readyPath, "R to acquire after its claim");
-  await recoverer.release();
-  const [recovererExit, recovererError] = await recoverer.finished();
-  expect(recovererExit, recovererError).toBe(0);
-  const pending = [first, second].filter((holder) =>
-    holder === first ? !firstHeldWhileVerified : !secondHeldWhilePaused);
-  if (pending.length === 2) {
-    await waitUntil(async () => await exists(first.readyPath) || await exists(second.readyPath), "one older writer to acquire");
-    const next = await exists(first.readyPath) ? first : second;
-    await next.release();
-    const [exit, stderr] = await next.finished();
-    expect(exit, stderr).toBe(0);
-    pending.splice(pending.indexOf(next), 1);
-  }
-  for (const holder of pending) {
-    await waitForProfileLockProtocol(holder.readyPath, "remaining older writer to acquire");
-    await holder.release();
-    const [exit, stderr] = await holder.finished();
-    expect(exit, stderr).toBe(0);
-  }
-  expect(firstHeldWhileVerified).toBe(false);
-  expect(secondHeldWhilePaused).toBe(false);
-  expect(await violations(holders)).toEqual([]);
 }, 60_000);
 
 for (const other of ["current", "tc540"] as const) {
@@ -304,6 +311,7 @@ for (const other of ["current", "tc540"] as const) {
 // mounts. Run `bun run --cwd packages/operations build` first.
 const node = Bun.which("node");
 const twoInstances = new URL("../test-support/two-instances.mjs", import.meta.url).pathname;
+const oldContext = new URL("../test-support/old-context.mjs", import.meta.url).pathname;
 
 test("built ESM and CJS copies in one PID do not settle one another's active turn", async () => {
   const { home } = await lockTestHome();
@@ -315,6 +323,7 @@ test("built ESM and CJS copies in one PID do not settle one another's active tur
     stderr: "pipe",
   });
   const [exit, stderr] = (await finishedChildren([child]))[0]!;
+
   expect(exit, stderr).toBe(0);
   expect(JSON.parse(await readFile(outcome, "utf8"))).toEqual({
     distinct: true,
@@ -322,8 +331,103 @@ test("built ESM and CJS copies in one PID do not settle one another's active tur
     heldTurnSettled: false,
   });
 }, 30_000);
+
+test("a TC-602 held-lock entry cannot bypass the new turn lock", async () => {
+  const { home, holders } = await lockTestHome();
+  if (!node) throw new Error("These tests need Node on PATH, as the CLI does.");
+  const holder = spawnLockHolder(home, holders, PROFILE, "holder", {
+    timeoutMs: 10_000, staleAfterMs: 30_000,
+  });
+  const holderDone = holder.finished();
+  try {
+    await waitForProfileLockProtocol(holder.readyPath, "the holder to take the profile lock");
+    const outcome = join(home, "old-context.out");
+    const child = Bun.spawn([node, oldContext, PROFILE, outcome], {
+      env: lockChildEnv(home),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exit, stderr] = (await finishedChildren([child]))[0]!;
+    expect(exit, stderr).toBe(0);
+    expect(await readFile(outcome, "utf8")).toBe("PROFILE_LOCK_TIMEOUT");
+    expect(await violations(holders)).toEqual([]);
+  } finally {
+    if (await exists(holder.readyPath)) await holder.release();
+    else holder.kill();
+    await holderDone;
+  }
+}, 30_000);
+
 const noHardLinks = new URL("../test-support/no-hard-links/no-hard-links.cjs", import.meta.url).pathname;
 const nodeCycler = new URL("../test-support/no-hard-links/cycle-profile-lock.mjs", import.meta.url).pathname;
+
+test("an orphaned no-hard-links claim restores a live legacy owner before another writer enters", async () => {
+  const { home, holders } = await lockTestHome();
+  if (!node) throw new Error("These tests need Node on PATH, as the CLI does.");
+  await deadHolderLock(3_600_000);
+  const recovery = join(home, "no-link-recovery");
+  const moved = join(home, "no-link-moved");
+  await Promise.all([mkdir(recovery), mkdir(moved)]);
+  const recoverer = Bun.spawn([node, "-r", noHardLinks, nodeCycler, PROFILE, holders, "1", "30000", "20000"], {
+    env: lockChildEnv(home, {
+      TC_TEST_PROFILE_LOCK_RECOVERY_BARRIER_DIR: recovery,
+      TC_TEST_PROFILE_LOCK_MOVED_BARRIER_DIR: moved,
+    }),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const recovererDone = finishedChildren([recoverer]);
+  const children: ReturnType<typeof spawnLockHolder>[] = [];
+  const completions = new Map<ReturnType<typeof spawnLockHolder>, Promise<[number, string]>>();
+  const track = (holder: ReturnType<typeof spawnLockHolder>) => {
+    children.push(holder);
+    completions.set(holder, holder.finished());
+    return holder;
+  };
+  try {
+    await waitForProfileLockProtocol(join(recovery, `ready-${recoverer.pid}-${PROFILE}`), "R before stale recovery");
+    const older = track(spawnLockHolder(home, holders, PROFILE, "legacy", {
+      timeoutMs: 20_000, staleAfterMs: 30_000, env: { TC_TEST_LOCK_PROTOCOL: "pre-tc540" },
+    }));
+    await waitForProfileLockProtocol(older.readyPath, "the legacy writer holding the replacement lock");
+    await writeFile(join(recovery, "release"), "release\n", "utf8");
+    await waitForProfileLockProtocol(join(moved, `ready-${recoverer.pid}-${PROFILE}`), "R after moving the live owner");
+    const claims = (await readdir(profileLockPath(PROFILE))).filter((name) => name.startsWith(".recover-"));
+    expect(claims).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(profileLockPath(PROFILE), claims[0]!), "utf8"))).toMatchObject({ pid: older.pid });
+    recoverer.kill("SIGKILL");
+    const [killedExit] = (await recovererDone)[0]!;
+    expect(killedExit).not.toBe(0);
+
+    const successor = track(spawnLockHolder(home, holders, PROFILE, "successor", {
+      timeoutMs: 1_000, staleAfterMs: 30_000, holdUntilReleased: false,
+    }));
+    const [prematureExit, prematureError] = await completions.get(successor)!;
+    expect(prematureExit, prematureError).toBe(3);
+    expect(JSON.parse(await readFile(profileLockMetadataPath(PROFILE), "utf8"))).toMatchObject({ pid: older.pid });
+    expect(await violations(holders)).toEqual([]);
+
+    await older.release();
+    const [olderExit, olderError] = await completions.get(older)!;
+    expect(olderExit, olderError).toBe(0);
+    const next = track(spawnLockHolder(home, holders, PROFILE, "next", {
+      timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false,
+    }));
+    const [nextExit, nextError] = await completions.get(next)!;
+    expect(nextExit, nextError).toBe(0);
+    expect(await violations(holders)).toEqual([]);
+  } finally {
+    await Promise.all([recovery, moved].map((barrier) =>
+      writeFile(join(barrier, "release"), "release\n", "utf8").catch(() => undefined)));
+    try { recoverer.kill("SIGKILL"); } catch { /* Already exited. */ }
+    await recovererDone;
+    for (const child of children) {
+      if (await exists(child.readyPath)) await child.release().catch(() => undefined);
+      else try { child.kill(); } catch { /* Already exited. */ }
+    }
+    await Promise.all([...completions.values()].map((completion) => completion.catch(() => undefined)));
+  }
+}, 60_000);
 
 function spawnNodeCycler(home: string, holders: string, options: { iterations: number; timeoutMs: number }) {
   if (!node) throw new Error("These tests need Node on PATH, as the CLI does.");
