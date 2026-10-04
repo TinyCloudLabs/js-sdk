@@ -164,11 +164,13 @@ export async function createInvocationRuntime(
       } catch (error) {
         // node-sdk refuses expired or otherwise unusable persisted authority
         // (`AUTH_EXPIRED`) while verifying it locally, before any node request.
-        // Only a new sign-in fixes that, so it must not look retryable.
+        // Only a new sign-in fixes that: the same non-retryable `AUTH_REQUIRED`
+        // a node's 401 for a stale session produces.
         if (isRecord(error) && error.code === "AUTH_EXPIRED") {
           return failed(summary, operationError(
-            "SESSION_EXPIRED",
-            "The selected profile's session has expired or is no longer valid. Sign in again.",
+            "AUTH_REQUIRED",
+            "The stored session has expired or is no longer valid. Sign in again.",
+            { retryable: false },
           ));
         }
         throw error;

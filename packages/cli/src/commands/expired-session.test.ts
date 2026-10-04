@@ -110,7 +110,6 @@ async function run(home: string, argv: string[]): Promise<{ exitCode: number; er
 
 const delegateLogin = {
   code: "AUTH_REQUIRED",
-  message: 'The session for profile "expired" has expired or is no longer valid.',
   hint: expect.stringContaining("tc --profile expired auth login --method openkey --paste --manifest"),
 };
 const localLogin = {
@@ -119,7 +118,6 @@ const localLogin = {
 };
 const ownerLogin = {
   code: "AUTH_REQUIRED",
-  message: 'The session for profile "expired" has expired or is no longer valid.',
   hint: "Sign in again with: tc --profile expired auth login --method openkey",
 };
 

@@ -536,14 +536,14 @@ test("rejects a delegate profile with local owner material before sign-in or run
   }
 });
 
-test("an expired owner-signed delegate session is a non-retryable SESSION_EXPIRED before any node request", async () => {
+test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED before any node request", async () => {
   await persistExpiredSignedSession("expired-agent");
   const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
     throw new Error("an expired session must not reach the node");
   }, { preconnect: globalThis.fetch.preconnect }));
   const expired = {
-    code: "SESSION_EXPIRED",
-    message: "The selected profile's session has expired or is no longer valid. Sign in again.",
+    code: "AUTH_REQUIRED",
+    message: "The stored session has expired or is no longer valid. Sign in again.",
     retryable: false,
   };
 

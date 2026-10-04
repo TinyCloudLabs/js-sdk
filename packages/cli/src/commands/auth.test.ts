@@ -306,7 +306,8 @@ mock.module("@tinycloud/operations", () => ({
     operationInvokeHook?.();
     const result = operationRecorded.results.shift();
     if (result === undefined) throw new Error("No operation result queued");
-    return result;
+    // Every real result envelope reports the invocation context.
+    return { context: { profile: "default", host: "https://node.example", posture: "delegate-session" }, ...result };
   },
 }));
 

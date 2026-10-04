@@ -1,7 +1,8 @@
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 
-const SESSION_EXPIRED = "SESSION_EXPIRED";
+/** Marks errors from {@link sessionExpiredError}; never output. */
+const SESSION_EXPIRED_REASON = "session_expired";
 
 /** How a profile of this posture gets a new session. */
 export function signInAgainHint(profileName: string, posture: string | undefined): string {
@@ -24,11 +25,24 @@ export function sessionExpiredError(profileName: string, posture: string | undef
     "AUTH_REQUIRED",
     `The session for profile "${profileName}" has expired or is no longer valid.`,
     ExitCode.AUTH_REQUIRED,
-    { hint: signInAgainHint(profileName, posture), reason: SESSION_EXPIRED },
+    { hint: signInAgainHint(profileName, posture), reason: SESSION_EXPIRED_REASON },
   );
+}
+
+/**
+ * An `AUTH_REQUIRED` decision with this profile kind's sign-in hint; any other
+ * error unchanged. For operation results, whose code alone says a new sign-in
+ * is needed.
+ */
+export function withSignInHint(error: CLIError, profileName: string, posture: string | undefined): CLIError {
+  if (error.code !== "AUTH_REQUIRED") return error;
+  return new CLIError(error.code, error.message, error.exitCode, {
+    ...error.metadata,
+    hint: signInAgainHint(profileName, posture),
+  });
 }
 
 /** Whether `error` came from {@link sessionExpiredError}, so a command can give its own sign-in guidance. */
 export function isSessionExpiredError(error: unknown): boolean {
-  return error instanceof CLIError && error.metadata?.reason === SESSION_EXPIRED;
+  return error instanceof CLIError && error.metadata?.reason === SESSION_EXPIRED_REASON;
 }

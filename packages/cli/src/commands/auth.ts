@@ -78,7 +78,7 @@ import {
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
-import { sessionExpiredError } from "../auth/session-expired.js";
+import { withSignInHint } from "../auth/session-expired.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
@@ -1089,8 +1089,7 @@ async function importRequestBoundDelegation(
         metadata,
       );
     case "error":
-      if (result.error.code === "SESSION_EXPIRED") throw sessionExpiredError(ctx.profile, result.context.posture);
-      throw cliErrorFromService({ ...result.error, meta: metadata });
+      throw withSignInHint(cliErrorFromService({ ...result.error, meta: metadata }), ctx.profile, result.context.posture);
   }
 }
 

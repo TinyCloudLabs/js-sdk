@@ -28,7 +28,13 @@ export class CLIError extends Error {
   }
 }
 
-/** Convert a service result once, before the CLI's own errors become immutable decisions. */
+/**
+ * Convert a service or operation result once, before the CLI's own errors
+ * become immutable decisions. A typed HTTP status decides first. Without one,
+ * an operation's own typed decision (`AUTH_REQUIRED`, `PERMISSION_DENIED`,
+ * for example an expired stored session or a node refusal operations already
+ * classified) keeps its exit code.
+ */
 export function cliErrorFromService(
   error: { code: string; message: string; meta?: Record<string, unknown>; status?: number; statusCode?: number },
   message = error.message,
@@ -44,11 +50,14 @@ export function cliErrorFromService(
     return missingPrivateKeyError();
   }
   const missingCapability = validatedCapabilityOf({ ...error, meta }) !== undefined;
-  const denied = verdict === "forbidden" || (verdict === "unauthenticated" && missingCapability);
+  const denied = verdict === "forbidden" || (verdict === "unauthenticated" && missingCapability) ||
+    (verdict === undefined && error.code === "PERMISSION_DENIED");
+  const unauthenticated = !denied &&
+    (verdict === "unauthenticated" || (verdict === undefined && error.code === "AUTH_REQUIRED"));
   return new CLIError(
-    denied ? "PERMISSION_DENIED" : verdict === "unauthenticated" ? "AUTH_REQUIRED" : error.code,
+    denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,
     message,
-    denied ? ExitCode.PERMISSION_DENIED : verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
+    denied ? ExitCode.PERMISSION_DENIED : unauthenticated ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
     meta,
   );
 }

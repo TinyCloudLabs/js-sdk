@@ -29,7 +29,7 @@ import { handleError, CLIError, cliErrorFromService, wrapError } from "../output
 import { ExitCode } from "../config/constants.js";
 import { PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { sessionExpiredError } from "../auth/session-expired.js";
+import { withSignInHint } from "../auth/session-expired.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
@@ -577,17 +577,13 @@ function throwCanonicalSecretGetError(
           { hint: `Sign in with: tc --profile ${result.context.profile} auth login` },
         );
       }
-      if (result.error.code === "SESSION_EXPIRED") {
-        throw sessionExpiredError(result.context.profile, result.context.posture);
-      }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
       }
-      throw new CLIError(
-        result.error.code,
-        result.error.message,
-        result.error.code === "PERMISSION_HINT_INVALID" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR,
-      );
+      if (result.error.code === "PERMISSION_HINT_INVALID") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
+      }
+      throw withSignInHint(cliErrorFromService(result.error), result.context.profile, result.context.posture);
     case "ok":
       throw new Error("Expected a failed canonical secret result.");
   }
