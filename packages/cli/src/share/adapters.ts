@@ -249,9 +249,11 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     // A salt retry must never move its record to that other profile.
     const profile = await profileName();
     let warned = false;
+    let sawProfile = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const snapshot = await identity(profile);
+        sawProfile = true;
         const keys = await prepareKeys(profile, snapshot);
         const salt = await preparedSalt(profile);
         const saltId = b64(salt);
@@ -284,7 +286,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
         // Another process may have created the first file or changed this
         // profile's signer inputs. Derive the new key outside the lock.
         if (error === saltChanged || error === identityChanged) continue;
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "PROFILE_NOT_FOUND") {
+        if (sawProfile && typeof error === "object" && error !== null && "code" in error && error.code === "PROFILE_NOT_FOUND") {
           throw new ShareHistoryRetryError(profile);
         }
         throw error;
@@ -318,6 +320,7 @@ export function createShareAuthorityAdapters(input: {
   readonly origin?: string;
   readonly nodeOrigin?: string;
   readonly credentialsOrigin?: string;
+  /** Resolved once for both node authentication and all sender-history operations. */
   readonly profileName?: () => Promise<string>;
   readonly fetchFn?: typeof globalThis.fetch;
   /** Injected in-process authority for tests or a host-specific deployment. */
@@ -335,6 +338,8 @@ export function createShareAuthorityAdapters(input: {
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
+  let selectedProfile: Promise<string> | undefined;
+  const profileName = (): Promise<string> => selectedProfile ??= input.profileName?.() ?? selectedProfileName();
   const canonicalOrigin = (value: unknown, label: string): string => {
     if (typeof value !== "string") throw new Error(`share ${label} is unavailable`);
     const parsed = new URL(value);
@@ -364,7 +369,7 @@ export function createShareAuthorityAdapters(input: {
   let nodePromise: Promise<TinyCloudNode> | undefined;
   let activeProfileName: string | undefined;
   const authenticatedNode = async () => nodePromise ??= (async () => {
-    const profile = await (input.profileName?.() ?? selectedProfileName());
+    const profile = await profileName();
     activeProfileName = profile;
     const context = await ProfileManager.resolveContext({ profile, ...(input.nodeOrigin === undefined ? {} : { host: input.nodeOrigin }) });
     const { ensureAuthenticated } = await import("../lib/sdk.js");
@@ -725,11 +730,11 @@ export function createShareAuthorityAdapters(input: {
   };
   return {
     targetAdapter,
-    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName, async (bytes, profile) => {
+    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, async (bytes, profile) => {
       // Authentication or delegation replay can use the network. The history
       // adapter prepares this signature before acquiring the profile lock.
       const context = await ProfileManager.resolveContext({ profile });
-      if (context.profile !== profile) throw new Error("share history profile or key changed; retry");
+      if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
       const { ensureAuthenticated } = await import("../lib/sdk.js");
       const signer = await ensureAuthenticated(context);
       return signer.signSessionBytes(bytes);

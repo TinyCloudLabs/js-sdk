@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
@@ -384,6 +384,30 @@ describe("tc share command contract", () => {
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});
+    }
+  });
+
+  test("an unknown profile keeps PROFILE_NOT_FOUND for list and revoke before any node call", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-share-unknown-profile-"));
+    try {
+      for (const command of [["list", "--json"], ["revoke", "abc"]]) {
+        const child = Bun.spawn(["bun", new URL("../index.ts", import.meta.url).pathname, "--profile", "nope", "share", ...command], {
+          cwd: join(import.meta.dir, "../../../.."),
+          env: { ...process.env, TC_HOME: home },
+          stdout: "pipe", stderr: "pipe",
+        });
+        const [stdout, stderr, exit] = await Promise.all([
+          new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+        ]);
+        expect(exit).toBe(1);
+        expect(stdout).toBe("");
+        expect(JSON.parse(stderr)).toMatchObject({
+          error: { code: "PROFILE_NOT_FOUND", message: expect.stringContaining("tc init") },
+        });
+        expect(stderr).not.toContain("revocation may already have succeeded");
+      }
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 

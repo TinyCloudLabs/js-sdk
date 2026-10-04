@@ -66,7 +66,7 @@ Without `--to`, publish creates a bearer link: anyone holding the complete URL c
 
 After a share is published, a profile-lock or history-write failure warns without hiding the published link; later `share list`, `share notify <id>`, and `share revoke <id>` cannot find an unrecorded share. Standalone domain notification checks the recipient and local five-minute window before probing the node; an expired window stays a non-retryable partial failure even when `/info` is unreachable.
 
-History writes name the pinned profile on stderr after about 2 seconds waiting for its lock; they cannot switch profiles on a salt retry. If the profile disappears or its signing key keeps changing, `SHARE_HISTORY_RETRY` gives a retry hint. After a revoke reports this error, check the node's state before retrying because revocation may already have completed.
+Share commands pin one profile for authentication and all history writes, even when the default changes. History writes name that profile on stderr after about 2 seconds waiting for its lock. If a profile disappears mid-operation or its signing key keeps changing, `SHARE_HISTORY_RETRY` gives a retry hint; a profile that never existed instead reports `PROFILE_NOT_FOUND` with a setup hint. After a revoke reports a history retry, check the node's state before trying again because revocation may already have completed.
 
 ## Other operations
 

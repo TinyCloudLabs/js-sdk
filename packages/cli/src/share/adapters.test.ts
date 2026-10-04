@@ -37,6 +37,7 @@ let historyBeforeLock: ((profile: string) => Promise<void>) | undefined;
 let historyOnCacheAccess: ((profile: string) => void) | undefined;
 let historyProfileMissing = false;
 let historyOnSign: (() => void) | undefined;
+let historyResolvedProfile: string | undefined;
 let uploadErrorCode: string | undefined;
 let uploadErrorMeta: Record<string, unknown> | undefined;
 let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
@@ -216,7 +217,7 @@ const node = {
 };
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
-    resolveContext: async ({ profile }: { profile: string }) => ({ profile, host: "https://node.example" }),
+    resolveContext: async ({ profile }: { profile: string }) => ({ profile: historyResolvedProfile ?? profile, host: "https://node.example" }),
     getProfile: async () => {
       if (historyProfileMissing) throw Object.assign(new Error("profile missing"), { code: "PROFILE_NOT_FOUND" });
       return historyCacheDir === undefined ? { authMethod: "openkey" } : historyLocalKey
@@ -267,6 +268,7 @@ afterEach(() => {
   historyOnCacheAccess = undefined;
   historyProfileMissing = false;
   historyOnSign = undefined;
+  historyResolvedProfile = undefined;
   encryptionSpaces.length = 0;
   ownerRootInputs.length = 0;
   sessionSignatures.length = 0;
@@ -1120,6 +1122,42 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
+  it("records a published share under its authenticated profile after the default changes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-publish-default-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyProfileDirectories = true;
+        historyCacheDir = join(profilePath("history-a"), "cache");
+        await Promise.all(["history-a", "history-b"].map((name) => mkdir(join(profilePath(name), "cache"), { recursive: true })));
+        let selected = "history-a";
+        const selections: string[] = [];
+        const adapters = createShareAuthorityAdapters({
+          profileName: async () => { selections.push(selected); return selected; },
+          origin: "https://share.example",
+          fetchFn: (async () => Response.json({
+            version: "tinycloud.share/config-v2",
+            shareOrigin: "https://share.example",
+            registryOrigin: "https://registry.example",
+            credentialsOrigin: "https://credentials.example",
+          })) as unknown as typeof globalThis.fetch,
+        });
+        const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address: "alice@example.com" }));
+        if ("state" in published) throw new Error("expected publication from history-a");
+        expect(selections).toEqual(["history-a"]);
+        selected = "history-b";
+        await adapters.records.put(historyRecordForPublishedShare(published));
+        const original = createEncryptedProfileHistory(async () => "history-a");
+        const other = createEncryptedProfileHistory(async () => "history-b");
+        expect(await original.get(published.metadata.shareId)).toMatchObject({ link: published.url });
+        expect(await other.get(published.metadata.shareId)).toBeUndefined();
+        expect(selections).toEqual(["history-a"]);
+      });
+    } finally {
+      historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("ignores an unrelated profile setting edited while acquiring the history lock", async () => {
     const root = await mkdtemp(join(tmpdir(), "tc-share-history-settings-"));
     try {
@@ -1262,6 +1300,24 @@ describe("TinyCloud share authority adapter", () => {
       historyProfileMissing = false;
       historyCacheDir = undefined;
       historyLocalKey = true;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a typed retry error when a resolved signer context belongs to another profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-context-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        historyLocalKey = false;
+        historyResolvedProfile = "history-other";
+        await mkdir(historyCacheDir, { recursive: true });
+        const storage = createShareAuthorityAdapters({ profileName: async () => "history-test" }).records;
+        await expect(storage.list()).rejects.toMatchObject({ code: "SHARE_HISTORY_RETRY", profile: "history-test" });
+      });
+    } finally {
+      historyResolvedProfile = undefined;
+      historyCacheDir = undefined;
       await rm(root, { recursive: true, force: true });
     }
   });
