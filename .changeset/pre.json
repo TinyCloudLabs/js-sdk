@@ -30,6 +30,7 @@
     "tc-548-profile-lock-writers",
     "tc-550-typed-auth-verdicts",
     "tc-571-share-notify-delivery-email",
+    "tc-601-revocation-whole-seconds",
     "tc-619-storage-full-reads",
     "tc-649-secret-setup-link"
   ]
