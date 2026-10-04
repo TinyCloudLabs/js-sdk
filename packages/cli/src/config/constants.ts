@@ -20,6 +20,14 @@ export const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 export const DEFAULT_PROFILE = "default";
 export const DEFAULT_CHAIN_ID = 1;
 
+/**
+ * How long a login commit or an import rollback waits for the profile lock.
+ * Both run after slow work that must not be lost, so they wait out a crashed
+ * holder: longer than the store's 30 s stale-lock threshold, after which a
+ * dead holder's lock is reclaimed.
+ */
+export const PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45_000;
+
 export const ExitCode = {
   SUCCESS: 0,
   ERROR: 1,

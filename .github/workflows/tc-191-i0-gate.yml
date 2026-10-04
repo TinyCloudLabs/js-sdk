@@ -89,6 +89,8 @@ jobs:
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/cli/src/commands/auth.test.ts
           bun test packages/cli/src/auth/device-auth.test.ts
+          bun test packages/cli/src/lib/sdk-bootstrap.test.ts
+          bun test packages/cli/src/config/profiles.test.ts
           bun test packages/cli/src/auth/scoped-login.test.ts
           bun test packages/cli/src/commands/context.test.ts
           bun run --cwd packages/cli check:skill-pack

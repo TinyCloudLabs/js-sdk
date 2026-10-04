@@ -1,6 +1,7 @@
-import { chmod, rm } from "node:fs/promises";
+import { chmod, lstat, readdir, rm, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  profilePath,
   readSession,
   removeSession,
   withProfileLock,
@@ -13,13 +14,13 @@ import {
   CONFIG_FILE,
   DEFAULT_PROFILE,
   DEFAULT_HOST,
+  ExitCode,
 } from "./constants.js";
 import {
   readJson,
   writeJson,
   fileExists,
   ensureDir,
-  removeDir,
   listDirs,
   PRIVATE_DIR_MODE,
 } from "./storage.js";
@@ -139,10 +140,27 @@ export class ProfileManager {
   }
 
   /**
-   * Deletes a profile directory.
-   * Throws if trying to delete the current default profile.
+   * Deletes a profile. Its key, session, settings, stores and cache are
+   * removed while holding the profile lock, so another writer's critical
+   * section never sees them vanish midway: session and key first, settings
+   * last, so a crash midway never leaves a session or key without its
+   * profile. `.lock` itself is left to the lock's release; the then-empty
+   * directory is removed afterwards unless another writer took the lock (or
+   * wrote) meanwhile. A profile directory that is a symlink is unlinked, its
+   * target left alone.
+   * Throws if the name is not one path segment or names the default profile.
    */
   static async deleteProfile(name: string): Promise<void> {
+    let profileDir: string;
+    try {
+      profileDir = profilePath(name);
+    } catch {
+      throw new CLIError(
+        "INVALID_PROFILE_NAME",
+        `Invalid profile name "${name}": a profile name is one path segment (no "/", "\\", "." or "..").`,
+        ExitCode.USAGE_ERROR,
+      );
+    }
     const config = await ProfileManager.getConfig();
     if (config.defaultProfile === name) {
       throw new CLIError(
@@ -150,8 +168,24 @@ export class ProfileManager {
         `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`,
       );
     }
-    const profileDir = join(PROFILES_DIR, name);
-    await removeDir(profileDir);
+    const isLink = await lstat(profileDir).then((stats) => stats.isSymbolicLink(), (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+    if (isLink) {
+      await rm(profileDir, { force: true });
+      return;
+    }
+    await ProfileManager.withLock(name, async () => {
+      for (const file of ["session.json", "key.json"]) await rm(join(profileDir, file), { force: true });
+      for (const entry of await readdir(profileDir)) {
+        if (entry !== ".lock" && entry !== "profile.json") await rm(join(profileDir, entry), { recursive: true, force: true });
+      }
+      await rm(join(profileDir, "profile.json"), { force: true });
+    });
+    await rmdir(profileDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
+    });
   }
 
   // ── Key management ──────────────────────────────────────────────────

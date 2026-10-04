@@ -362,11 +362,16 @@ async function acquireProfileLock(
   const startedAt = Date.now();
   const lockPath = profileLockPath(profile);
 
-  await mkdir(profilePath(profile), { recursive: true, mode: PRIVATE_DIR_MODE });
+  const directory = profilePath(profile);
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   // Every store write takes this lock: tighten the tree older releases
   // created 0775 before writing sessions or delegations into it.
-  for (const directory of [tinycloudHomePath(), profilesPath(), profilePath(profile)]) {
-    await chmod(directory, PRIVATE_DIR_MODE);
+  for (const path of [tinycloudHomePath(), profilesPath(), directory]) {
+    await chmod(path, PRIVATE_DIR_MODE).catch((error: unknown) => {
+      // A profile deletion can remove the profile directory right after the
+      // mkdir above; the lock attempt below recreates it 0700.
+      if (path !== directory || !isErrno(error, "ENOENT")) throw error;
+    });
   }
 
   while (true) {
@@ -400,6 +405,11 @@ async function acquireProfileLock(
  *    successful link holds the lock; on either failure nothing is released,
  *    since nothing was acquired, and the caller retries.
  *
+ * A profile deletion removes the profile directory once it has released its
+ * lock, so `mkdir(.lock)` can see ENOENT; the directory is recreated (0700)
+ * and the caller retries within its deadline, as for a first write to a new
+ * profile.
+ *
  * Only one owner.json can exist at the lock path, and it is removed only by
  * its holder's release or by recovery of a dead holder, so at most one
  * process holds the lock. Returns false when the lock is not acquired.
@@ -409,7 +419,9 @@ async function publishProfileLock(profile: string, lockPath: string, token: stri
     await mkdir(lockPath, { mode: PRIVATE_DIR_MODE });
   } catch (error) {
     if (isErrno(error, "EEXIST")) return false;
-    throw error;
+    if (!isErrno(error, "ENOENT")) throw error;
+    await mkdir(profilePath(profile), { recursive: true, mode: PRIVATE_DIR_MODE });
+    return false;
   }
   await waitForTestBarrier(TEST_LOCK_PUBLISH_BARRIER_DIR, profile);
   const staged = join(dirname(lockPath), `.lock-owner-${token}.tmp`);

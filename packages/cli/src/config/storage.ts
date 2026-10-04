@@ -65,13 +65,6 @@ export async function ensureDir(dirPath: string): Promise<void> {
 }
 
 /**
- * Remove a directory recursively (rm -rf).
- */
-export async function removeDir(dirPath: string): Promise<void> {
-  await rm(dirPath, { recursive: true, force: true });
-}
-
-/**
  * List directory names (not files) inside a directory.
  * Returns an empty array if the directory does not exist.
  */
