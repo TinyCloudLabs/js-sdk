@@ -1,5 +1,20 @@
 # @tinycloudlabs/web-sdk
 
+## 3.1.0-beta.6
+
+### Minor Changes
+
+- 045c2d3: Share reads preserve the Node's HTTP status and bounded diagnostic text, even when reading the response body fails. A cached recipient session is re-admitted only after a typed 401/403 (or a legacy untyped error ending in `(401)` or `(403)`); a typed non-auth error retains the session even if its body mentions authorization.
+
+### Patch Changes
+
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+  - @tinycloud/sdk-core@3.1.0-beta.6
+  - @tinycloud/node-sdk@3.1.0-beta.6
+  - @tinycloud/share-sdk@1.1.0-beta.2
+
 ## 3.1.0-beta.5
 
 ### Patch Changes

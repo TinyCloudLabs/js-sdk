@@ -37,6 +37,14 @@
     "tc-602-operations-compact-bindings",
     "tc-619-storage-full-reads",
     "tc-633-profile-lock-internals",
+    "tc-634-cli-kv-authorization",
+    "tc-634-core-http-errors",
+    "tc-634-kv-operation-auth",
+    "tc-634-node-sdk-auth-errors",
+    "tc-634-server-delegated-auth",
+    "tc-634-services-kv-auth",
+    "tc-634-share-refusals",
+    "tc-634-web-share-cache",
     "tc-635-share-notify-followups",
     "tc-649-secret-setup-link"
   ]

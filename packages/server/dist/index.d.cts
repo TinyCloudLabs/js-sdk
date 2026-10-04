@@ -56,6 +56,7 @@ type KvLike = {
         ok: false;
         error?: {
             message?: string;
+            meta?: Record<string, unknown>;
         };
     }>;
 };

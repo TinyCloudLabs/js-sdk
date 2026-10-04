@@ -163,7 +163,7 @@ import ora from "ora";
 function outputJson(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
-function outputError(code3, message, hint) {
+function outputError(code3, message, hint, meta) {
   if (isInteractive()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
@@ -180,6 +180,7 @@ function outputError(code3, message, hint) {
       error: { code: code3, message }
     };
     if (hint) payload.error.hint = hint;
+    if (meta) payload.error.meta = meta;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
 }
@@ -261,23 +262,42 @@ var init_formatter = __esm({
 import { readFileSync, readdirSync } from "fs";
 import { join as join2 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
-function wrapError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Missing private key parameter in JWK")) {
-    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
-    return new CLIError(
-      "AUTH_REQUIRED",
-      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
-      ExitCode.AUTH_REQUIRED,
-      {
-        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
-      }
-    );
-  }
+function cliErrorFromService(error, message = error.message) {
   if (error instanceof CLIError) return error;
+  const meta = { ...error.meta };
+  delete meta.hint;
+  const status = error.status ?? error.statusCode;
+  if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
+  const verdict = authorizationVerdictOf({ ...error, meta });
+  if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
+    return missingPrivateKeyError();
+  }
+  const missingCapability = validatedCapabilityOf({ ...error, meta }) !== void 0;
+  const denied = verdict === "forbidden" || verdict === "unauthenticated" && missingCapability;
+  return new CLIError(
+    denied ? "PERMISSION_DENIED" : verdict === "unauthenticated" ? "AUTH_REQUIRED" : error.code,
+    message,
+    denied ? ExitCode.PERMISSION_DENIED : verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
+    meta
+  );
+}
+function wrapError(error) {
+  if (error instanceof CLIError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const verdict = authorizationVerdictOf(error);
+  if (verdict === "unauthenticated") {
+    return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
+  }
+  if (verdict === "forbidden") {
+    return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
+  }
+  if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
+    return missingPrivateKeyError();
+  }
   if (error instanceof ProfileLockTimeoutError) {
     return new CLIError(
       "PROFILE_LOCK_TIMEOUT",
@@ -289,13 +309,13 @@ function wrapError(error) {
   if (error instanceof ProfileDeletedError) {
     return new CLIError("PROFILE_NOT_FOUND", message);
   }
-  if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
+  if (verdict === void 0 && (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired"))) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
   if (message.includes("NOT_FOUND") || message.includes("KV_NOT_FOUND")) {
     return new CLIError("NOT_FOUND", message, ExitCode.NOT_FOUND);
   }
-  if (message.includes("PERMISSION_DENIED")) {
+  if (verdict === void 0 && message.includes("PERMISSION_DENIED")) {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
   if (message.includes("ECONNREFUSED") || message.includes("ETIMEDOUT") || message.includes("fetch failed")) {
@@ -303,39 +323,51 @@ function wrapError(error) {
   }
   return new CLIError("ERROR", message, ExitCode.ERROR);
 }
+function missingPrivateKeyError() {
+  const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` }
+  );
+}
 function handleError(error) {
   const cliError = wrapError(error);
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
-  outputError(cliError.code, cliError.message, hint);
+  const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
+  const meta = {};
+  if (cliError.status !== void 0 && authMeta !== void 0) meta.status = cliError.status;
+  const capability = validatedCapabilityOf({ meta: authMeta });
+  if (capability) {
+    meta.resource = capability.resource;
+    meta.requiredAction = capability.requiredAction;
+  }
+  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : void 0);
   process.exit(cliError.exitCode);
 }
 function buildAuthHint(error) {
-  const resource = error.metadata?.resource;
-  const requiredAction = error.metadata?.requiredAction;
-  if (typeof resource !== "string" || typeof requiredAction !== "string") {
-    return void 0;
-  }
-  const spec = capSpecFromAuthMeta(resource, requiredAction);
+  const capability = validatedCapabilityOf({ meta: error.metadata });
+  if (!capability) return void 0;
+  const spec = capSpecFromAuthMeta(capability.resource, capability.requiredAction);
   if (!spec) return void 0;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap "${spec}"`,
+    `Request it with: tc auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
     "Then retry the original command."
   ].join("\n");
 }
 function capSpecFromAuthMeta(resource, action) {
-  const slash = resource.indexOf("/");
-  if (slash <= 0 || slash === resource.length - 1) return void 0;
-  const spaceUri = resource.slice(0, slash);
-  const rest = resource.slice(slash + 1);
-  const nextSlash = rest.indexOf("/");
-  if (nextSlash <= 0) return void 0;
-  const serviceShort = rest.slice(0, nextSlash);
-  const path = rest.slice(nextSlash + 1);
-  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
-  const spaceName = spaceUri.startsWith("tinycloud:") ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1) : spaceUri;
-  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
+  const slash = action.indexOf("/");
+  if (slash < 0) return void 0;
+  const longService = action.slice(0, slash);
+  const serviceShort = SERVICE_LONG_TO_SHORT[longService];
+  if (!serviceShort) return void 0;
+  const parsed = parseCapabilityResource(resource, serviceShort);
+  if (!parsed) return void 0;
+  const spaceName = parsed.space.slice(parsed.space.lastIndexOf(":") + 1);
+  return `${longService}:${spaceName}:${parsed.path}:${action.slice(slash + 1)}`;
 }
 function buildNetworkHint() {
   const readHost = (name) => {
@@ -389,7 +421,9 @@ var init_errors = __esm({
         this.exitCode = exitCode;
         this.metadata = metadata;
         this.name = "CLIError";
+        if (typeof metadata?.status === "number" && Number.isInteger(metadata.status) && metadata.status >= 400 && metadata.status <= 599) this.status = metadata.status;
       }
+      status;
     };
   }
 });
@@ -1880,6 +1914,7 @@ var CAPABILITIES2 = deriveServiceConstants("capabilities");
 var HOOKS = deriveServiceConstants("hooks");
 var ENCRYPTION = deriveServiceConstants("encryption");
 var SPACE = deriveServiceConstants("space");
+var CAPABILITY_REGISTRY = CAPABILITIES;
 var DEFAULT_MANIFEST_SPACE = "applications";
 var ACCOUNT_REGISTRY_SPACE = "account";
 var ACCOUNT_REGISTRY_PATH = "applications/";
@@ -6820,6 +6855,75 @@ var ServiceSessionSchema = external_exports.object({
   /** The session key JWK (required for invoke) */
   jwk: external_exports.object({}).passthrough()
 });
+var URN_PREFIX = "urn:tinycloud:encryption:";
+var NETWORK_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+var PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
+var NetworkIdError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "NetworkIdError";
+  }
+};
+function parseNetworkId(networkId) {
+  if (typeof networkId !== "string" || networkId.length === 0) {
+    throw new NetworkIdError("networkId must be a non-empty string");
+  }
+  if (!networkId.startsWith(URN_PREFIX)) {
+    throw new NetworkIdError(
+      `networkId must start with ${URN_PREFIX} (got ${JSON.stringify(networkId)})`
+    );
+  }
+  const body = networkId.slice(URN_PREFIX.length);
+  const lastColon = body.lastIndexOf(":");
+  if (lastColon <= 0 || lastColon === body.length - 1) {
+    throw new NetworkIdError(
+      `networkId missing ownerDid or name segment (got ${JSON.stringify(networkId)})`
+    );
+  }
+  const ownerDid = body.slice(0, lastColon);
+  const name = body.slice(lastColon + 1);
+  if (!ownerDid.startsWith("did:")) {
+    throw new NetworkIdError(
+      `networkId ownerDid must be a DID (got ${JSON.stringify(ownerDid)})`
+    );
+  }
+  const didParts = ownerDid.split(":");
+  if (didParts.length < 3 || didParts.some((p) => p.length === 0)) {
+    throw new NetworkIdError(
+      `networkId ownerDid is not a well-formed DID (got ${JSON.stringify(ownerDid)})`
+    );
+  }
+  if (!NETWORK_NAME_RE.test(name)) {
+    throw new NetworkIdError(
+      `networkId name ${JSON.stringify(name)} must match ${NETWORK_NAME_RE.source}`
+    );
+  }
+  return { networkId, ownerDid, name };
+}
+function parsePkhOwnerDid(ownerDid) {
+  const match = ownerDid.match(PKH_EIP155_DID_RE);
+  if (!match) return null;
+  return {
+    chainId: match[1],
+    address: match[2].toLowerCase()
+  };
+}
+function ownerDidMatches(a, b) {
+  const aPkh = parsePkhOwnerDid(a);
+  const bPkh = parsePkhOwnerDid(b);
+  if (aPkh && bPkh) {
+    return aPkh.chainId === bPkh.chainId && aPkh.address === bPkh.address;
+  }
+  return a === b;
+}
+function networkDiscoveryKey(name) {
+  if (!NETWORK_NAME_RE.test(name)) {
+    throw new NetworkIdError(
+      `network name ${JSON.stringify(name)} must match ${NETWORK_NAME_RE.source}`
+    );
+  }
+  return `.well-known/encryption/network/${name}`;
+}
 function parsePermissionHint(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
@@ -6886,6 +6990,101 @@ function parseAuthError(responseText) {
 }
 function authUnauthorizedError(service, message, meta) {
   return serviceError(ErrorCodes.AUTH_UNAUTHORIZED, message, service, { meta });
+}
+var grantableActions = new Set(
+  CAPABILITY_REGISTRY.map(({ urn }) => urn).filter((urn) => !urn.endsWith("/*"))
+);
+var capabilityServices = new Set(
+  CAPABILITY_REGISTRY.map(({ service }) => service.slice("tinycloud.".length))
+);
+function parseCapabilityResource2(resource, service) {
+  if (resource.length === 0 || resource.length > 1024 || !capabilityServices.has(service) || /[\s\p{C}*#]/u.test(resource) || resource.includes("://")) return void 0;
+  const segments = resource.split("/");
+  if (!/^tinycloud:[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(segments[0])) return void 0;
+  const serviceIndex = segments.findIndex(
+    (segment, index) => index > 0 && capabilityServices.has(segment)
+  );
+  if (serviceIndex < 1 || segments[serviceIndex] !== service) return void 0;
+  if (segments.slice(1, serviceIndex).some(
+    (segment) => segment.length === 0 || segment === "." || segment === ".."
+  )) return void 0;
+  const pathSegments = segments.slice(serviceIndex + 1);
+  if (pathSegments.some((segment) => segment === "." || segment === "..")) return void 0;
+  if (service !== "kv" && (pathSegments.length === 0 || pathSegments[pathSegments.length - 1] === "")) return void 0;
+  return {
+    space: segments.slice(0, serviceIndex).join("/"),
+    path: pathSegments.join("/")
+  };
+}
+function safeCapabilityResource(value, service, action) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) return false;
+  if (service === "encryption" && value.startsWith("urn:tinycloud:encryption:")) {
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$/.test(value) || value.includes("//") || value.split("/").some((segment) => segment === "." || segment === "..")) return false;
+    try {
+      parseNetworkId(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const parsed = parseCapabilityResource2(value, service);
+  return parsed !== void 0 && (!parsed.path.endsWith("/") || service === "kv" && action === "tinycloud.kv/list") && (parsed.path !== "" || service === "kv" && action === "tinycloud.kv/list");
+}
+function validatedCapabilityOf2(error) {
+  const verdict = authorizationVerdictOf2(error);
+  if (verdict !== "unauthenticated" && verdict !== "forbidden") return void 0;
+  const seen = /* @__PURE__ */ new Set();
+  let node = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null && !seen.has(node); depth += 1) {
+    seen.add(node);
+    const record = node;
+    const status = errorStatusOf(record);
+    const meta = record.meta;
+    if ((status === 401 || status === 403 || status === void 0 && record.code === ErrorCodes.AUTH_UNAUTHORIZED) && typeof meta === "object" && meta !== null && !Array.isArray(meta)) {
+      const metadata = meta;
+      const { resource, requiredAction } = metadata;
+      if (typeof requiredAction === "string" && grantableActions.has(requiredAction)) {
+        const actionService = requiredAction.slice("tinycloud.".length, requiredAction.indexOf("/"));
+        const explicitService = record.service === void 0 ? metadata.service : record.service;
+        if (safeCapabilityResource(resource, actionService, requiredAction) && (explicitService === void 0 || explicitService === actionService || explicitService === `tinycloud.${actionService}`)) {
+          return { resource, requiredAction };
+        }
+      }
+    }
+    node = record.cause;
+  }
+  return void 0;
+}
+var MAX_CAUSE_DEPTH = 8;
+function errorStatusOf(node) {
+  const meta = node.meta;
+  const candidates = [
+    node.status,
+    node.statusCode,
+    typeof meta === "object" && meta !== null ? meta.status : void 0
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isInteger(candidate) && candidate >= 400 && candidate <= 599) {
+      return candidate;
+    }
+  }
+  return void 0;
+}
+function authorizationVerdictOf2(error) {
+  const seen = /* @__PURE__ */ new Set();
+  let sawUnauthorizedCode = false;
+  let node = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null && !seen.has(node); depth += 1) {
+    seen.add(node);
+    const record = node;
+    const status = errorStatusOf(record);
+    if (status === 401) return "unauthenticated";
+    if (status === 403) return "forbidden";
+    if (status !== void 0) return "other";
+    if (record.code === ErrorCodes.AUTH_UNAUTHORIZED) sawUnauthorizedCode = true;
+    node = record.cause;
+  }
+  return sawUnauthorizedCode ? "forbidden" : void 0;
 }
 function storageQuotaExceededError(service, message, meta) {
   return {
@@ -7582,12 +7781,14 @@ var KVService = class extends BaseService {
         signal: this.combineSignals(options?.signal)
       });
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = response.status === 401 || response.status === 403 ? await this.readAuthorizationText(response) : await response.text();
         if (response.status === 401 || response.status === 403) {
           return this.authorizationFailure(
             `Failed to batch read ${keys.length} key(s)`,
             response,
-            errorText
+            errorText,
+            paths,
+            action
           );
         }
         if (response.status === 413) {
@@ -7677,7 +7878,7 @@ var KVService = class extends BaseService {
       return text;
     }
   }
-  async createSignedReadUrlError(response, key) {
+  async createSignedReadUrlError(response, key, path) {
     let errorText = response.statusText;
     try {
       const text = await response.text();
@@ -7690,7 +7891,9 @@ var KVService = class extends BaseService {
       return this.authorizationFailure(
         `Failed to create signed read URL for key ${JSON.stringify(key)}`,
         response,
-        errorText
+        errorText,
+        [path],
+        KVAction.GET
       );
     }
     const code3 = response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
@@ -7703,21 +7906,42 @@ var KVService = class extends BaseService {
       )
     );
   }
+  /** A known 401/403 keeps its typed status even if reading its body fails. */
+  async readAuthorizationText(response) {
+    try {
+      return await response.text();
+    } catch {
+      return "";
+    }
+  }
   /**
    * AUTH_UNAUTHORIZED for a 401/403 response. The message keeps the HTTP
    * status and the server text (`<context>: <status> - <text>`, the same
    * shape as every other KV failure) so callers that rethrow only the message
    * still see the status; `meta.status` carries it for typed callers.
-   * Resource/ability hints are parsed from the raw body, never the message.
+   * Server hints must match the requested path/action (whether the node sends
+   * a relative path or full resource); metadata uses only the request-derived
+   * canonical resource under the authenticated session's space.
    */
-  authorizationFailure(context, response, errorText, extraMeta = {}) {
+  authorizationFailure(context, response, errorText, paths, expectedAction, extraMeta = {}) {
     const { resource, action } = parseAuthError(errorText);
+    const requestedPath = paths.find(
+      (path) => resource === path || resource === `${this.context.session.spaceId}/kv/${path}`
+    );
+    const capability = requestedPath !== void 0 && action === expectedAction ? validatedCapabilityOf2({
+      service: "kv",
+      code: ErrorCodes.AUTH_UNAUTHORIZED,
+      meta: {
+        status: response.status,
+        resource: `${this.context.session.spaceId}/kv/${requestedPath}`,
+        requiredAction: action
+      }
+    }) : void 0;
     const detail = errorText.trim().length > 0 ? errorText : response.statusText || "authorization failed";
     return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
       status: response.status,
-      ...action && { requiredAction: action },
-      ...resource && { resource },
-      ...extraMeta
+      ...extraMeta,
+      ...capability
     }));
   }
   normalizeSignedReadUrlResponse(data) {
@@ -7761,13 +7985,24 @@ var KVService = class extends BaseService {
         );
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
-            const errorText2 = await response.text();
+            const errorText2 = await this.readAuthorizationText(response);
             const permissionHint = parsePermissionHintFromErrorText(errorText2);
+            const structuredCapability = permissionHint?.service === "tinycloud.kv" && permissionHint.space === this.context.session.spaceId && permissionHint.path === path ? validatedCapabilityOf2({
+              service: "kv",
+              code: ErrorCodes.AUTH_UNAUTHORIZED,
+              meta: {
+                status: response.status,
+                resource: `${this.context.session.spaceId}/kv/${path}`,
+                requiredAction: KVAction.GET
+              }
+            }) : void 0;
             return this.authorizationFailure(
               `Failed to get key ${JSON.stringify(key)}`,
               response,
               errorText2,
-              permissionHint === void 0 ? {} : { permissionHint }
+              [path],
+              KVAction.GET,
+              structuredCapability ? { permissionHint, ...structuredCapability } : {}
             );
           }
           if (response.status === 404) {
@@ -7844,7 +8079,9 @@ var KVService = class extends BaseService {
           return this.authorizationFailure(
             `Failed to put key ${JSON.stringify(key)}`,
             response,
-            await response.text()
+            await this.readAuthorizationText(response),
+            [path],
+            KVAction.PUT
           );
         }
         if (!response.ok) {
@@ -7973,7 +8210,9 @@ var KVService = class extends BaseService {
             return this.authorizationFailure(
               `Failed to batch put ${items.length} key(s)`,
               response,
-              errorText
+              errorText,
+              paths,
+              KVAction.PUT
             );
           }
           const quotaError = this.handleQuotaErrorResponse(
@@ -8094,11 +8333,13 @@ var KVService = class extends BaseService {
           }
         );
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
               "Failed to list keys",
               response,
-              await response.text()
+              await this.readAuthorizationText(response),
+              [listPath],
+              KVAction.LIST
             );
           }
           const errorText = await response.text();
@@ -8147,11 +8388,13 @@ var KVService = class extends BaseService {
           options?.ifMatch === void 0 ? void 0 : { "if-match": options.ifMatch }
         );
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
               `Failed to delete key ${JSON.stringify(key)}`,
               response,
-              await response.text()
+              await this.readAuthorizationText(response),
+              [path],
+              KVAction.DELETE
             );
           }
           if (response.status === 404) {
@@ -8209,11 +8452,13 @@ var KVService = class extends BaseService {
           options?.signal
         );
         if (!response.ok) {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
               `Failed to get metadata for key ${JSON.stringify(key)}`,
               response,
-              await response.text()
+              await this.readAuthorizationText(response),
+              [path],
+              KVAction.HEAD
             );
           }
           if (response.status === 404) {
@@ -8280,7 +8525,7 @@ var KVService = class extends BaseService {
           signal: this.combineSignals(options?.signal)
         });
         if (!response.ok) {
-          return this.createSignedReadUrlError(response, key);
+          return this.createSignedReadUrlError(response, key, path);
         }
         const signedUrl = this.normalizeSignedReadUrlResponse(
           await response.json()
@@ -8504,14 +8749,15 @@ var SQLService = class extends BaseService {
         };
         if (options?.maxRows !== void 0) body.maxRows = options.maxRows;
         if (options?.maxBytes !== void 0) body.maxBytes = options.maxBytes;
+        const action = this.actionForSql(sql, SQLAction.READ);
         const response = await this.invokeSQL(
           dbName,
-          this.actionForSql(sql, SQLAction.READ),
+          action,
           body,
           options?.signal
         );
         if (!response.ok) {
-          return this.handleErrorResponse(response, "query");
+          return this.handleErrorResponse(response, "query", dbName, [action]);
         }
         const data = await response.json();
         return ok(data);
@@ -8540,14 +8786,15 @@ var SQLService = class extends BaseService {
             (statement) => this.actionForSql(statement, SQLAction.SCHEMA)
           )
         ];
+        const requestedActions2 = this.dedupeActions(actions);
         const response = await this.invokeSQL(
           dbName,
-          this.dedupeActions(actions),
+          requestedActions2,
           body,
           options?.signal
         );
         if (!response.ok) {
-          return this.handleErrorResponse(response, "execute");
+          return this.handleErrorResponse(response, "execute", dbName, requestedActions2);
         }
         const data = await response.json();
         return ok(data);
@@ -8562,14 +8809,15 @@ var SQLService = class extends BaseService {
         return err(authRequiredError("sql"));
       }
       try {
+        const requestedActions2 = this.actionsForSqlBatch(statements);
         const response = await this.invokeSQL(
           dbName,
-          this.actionsForSqlBatch(statements),
+          requestedActions2,
           { action: "batch", statements },
           options?.signal
         );
         if (!response.ok) {
-          return this.handleErrorResponse(response, "batch");
+          return this.handleErrorResponse(response, "batch", dbName, requestedActions2);
         }
         const data = await response.json();
         return ok(data);
@@ -8591,7 +8839,7 @@ var SQLService = class extends BaseService {
           options?.signal
         );
         if (!response.ok) {
-          return this.handleErrorResponse(response, "executeStatement");
+          return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
         }
         const data = await response.json();
         return ok(data);
@@ -8613,7 +8861,7 @@ var SQLService = class extends BaseService {
           options?.signal
         );
         if (!response.ok) {
-          return this.handleErrorResponse(response, "export");
+          return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
         }
         const resp = response;
         if (typeof resp.blob === "function") {
@@ -8747,7 +8995,7 @@ var SQLService = class extends BaseService {
       }))
     );
   }
-  async handleErrorResponse(response, operation) {
+  async handleErrorResponse(response, operation, dbName, requestedActions2) {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
     if (response.status === 402) {
@@ -8766,9 +9014,11 @@ var SQLService = class extends BaseService {
       errorBody
     );
     if (response.status === 401) {
-      const { resource, action } = parseAuthError(errorText);
-      if (action) meta.requiredAction = action;
-      if (resource) meta.resource = resource;
+      const { action } = parseAuthError(errorText);
+      if (action && requestedActions2.includes(action)) {
+        meta.requiredAction = action;
+        meta.resource = `${this.context.session.spaceId}/sql/${dbName}`;
+      }
     }
     return err(
       serviceError(errorCode2, message, "sql", { meta })
@@ -11517,75 +11767,6 @@ function canonicalHashHex(sha2563, value) {
   const canonical = canonicalize(value);
   return hexEncode2(sha2563(utf8Encode(canonical)));
 }
-var URN_PREFIX = "urn:tinycloud:encryption:";
-var NETWORK_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
-var PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
-var NetworkIdError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "NetworkIdError";
-  }
-};
-function parseNetworkId(networkId) {
-  if (typeof networkId !== "string" || networkId.length === 0) {
-    throw new NetworkIdError("networkId must be a non-empty string");
-  }
-  if (!networkId.startsWith(URN_PREFIX)) {
-    throw new NetworkIdError(
-      `networkId must start with ${URN_PREFIX} (got ${JSON.stringify(networkId)})`
-    );
-  }
-  const body = networkId.slice(URN_PREFIX.length);
-  const lastColon = body.lastIndexOf(":");
-  if (lastColon <= 0 || lastColon === body.length - 1) {
-    throw new NetworkIdError(
-      `networkId missing ownerDid or name segment (got ${JSON.stringify(networkId)})`
-    );
-  }
-  const ownerDid = body.slice(0, lastColon);
-  const name = body.slice(lastColon + 1);
-  if (!ownerDid.startsWith("did:")) {
-    throw new NetworkIdError(
-      `networkId ownerDid must be a DID (got ${JSON.stringify(ownerDid)})`
-    );
-  }
-  const didParts = ownerDid.split(":");
-  if (didParts.length < 3 || didParts.some((p) => p.length === 0)) {
-    throw new NetworkIdError(
-      `networkId ownerDid is not a well-formed DID (got ${JSON.stringify(ownerDid)})`
-    );
-  }
-  if (!NETWORK_NAME_RE.test(name)) {
-    throw new NetworkIdError(
-      `networkId name ${JSON.stringify(name)} must match ${NETWORK_NAME_RE.source}`
-    );
-  }
-  return { networkId, ownerDid, name };
-}
-function parsePkhOwnerDid(ownerDid) {
-  const match = ownerDid.match(PKH_EIP155_DID_RE);
-  if (!match) return null;
-  return {
-    chainId: match[1],
-    address: match[2].toLowerCase()
-  };
-}
-function ownerDidMatches(a, b) {
-  const aPkh = parsePkhOwnerDid(a);
-  const bPkh = parsePkhOwnerDid(b);
-  if (aPkh && bPkh) {
-    return aPkh.chainId === bPkh.chainId && aPkh.address === bPkh.address;
-  }
-  return a === b;
-}
-function networkDiscoveryKey(name) {
-  if (!NETWORK_NAME_RE.test(name)) {
-    throw new NetworkIdError(
-      `network name ${JSON.stringify(name)} must match ${NETWORK_NAME_RE.source}`
-    );
-  }
-  return `.well-known/encryption/network/${name}`;
-}
 var DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1";
 var ENVELOPE_VERSION = 1;
 var DEFAULT_KEY_VERSION = 1;
@@ -12421,7 +12602,7 @@ var SERVICE_SHORT_TO_LONG = Object.freeze({
 });
 var ENCRYPTION_PERMISSION_SERVICE2 = "tinycloud.encryption";
 var ENCRYPTION_MANIFEST_SPACE2 = "encryption";
-var SERVICE_LONG_TO_SHORT = Object.freeze(
+var SERVICE_LONG_TO_SHORT2 = Object.freeze(
   Object.fromEntries(
     Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
   )
@@ -13955,7 +14136,7 @@ async function authenticatedNode(cmd) {
 }
 function assertOk(result) {
   if (!result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    throw cliErrorFromService(result.error);
   }
 }
 async function loadManifestSource(source) {
@@ -15967,7 +16148,7 @@ async function importRequestBoundDelegation(ctx, artifact) {
         ExitCode.ERROR
       );
     case "error":
-      throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+      throw cliErrorFromService(result.error);
   }
 }
 function isStoredDelegationLike(value) {
@@ -16702,7 +16883,7 @@ function registerDelegationCommand(program) {
         expiry
       });
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({
         cid: result.data.cid,
@@ -16722,7 +16903,7 @@ function registerDelegationCommand(program) {
       const node = await ensureAuthenticated(ctx);
       const result = await node.delegationManager.list();
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       let delegations = result.data;
       if (options.granted) {
@@ -16768,7 +16949,7 @@ function registerDelegationCommand(program) {
       const node = await ensureAuthenticated(ctx);
       const result = await node.delegationManager.revoke(cid);
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ cid, revoked: true });
     } catch (error) {
@@ -16893,7 +17074,6 @@ function registerDoctorCommand(program) {
 init_profiles();
 init_formatter();
 init_errors();
-init_constants();
 import { readFile as readFile5, writeFile as writeFile3 } from "fs/promises";
 import { resolve } from "path";
 init_theme();
@@ -16910,7 +17090,7 @@ function registerDuckdbCommand(program) {
         () => node.duckdb.db(options.db).query(sqlStr, params)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const { columns, rows, rowCount } = result.data;
       if (shouldOutputJson()) {
@@ -16942,7 +17122,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
         () => node.duckdb.db(options.db).execute(sqlStr, params)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ changes: result.data.changes });
     } catch (error) {
@@ -16959,7 +17139,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
         () => node.duckdb.db(options.db).describe()
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const schema = result.data;
       if (shouldOutputJson()) {
@@ -17004,7 +17184,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
         () => node.duckdb.db(options.db).export()
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
@@ -17031,7 +17211,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
         () => node.duckdb.db(options.db).import(bytes)
       );
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({
         file: filePath,
@@ -17168,7 +17348,7 @@ init_theme();
 async function throwKvError(error, spaceUri, profileName) {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName);
   if (hosted) throw hosted;
-  throw new CLIError(error.code, error.message, ExitCode.ERROR);
+  throw cliErrorFromService(error);
 }
 function isByteCount(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -18685,7 +18865,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         operation: () => secrets2.list(scopeOptions)
       });
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const secretNames = Array.isArray(result.data) ? result.data : [];
       outputJson({
@@ -18802,7 +18982,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         operation: () => secrets2.put(name, secretValue, scopeOptions)
       });
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ name, written: true });
     } catch (error) {
@@ -18828,7 +19008,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         operation: () => secrets2.delete(name, scopeOptions)
       });
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ name, deleted: true });
     } catch (error) {
@@ -27511,7 +27691,6 @@ async function notifyShare(input) {
     };
   }
   let attempts = 0;
-  let lastError;
   while (attempts < attemptsLimit) {
     if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
     attempts += 1;
@@ -27538,10 +27717,19 @@ async function notifyShare(input) {
           reason: "delivery-window-expired"
         };
       }
-      lastError = error;
+      if (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)) {
+        return {
+          protocol: "tinycloud-share",
+          version: 1,
+          shareId: input.shareId,
+          state: "partial-failure",
+          idempotencyKey,
+          attempts,
+          retryable: false
+        };
+      }
     }
   }
-  void lastError;
   return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state: "partial-failure", idempotencyKey, attempts, retryable: true };
 }
 async function defaultIdempotencyKey(shareId, recipient) {
@@ -29543,7 +29731,7 @@ function registerSpaceCommand(program) {
       const node = await ensureAuthenticated(ctx);
       const result = await node.spaces.list();
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       if (shouldOutputJson()) {
         outputJson({ spaces: result.data, count: result.data.length });
@@ -29688,7 +29876,7 @@ async function throwSqlError(error, spaceUri, profileName, prefix) {
   const hosted = await unhostedSpaceError(error, spaceUri, profileName);
   if (hosted) throw hosted;
   const message = prefix ? `${prefix}${error.message}` : error.message;
-  throw new CLIError(error.code, message, ExitCode.ERROR, error.meta);
+  throw cliErrorFromService(error, message);
 }
 function registerSqlCommand(program) {
   const sql = program.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
@@ -30400,7 +30588,7 @@ async function unlockVault(node, privateKey) {
   const signer = new PrivateKeySigner2(privateKey);
   const result = await node.vault.unlock(signer);
   if (result && !result.ok) {
-    throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+    throw cliErrorFromService(result.error);
   }
 }
 function registerVaultCommand(program) {
@@ -30441,7 +30629,7 @@ function registerVaultCommand(program) {
       }
       const result = await withSpinner(`Writing ${key}...`, () => node.vault.put(key, putValue));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ key, written: true });
     } catch (error) {
@@ -30460,7 +30648,7 @@ function registerVaultCommand(program) {
         if (result.error.code === "NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Key "${key}" not found`, ExitCode.NOT_FOUND);
         }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const data = result.data.data ?? result.data;
       if (options.output) {
@@ -30491,7 +30679,7 @@ function registerVaultCommand(program) {
       await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
       const result = await withSpinner(`Deleting ${key}...`, () => node.vault.delete(key));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ key, deleted: true });
     } catch (error) {
@@ -30508,7 +30696,7 @@ function registerVaultCommand(program) {
       const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
       const result = await withSpinner("Listing vault keys...", () => node.vault.list(listOptions));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const keys = result.data.data ?? result.data;
       const keyList = Array.isArray(keys) ? keys : [];
@@ -30534,7 +30722,7 @@ function registerVaultCommand(program) {
           outputJson({ key, exists: false, metadata: {} });
           return;
         }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({
         key,
@@ -30584,7 +30772,7 @@ function registerVarsCommand(program) {
       const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
       const result = await withSpinner("Listing variables...", () => prefixedKv.list());
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const rawData = result.data.data ?? result.data;
       const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
@@ -30608,7 +30796,7 @@ function registerVarsCommand(program) {
         if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") {
           throw new CLIError("NOT_FOUND", `Variable "${name}" not found`, ExitCode.NOT_FOUND);
         }
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       const data = result.data.data;
       let value;
@@ -30666,7 +30854,7 @@ function registerVarsCommand(program) {
       const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
       const result = await withSpinner(`Setting variable ${name}...`, () => prefixedKv.put(name, payload));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ name, written: true });
     } catch (error) {
@@ -30682,7 +30870,7 @@ function registerVarsCommand(program) {
       const prefixedKv = node.kv.withPrefix(VARIABLES_PREFIX);
       const result = await withSpinner(`Deleting variable ${name}...`, () => prefixedKv.delete(name));
       if (!result.ok) {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.ERROR);
+        throw cliErrorFromService(result.error);
       }
       outputJson({ name, deleted: true });
     } catch (error) {

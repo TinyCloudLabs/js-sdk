@@ -1,5 +1,18 @@
 # @tinycloud/server
 
+## 2.5.0-beta.6
+
+### Minor Changes
+
+- 045c2d3: Delegated-secret KV read failures now retain the structured service error as their cause. Consumers can distinguish HTTP 401/403 authorization failures from other failures without parsing response text; the diagnostic message remains available.
+
+### Patch Changes
+
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+  - @tinycloud/sdk-core@3.1.0-beta.6
+  - @tinycloud/node-sdk@3.1.0-beta.6
+
 ## 2.4.13-beta.5
 
 ### Patch Changes

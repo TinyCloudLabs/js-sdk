@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 3.1.0-beta.6
+
+### Minor Changes
+
+- 045c2d3: Preserve typed HTTP status and bounded server response text in node-info, encryption-network, and V3 delivery failures using the shared sdk-core helper. Bootstrap, owned-space hosting, and runtime/delegation activation failures retain rejected host results through error causes and status-bearing messages. `hostOwnedSpace()` reports rejected host delegations without collapsing their status to a boolean.
+
+### Patch Changes
+
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+  - @tinycloud/sdk-core@3.1.0-beta.6
+  - @tinycloud/sdk-services@3.1.0-beta.6
+
 ## 3.1.0-beta.5
 
 ### Minor Changes

@@ -72,7 +72,7 @@ var init_theme = __esm({
 
 // src/output/formatter.ts
 import ora from "ora";
-function outputError(code3, message, hint) {
+function outputError(code3, message, hint, meta) {
   if (isInteractive()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
@@ -89,6 +89,7 @@ function outputError(code3, message, hint) {
       error: { code: code3, message }
     };
     if (hint) payload.error.hint = hint;
+    if (meta) payload.error.meta = meta;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
 }
@@ -111,23 +112,23 @@ var init_formatter = __esm({
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
 function wrapError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Missing private key parameter in JWK")) {
-    const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
-    return new CLIError(
-      "AUTH_REQUIRED",
-      `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
-      ExitCode.AUTH_REQUIRED,
-      {
-        hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
-      }
-    );
-  }
   if (error instanceof CLIError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const verdict = authorizationVerdictOf(error);
+  if (verdict === "unauthenticated") {
+    return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
+  }
+  if (verdict === "forbidden") {
+    return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
+  }
+  if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
+    return missingPrivateKeyError();
+  }
   if (error instanceof ProfileLockTimeoutError) {
     return new CLIError(
       "PROFILE_LOCK_TIMEOUT",
@@ -139,13 +140,13 @@ function wrapError(error) {
   if (error instanceof ProfileDeletedError) {
     return new CLIError("PROFILE_NOT_FOUND", message);
   }
-  if (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired")) {
+  if (verdict === void 0 && (message.includes("Not signed in") || message.includes("AUTH_EXPIRED") || message.includes("Session expired"))) {
     return new CLIError("AUTH_REQUIRED", message, ExitCode.AUTH_REQUIRED);
   }
   if (message.includes("NOT_FOUND") || message.includes("KV_NOT_FOUND")) {
     return new CLIError("NOT_FOUND", message, ExitCode.NOT_FOUND);
   }
-  if (message.includes("PERMISSION_DENIED")) {
+  if (verdict === void 0 && message.includes("PERMISSION_DENIED")) {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
   if (message.includes("ECONNREFUSED") || message.includes("ETIMEDOUT") || message.includes("fetch failed")) {
@@ -153,39 +154,51 @@ function wrapError(error) {
   }
   return new CLIError("ERROR", message, ExitCode.ERROR);
 }
+function missingPrivateKeyError() {
+  const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` }
+  );
+}
 function handleError(error) {
   const cliError = wrapError(error);
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
-  outputError(cliError.code, cliError.message, hint);
+  const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
+  const meta = {};
+  if (cliError.status !== void 0 && authMeta !== void 0) meta.status = cliError.status;
+  const capability = validatedCapabilityOf({ meta: authMeta });
+  if (capability) {
+    meta.resource = capability.resource;
+    meta.requiredAction = capability.requiredAction;
+  }
+  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : void 0);
   process.exit(cliError.exitCode);
 }
 function buildAuthHint(error) {
-  const resource = error.metadata?.resource;
-  const requiredAction = error.metadata?.requiredAction;
-  if (typeof resource !== "string" || typeof requiredAction !== "string") {
-    return void 0;
-  }
-  const spec = capSpecFromAuthMeta(resource, requiredAction);
+  const capability = validatedCapabilityOf({ meta: error.metadata });
+  if (!capability) return void 0;
+  const spec = capSpecFromAuthMeta(capability.resource, capability.requiredAction);
   if (!spec) return void 0;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap "${spec}"`,
+    `Request it with: tc auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
     "Then retry the original command."
   ].join("\n");
 }
 function capSpecFromAuthMeta(resource, action) {
-  const slash = resource.indexOf("/");
-  if (slash <= 0 || slash === resource.length - 1) return void 0;
-  const spaceUri = resource.slice(0, slash);
-  const rest = resource.slice(slash + 1);
-  const nextSlash = rest.indexOf("/");
-  if (nextSlash <= 0) return void 0;
-  const serviceShort = rest.slice(0, nextSlash);
-  const path = rest.slice(nextSlash + 1);
-  const actionName = action.includes("/") ? action.slice(action.indexOf("/") + 1) : action;
-  const spaceName = spaceUri.startsWith("tinycloud:") ? spaceUri.slice(spaceUri.lastIndexOf(":") + 1) : spaceUri;
-  return `tinycloud.${serviceShort}:${spaceName}:${path}:${actionName}`;
+  const slash = action.indexOf("/");
+  if (slash < 0) return void 0;
+  const longService = action.slice(0, slash);
+  const serviceShort = SERVICE_LONG_TO_SHORT[longService];
+  if (!serviceShort) return void 0;
+  const parsed = parseCapabilityResource(resource, serviceShort);
+  if (!parsed) return void 0;
+  const spaceName = parsed.space.slice(parsed.space.lastIndexOf(":") + 1);
+  return `${longService}:${spaceName}:${parsed.path}:${action.slice(slash + 1)}`;
 }
 function buildNetworkHint() {
   const readHost = (name) => {
@@ -239,7 +252,9 @@ var init_errors = __esm({
         this.exitCode = exitCode;
         this.metadata = metadata;
         this.name = "CLIError";
+        if (typeof metadata?.status === "number" && Number.isInteger(metadata.status) && metadata.status >= 400 && metadata.status <= 599) this.status = metadata.status;
       }
+      status;
     };
   }
 });
@@ -15019,7 +15034,6 @@ async function notifyShare(input) {
     };
   }
   let attempts = 0;
-  let lastError;
   while (attempts < attemptsLimit) {
     if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
     attempts += 1;
@@ -15046,10 +15060,19 @@ async function notifyShare(input) {
           reason: "delivery-window-expired"
         };
       }
-      lastError = error;
+      if (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)) {
+        return {
+          protocol: "tinycloud-share",
+          version: 1,
+          shareId: input.shareId,
+          state: "partial-failure",
+          idempotencyKey,
+          attempts,
+          retryable: false
+        };
+      }
     }
   }
-  void lastError;
   return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state: "partial-failure", idempotencyKey, attempts, retryable: true };
 }
 async function defaultIdempotencyKey(shareId, recipient) {

@@ -1,5 +1,22 @@
 # @tinycloud/cli
 
+## 1.1.0-beta.9
+
+### Minor Changes
+
+- 045c2d3: TC-634: `tc kv` previously surfaced some HTTP 401/403 refusals as `AUTH_UNAUTHORIZED` or `NETWORK_ERROR` with exit 1. Get, put, head, list, and delete now return `AUTH_REQUIRED` (exit 3) for plain 401 and `PERMISSION_DENIED` (exit 5) for 403 or a 401 with a validated missing capability. `tc space list|host` and `tc sql` honor typed status, while deliberately constructed CLI errors retain their own code, exit code, and metadata. The same service-result mapping applies to `tc vault`, `tc vars`, `tc duckdb`, `tc secrets list|put|delete`, `tc delegation`, and `tc account`: a status-less `AUTH_UNAUTHORIZED` now exits 5 as `PERMISSION_DENIED` instead of exit 1. Untyped signer JWK failures still request sign-in. Capability-request hints use validated TinyCloud resources and actions, including root or trailing-prefix KV lists and nested SQL spaces; noninteractive JSON adds optional `meta` with HTTP status and only validated resource/action fields, never arbitrary server metadata. Non-auth failures and `tc share` redaction remain unchanged.
+
+### Patch Changes
+
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+  - @tinycloud/sdk-core@3.1.0-beta.6
+  - @tinycloud/operations@0.4.0-beta.9
+  - @tinycloud/node-sdk@3.1.0-beta.6
+  - @tinycloud/share-sdk@1.1.0-beta.2
+
 ## 1.1.0-beta.8
 
 ### Patch Changes

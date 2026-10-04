@@ -1,5 +1,11 @@
 # @tinycloud/share-sdk
 
+## 1.1.0-beta.2
+
+### Minor Changes
+
+- 045c2d3: Recipient challenge, delegation, import, and decrypt HTTP rejections now expose a typed response status instead of only embedding it in the message. Notification delivery no longer retries a typed 401/403 refusal and reports `retryable: false` after the first attempt; transient failures retain the existing retry budget.
+
 ## 1.1.0-beta.1
 
 ### Minor Changes
