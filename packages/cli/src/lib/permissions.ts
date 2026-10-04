@@ -11,7 +11,6 @@ import {
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
-  upsertProfileRecord,
   withProfileLock,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
@@ -26,6 +25,7 @@ import {
   type AuthRequestArtifact,
   type PermissionEntry,
   type PortableDelegation,
+  type RuntimeDelegationActivator,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import { PROFILES_DIR } from "../config/constants.js";
@@ -145,17 +145,18 @@ export async function saveAdditionalDelegations(
   await replaceSharedRecords(profile, "additional-delegations", entries);
 }
 
+/**
+ * Stores a delegation that was not checked against a stored request. A stored
+ * record for the same CID that carries a request binding is kept as it is.
+ */
 export async function appendAdditionalDelegation(
   profile: string,
   entry: StoredAdditionalDelegation,
 ): Promise<void> {
-  await upsertProfileRecord(
-    profile,
-    "additional-delegations",
-    entry.delegation.cid,
-    entry,
-    (candidate) => candidate.delegation.cid,
-  );
+  // Loaded on use: a static import would evaluate node-sdk in every command
+  // that only reads profile state through this module.
+  const { storeDelegationWithoutRequest } = await import("@tinycloud/operations/delegation-binding");
+  await storeDelegationWithoutRequest(profile, { ...entry });
 }
 
 export async function loadPermissionRequestArtifacts(
@@ -223,12 +224,46 @@ export async function getLastPermissionRequestArtifact(
   return existing.at(-1) ?? null;
 }
 
+/**
+ * Reinstalls a profile's stored delegations on a fresh node. Compact-UCAN and
+ * signed-login records follow the operations runtime's binding rule
+ * (validated activation, and a request binding the signed capabilities fit
+ * inside); `migrate` is true only when `node` holds the profile's own session,
+ * so the one-time binding migration may run. Other records (the CLI's own
+ * signed-login grants) are installed as before.
+ */
 export async function replayAdditionalDelegations(
   node: TinyCloudNode,
   profile: string,
+  options: { host: string; ownerSpace?: string; migrate: boolean },
 ): Promise<void> {
+  // Loaded on use, as in appendAdditionalDelegation.
+  const {
+    operationSpaceResolver,
+    prepareStoredDelegationReplay,
+    replayStoredDelegation,
+    storedDelegationKind,
+  } = await import("@tinycloud/operations/delegation-binding");
+  const activator = node as unknown as RuntimeDelegationActivator;
+  const migrated = await prepareStoredDelegationReplay(profile, activator, {
+    host: options.host,
+    migrate: options.migrate,
+  });
+  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
   const entries = await loadAdditionalDelegations(profile);
   for (const entry of entries) {
+    const record = { ...entry };
+    if (storedDelegationKind(record) !== "other") {
+      const installed = await replayStoredDelegation(activator, record, {
+        host: options.host,
+        migrated,
+        resolveSpace,
+      });
+      if (installed === undefined && process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: refused by validation or its request binding\n`);
+      }
+      continue;
+    }
     // Skip expired delegations rather than letting useRuntimeDelegation throw.
     const expiry = entry.delegation.expiry instanceof Date
       ? entry.delegation.expiry

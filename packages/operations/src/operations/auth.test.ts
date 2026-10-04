@@ -366,6 +366,37 @@ test("a request-bound re-import binds a compact delegation stored without its re
   }
 });
 
+test("a request-bound re-import replaces a stored binding replay cannot use and collapses duplicate rows", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const other = { delegation: { cid: "bafy-unrelated" }, permissions: [] };
+    // A binding that parses but grants nothing, and a second row for the CID.
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [
+      { delegation, permissions: [], authorityRequest: { requestId: "req_empty", requested: [] } },
+      other,
+      { delegation, permissions: [] },
+    ]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted).toEqual([]);
+
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "ok",
+      output: { cid: delegation.cid, alreadyPresent: true },
+    });
+    const records = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(records).toEqual([
+      expect.objectContaining({ authorityRequest: expect.objectContaining({ requestId }) }),
+      other,
+    ]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted)
+      .toEqual(canonicalizeCapabilities(fixture.hermetic.permissions));
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("imports a real signed delegation with an explicit selected profile host", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {

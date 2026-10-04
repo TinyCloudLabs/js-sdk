@@ -1,6 +1,5 @@
 import type {
   PermissionEntry,
-  PortableDelegation,
   RuntimeDelegationActivator,
   TinyCloudNode,
 } from "@tinycloud/node-sdk";
@@ -13,8 +12,7 @@ import type {
   OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
-import { DelegationRequestBindingSchema } from "./artifacts.js";
-import { canonicalizeCapabilities, delegationWithinRequest } from "./authority.js";
+import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { resolveInvocationProfile, resolvePosture } from "./profile.js";
 import { operationSpaceResolver } from "./secrets.js";
@@ -25,7 +23,7 @@ import {
   readProfile,
   readSession,
 } from "./state.js";
-import { beginBindingMigration } from "./delegation-binding.js";
+import { prepareStoredDelegationReplay, replayStoredDelegation } from "./delegation-binding.js";
 
 export type InvocationRuntimeResolution =
   | Readonly<{ ok: true; context: OperationContext }>
@@ -46,11 +44,6 @@ interface StoredSession extends Record<string, unknown> {
   readonly siwe?: unknown;
   readonly signature?: unknown;
   readonly tinycloudHosts?: unknown;
-}
-
-interface StoredAdditionalDelegation extends Record<string, unknown> {
-  readonly delegation?: unknown;
-  readonly authorityRequest?: unknown;
 }
 
 /**
@@ -100,16 +93,14 @@ export async function createInvocationRuntime(
     // Keep the value import namespace-shaped so projection modules remain
     // compatible with lightweight node-sdk test doubles.
     const {
-      activateValidatedRuntimeDelegation,
       TinyCloudNode: TinyCloudNodeConstructor,
     } = nodeSdk;
     const explicitPrivateKeyOverride = typeof target.privateKey === "string";
-    const [session, key, additionalDelegations] = explicitPrivateKeyOverride
-      ? [null, null, [] as StoredAdditionalDelegation[]]
+    const [session, key] = explicitPrivateKeyOverride
+      ? [null, null]
       : await Promise.all([
         readSession<StoredSession>(profileName),
         readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
-        readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
       ]);
     const profile = resolved.profile;
 
@@ -183,40 +174,26 @@ export async function createInvocationRuntime(
     const seenCids = new Set<string>();
     // An explicit key is another identity: it neither replays nor migrates
     // this profile's records.
-    const migration = explicitPrivateKeyOverride ? undefined : await beginBindingMigration(profileName);
-    for (const entry of additionalDelegations) {
-      const delegation = normalizeStoredDelegation(entry);
-      if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) continue;
-      // The binding is local profile data. It keeps a delegation to the
-      // stored request it was imported against. Once the profile's one-time
-      // migration has run, a record written by any other path (CLI import of
-      // an unbound artifact, a copied or pasted record) installs nothing;
-      // before it, an unbound record replays as it always did and is bound to
-      // exactly the signed authority read here. It does not stop someone who
-      // can write this profile directory, who already holds the key and the
-      // signed bytes.
-      const binding = DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
-      const authorize = binding.success
-        ? (effective: readonly PermissionEntry[]) =>
-          delegationWithinRequest(binding.data.requested, effective, resolveSpace)
-        : migration?.authorizer(entry);
-      if (authorize === undefined) continue;
-      try {
-        const activated = await activateValidatedRuntimeDelegation(node as unknown as RuntimeDelegationActivator, delegation, {
+    if (!explicitPrivateKeyOverride) {
+      const activator = node as unknown as RuntimeDelegationActivator;
+      // Migration runs before the records are read, so the records replayed
+      // here and the migration marker agree.
+      const migrated = await prepareStoredDelegationReplay(profileName, activator, {
+        host: summary.host,
+        migrate: true,
+      });
+      for (const entry of await readAdditionalDelegations<Record<string, unknown>>(profileName)) {
+        const activated = await replayStoredDelegation(activator, entry, {
           host: summary.host,
-          authorize,
+          migrated,
+          resolveSpace,
         });
-        if (!seenCids.has(activated.cid)) {
+        if (activated !== undefined && !seenCids.has(activated.cid)) {
           seenCids.add(activated.cid);
           livePermissions.push(...activated.effectivePermissions);
         }
-      } catch {
-        // Stored data is untrusted transport material. Replaying an invalid,
-        // stale, wrong-session, or rejected record must not grant it authority
-        // or reveal its contents through a safe operation channel.
       }
     }
-    await migration?.commit();
 
     const runtime: OperationRuntime = {
       node,
@@ -288,33 +265,6 @@ function normalizeSession(
       ? { tinycloudHosts: session.tinycloudHosts }
       : {}),
   };
-}
-
-function normalizeStoredDelegation(
-  entry: StoredAdditionalDelegation,
-): PortableDelegation | undefined {
-  const raw = entry.delegation;
-  if (!isRecord(raw) || !isRecord(raw.delegationHeader)) return undefined;
-  const expiry = parseExpiry(raw.expiry);
-  if (
-    expiry === undefined ||
-    typeof raw.cid !== "string" ||
-    typeof raw.spaceId !== "string" ||
-    typeof raw.path !== "string" ||
-    !Array.isArray(raw.actions) || !raw.actions.every((action) => typeof action === "string") ||
-    typeof raw.delegateDID !== "string" ||
-    typeof raw.ownerAddress !== "string" ||
-    typeof raw.chainId !== "number" ||
-    typeof raw.delegationHeader.Authorization !== "string"
-  ) {
-    return undefined;
-  }
-  return { ...raw, expiry } as PortableDelegation;
-}
-
-function parseExpiry(value: unknown): Date | undefined {
-  const expiry = value instanceof Date ? value : typeof value === "string" ? new Date(value) : undefined;
-  return expiry !== undefined && !Number.isNaN(expiry.getTime()) ? expiry : undefined;
 }
 
 function hasPrivateParameter(value: unknown): value is Record<string, unknown> {

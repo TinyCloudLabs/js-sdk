@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
@@ -552,11 +552,6 @@ export function registerAuthCommand(program: Command): void {
           if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
           node = (await bootstrapDelegatedSession(ctx, imported.delegation)).node;
         }
-        await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
-          imported.delegation,
-          imported.permissions,
-        ));
-
         // A delegation whose audience is this profile's own session key can be
         // installed as a runtime grant (useRuntimeDelegation activates it for
         // matching service calls). A cross-user delegation — audience is this
@@ -567,12 +562,36 @@ export function registerAuthCommand(program: Command): void {
           typeof imported.delegation.delegateDID === "string" &&
           principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
         let activated = false;
-        if (targetsSessionKey) {
-          await node.useRuntimeDelegation(imported.delegation);
+        let permissions = imported.permissions;
+        // Loaded on use: a static import would evaluate the operations
+        // delegation-binding bundle in every command that registers `auth`.
+        const { activateUnboundCompactImport, storedDelegationKind } = await import(
+          "@tinycloud/operations/delegation-binding"
+        );
+        if (targetsSessionKey && storedDelegationKind({ delegation: imported.delegation }) === "compact") {
+          // No stored request contains this compact UCAN, so it is validated as
+          // replay validates it and bound to exactly the capabilities it signs.
+          // Replay then holds the stored record to that binding.
+          const record = await activateUnboundCompactImport(
+            node as unknown as RuntimeDelegationActivator,
+            imported.delegation,
+            ctx.host,
+          );
+          await appendAdditionalDelegation(ctx.profile, record);
+          permissions = record.permissions;
           activated = true;
+        } else {
+          await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
+            imported.delegation,
+            imported.permissions,
+          ));
+          if (targetsSessionKey) {
+            await node.useRuntimeDelegation(imported.delegation);
+            activated = true;
+          }
         }
         await appendGrantHistory(ctx.profile, {
-          addedCaps: imported.permissions,
+          addedCaps: permissions,
           source: "cli",
           delegationCid: imported.delegation.cid,
           expiry: imported.delegation.expiry.toISOString(),
@@ -584,7 +603,7 @@ export function registerAuthCommand(program: Command): void {
           kind: "tinycloud.auth.delegation",
           requestId: imported.requestId ?? null,
           delegationCid: imported.delegation.cid,
-          permissions: imported.permissions,
+          permissions,
           expiry: imported.delegation.expiry.toISOString(),
         });
       } catch (error) {

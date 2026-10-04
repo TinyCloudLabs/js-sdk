@@ -162,7 +162,8 @@ test("tc auth import contends for the operations lock and preserves additional d
       heldDelegation.delegation.cid,
     ].sort());
     expect(records).toContainEqual(expect.objectContaining({ delegation: storedAppendedDelegation }));
-    expect(records).toContainEqual(storedHeldDelegation);
+    // The CLI's first replay migrates the held record: kept, and now bound.
+    expect(records).toContainEqual(expect.objectContaining(storedHeldDelegation));
     expect(await readStoreMetadata(home, profile, "additional-delegations")).toEqual({ formatVersion: 1 });
   } finally {
     fixture.hermetic.stop();

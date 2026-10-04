@@ -40,7 +40,6 @@ import {
   updateProfileStore,
 } from "../state.js";
 import { operationSpaceResolver } from "../secrets.js";
-import { hasRequestBinding } from "../delegation-binding.js";
 
 type CapabilitiesInput = Record<never, never>;
 type CapabilitiesOutput = { readonly capabilities: readonly PermissionEntry[] };
@@ -414,19 +413,16 @@ async function importRequestBoundDelegation(
               requested: request.requested,
             } satisfies DelegationRequestBinding,
           };
-          const alreadyPresent = records.some((entry) => delegationCid(entry) === activated.cid);
-          // Once a profile's binding migration has run, a record without a
-          // valid binding (from an unbound `tc auth import`, say) installs
-          // nothing at replay. This validated import supplies the binding.
-          const repairBinding = alreadyPresent && records.some((entry) =>
-            delegationCid(entry) === activated.cid && !hasRequestBinding(entry)
-          );
+          // A validated import replaces every stored row for its CID with this
+          // record, whatever binding those rows carried (none, a synthesized
+          // one, or one replay cannot use), keeping the first row's position.
+          const position = records.findIndex((entry) => delegationCid(entry) === activated.cid);
+          const alreadyPresent = position !== -1;
+          const others = records.filter((entry) => delegationCid(entry) !== activated.cid);
           return {
-            records: !alreadyPresent
-              ? [...records, record]
-              : repairBinding
-              ? records.map((entry) => delegationCid(entry) === activated.cid ? record : entry)
-              : records,
+            records: alreadyPresent
+              ? [...others.slice(0, position), record, ...others.slice(position)]
+              : [...records, record],
             result: {
               status: "ok",
               output: {

@@ -1,37 +1,67 @@
 import { join } from "node:path";
 
-import type { PermissionEntry } from "@tinycloud/node-sdk";
+// Keep the value import namespace-shaped so modules that import this one stay
+// compatible with lightweight node-sdk test doubles.
+import * as nodeSdk from "@tinycloud/node-sdk";
+import type {
+  PermissionEntry,
+  PortableDelegation,
+  RuntimeDelegationActivator,
+  ValidatedRuntimeDelegation,
+} from "@tinycloud/node-sdk";
 
-import {
-  DelegationRequestBindingSchema,
-  type DelegationRequestBinding,
-} from "./artifacts.js";
+import { DelegationRequestBindingSchema } from "./artifacts.js";
+import { delegationWithinRequest, type OperationSpaceResolver } from "./authority.js";
 import {
   profilePath,
+  readAdditionalDelegations,
   readJson,
   updateProfileStore,
   withProfileLock,
   writeJsonAtomic,
 } from "./state.js";
 
+export { operationSpaceResolver } from "./secrets.js";
+
 /**
- * Request bindings for stored runtime delegations.
+ * Request bindings for delegations stored in `additional-delegations.json`.
  *
- * Replay installs a record from `additional-delegations.json` only when its
- * `authorityRequest` binding is valid and its signed capabilities stay inside
- * the binding's `requested`. `tinycloud.auth.import` writes that binding.
+ * A compact-UCAN or signed-login (SIWE) record replays only when its
+ * `authorityRequest` binding is valid and the capabilities its signed bytes
+ * grant fit inside the binding's `requested`. Validated activation checks that
+ * before anything is activated. Three writers produce bindings:
  *
- * Records stored before bindings existed carry none. Each profile migrates
- * them once: the first authenticated runtime that finds no migration marker
- * replays unbound records as before, binds every one whose signed authority
- * it read to exactly that authority, and then writes the marker. From then on
- * an unbound record installs nothing.
+ * - `tinycloud.auth.import`: the stored request the delegation was checked
+ *   against (`requestId` is that request's).
+ * - `tc auth import` of an artifact with no request: exactly the delegation's
+ *   own signed capabilities (`unbound-import:<cid>`).
+ * - The one-time migration of records stored before bindings existed: exactly
+ *   each record's own signed capabilities (`migrated:<cid>`).
+ *
+ * Records the CLI stores from its own signed-login grants carry no
+ * `siweProof`, cannot be verified here, and keep their legacy CLI replay.
+ *
+ * The binding is local profile data. It stops records written by any other
+ * path from granting authority. It does not stop someone who can write the
+ * profile directory, who already holds the session key and the signed bytes.
  */
 
-/** Written into a migrated record beside its synthesized binding. */
-export const BINDING_MIGRATION_NOTE =
-  "Stored without a request binding before bindings were required. Bound at migration to exactly " +
-  "its own signed capabilities, so replay refuses any delegation in this record that exceeds them.";
+export type BindingSource = "migration" | "unbound-import";
+
+const REQUEST_ID_PREFIX: Record<BindingSource, string> = {
+  migration: "migrated",
+  "unbound-import": "unbound-import",
+};
+
+/** The audit note written beside a binding synthesized from a record's own signed capabilities. */
+export const BINDING_NOTES: Record<BindingSource, string> = {
+  migration:
+    "Stored without a request binding before bindings were required. Bound at migration to exactly " +
+    "its own signed capabilities, so replay refuses any delegation in this record that exceeds them.",
+  "unbound-import":
+    "Imported by `tc auth import` without a stored request. Bound to exactly its own signed " +
+    "capabilities, so replay refuses any delegation in this record that exceeds them.",
+};
 
 /** Short so a busy profile only defers migration to a later runtime. */
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
@@ -41,106 +71,251 @@ export function bindingMigrationPath(profile: string): string {
   return join(profilePath(profile), "delegation-binding-migration.json");
 }
 
-/** Whether a stored record carries a binding replay accepts. */
-export function hasRequestBinding(entry: Record<string, unknown>): boolean {
-  return DelegationRequestBindingSchema.safeParse(entry.authorityRequest).success;
+/**
+ * How replay treats a stored record: `compact` and `signed-login` records go
+ * through validated activation and the binding rule; `other` records (the
+ * CLI's own signed-login grants, malformed records) do not.
+ */
+export function storedDelegationKind(entry: Record<string, unknown>): "compact" | "signed-login" | "other" {
+  const delegation = entry.delegation;
+  if (!isRecord(delegation)) return "other";
+  if ("siweProof" in delegation) return "signed-login";
+  const authorization = isRecord(delegation.delegationHeader)
+    ? delegation.delegationHeader.Authorization
+    : undefined;
+  if (typeof authorization !== "string") return "other";
+  // The compact-UCAN shape validated activation derives signed authority from.
+  const parts = authorization.replace(/^Bearer /i, "").split(".");
+  return parts.length === 3 && parts.every((part) => part.length > 0) ? "compact" : "other";
 }
 
 /**
- * Starts this runtime's part of the migration, or returns `undefined` once the
- * profile has migrated. An unreadable marker counts as migrated: a damaged
- * marker never reopens migration.
+ * Binds a record to exactly the capabilities its signed bytes grant, with an
+ * audit note naming where the binding came from.
  */
-export async function beginBindingMigration(profile: string): Promise<BindingMigration | undefined> {
-  try {
-    if (await readJson<unknown>(bindingMigrationPath(profile)) !== null) return undefined;
-  } catch {
-    return undefined;
-  }
-  return new BindingMigration(profile);
+function bindToSignedCapabilities<T extends { readonly delegation: { readonly cid: string } }>(
+  record: T,
+  signed: readonly PermissionEntry[],
+  source: BindingSource,
+  recordedAt = new Date().toISOString(),
+): T & Record<"authorityRequest" | "authorityRequestAudit", unknown> {
+  return {
+    ...record,
+    authorityRequest: DelegationRequestBindingSchema.parse({
+      requestId: `${REQUEST_ID_PREFIX[source]}:${record.delegation.cid}`,
+      requested: structuredClone(signed),
+    }),
+    authorityRequestAudit: { source, recordedAt, note: BINDING_NOTES[source] },
+  };
 }
 
-export class BindingMigration {
-  readonly #profile: string;
-  /** Signed capabilities read by replay, keyed by CID and authorization bytes. */
-  readonly #signed = new Map<string, readonly PermissionEntry[]>();
+/**
+ * Validates and activates a compact delegation that `tc auth import` received
+ * without a stored request, through the same validated activation replay uses,
+ * and returns its record bound to exactly the capabilities its signed bytes
+ * grant. Throws when validation or activation fails.
+ */
+export async function activateUnboundCompactImport(
+  node: RuntimeDelegationActivator,
+  delegation: PortableDelegation,
+  host: string,
+): Promise<{ delegation: PortableDelegation; permissions: PermissionEntry[] } & Record<string, unknown>> {
+  const activated = await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host });
+  return bindToSignedCapabilities(
+    // The record keeps the delegation as imported; replay validates it again.
+    { delegation, permissions: [...activated.effectivePermissions] },
+    activated.effectivePermissions,
+    "unbound-import",
+  );
+}
 
-  constructor(profile: string) {
-    this.#profile = profile;
-  }
-
-  /**
-   * The replay authorization for an unbound record, which also records the
-   * signed capabilities it is about to install. `undefined` when the record is
-   * not one migration binds: it has an `authorityRequest` member (valid or
-   * not), or it is a signed-login (SIWE) record, whose binding only a
-   * validated import may write.
-   */
-  authorizer(entry: Record<string, unknown>): ((effective: readonly PermissionEntry[]) => boolean) | undefined {
-    const key = migrationKey(entry);
-    if (key === undefined) return undefined;
-    return (effective) => {
-      this.#signed.set(key, structuredClone(effective));
-      return true;
-    };
-  }
-
-  /**
-   * Binds every still-unbound record whose signed capabilities this runtime
-   * read, then writes the marker. Any failure (a busy lock, an unwritable
-   * profile, a binding replay would not accept) leaves the marker unwritten,
-   * so the next runtime replays as before and retries.
-   */
-  async commit(): Promise<void> {
-    const migratedAt = new Date().toISOString();
-    try {
-      await withProfileLock(this.#profile, async () => {
-        if (await readJson<unknown>(bindingMigrationPath(this.#profile)) !== null) return;
-        const bound: string[] = [];
-        if (this.#signed.size > 0) {
-          await updateProfileStore<Record<string, unknown>, void>(
-            this.#profile,
-            "additional-delegations",
-            (records) => ({
-              records: records.map((entry) => {
-                const key = migrationKey(entry);
-                const signed = key === undefined ? undefined : this.#signed.get(key);
-                if (signed === undefined) return entry;
-                const cid = (entry.delegation as { cid: string }).cid;
-                const authorityRequest: DelegationRequestBinding = DelegationRequestBindingSchema.parse({
-                  requestId: `migrated:${cid}`,
-                  requested: signed,
-                });
-                bound.push(cid);
-                return {
-                  ...entry,
-                  authorityRequest,
-                  authorityRequestMigration: { migratedAt, note: BINDING_MIGRATION_NOTE },
-                };
-              }),
-              result: undefined,
-            }),
-          );
-        }
-        await writeJsonAtomic(bindingMigrationPath(this.#profile), { formatVersion: 1, migratedAt, bound });
-      }, { timeoutMs: MIGRATION_LOCK_TIMEOUT_MS });
-    } catch {
-      // Replay already ran under the pre-migration rule for this runtime.
+/**
+ * Stores a record written without a stored request (by `tc auth import` or a
+ * CLI grant). Any stored record for the same CID that carries a binding is
+ * kept as it is, so this route never drops, replaces or weakens a binding;
+ * otherwise the record replaces every row for its CID, at the first one's
+ * position.
+ */
+export async function storeDelegationWithoutRequest(
+  profile: string,
+  record: { readonly delegation: { readonly cid: string } } & Record<string, unknown>,
+): Promise<void> {
+  const cid = record.delegation.cid;
+  await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (records) => {
+    const position = records.findIndex((entry) => storedCid(entry) === cid);
+    if (records.some((entry) => storedCid(entry) === cid && "authorityRequest" in entry)) {
+      return { records, result: undefined };
     }
+    const others = records.filter((entry) => storedCid(entry) !== cid);
+    return {
+      records: position === -1
+        ? [...records, record]
+        : [...others.slice(0, position), record, ...others.slice(position)],
+      result: undefined,
+    };
+  });
+}
+
+/**
+ * Runs before replay reads the profile's records, so those records and the
+ * migration marker agree. Returns whether the profile has migrated.
+ *
+ * Migration is one locked read-modify-write of the current records: every
+ * compact record with no `authorityRequest` whose signed capabilities validated
+ * activation can read (CID, expiry, audience and declared resources checked,
+ * nothing activated) is bound to exactly those capabilities, and the marker is
+ * written in the same critical section. A compact record it cannot read can
+ * never activate for this session either. `migrate` must be false unless
+ * `node` holds the profile's own session. If the lock is busy or any step
+ * fails, nothing is written and this runtime replays under the pre-migration
+ * rule.
+ */
+export async function prepareStoredDelegationReplay(
+  profile: string,
+  node: RuntimeDelegationActivator,
+  options: { readonly host: string; readonly migrate: boolean },
+): Promise<boolean> {
+  if (await migrationRecorded(profile)) return true;
+  if (!options.migrate) return false;
+  try {
+    return await withProfileLock(profile, async () => {
+      if (await migrationRecorded(profile)) return true;
+      const recordedAt = new Date().toISOString();
+      const bound = new Map<string, Record<string, unknown>>();
+      for (const entry of await readAdditionalDelegations<Record<string, unknown>>(profile)) {
+        if ("authorityRequest" in entry || storedDelegationKind(entry) !== "compact") continue;
+        const delegation = normalizeStoredDelegation(entry);
+        if (delegation === undefined) continue;
+        const signed = await signedCapabilities(node, delegation, options.host);
+        if (signed === undefined) continue;
+        bound.set(recordKey(entry)!, bindToSignedCapabilities(entry as typeof entry & { delegation: { cid: string } }, signed, "migration", recordedAt));
+      }
+      if (bound.size > 0) {
+        await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (records) => ({
+          records: records.map((entry) => {
+            const key = "authorityRequest" in entry ? undefined : recordKey(entry);
+            return (key === undefined ? undefined : bound.get(key)) ?? entry;
+          }),
+          result: undefined,
+        }));
+      }
+      await writeJsonAtomic(bindingMigrationPath(profile), {
+        formatVersion: 1,
+        migratedAt: recordedAt,
+        bound: [...bound.values()].map(storedCid),
+      });
+      return true;
+    }, { timeoutMs: MIGRATION_LOCK_TIMEOUT_MS });
+  } catch {
+    return false;
   }
 }
 
-/** Identifies an unbound, non-SIWE record by its CID and exact authorization bytes. */
-function migrationKey(entry: Record<string, unknown>): string | undefined {
-  if ("authorityRequest" in entry) return undefined;
-  const delegation = entry.delegation;
-  if (delegation === null || typeof delegation !== "object" || "siweProof" in delegation) {
+/**
+ * Replays one stored record under the binding rule. A record with a valid
+ * binding installs only if its signed capabilities fit inside it. Before the
+ * profile has migrated, an unbound compact record installs with its signed
+ * authority as it always did; after, it installs nothing. A signed-login
+ * record installs only with a binding. Returns the installed delegation, or
+ * `undefined` when the record installs nothing. Never throws: stored data is
+ * untrusted transport material.
+ */
+export async function replayStoredDelegation(
+  node: RuntimeDelegationActivator,
+  entry: Record<string, unknown>,
+  options: {
+    readonly host: string;
+    readonly migrated: boolean;
+    readonly resolveSpace: OperationSpaceResolver;
+  },
+): Promise<ValidatedRuntimeDelegation | undefined> {
+  const delegation = normalizeStoredDelegation(entry);
+  if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) return undefined;
+  const binding = DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
+  const authorize = binding.success
+    ? (effective: readonly PermissionEntry[]) =>
+      delegationWithinRequest(binding.data.requested, effective, options.resolveSpace)
+    : !options.migrated && !("authorityRequest" in entry) && storedDelegationKind(entry) === "compact"
+    ? () => true
+    : undefined;
+  if (authorize === undefined) return undefined;
+  try {
+    return await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host: options.host, authorize });
+  } catch {
+    // An invalid, stale, wrong-session, or rejected record grants nothing and
+    // must not reveal its contents through a safe operation channel.
     return undefined;
   }
-  const { cid, delegationHeader } = delegation as { cid?: unknown; delegationHeader?: unknown };
-  const authorization = delegationHeader !== null && typeof delegationHeader === "object"
-    ? (delegationHeader as { Authorization?: unknown }).Authorization
-    : undefined;
-  if (typeof cid !== "string" || typeof authorization !== "string") return undefined;
-  return JSON.stringify([cid, authorization]);
+}
+
+/** An unreadable marker counts as migrated: a damaged marker never reopens migration. */
+async function migrationRecorded(profile: string): Promise<boolean> {
+  try {
+    return await readJson<unknown>(bindingMigrationPath(profile)) !== null;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The capabilities a stored delegation's signed bytes grant, read through
+ * validated activation, which `authorize` stops before anything is activated.
+ */
+async function signedCapabilities(
+  node: RuntimeDelegationActivator,
+  delegation: PortableDelegation,
+  host: string,
+): Promise<readonly PermissionEntry[] | undefined> {
+  let signed: readonly PermissionEntry[] | undefined;
+  try {
+    await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, {
+      // The transport host is not signed authority; check it at replay instead.
+      host: delegation.host ?? host,
+      authorize: (effective) => {
+        signed = effective;
+        return false;
+      },
+    });
+  } catch {
+    // Refused by `authorize` once the capabilities were read, or failed a check before it.
+  }
+  return signed;
+}
+
+function normalizeStoredDelegation(entry: Record<string, unknown>): PortableDelegation | undefined {
+  const raw = entry.delegation;
+  if (!isRecord(raw) || !isRecord(raw.delegationHeader)) return undefined;
+  const expiry = raw.expiry instanceof Date
+    ? raw.expiry
+    : typeof raw.expiry === "string" ? new Date(raw.expiry) : undefined;
+  if (
+    expiry === undefined || Number.isNaN(expiry.getTime()) ||
+    typeof raw.cid !== "string" ||
+    typeof raw.spaceId !== "string" ||
+    typeof raw.path !== "string" ||
+    !Array.isArray(raw.actions) || !raw.actions.every((action) => typeof action === "string") ||
+    typeof raw.delegateDID !== "string" ||
+    typeof raw.ownerAddress !== "string" ||
+    typeof raw.chainId !== "number" ||
+    typeof raw.delegationHeader.Authorization !== "string"
+  ) {
+    return undefined;
+  }
+  return { ...raw, expiry } as PortableDelegation;
+}
+
+function storedCid(entry: Record<string, unknown>): string | undefined {
+  const cid = isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+  return typeof cid === "string" ? cid : undefined;
+}
+
+/** A record's CID and exact authorization bytes. */
+function recordKey(entry: Record<string, unknown>): string | undefined {
+  const delegation = entry.delegation;
+  if (!isRecord(delegation) || !isRecord(delegation.delegationHeader)) return undefined;
+  return JSON.stringify([delegation.cid, delegation.delegationHeader.Authorization]);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

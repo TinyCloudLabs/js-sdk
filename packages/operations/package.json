@@ -34,6 +34,11 @@
       "import": "./dist/profile.js",
       "require": "./dist/profile.cjs"
     },
+    "./delegation-binding": {
+      "types": "./dist/delegation-binding.d.ts",
+      "import": "./dist/delegation-binding.js",
+      "require": "./dist/delegation-binding.cjs"
+    },
     "./secret-capabilities": {
       "types": "./dist/secret-capabilities.d.ts",
       "import": "./dist/secret-capabilities.js",
@@ -50,7 +55,7 @@
     "coverage.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts",
+    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts",
     "clean": "rm -rf dist",
     "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",

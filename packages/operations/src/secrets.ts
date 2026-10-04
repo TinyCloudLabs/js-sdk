@@ -1,9 +1,6 @@
-import {
-  canonicalizeAddress,
-  makePkhSpaceId,
-  parsePkhDid,
-  parseSpaceUri,
-} from "@tinycloud/node-sdk";
+// Namespace-shaped so modules that bundle this one stay compatible with
+// lightweight node-sdk test doubles.
+import * as nodeSdk from "@tinycloud/node-sdk";
 
 import { OperationInvocationError, operationError } from "./errors.js";
 
@@ -120,19 +117,19 @@ function resolveOperationSpace(space: string, node: unknown, ownerSpace?: string
   }
 
   const did = typeof candidate.did === "string" ? candidate.did : undefined;
-  const pkh = did === undefined ? null : parsePkhDid(did);
+  const pkh = did === undefined ? null : nodeSdk.parsePkhDid(did);
   if (pkh === null) {
     throw invalidSecretInput();
   }
-  return makePkhSpaceId(pkh.address, pkh.chainId, space);
+  return nodeSdk.makePkhSpaceId(pkh.address, pkh.chainId, space);
 }
 
 function ownedSpaceForName(ownerSpace: string, name: string): string | undefined {
-  const parsed = parseSpaceUri(ownerSpace);
+  const parsed = nodeSdk.parseSpaceUri(ownerSpace);
   if (parsed === null) return undefined;
   try {
-    const pkh = parsePkhDid(parsed.owner);
-    return pkh === null ? undefined : makePkhSpaceId(pkh.address, pkh.chainId, name);
+    const pkh = nodeSdk.parsePkhDid(parsed.owner);
+    return pkh === null ? undefined : nodeSdk.makePkhSpaceId(pkh.address, pkh.chainId, name);
   } catch {
     return undefined;
   }
@@ -151,7 +148,7 @@ function canonicalizeSpaceUri(space: string): string {
     /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]+)$/,
   );
   if (pkh !== null) {
-    return `tinycloud:pkh:eip155:${pkh[1]}:${canonicalizeAddress(pkh[2]!).toLowerCase()}:${pkh[3]}`;
+    return `tinycloud:pkh:eip155:${pkh[1]}:${nodeSdk.canonicalizeAddress(pkh[2]!).toLowerCase()}:${pkh[3]}`;
   }
   return space;
 }

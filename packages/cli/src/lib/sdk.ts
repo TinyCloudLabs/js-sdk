@@ -109,7 +109,13 @@ export async function createSDKInstance(
     } else {
       await node.signIn();
     }
-    await replayAdditionalDelegations(node, ctx.profile);
+    // The profile's own key signs this session; an explicit key is another
+    // identity and must not migrate the profile's records.
+    await replayAdditionalDelegations(node, ctx.profile, {
+      host: ctx.host,
+      ownerSpace: profile.spaceId,
+      migrate: options?.privateKey === undefined,
+    });
     return node;
   }
 
@@ -119,6 +125,8 @@ export async function createSDKInstance(
     privateKey: options?.privateKey,
   });
 
+  // Only the profile's own restored session may run its binding migration.
+  let restoredOwnSession = false;
   if (options?.privateKey) {
     // Sign in with private key (existing behavior)
     await node.signIn();
@@ -135,9 +143,14 @@ export async function createSDKInstance(
       siwe: session.siwe as string | undefined,
       signature: session.signature as string | undefined,
     });
+    restoredOwnSession = true;
   }
 
-  await replayAdditionalDelegations(node, ctx.profile);
+  await replayAdditionalDelegations(node, ctx.profile, {
+    host: ctx.host,
+    ownerSpace: profile?.spaceId,
+    migrate: restoredOwnSession,
+  });
   return node;
 }
 

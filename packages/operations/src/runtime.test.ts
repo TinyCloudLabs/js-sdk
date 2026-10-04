@@ -6,13 +6,15 @@ import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
-import { BINDING_MIGRATION_NOTE, bindingMigrationPath } from "./delegation-binding.js";
+import { BINDING_NOTES, bindingMigrationPath } from "./delegation-binding.js";
 import { createInvocationRuntime } from "./runtime.js";
 import {
   additionalDelegationsPath,
   profileConfigPath,
   readAdditionalDelegations,
   readJson,
+  upsertProfileRecord,
+  withProfileLock,
   writeJsonAtomic,
 } from "./state.js";
 import { authOperationDefinitions } from "./operations/auth.js";
@@ -184,7 +186,7 @@ test("migration binds an existing unbound compact record to its own signed autho
     const [migrated] = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
     expect(migrated).toMatchObject({
       authorityRequest: { requestId: `migrated:${delegation.cid}`, requested: canonicalizeCapabilities(kvOnly) },
-      authorityRequestMigration: { migratedAt: expect.any(String), note: BINDING_MIGRATION_NOTE },
+      authorityRequestAudit: { source: "migration", recordedAt: expect.any(String), note: BINDING_NOTES.migration },
     });
     expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [delegation.cid] });
 
@@ -199,6 +201,103 @@ test("migration binds an existing unbound compact record to its own signed autho
     expect(third.runtime.granted).toEqual([]);
     expect(installedCids(third)).toEqual([]);
   } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a record a locked writer publishes while migration waits for the lock is bound by the next runtime", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const original = TinyCloudNode.prototype.useRuntimeDelegation;
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
+    const first = await fixture.hermetic.mintDelegationWithPermissions([...kvOnly]);
+    const second = await fixture.hermetic.mintDelegation();
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation: first, permissions: [] }]);
+
+    // A writer holds the profile lock from before the runtime starts and
+    // publishes `second`, unbound, while the runtime replays `first`.
+    let locked!: () => void;
+    let release!: () => void;
+    const holding = new Promise<void>((resolve) => { locked = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const writer = withProfileLock(fixture.profile, async () => {
+      locked();
+      await released;
+      await upsertProfileRecord(
+        fixture.profile,
+        "additional-delegations",
+        second.cid,
+        { delegation: second, permissions: [] },
+        (candidate: { delegation: { cid: string } }) => candidate.delegation.cid,
+      );
+    });
+    await holding;
+    activations.mockImplementation(async function (this: TinyCloudNode, delegation) {
+      release();
+      await writer;
+      return original.call(this, delegation);
+    });
+
+    const during = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(during)).toEqual([first.cid]);
+    activations.mockRestore();
+
+    const after = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(after).sort()).toEqual([first.cid, second.cid].sort());
+    expect((await readAdditionalDelegations<Record<string, unknown>>(fixture.profile)).map(
+      (record) => (record.authorityRequest as { requestId: string }).requestId,
+    )).toEqual([`migrated:${first.cid}`, `migrated:${second.cid}`]);
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("migration binds a record a host-overridden first invocation cannot activate", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const delegation = { ...await fixture.hermetic.mintDelegation(), host: fixture.hermetic.host };
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation, permissions: [] }]);
+
+    const elsewhere = await createInvocationRuntime({ profile: fixture.profile, host: "http://127.0.0.1:9" });
+    if (!elsewhere.ok) throw new Error(`expected a runtime: ${elsewhere.error.code}`);
+    expect(elsewhere.context.runtime.granted).toEqual([]);
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [delegation.cid] });
+
+    const home = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(home)).toEqual([delegation.cid]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a runtime that restores its session while another migrates replays the migrated records", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const original = TinyCloudNode.prototype.restoreSession;
+  const restores = spyOn(TinyCloudNode.prototype, "restoreSession");
+  try {
+    const delegation = await fixture.hermetic.mintDelegation();
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation, permissions: [] }]);
+
+    // The slower runtime is mid-restore when the faster one migrates.
+    let faster: RuntimeOperationContext | undefined;
+    restores.mockImplementation(async function (this: TinyCloudNode, session) {
+      if (faster === undefined) {
+        restores.mockImplementation(function (this: TinyCloudNode, inner) {
+          return original.call(this, inner);
+        });
+        faster = await authenticatedRuntime(fixture.profile);
+      }
+      return original.call(this, session);
+    });
+    const slower = await authenticatedRuntime(fixture.profile);
+
+    expect(installedCids(faster!)).toEqual([delegation.cid]);
+    expect(installedCids(slower)).toEqual([delegation.cid]);
+    expect(slower.runtime.granted).toEqual(canonicalizeCapabilities(fixture.hermetic.permissions));
+  } finally {
+    restores.mockRestore();
     fixture.hermetic.stop();
   }
 });
