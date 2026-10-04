@@ -7,10 +7,11 @@ import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
 // Stored grants that cannot be used are reported as fixed codes inside the
 // CLI's JSON error, under both Bun (source) and Node (the built CLI). The
-// grants are real owner-signed CACAOs: one stored without its proof (as
-// earlier releases did), one whose stored host carries URL userinfo, one the
-// node refuses with a response body, and one whose stored CID is free text.
-// Neither the body, the host nor the free-text CID may reach the output.
+// grants are real owner-signed CACAOs: one stored without its proof or a
+// request binding (as earlier releases did), one with its proof but no
+// binding, one whose stored host carries URL userinfo, one the node refuses
+// with a response body, and one whose stored CID is free text. Neither the
+// body, the host nor the free-text CID may reach the output.
 
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 const RESPONSE_CANARY = "tc-node-response-body-canary";
@@ -53,7 +54,9 @@ beforeAll(async () => {
     return { ...wasm.completeSessionSetup({ ...prepared, signature }), siwe: prepared.siwe, signature };
   };
   const session = await signed({ capabilities: { "": ["tinycloud.capabilities/read"] } });
-  const grant = async (host: string, withProof: boolean) => {
+  const permissions = [{ service: "tinycloud.kv", space: spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }];
+  // Stored as the CLI stores its grants: with the signed proof and a request binding.
+  const grant = async (host: string, stored: "current" | "unbound" | "legacy" = "current") => {
     const proof = await signed({ kv: { "vault/secrets/KEY": ["tinycloud.kv/get"] } });
     grantCids.push(proof.delegationCid);
     return {
@@ -69,9 +72,12 @@ beforeAll(async () => {
         ownerAddress: address,
         chainId: 1,
         host,
-        ...(withProof ? { sessionProof: { siwe: proof.siwe, signature: proof.signature } } : {}),
+        ...(stored === "legacy" ? {} : { siweProof: { siwe: proof.siwe, signature: proof.signature } }),
       },
-      permissions: [{ service: "tinycloud.kv", space: spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      permissions,
+      ...(stored === "current"
+        ? { authorityRequest: { requestId: `cli-grant:${proof.delegationCid}`, requested: permissions } }
+        : {}),
     };
   };
 
@@ -86,11 +92,12 @@ beforeAll(async () => {
     jwk, address, chainId: 1, spaceId, verificationMethod: sessionDid,
     siwe: session.siwe, signature: session.signature, ownerDid, expiresAt, tinycloudHosts: [node.url.origin],
   });
-  const freeTextCid = await grant(node.url.origin, true);
+  const freeTextCid = await grant(node.url.origin);
   await writeJsonAtomic(additionalDelegationsPath("owner"), [
-    await grant(node.url.origin, false),
-    await grant(`https://agent:${USERINFO_CANARY}@evil.example`, true),
-    await grant(node.url.origin, true),
+    await grant(node.url.origin, "legacy"),
+    await grant(node.url.origin, "unbound"),
+    await grant(`https://agent:${USERINFO_CANARY}@evil.example`),
+    await grant(node.url.origin),
     { ...freeTextCid, delegation: { ...freeTextCid.delegation, cid: CID_CANARY } },
   ]);
 });
@@ -127,8 +134,9 @@ test.each(runtimes)("under %s, --json stderr is one parseable error carrying the
     code: "PERMISSION_DENIED",
     warnings: [
       { code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: grantCids[1] },
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: grantCids[2] },
-      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: grantCids[3] },
+      { code: "STORED_GRANT_SKIPPED", reason: "unbound", grantCid: grantCids[2] },
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: grantCids[3] },
+      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: grantCids[4] },
       { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
     ],
   });

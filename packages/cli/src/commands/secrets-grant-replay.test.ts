@@ -129,12 +129,16 @@ test("an approved escalation authorizes secrets get in the same process and in a
   // One approval, then the immediate canonical retry read the value.
   expect(acquisitions).toBe(1);
   expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
-  const stored = await readAdditionalDelegations<{ delegation: { cid: string; sessionProof?: unknown } }>("owner");
+  const stored = await readAdditionalDelegations<{
+    delegation: { cid: string; siweProof?: unknown };
+    authorityRequest?: { requestId?: unknown };
+    authorityRequestAudit?: unknown;
+  }>("owner");
   expect(stored).toHaveLength(1);
-  expect(stored[0]!.delegation.sessionProof).toEqual({
-    siwe: expect.any(String),
-    signature: expect.any(String),
-  });
+  // The signed proof replay verifies the grant from, and the request binding
+  // replay holds a signed-login record to.
+  expect(stored[0]!.delegation.siweProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
+  expect(stored[0]!.authorityRequest?.requestId).toBe(`cli-grant:${stored[0]!.delegation.cid}`);
 
   // A new process has only the stored grant; it must replay it, not ask again.
   const freshRead = async () => {
@@ -157,10 +161,11 @@ test("an approved escalation authorizes secrets get in the same process and in a
   expect({ exitCode: fresh.exitCode, stderr: fresh.stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(JSON.parse(fresh.stdout)).toEqual({ name: SECRET, value: CANARY });
 
-  // A copy left by an earlier release, without its proof, is skipped; the read
-  // still succeeds and stderr stays machine-readable.
-  const { sessionProof: _proof, ...proofless } = stored[0]!.delegation;
-  await writeJsonAtomic(additionalDelegationsPath("owner"), [stored[0], { ...stored[0], delegation: proofless }]);
+  // A copy left by an earlier release, with neither its proof nor a binding,
+  // is skipped; the read still succeeds and stderr stays machine-readable.
+  const { siweProof: _proof, ...proofless } = stored[0]!.delegation;
+  const { authorityRequest: _binding, authorityRequestAudit: _audit, ...unbound } = stored[0]!;
+  await writeJsonAtomic(additionalDelegationsPath("owner"), [stored[0], { ...unbound, delegation: proofless }]);
   const upgraded = await freshRead();
   expect(upgraded.exitCode).toBe(0);
   expect(JSON.parse(upgraded.stdout)).toEqual({ name: SECRET, value: CANARY });

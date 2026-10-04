@@ -59,7 +59,7 @@ export interface PortableDelegation extends Omit<Delegation, "isRevoked"> {
    * Not authority: activation rebuilds the CACAO from them and accepts only
    * byte-identical authorization bytes.
    */
-  sessionProof?: { siwe: string; signature: string };
+  siweProof?: { siwe: string; signature: string };
 }
 
 /**
@@ -463,7 +463,7 @@ function signedAuthorityFromSessionGrant(
   authorization: string,
   cid: string,
 ): SignedRuntimeAuthority {
-  const proof = delegation.sessionProof;
+  const proof = delegation.siweProof;
   if (
     proof === undefined || proof === null || typeof proof !== "object" ||
     typeof proof.siwe !== "string" || typeof proof.signature !== "string"
@@ -594,7 +594,7 @@ function resourcesMatch(
  * A compact UCAN's audience, expiry and permissions come from its signed
  * payload, and its transport fields must agree with them. A CACAO session
  * grant (OpenKey `/delegate`, `grantRuntimePermissions`) is verified from its
- * `sessionProof` against this runtime's live session key; its installed
+ * `siweProof` against this runtime's live session key; its installed
  * authority is exactly the verified ReCap, and its transport `resources` are
  * display data that is never consulted. Either way the helper then invokes
  * {@link TinyCloudNode.useRuntimeDelegation}; the node activation call remains
@@ -708,7 +708,7 @@ export async function activateValidatedRuntimeDelegation(
     expiry: new Date(signed.expiry),
     delegateDID: signed.audience,
     host,
-    ...(compact ? {} : { sessionProof: delegation.sessionProof }),
+    ...(compact ? {} : { siweProof: delegation.siweProof }),
   };
 
   try {

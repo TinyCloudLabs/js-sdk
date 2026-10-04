@@ -400,7 +400,7 @@ describe("activateValidatedRuntimeDelegation with wallet-signed session grants",
     try {
       const { grant, restored, requested, spaceId } = await ownerGrant(fixture);
       expect(grant.delegationHeader.Authorization.split(".")).toHaveLength(1);
-      expect(grant.sessionProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
+      expect(grant.siweProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
       const broadened = {
         ...grant,
         resources: [
@@ -431,9 +431,9 @@ describe("activateValidatedRuntimeDelegation with wallet-signed session grants",
       const activate = (delegation: PortableDelegation, node = restored) =>
         activateValidatedRuntimeDelegation(node, delegation, { host: fixture.host });
 
-      await expect(activate({ ...grant, sessionProof: undefined }))
+      await expect(activate({ ...grant, siweProof: undefined }))
         .rejects.toThrow(/without its signed SIWE proof/);
-      await expect(activate({ ...grant, sessionProof: other!.sessionProof })).rejects.toThrow();
+      await expect(activate({ ...grant, siweProof: other!.siweProof })).rejects.toThrow();
       // The delegate's session belongs to a different wallet than the grant's signer.
       await expect(activate(grant, fixture.delegate)).rejects.toThrow(/not signed by this session's owner/);
       expect(restored.getRuntimePermissionDelegations()).toEqual([]);

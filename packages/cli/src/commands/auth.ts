@@ -90,6 +90,7 @@ import {
   isCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact,
   appendGrantHistory,
+  cliGrantRecord,
   compactPermission,
   loadAdditionalDelegations,
   loadManifestPermissions,
@@ -452,7 +453,7 @@ export function registerAuthCommand(program: Command): void {
             const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
             grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
           }
-          await activateAndStoreOpenKeyGrants(ctx.profile, node, grants, options.manifest ? "manifest" : "cli");
+          await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options.manifest ? "manifest" : "cli");
           const delegationCids = grants.map(({ delegation }) => delegation.cid);
           const expiry = grants.at(-1)?.delegation.expiry.toISOString();
           reportDeclined(declined);
@@ -496,8 +497,7 @@ export function registerAuthCommand(program: Command): void {
         for (const delegation of delegations) {
           const covering = permissionsFromDelegation(delegation);
           localEffective.push(...covering);
-          const stored = storedAdditionalDelegation(delegation, covering);
-          await appendAdditionalDelegation(ctx.profile, stored);
+          await appendAdditionalDelegation(ctx.profile, await cliGrantRecord(node, delegation, covering, ctx.host));
           delegationCids.push(delegation.cid);
           expiry = delegation.expiry.toISOString();
           await appendGrantHistory(ctx.profile, {
@@ -1137,12 +1137,17 @@ interface StagedOpenKeyGrant {
 /** Validate and activate the complete batch before committing any stored authority. */
 async function activateAndStoreOpenKeyGrants(
   profileName: string,
+  host: string,
   node: TinyCloudNode,
   grants: StagedOpenKeyGrant[],
   source: "cli" | "manifest",
 ): Promise<void> {
-  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   if (grants.length === 0) return;
+  // Bound before anything is activated: a grant whose signed authority the
+  // replay rule cannot read fails the batch rather than be stored unusable.
+  const records = await Promise.all(grants.map(({ delegation, effective }) =>
+    cliGrantRecord(node, delegation, effective, host)));
+  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   await ProfileManager.withLock(profileName, async () => {
     for (const { delegation, effective } of grants) {
       await appendGrantHistory(profileName, {
@@ -1153,10 +1158,7 @@ async function activateAndStoreOpenKeyGrants(
       });
     }
     // A stored record for the same CID that carries a request binding is kept.
-    await appendAdditionalDelegations(
-      profileName,
-      grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
-    );
+    await appendAdditionalDelegations(profileName, records);
   });
 }
 
@@ -1214,7 +1216,7 @@ export async function ensureDelegationAuthority(params: {
       const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
-    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.node, grants, "cli");
+    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
     return;
   }
 
@@ -1238,7 +1240,7 @@ export async function ensureDelegationAuthority(params: {
     const covering = permissionsFromDelegation(delegation);
     await appendAdditionalDelegation(
       params.ctx.profile,
-      storedAdditionalDelegation(delegation, covering),
+      await cliGrantRecord(params.node, delegation, covering, params.ctx.host),
     );
     await appendGrantHistory(params.ctx.profile, {
       addedCaps: covering,
@@ -1447,7 +1449,7 @@ export function portableFromOpenKeyDelegation(
     chainId: Number(ownerParts[3]),
     host,
     // Verified above; replay rebuilds the CACAO from it before trusting the grant.
-    sessionProof: { siwe: data.siwe as string, signature: data.signature as string },
+    siweProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
 }
 

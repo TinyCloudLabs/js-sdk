@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { openKeyDelegate } from "../test-support/openkey-delegate.js";
+import { restoredOwnerNode } from "../test-support/restored-owner-node.js";
 
 const TEST_HOME = await mkdtemp(join(tmpdir(), "tc-secrets-owner-retry-"));
 const ORIGINAL_HOME = process.env.HOME;
@@ -53,15 +54,17 @@ let operationAttempts = 0;
 const installedDelegations: string[] = [];
 let currentSession: Record<string, unknown> | null = { expiresAt: "2099-01-01T00:00:00.000Z" };
 
-const node = {
-  did: "did:key:z6MkOwner",
-  hasRuntimePermissions: () => false,
-  getDefaultEncryptionNetworkId: () => NETWORK_ID,
-  getEncryptionNetworkIdForSpace: () => NETWORK_ID,
-  useRuntimeDelegation: async (delegation: { cid: string }) => {
-    installedDelegations.push(delegation.cid);
-  },
-  secrets: {
+// A real node restored offline, so storing the approved grant reads its signed
+// authority as replay does; activation and secret reads are recorded instead.
+const node = await restoredOwnerNode({ wasm, signer, sessionKey: key, sessionDid, spaceId, host: profile.host });
+node.hasRuntimePermissions = () => false;
+node.getDefaultEncryptionNetworkId = () => NETWORK_ID;
+node.getEncryptionNetworkIdForSpace = () => NETWORK_ID;
+node.useRuntimeDelegation = async (delegation) => {
+  installedDelegations.push(delegation.cid);
+};
+Object.defineProperty(node, "secrets", {
+  value: {
     get: async (name: string) => {
       secretAttempts.push(name);
       if (secretAttempts.length === 1) {
@@ -79,7 +82,7 @@ const node = {
       throw new Error("secrets get retried more than once");
     },
   },
-};
+});
 
 async function signedApproval() {
   const now = Date.now();

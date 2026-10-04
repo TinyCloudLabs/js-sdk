@@ -188,6 +188,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -314,6 +316,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -507,6 +511,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -707,6 +713,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -1297,6 +1305,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -1423,6 +1433,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -1616,6 +1628,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -1816,6 +1830,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -2415,6 +2431,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -2541,6 +2559,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -2734,6 +2754,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -2934,6 +2956,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -3716,6 +3740,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -3842,6 +3868,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -4035,6 +4063,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -4235,6 +4265,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -4984,6 +5016,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -5110,6 +5144,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -5303,6 +5339,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -5503,6 +5541,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -6221,6 +6261,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -6347,6 +6389,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -6540,6 +6584,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -6740,6 +6786,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -7339,6 +7387,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -7465,6 +7515,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -7658,6 +7710,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -7858,6 +7912,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -8449,6 +8505,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -8575,6 +8633,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -8768,6 +8828,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -8968,6 +9030,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -9563,6 +9627,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -9689,6 +9755,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -9882,6 +9950,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -10082,6 +10152,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -10636,6 +10708,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -10762,6 +10836,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -10955,6 +11031,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -11155,6 +11233,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -11877,6 +11957,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -12003,6 +12085,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -12196,6 +12280,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -12396,6 +12482,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -12940,6 +13028,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -13066,6 +13156,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -13259,6 +13351,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -13459,6 +13553,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -14050,6 +14146,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -14176,6 +14274,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -14369,6 +14469,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -14569,6 +14671,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -15247,6 +15351,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -15373,6 +15479,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -15566,6 +15674,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -15766,6 +15876,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -16425,6 +16537,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -16551,6 +16665,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -16744,6 +16860,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -16944,6 +17062,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -17582,6 +17702,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -17708,6 +17830,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -17901,6 +18025,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",
@@ -18101,6 +18227,8 @@
                       "type": "string",
                       "enum": [
                         "malformed",
+                        "unbound",
+                        "outside_request",
                         "host_mismatch",
                         "expired",
                         "cid_mismatch",

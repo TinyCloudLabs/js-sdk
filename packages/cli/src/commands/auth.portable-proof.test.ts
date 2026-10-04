@@ -3,8 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
-import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry, type TinyCloudNode } from "@tinycloud/node-sdk";
 import { openKeyDelegate, type OpenKeyCallback, type OpenKeyDelegate } from "../test-support/openkey-delegate.js";
+import { restoredOwnerNode } from "../test-support/restored-owner-node.js";
 
 const originalHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-portable-proof-"));
@@ -16,13 +17,9 @@ const staticCallback: OpenKeyDelegate = async () => callback;
 let acquire: OpenKeyDelegate = staticCallback;
 let activationError: Error | undefined;
 const activated: unknown[] = [];
-const node = {
-  hasRuntimePermissions: () => false,
-  useRuntimeDelegation: async (delegation: unknown) => {
-    if (activationError) throw activationError;
-    activated.push(delegation);
-  },
-};
+// A real node restored offline below; only activation is recorded instead of
+// installed, so binding a grant reads its signed authority as replay does.
+let node: TinyCloudNode;
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => node,
   bootstrapDelegatedSession: async () => node,
@@ -105,6 +102,13 @@ async function signedProof(options: { nested?: boolean; broad?: boolean; raw?: b
     permissions: requested,
   };
 }
+
+node = await restoredOwnerNode({ wasm, signer, sessionKey: jwk, sessionDid: did, spaceId, host });
+node.hasRuntimePermissions = () => false;
+node.useRuntimeDelegation = async (delegation) => {
+  if (activationError) throw activationError;
+  activated.push(delegation);
+};
 
 const openKey = openKeyDelegate({ wasm, signer, sessionKey: jwk, sessionDid: did });
 const openKeyRequests = openKey.requests;
@@ -210,7 +214,7 @@ describe("signed portable OpenKey grants", () => {
     await expect(ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
-      node: node as never,
+      node,
       requested: [...requested, otherSpace],
       expiryOption: undefined, reason: "Read secret and application", yes: true,
       openKeyAcquisition: async () => callback,
@@ -340,7 +344,7 @@ describe("signed portable OpenKey grants", () => {
     await ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
-      node: node as never,
+      node,
       requested: missing, expiryOption: undefined, reason: "Read named secret", yes: true, force: true,
       anchorSpace: "secrets",
       openKeyAcquisition: openKey.delegate,
@@ -364,7 +368,7 @@ describe("signed portable OpenKey grants", () => {
     await ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: { ...await ProfileManager.getProfile(profileName), spaceName: "default", spaceId: undefined },
-      node: node as never,
+      node,
       requested: [{ service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry],
       expiryOption: undefined, reason: "Decrypt named secret", yes: true, force: true,
       anchorSpace: "secrets",

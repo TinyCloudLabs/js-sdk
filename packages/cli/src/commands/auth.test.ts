@@ -379,6 +379,7 @@ mock.module("../lib/permissions.js", () => ({
   isCompatiblePermissionRequestArtifact: validateCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
   appendGrantHistory: async () => {},
+  cliGrantRecord: async (_node: unknown, delegation: object, permissions: object[]) => ({ delegation, permissions }),
   compactPermission: () => "",
   loadAdditionalDelegations: async () => [],
   loadManifestPermissions: async () => [],

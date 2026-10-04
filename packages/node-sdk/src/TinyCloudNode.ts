@@ -6333,7 +6333,7 @@ export class TinyCloudNode {
     spaceId: string,
     session: TinyCloudSession,
     expiresAt: Date,
-    sessionProof: { siwe: string; signature: string },
+    siweProof: { siwe: string; signature: string },
   ): PortableDelegation {
     const resources = this.delegatedResourcesForEntries(entries, spaceId);
     const primary = resources[0];
@@ -6350,7 +6350,7 @@ export class TinyCloudNode {
       ownerAddress: session.address,
       chainId: session.chainId,
       host: this.config.host,
-      sessionProof,
+      siweProof,
     };
   }
 
