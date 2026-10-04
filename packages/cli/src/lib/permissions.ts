@@ -557,9 +557,11 @@ export function permissionsFromDelegation(
 
 export function compactPermission(permission: PermissionEntry): string {
   const service = permission.service;
-  const space = permission.space.startsWith("tinycloud:")
-    ? permission.space.slice(permission.space.lastIndexOf(":") + 1)
-    : permission.space;
+  // A raw network entry from an operation's `missing` set carries no space.
+  const fullSpace = permission.space ?? (isRawEncryptionPermission(permission) ? ENCRYPTION_MANIFEST_SPACE : "");
+  const space = fullSpace.startsWith("tinycloud:")
+    ? fullSpace.slice(fullSpace.lastIndexOf(":") + 1)
+    : fullSpace;
   const actions = permission.actions
     .map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action)
     .join(",");

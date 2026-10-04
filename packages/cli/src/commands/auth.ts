@@ -43,6 +43,7 @@ import {
   declinedPermissions,
   parseRequestedExpiry,
   pinnedOwner,
+  grantRequestPermissions,
   scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
@@ -411,6 +412,7 @@ export function registerAuthCommand(program: Command): void {
               "Grant requested TinyCloud permissions from `tc auth request --grant`.",
               group,
             );
+            const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
             let delegationData: Record<string, unknown>;
             if (options.device) {
               const approval = await acquireDeviceDelegation({
@@ -418,7 +420,7 @@ export function registerAuthCommand(program: Command): void {
                 jwk: key,
                 nodeOrigin: ctx.host,
                 shareOrigin: DEFAULT_SHARE_ORIGIN,
-                permissions: group,
+                permissions: request,
                 expiry: parseRequestedExpiry(expiryOption ?? "7d"),
                 reason,
                 expectedOwner: pinnedOwner(profile),
@@ -430,14 +432,14 @@ export function registerAuthCommand(program: Command): void {
               delegationData = await startAuthFlow(profile.did, {
                 jwk: key,
                 host: ctx.host,
-                permissions: group,
+                permissions: request,
                 reason,
                 openkeyHost,
                 expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                 noPopup: options.popup === false,
               });
             }
-            const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host, proof);
+            const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
             grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
           }
           await activateAndStoreOpenKeyGrants(ctx.profile, node, grants, options.manifest ? "manifest" : "cli");
@@ -1150,6 +1152,11 @@ export async function ensureDelegationAuthority(params: {
   reason: string;
   yes: boolean;
   force?: boolean;
+  /**
+   * Space a decrypt-only grant is requested in. OpenKey signs only a request
+   * with one space; defaults to the profile's primary space.
+   */
+  anchorSpace?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<void> {
@@ -1173,17 +1180,21 @@ export async function ensureDelegationAuthority(params: {
       expectedOwner: pinnedOwner(params.profile),
       expiry: expiryCap,
     };
+    const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     const grants: StagedOpenKeyGrant[] = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
+      // capabilities/read is part of the request, so the signed proof may
+      // carry it without broadening the grant.
+      const request = grantRequestPermissions(group, anchorSpace);
       const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key,
         host: params.ctx.host,
-        permissions: group,
+        permissions: request,
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
       });
-      const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host, proof);
+      const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
     await activateAndStoreOpenKeyGrants(params.ctx.profile, params.node, grants, "cli");
@@ -1394,7 +1405,10 @@ export function portableFromOpenKeyDelegation(
   }
   const returnedSpace = data.spaceId as string; // Bound to the signed proof by verifyScopedLogin.
   const effective = session.permissions;
-  const primary = effective.find((permission) => !isRawEncryptionPermission(permission)) ?? effective[0]!;
+  // The headline resource is a requested data entry, not the
+  // capabilities/read every OpenKey grant carries or a raw network.
+  const spaced = effective.filter((permission) => !isRawEncryptionPermission(permission));
+  const primary = spaced.find((permission) => permission.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0]!;
   const resources = effective.map((permission) => ({
     service: permission.service.slice("tinycloud.".length),
     space: isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,

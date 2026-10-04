@@ -56,6 +56,41 @@ function signerJwkForProfile(
 }
 
 /**
+ * The stored session failed node-sdk's local verification (`AUTH_EXPIRED`:
+ * expired, or no longer valid for its key). Only a new sign-in fixes it, and
+ * the refusal happens before any node request.
+ */
+function sessionExpiredError(profileName: string, posture: string | undefined): CLIError {
+  const hint = posture === "local-owner-key"
+    ? `Sign in again with: tc --profile ${profileName} auth login --method local`
+    : posture === "delegate-session"
+      ? `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`
+      : `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `The session for profile "${profileName}" has expired or is no longer valid.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint },
+  );
+}
+
+async function restoreProfileSession(
+  node: TinyCloudNode,
+  profileName: string,
+  profile: ProfileConfig | null,
+  sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+): Promise<void> {
+  try {
+    await node.restoreSession(sessionData);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+      throw sessionExpiredError(profileName, profile === null ? undefined : resolveProfilePosture(profile));
+    }
+    throw error;
+  }
+}
+
+/**
  * Create a TinyCloudNode instance from the current CLI context.
  * Uses the profile's persisted session and key.
  *
@@ -96,7 +131,7 @@ export async function createSDKInstance(
 
     let restoredOwnSession = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-      await node.restoreSession({
+      await restoreProfileSession(node, ctx.profile, profile, {
         delegationHeader: session.delegationHeader as { Authorization: string },
         delegationCid: session.delegationCid as string,
         spaceId: session.spaceId as string,
@@ -135,7 +170,7 @@ export async function createSDKInstance(
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
     // Restore session from stored delegation data (browser auth flow)
-    await node.restoreSession({
+    await restoreProfileSession(node, ctx.profile, profile, {
       delegationHeader: session.delegationHeader as { Authorization: string },
       delegationCid: session.delegationCid as string,
       spaceId: session.spaceId as string,

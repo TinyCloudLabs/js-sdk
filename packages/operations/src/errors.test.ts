@@ -19,6 +19,7 @@ test("defines every stable v1 operation error code", () => {
     "AUTH_REQUIRED",
     "PERMISSION_DENIED",
     "SESSION_NOT_FOUND",
+    "SESSION_EXPIRED",
     "PERMISSION_HINT_INVALID",
     "DELEGATION_ARTIFACT_INVALID",
     "DELEGATION_EXPIRED",

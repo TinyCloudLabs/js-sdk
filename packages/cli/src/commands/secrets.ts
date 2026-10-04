@@ -278,6 +278,7 @@ async function runSecretOperation<T>(params: {
       reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true,
+      anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
     }),
   );
@@ -471,6 +472,7 @@ async function invokeCanonicalSecretGet(params: {
       reason: secretPermissionReason("get", params.name),
       yes: true,
       force: true,
+      anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
     }),
   );
@@ -526,6 +528,19 @@ function throwCanonicalSecretGetError(
           "Not signed in to TinyCloud.",
           ExitCode.AUTH_REQUIRED,
           { hint: `Sign in with: tc --profile ${result.context.profile} auth login` },
+        );
+      }
+      if (result.error.code === "SESSION_EXPIRED") {
+        const profile = result.context.profile;
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          `The session for profile "${profile}" has expired or is no longer valid.`,
+          ExitCode.AUTH_REQUIRED,
+          {
+            hint: result.context.posture === "local-owner-key"
+              ? `Sign in again with: tc --profile ${profile} auth login --method local`
+              : scopedSecretLoginHint(profile),
+          },
         );
       }
       if (result.error.code === "NODE_UNREACHABLE") {

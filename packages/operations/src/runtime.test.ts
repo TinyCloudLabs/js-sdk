@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
 import { BINDING_NOTES, bindingMigrationPath } from "./delegation-binding.js";
+import { invokeOperation } from "./invoke.js";
 import { createInvocationRuntime } from "./runtime.js";
 import {
   additionalDelegationsPath,
   profileConfigPath,
+  profilePath,
   readAdditionalDelegations,
   readJson,
   sessionPath,
@@ -473,6 +475,76 @@ test("rejects a delegate profile with local owner material before sign-in or run
     signIn.mockRestore();
   }
 });
+
+test("an expired owner-signed delegate session is a non-retryable SESSION_EXPIRED before any node request", async () => {
+  await persistExpiredSignedSession("expired-agent");
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
+    throw new Error("an expired session must not reach the node");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  const expired = {
+    code: "SESSION_EXPIRED",
+    message: "The selected profile's session has expired or is no longer valid. Sign in again.",
+    retryable: false,
+  };
+
+  try {
+    const runtime = await createInvocationRuntime({ profile: "expired-agent" });
+    expect(runtime).toMatchObject({
+      ok: false,
+      context: { profile: "expired-agent", posture: "delegate-session" },
+      error: expired,
+    });
+
+    const read = await invokeOperation("tinycloud.secrets.get", 1, { profile: "expired-agent" }, { name: "KEY" });
+    expect(read).toMatchObject({ status: "error", error: expired });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+/** A delegate-session profile whose stored session is a real owner-signed SIWE that has expired. */
+async function persistExpiredSignedSession(profile: string): Promise<void> {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
+  const address = await signer.getAddress();
+  const ownerDid = `did:pkh:eip155:1:${address}`;
+  const spaceId = wasm.makeSpaceId(address, 1, "secrets");
+  const manager = wasm.createSessionManager();
+  const jwk = JSON.parse(manager.jwk("default")!);
+  const sessionDid = manager.getDID("default");
+  const expiresAt = new Date(Date.now() - 3_600_000).toISOString();
+  const prepared = wasm.prepareSession({
+    abilities: {
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+      kv: { "vault/secrets/KEY": ["tinycloud.kv/get"] },
+    },
+    rawAbilities: { [`urn:tinycloud:encryption:${ownerDid}:default`]: ["tinycloud.encryption/decrypt"] },
+    address, chainId: 1, domain: "cli.example.test", spaceId, jwk,
+    issuedAt: new Date(Date.now() - 7_200_000).toISOString(),
+    expirationTime: expiresAt,
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  await writeJsonAtomic(profileConfigPath(profile), {
+    name: profile,
+    host: "https://node.example",
+    chainId: 1,
+    spaceName: "secrets",
+    did: sessionDid,
+    sessionDid,
+    ownerDid,
+    spaceId,
+    authMethod: "openkey",
+    posture: "delegate-session",
+    createdAt: "2026-07-14T12:00:00.000Z",
+  });
+  await writeJsonAtomic(`${profilePath(profile)}/key.json`, jwk);
+  await writeJsonAtomic(sessionPath(profile), {
+    ...wasm.completeSessionSetup({ ...prepared, signature }),
+    jwk, address, chainId: 1, spaceId, verificationMethod: sessionDid,
+    siwe: prepared.siwe, signature, ownerDid, expiresAt,
+  });
+}
 
 function validatedDelegation(
   delegation: StoredRuntimeDelegation,

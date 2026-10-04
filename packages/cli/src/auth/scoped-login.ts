@@ -289,7 +289,23 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
  */
 export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
   // Validation guarantees one non-raw entry with a non-empty space.
-  const space = permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "";
+  return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "");
+}
+
+/**
+ * One escalation grant (one space's group of a `tc secrets` missing grant or
+ * `auth request --grant`) as OpenKey `/delegate` signs it: the group's
+ * single space, raw decrypt in the `encryption` pseudo-space, and
+ * `tinycloud.capabilities/read` on the space root. A decrypt-only group has
+ * no space of its own, so it is anchored on `anchorSpace`; OpenKey refuses a
+ * request whose non-raw entries do not name exactly one space.
+ */
+export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: string): PermissionEntry[] {
+  const request = group.map((p) => isRawEncryptionPermission(p) ? { ...p, space: ENCRYPTION_MANIFEST_SPACE } : p);
+  return withCapabilitiesRead(request, request.find((p) => !isRawEncryptionPermission(p))?.space ?? anchorSpace);
+}
+
+function withCapabilitiesRead(permissions: PermissionEntry[], space: string): PermissionEntry[] {
   const hasRead = permissions.some((p) =>
     p.service === "tinycloud.capabilities" && p.path === "" && p.actions.includes(CAPABILITIES_READ) &&
     normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(space));
