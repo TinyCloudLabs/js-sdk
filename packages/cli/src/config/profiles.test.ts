@@ -8,6 +8,7 @@ const home = await mkdtemp(join(tmpdir(), "tc-profiles-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("./profiles.js");
 const { PROFILES_DIR } = await import("./constants.js");
+const { savePermissionRequestArtifacts } = await import("../lib/permissions.js");
 
 beforeEach(async () => {
   await rm(join(home, ".tinycloud"), { recursive: true, force: true });
@@ -39,32 +40,45 @@ describe("ProfileManager.deleteProfile", () => {
     expect(await readdir(target)).toEqual(["profile.json"]);
   });
 
-  test("a session write that waited while the profile was deleted is refused and recreates nothing", async () => {
-    await ProfileManager.setProfile("doomed", { name: "doomed", host: "https://node.tinycloud.test", did: "did:key:zDoomed", chainId: 1, spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z" });
-    await ProfileManager.setSession("doomed", { delegationCid: "bafy-old" });
-    const contended = join(home, "contended");
-    process.env.NODE_ENV = "test";
-    process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = contended;
-    try {
-      const entered = Promise.withResolvers<void>();
-      const proceed = Promise.withResolvers<void>();
-      // The lock is held, and the deletion then runs in that critical section,
-      // so the write below is waiting before the deletion starts.
-      const deleting = ProfileManager.withLock("doomed", async () => {
-        entered.resolve();
-        await proceed.promise;
-        await ProfileManager.deleteProfile("doomed");
-      });
-      await entered.promise;
-      const writing = ProfileManager.setSession("doomed", { delegationCid: "bafy-new" });
-      while (!await stat(contended).then(() => true, () => false)) { /* each stat yields to the writer */ }
-      proceed.resolve();
-      await deleting;
+  // Every writer of profile state other than the settings themselves.
+  for (const [store, write] of [
+    ["session", () => ProfileManager.setSession("doomed", { delegationCid: "bafy-new" })],
+    ["key", () => ProfileManager.setKey("doomed", { kty: "OKP", crv: "Ed25519", x: "new-public" })],
+    ["permission request", () => savePermissionRequestArtifacts("doomed", [])],
+  ] as const) {
+    test(`a ${store} write that waited while the profile was deleted is refused and recreates nothing`, async () => {
+      await ProfileManager.setProfile("doomed", { name: "doomed", host: "https://node.tinycloud.test", did: "did:key:zDoomed", chainId: 1, spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z" });
+      await ProfileManager.setSession("doomed", { delegationCid: "bafy-old" });
+      const contended = join(home, `contended-${store.replace(" ", "-")}`);
+      process.env.NODE_ENV = "test";
+      process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = contended;
+      try {
+        const entered = Promise.withResolvers<void>();
+        const proceed = Promise.withResolvers<void>();
+        // The lock is held, and the deletion then runs in that critical section,
+        // so the write below is waiting before the deletion starts.
+        const deleting = ProfileManager.withLock("doomed", async () => {
+          entered.resolve();
+          await proceed.promise;
+          await ProfileManager.deleteProfile("doomed");
+        });
+        await entered.promise;
+        const writing = write();
+        while (!await stat(contended).then(() => true, () => false)) { /* each stat yields to the writer */ }
+        proceed.resolve();
+        await deleting;
 
-      await expect(writing).rejects.toMatchObject({ code: "PROFILE_NOT_FOUND" });
-      await expect(readdir(join(PROFILES_DIR, "doomed"))).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
-    }
+        await expect(writing).rejects.toMatchObject({ code: "PROFILE_NOT_FOUND" });
+        await expect(readdir(join(PROFILES_DIR, "doomed"))).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+      }
+    });
+  }
+
+  test("deleting a profile that does not exist creates no profile or lock state", async () => {
+    await ProfileManager.deleteProfile("ghost");
+    expect((await readdir(join(home, ".tinycloud"))).sort()).toEqual(["profiles"]);
+    expect(await readdir(PROFILES_DIR)).toEqual([]);
   });
 });

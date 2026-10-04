@@ -227,6 +227,8 @@ KV keys cannot contain spaces or control characters: the SDK sends keys unescape
 ```
 ~/.tinycloud/                      # 0700
 ├── config.json                    # Global config (defaultProfile)
+├── profile-locks/
+│   └── {name}/                    # Turn lock (see below); kept after `tc profile delete`
 └── profiles/
     └── {name}/                    # 0700
         ├── profile.json           # Host, DID, chainId, ownerDid, spaceId (0600)
@@ -235,8 +237,17 @@ KV keys cannot contain spaces or control characters: the SDK sends keys unescape
         ├── additional-delegations.json        # Imported and granted delegations, with request bindings (0600)
         ├── auth-requests.json                 # Stored permission requests (0600)
         ├── delegation-binding-migration.json  # Present once unbound records were migrated (0600)
+        ├── .lock/                 # Lock shared with older releases, while held
         └── cache/
 ```
+
+### Profile lock
+
+Every write to a profile (key, session, settings, delegations, permission requests) runs under the profile's lock, shared by `tc` and the MCP server. Processes of this release first take a turn in `profile-locks/{name}/`, then the `profiles/{name}/.lock` directory every release uses, so they keep excluding CLI 1.0.0-beta.16 and older (which hold `.lock` from its creation) and 1.0.0-beta.17 … 1.0.1-beta.4 (which hold it once `owner.json` is linked in), and those exclude them. Among processes of this release, mutual exclusion holds however long any of them is paused, and needs no hard links (FAT/exFAT and SMB mounts work).
+
+That guarantee assumes every process using the profile runs on the same host and in the same PID namespace (a crashed process is recognised by its PID being gone), and a filesystem whose `rename` of a directory fails when the target exists. It does not hold for a `TC_HOME` shared across machines (NFS) or between containers that do not share a PID namespace: there a live process can look crashed, have its turn or staging directory removed, and the lock can be taken twice or stop working. Older releases running at the same time keep their own limits: a 1.0.0-beta.16-or-older process paused for longer than 30 s right after creating `.lock`, or a 1.0.0-beta.17 … 1.0.1-beta.4 process reclaiming `.lock` at the same moment as such a process, can still let two writers in. CLI 1.0.0-beta.16 and older never reclaim an abandoned `.lock` without an owner record; a newer release does, once it is 30 s old.
+
+A crashed holder's lock is reclaimed automatically (`.lock` once 30 s old). `PROFILE_LOCK_TIMEOUT` naming `profile-locks/{name}` means its turn lock is damaged (for example by a disk error): when no `tc` or MCP process is using that profile, remove `~/.tinycloud/profile-locks/{name}`; it is recreated on the next write. A write that waited for the lock while `tc profile delete` removed the profile fails with `PROFILE_NOT_FOUND` instead of recreating it.
 
 ## DID Formats
 

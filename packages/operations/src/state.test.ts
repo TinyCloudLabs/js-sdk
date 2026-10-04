@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ProfileDeletedError,
   ProfileLockTimeoutError,
@@ -33,7 +33,7 @@ import {
   withTinyCloudStateRoot,
 } from "./state.js";
 import { waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
-import { ageLock, appendFixture, exists, finishedChildren, spawnLockCycler, spawnLockHolder, violations } from "./test-support/lock-children.js";
+import { ageLock, appendFixture, exists, finishedChildren, lockChildEnv, spawnLockCycler, spawnLockHolder, violations } from "./test-support/lock-children.js";
 import { resolveInvocationContext } from "./profile.js";
 
 const originalTcHome = process.env.TC_HOME;
@@ -589,7 +589,7 @@ test("a TC-540 recoverer killed holding only its claim leaves a lock the next wr
   expect(await exists(lockPath)).toBe(false);
 }, 30_000);
 
-test("a recoverer of this release killed holding its claim leaves a lock the next writer reclaims at once", async () => {
+test("a recoverer of this release killed mid-recovery leaves only claims that 1.0.0-beta.17+ releases reclaim once aged", async () => {
   const { home, holders } = await lockTestHome();
   const profile = "delegate";
   const lockPath = profileLockPath(profile);
@@ -597,21 +597,29 @@ test("a recoverer of this release killed holding its claim leaves a lock the nex
   await mkdir(barrier, { recursive: true });
   await crashedHolderLock(profile);
 
-  // K recovers the dead holder's lock: links its `.recover-*` claim, unlinks
-  // owner.json, and is killed (holding its turn) before removing the claim.
+  // K recovers the dead holder's lock: moves owner.json into its claim, and
+  // is killed (holding its turn) before removing its claims.
   const killed = spawnLockHolder(home, holders, profile, "killed", { timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false, env: { TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR: barrier } });
-  await waitForProfileLockProtocol(join(barrier, `ready-${killed.pid}-${profile}`), "K holding only its claim");
+  await waitForProfileLockProtocol(join(barrier, `ready-${killed.pid}-${profile}`), "K holding only its claims");
   killed.kill();
   await killed.finished();
   const left = await readdir(lockPath);
-  expect(left).toHaveLength(1);
-  expect(left[0]).toMatch(/^\.recover-[0-9a-f-]+\.json$/);
+  expect(left.length).toBeGreaterThan(0);
+  for (const name of left) expect(name).toMatch(/^\.stale-[0-9a-f-]+\.json$/);
 
-  // Only a recoverer of this release, holding a turn, makes such a claim, so
-  // the next one to hold a turn knows K is gone: no wait for the claim to age.
-  await withProfileLock(profile, async () => {
-    expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: process.pid });
-  }, { timeoutMs: 2_000, staleAfterMs: 30_000, retryMs: 5 });
+  // Like a 1.0.0-beta.17 … 1.0.1-beta.4 recoverer's claim, it may belong to a
+  // live recoverer while fresh...
+  await expect(withProfileLock(profile, async () => undefined, { timeoutMs: 200, staleAfterMs: 30_000, retryMs: 5 }))
+    .rejects.toBeInstanceOf(ProfileLockTimeoutError);
+  // ...and once aged, a TC-540 release (the only kind left running here)
+  // reclaims it, as it would on master.
+  await ageLock(profile);
+  const older = spawnLockHolder(home, holders, profile, "older", { timeoutMs: 10_000, staleAfterMs: 30_000, env: TC540 });
+  await waitForProfileLockProtocol(older.readyPath, "the TC-540 writer reclaiming");
+  expect(JSON.parse(await readFile(profileLockMetadataPath(profile), "utf8"))).toMatchObject({ pid: older.pid });
+  await older.release();
+  const [exit, stderr] = await older.finished();
+  expect(exit, stderr).toBe(0);
   expect(await exists(lockPath)).toBe(false);
   expect(await violations(holders)).toEqual([]);
 }, 30_000);
@@ -909,6 +917,209 @@ test("collectors remove a crashed process's staged turn but never a paused one's
   expect(pausedExit, pausedError).toBe(0);
   expect(await violations(holders)).toEqual([]);
 }, 60_000);
+
+// Faults are injected with permissions, which do not bind root.
+const runsAsRoot = process.getuid?.() === 0;
+const turnFaultFixture = new URL("../test-support/turn-fault.ts", import.meta.url).pathname;
+
+/** A long-lived writer (test-support/turn-fault.ts) that reports its first and second acquisitions. */
+interface TurnFaultWriter {
+  readonly pid: number;
+  readonly signals: string;
+  outcome(name: "first" | "second"): Promise<string>;
+  retry(): Promise<void>;
+  finished(): Promise<readonly [number, string]>;
+}
+
+async function spawnTurnFault(home: string, holders: string, profile: string, options: { hold?: boolean; env?: Record<string, string> } = {}): Promise<TurnFaultWriter> {
+  const signals = join(home, "signals");
+  await mkdir(signals, { recursive: true });
+  const child = Bun.spawn([process.execPath, turnFaultFixture, profile, holders, signals, options.hold ? "hold" : "-"], {
+    env: lockChildEnv(home, options.env),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const outcome = async (name: "first" | "second") => {
+    await waitForProfileLockProtocol(join(signals, name), `the writer's ${name} acquisition`);
+    return readFile(join(signals, name), "utf8");
+  };
+  return {
+    pid: child.pid,
+    signals,
+    outcome,
+    retry: () => writeFile(join(signals, "retry"), "retry\n", "utf8"),
+    finished: async () => [await child.exited, await new Response(child.stderr).text()] as const,
+  };
+}
+
+/** Another process and then the writer's own process each take the lock. */
+async function expectLockTakenAgain(home: string, holders: string, profile: string, writer: TurnFaultWriter, others = 1): Promise<void> {
+  for (let index = 0; index < others; index++) {
+    const [exit, stderr] = await spawnLockHolder(home, holders, profile, `other-${index}`, { timeoutMs: 10_000, staleAfterMs: 30_000, holdUntilReleased: false }).finished();
+    expect(exit, stderr).toBe(0);
+  }
+  await writer.retry();
+  expect(await writer.outcome("second")).toBe("ok");
+  const [exit, stderr] = await writer.finished();
+  expect(exit, stderr).toBe(0);
+  expect(await violations(holders)).toEqual([]);
+}
+
+test.skipIf(runsAsRoot)("a held marker that cannot be written strands no turn once writes work again", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const turns = profileTurnLockPath(profile);
+  const barrier = join(home, "turn-publish-barrier");
+  await mkdir(barrier);
+  const writer = await spawnTurnFault(home, holders, profile, { env: { TC_TEST_PROFILE_LOCK_TURN_PUBLISH_BARRIER_DIR: barrier } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${writer.pid}-${profile}`), "the writer about to publish turn 1");
+  // Its staged turn becomes read-only: once published, `held` cannot be written in it.
+  const [stage] = (await readdir(turns)).filter((name) => name.startsWith(".stage-"));
+  await chmod(join(turns, stage!), 0o500);
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+  expect(await writer.outcome("first")).toBe("EACCES");
+
+  // The disk works again; the writer's process is still alive.
+  await chmod(join(turns, "1"), 0o700);
+  await expectLockTakenAgain(home, holders, profile, writer);
+}, 60_000);
+
+test.skipIf(runsAsRoot)("a done marker that cannot be written keeps the critical section's result and strands no turn", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const turns = profileTurnLockPath(profile);
+  const writer = await spawnTurnFault(home, holders, profile, { hold: true });
+  await waitForProfileLockProtocol(join(writer.signals, "holding"), "the writer holding the lock");
+  // Its turn becomes read-only: `done` cannot be written when it releases.
+  const turn = String(Math.max(...(await readdir(turns)).filter((name) => /^\d+$/.test(name)).map(Number)));
+  await chmod(join(turns, turn), 0o500);
+  await writeFile(join(writer.signals, "release"), "release\n", "utf8");
+  expect(await writer.outcome("first")).toBe("ok");
+
+  await chmod(join(turns, turn), 0o700);
+  await expectLockTakenAgain(home, holders, profile, writer);
+}, 60_000);
+
+test.skipIf(runsAsRoot)("a turn whose predecessor cannot be read is left undecided, not void, and settled once it can", async () => {
+  const { home, holders } = await lockTestHome();
+  const profile = "delegate";
+  const turns = profileTurnLockPath(profile);
+  const barrier = join(home, "turn-publish-barrier");
+  await mkdir(barrier);
+  const writer = await spawnTurnFault(home, holders, profile, { env: { TC_TEST_PROFILE_LOCK_TURN_PUBLISH_BARRIER_DIR: barrier } });
+  await waitForProfileLockProtocol(join(barrier, `ready-${writer.pid}-${profile}`), "the writer about to publish turn 1");
+  // Turn 0, which the writer read and will check again, becomes unreadable.
+  await chmod(join(turns, "0"), 0o000);
+  await writeFile(join(barrier, "release"), "release\n", "utf8");
+  expect(await writer.outcome("first")).toBe("EACCES");
+
+  await chmod(join(turns, "0"), 0o700);
+  await expectLockTakenAgain(home, holders, profile, writer, 3);
+}, 60_000);
+
+test("a store write that arrives after the deletion was recorded, but before it released the lock, is refused", async () => {
+  const home = await isolatedHome();
+  const profile = "delegate";
+  await writeJsonAtomic(profileConfigPath(profile), legacyProfile);
+  const contended = join(home, "contended");
+  process.env.NODE_ENV = "test";
+  process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = contended;
+  try {
+    const recorded = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const deleting = withProfileLock(profile, async () => {
+      await rm(profileConfigPath(profile));
+      await recordProfileDeletion(profile);
+      recorded.resolve();
+      await finish.promise;
+    });
+    await recorded.promise;
+    const writing = writeSession(profile, { value: "after-record" }, { timeoutMs: 5_000, retryMs: 5 });
+    while (!await exists(contended)) { /* each stat yields to the writer */ }
+    finish.resolve();
+    await deleting;
+    await rmdir(profilePath(profile)).catch(() => undefined);
+
+    await expect(writing).rejects.toBeInstanceOf(ProfileDeletedError);
+    expect(await exists(profilePath(profile))).toBe(false);
+  } finally {
+    delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+  }
+});
+
+test("a store write that waited after a deletion and a re-creation of the profile is written", async () => {
+  const home = await isolatedHome();
+  const profile = "delegate";
+  await writeJsonAtomic(profileConfigPath(profile), legacyProfile);
+  await withProfileLock(profile, async () => {
+    await rm(profileConfigPath(profile));
+    await recordProfileDeletion(profile);
+  });
+  await withProfileLock(profile, () => writeJsonAtomic(profileConfigPath(profile), legacyProfile));
+  const contended = join(home, "contended");
+  process.env.NODE_ENV = "test";
+  process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = contended;
+  try {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const holding = withProfileLock(profile, async () => {
+      entered.resolve();
+      await finish.promise;
+    });
+    await entered.promise;
+    const writing = writeSession(profile, { value: "recreated" }, { timeoutMs: 5_000, retryMs: 5 });
+    while (!await exists(contended)) { /* each stat yields to the writer */ }
+    finish.resolve();
+    await holding;
+    await writing;
+    expect(await readSession(profile)).toEqual({ value: "recreated" });
+  } finally {
+    delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+  }
+});
+
+test("a crashed process's staging directory beside the turn lock is collected; a live one is kept", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await withProfileLock(profile, async () => undefined);
+  const parent = dirname(profileTurnLockPath(profile));
+  const crashed = join(parent, `.stage-${profile}-999999999-${randomUUID()}`);
+  const live = join(parent, `.stage-other-${process.pid}-${randomUUID()}`);
+  await mkdir(join(crashed, "0"), { recursive: true });
+  await mkdir(live);
+  await withProfileLock(profile, async () => undefined);
+  expect(await exists(crashed)).toBe(false);
+  expect(await exists(live)).toBe(true);
+});
+
+test("a damaged or never-granted top turn times out naming the turn lock and how to recover", async () => {
+  await isolatedHome();
+  const profile = "delegate";
+  await withProfileLock(profile, async () => undefined);
+  const turns = profileTurnLockPath(profile);
+  const top = Math.max(...(await readdir(turns)).filter((name) => /^\d+$/.test(name)).map(Number));
+  const attempt = () => withProfileLock(profile, async () => undefined, { timeoutMs: 100, retryMs: 5 });
+
+  // A never-granted turn on top (done without held).
+  const token = randomUUID();
+  await mkdir(join(turns, String(top + 1)));
+  await writeFile(join(turns, String(top + 1), "owner.json"), JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), token, after: "another" }));
+  await writeFile(join(turns, String(top + 1), `${token}.done`), "");
+  const neverGranted = await attempt().catch((error: unknown) => error);
+  expect(neverGranted).toBeInstanceOf(ProfileLockTimeoutError);
+  expect((neverGranted as Error).message).toContain(`${turns} ends with turn ${top + 1}, which was never granted`);
+  expect((neverGranted as Error).message).toContain("remove that directory");
+
+  // A truncated owner record on top.
+  await writeFile(join(turns, String(top + 1), "owner.json"), "{\"pid\": 1");
+  const unreadable = await attempt().catch((error: unknown) => error);
+  expect(unreadable).toBeInstanceOf(ProfileLockTimeoutError);
+  expect((unreadable as Error).message).toContain(`${turns} has an unreadable turn ${top + 1}`);
+
+  // The documented recovery: remove the directory while nothing uses the profile.
+  await rm(turns, { recursive: true });
+  await withProfileLock(profile, async () => undefined, { timeoutMs: 1_000 });
+});
 
 test("a lock held in one state root does not stand in for another root's lock", async () => {
   const rootA = await mkdtemp(join(tmpdir(), "tc-lock-root-a-"));

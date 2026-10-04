@@ -26,6 +26,12 @@ jobs:
         with:
           bun-version: 1.2.0
 
+      # The profile-lock tests run the built package under Node (as the CLI
+      # runs it) in children whose hard links are made to fail.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown

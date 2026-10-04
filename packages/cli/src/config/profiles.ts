@@ -4,6 +4,7 @@ import {
   profilePath,
   readSession,
   recordProfileDeletion,
+  refuseWriteToDeletedProfile,
   removeSession,
   withProfileLock,
   writeSession,
@@ -171,11 +172,13 @@ export class ProfileManager {
         `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`,
       );
     }
-    const isLink = await lstat(profileDir).then((stats) => stats.isSymbolicLink(), (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
+    const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return "missing";
       throw error;
     });
-    if (isLink) {
+    // Nothing to delete; taking the lock would create the profile's lock state.
+    if (kind === "missing") return;
+    if (kind === "link") {
       await rm(profileDir, { force: true });
       return;
     }
@@ -201,9 +204,14 @@ export class ProfileManager {
     return readJson<object>(join(PROFILES_DIR, name, "key.json"));
   }
 
-  /** Saves a JWK key under the profile lock (0600, in an owner-only profile directory). */
+  /**
+   * Saves a JWK key under the profile lock (0600, in an owner-only profile
+   * directory). Refused (PROFILE_NOT_FOUND) if the profile was deleted while
+   * this waited for the lock, rather than leaving a key-only profile.
+   */
   static async setKey(name: string, jwk: object): Promise<void> {
     await ProfileManager.withLock(name, async () => {
+      await refuseWriteToDeletedProfile(name);
       await writeJson(join(await ProfileManager.ensureProfileDir(name), "key.json"), jwk);
     });
   }
