@@ -1,0 +1,35 @@
+# Major versions are a human decision (TC-615). This fails a pull request that
+# adds a `major` changeset or raises a package's major version, unless one of
+# the PR's own empty commits approves it:
+#
+#   git commit --allow-empty -m "approve-major-release: @tinycloud/cli"
+#
+# Agents never write that commit. The Release workflow applies the same rule
+# before publishing betas and before graduating them to stable.
+name: Major release guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  signoff:
+    name: Major release sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Test the guard
+        run: node --test .github/scripts/check-major-release-signoff.test.mjs
+
+      - name: Require sign-off for major bumps
+        run: node .github/scripts/check-major-release-signoff.mjs pr "$BASE_SHA" "$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
