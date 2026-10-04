@@ -581,6 +581,284 @@ test("an authorized missing secret returns only the value-free setup action", as
   }
 });
 
+test("an unbound `tc auth import` keeps serving `tc secrets get` and MCP across the binding migration", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-unbound-import-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture({ secretPayloadValue: "hermetic encrypted delegation proof" });
+  const canary = "hermetic encrypted delegation proof";
+  const delegationsPath = join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json");
+  const readRecords = async () => JSON.parse(await readFile(delegationsPath, "utf8")) as Array<Record<string, any>>;
+  const secretGet = ["--profile", fixture.profile, "secrets", "get", "HERMETIC_DELEGATION_CANARY"];
+  const mcpSecretGet = { name: "tinycloud_secrets_get", arguments: { name: "HERMETIC_DELEGATION_CANARY" } };
+  let client: ConnectedClient | undefined;
+  let stage = "configure delegate profile";
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+
+    stage = "replay a record an older release stored unbound";
+    const stored = await fixture.hermetic.mintDelegation();
+    await writeFile(delegationsPath, JSON.stringify([{ delegation: stored, permissions: fixture.hermetic.permissions }]));
+    expect(await runTinyCloudCli(home, secretGet)).toEqual({ name: "HERMETIC_DELEGATION_CANARY", value: canary });
+    expect((await readRecords())[0]).toMatchObject({
+      authorityRequest: { requestId: `migrated:${stored.cid}` },
+      authorityRequestAudit: { source: "migration" },
+    });
+    client = await connectClient(home, ["--profile", fixture.profile]);
+    expect(contentOf(await timedTool(client.client, mcpSecretGet))).toMatchObject({ status: "ok", output: { value: canary } });
+    await closeWithinDeadline(client.client);
+    client = undefined;
+
+    stage = "import an unbound artifact after the migration";
+    await writeFile(delegationsPath, "[]");
+    const imported = await fixture.hermetic.mintDelegation();
+    expect(await runTinyCloudCli(home, ["--profile", fixture.profile, "auth", "import", "--stdin"], imported))
+      .toMatchObject({ imported: true, activated: true, delegationCid: imported.cid });
+    const [record] = await readRecords();
+    expect(record).toMatchObject({
+      authorityRequest: { requestId: `unbound-import:${imported.cid}` },
+      authorityRequestAudit: { source: "unbound-import" },
+    });
+    expect(await runTinyCloudCli(home, secretGet)).toEqual({ name: "HERMETIC_DELEGATION_CANARY", value: canary });
+    client = await connectClient(home, ["--profile", fixture.profile]);
+    expect(contentOf(await timedTool(client.client, mcpSecretGet))).toMatchObject({ status: "ok", output: { value: canary } });
+    expect(contentOf(await timedTool(client.client, { name: "tinycloud_auth_capabilities", arguments: {} })))
+      .toMatchObject({
+        status: "ok",
+        output: { capabilities: expect.arrayContaining([expect.objectContaining({ actions: ["tinycloud.kv/get"] })]) },
+      });
+    await closeWithinDeadline(client.client);
+    client = undefined;
+
+    stage = "re-import the same CID over a request binding";
+    const requestBound = { ...record, authorityRequest: { requestId: "req_owner_grant", requested: fixture.hermetic.permissions } };
+    await writeFile(delegationsPath, JSON.stringify([requestBound]));
+    await runTinyCloudCli(home, ["--profile", fixture.profile, "auth", "import", "--stdin"], imported);
+    expect(await readRecords()).toEqual([JSON.parse(JSON.stringify(requestBound))]);
+  } catch (error) {
+    throw new Error(`${stage}: ${error instanceof Error ? error.message : String(error)}; MCP stderr: ${client?.stderr() ?? ""}`);
+  } finally {
+    await closeWithinDeadline(client?.client);
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("`tc kv get` never activates a stored compact delegation broader than its request binding", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-cli-replay-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+    const kvOnly = (fixture.hermetic.permissions as Array<{ service: string }>)
+      .filter((permission) => permission.service === "tinycloud.kv");
+    // Signs KV get and network decrypt; the narrower binding covers only KV get.
+    const delegation = await fixture.hermetic.mintDelegation();
+    const activationsDuring = (records: readonly unknown[]) => kvGetActivations(home, fixture, records);
+
+    // The first run also records the (empty) profile's binding migration.
+    const baseline = await activationsDuring([]);
+    expect(await activationsDuring([{
+      delegation,
+      permissions: kvOnly,
+      authorityRequest: { requestId: "req_kv_only", requested: kvOnly },
+    }])).toBe(baseline);
+    // Unbound after the migration, with a correct header and with
+    // case-folded, upper-case and duplicated header names.
+    const authorization = delegation.delegationHeader.Authorization as string;
+    for (const delegationHeader of [
+      { Authorization: authorization },
+      { authorization },
+      { AUTHORIZATION: authorization },
+      { Authorization: authorization, authorization },
+    ]) {
+      expect(await activationsDuring([{ delegation: { ...delegation, delegationHeader }, permissions: [] }]))
+        .toBe(baseline);
+    }
+    // Not contained in its binding, with the header value in an array.
+    expect(await activationsDuring([{
+      delegation: { ...delegation, delegationHeader: { Authorization: [authorization] } },
+      permissions: kvOnly,
+      authorityRequest: { requestId: "req_kv_only", requested: kvOnly },
+    }])).toBe(baseline);
+    expect(await activationsDuring([{
+      delegation,
+      permissions: fixture.hermetic.permissions,
+      authorityRequest: { requestId: "req_plan", requested: fixture.hermetic.permissions },
+    }])).toBe(baseline + 1);
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("the CLI's legacy replay installs an unbound signed-login grant, never one that carries a binding", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-cli-legacy-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+    // An owner-signed login (CACAO) for the delegate's session key, stored the
+    // way the CLI stores its own grants: no `siweProof`.
+    const { NodeWasmBindings, PrivateKeySigner } = await import("@tinycloud/node-sdk");
+    const wasm = new NodeWasmBindings();
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    const address = await signer.getAddress();
+    const spaceId = fixture.hermetic.restorableSession.spaceId as string;
+    const issuedAt = new Date();
+    const expiry = new Date(issuedAt.getTime() + 60 * 60_000);
+    const prepared = wasm.prepareSession({
+      abilities: { kv: { "vault/secrets/HERMETIC_DELEGATION_CANARY": ["tinycloud.kv/get"] } },
+      address,
+      chainId: 1,
+      domain: "openkey.test",
+      issuedAt: issuedAt.toISOString(),
+      expirationTime: expiry.toISOString(),
+      spaceId,
+      jwk: fixture.hermetic.restorableSession.jwk as object,
+    });
+    const session = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
+    const grant = {
+      cid: session.delegationCid,
+      delegationHeader: { Authorization: session.delegationHeader.Authorization },
+      spaceId,
+      path: "vault/secrets/HERMETIC_DELEGATION_CANARY",
+      actions: ["tinycloud.kv/get"],
+      delegateDID: fixture.sessionDid,
+      ownerAddress: address,
+      chainId: 1,
+      expiry: expiry.toISOString(),
+      host: fixture.hermetic.host,
+    };
+    const activationsDuring = (records: readonly unknown[]) => kvGetActivations(home, fixture, records);
+
+    const baseline = await activationsDuring([]);
+    expect(await activationsDuring([{ delegation: grant, permissions: [] }])).toBe(baseline + 1);
+    for (const authorityRequest of [{ requestId: "req_empty", requested: [] }, { requestId: "req_malformed" }]) {
+      expect(await activationsDuring([{ delegation: grant, permissions: [], authorityRequest }])).toBe(baseline);
+    }
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("an ordinary command on a local profile migrates it; one with another --private-key does not", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-local-migration-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  const marker = join(home, ".tinycloud/profiles", fixture.ownerProfile, "delegation-binding-migration.json");
+  const migrated = () => readFile(marker, "utf8").then(() => true, () => false);
+  try {
+    await disableLocalNodeDiscovery(home, fixture.ownerProfile);
+    await runTinyCloudCliExit(home, [
+      "--profile", fixture.ownerProfile, "secrets", "list",
+      "--private-key", "1111111111111111111111111111111111111111111111111111111111111111",
+    ]);
+    expect(await migrated()).toBe(false);
+
+    const caps = await runTinyCloudCliExit(home, ["--profile", fixture.ownerProfile, "auth", "caps"]);
+    expect(caps.exitCode, caps.stderr).toBe(0);
+    expect(await migrated()).toBe(true);
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("the CLI's replay skips stored elements that are not objects and still migrates and installs the rest", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-cli-elements-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  const profileDirectory = join(home, ".tinycloud/profiles", fixture.profile);
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const malformed = [42, "not a record", null];
+
+    // The first CLI run on this profile migrates it.
+    await kvGetActivations(home, fixture, [...malformed, { delegation, permissions: [] }]);
+    expect(JSON.parse(await readFile(join(profileDirectory, "delegation-binding-migration.json"), "utf8")))
+      .toMatchObject({ bound: [delegation.cid], unbound: [] });
+    const stored = JSON.parse(await readFile(join(profileDirectory, "additional-delegations.json"), "utf8")) as unknown[];
+    expect(stored.slice(0, 3)).toEqual(malformed);
+    expect(stored[3]).toMatchObject({ authorityRequest: { requestId: `migrated:${delegation.cid}` } });
+
+    // The migrated record still installs next to the malformed elements.
+    expect(await kvGetActivations(home, fixture, stored)).toBe(await kvGetActivations(home, fixture, malformed) + 1);
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+/**
+ * `/delegate` activations one `tc kv get` makes with `records` stored. The
+ * loopback node does not hold reads to the delegation chain, so activations
+ * are what shows which stored records the CLI installed; the command's own
+ * result is not (a read through an installed login grant fails on this node).
+ */
+async function kvGetActivations(home: string, fixture: any, records: readonly unknown[]): Promise<number> {
+  await writeFile(
+    join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"),
+    JSON.stringify(records),
+  );
+  const before = fixture.hermetic.nativeBearerStats().delegations as number;
+  await runTinyCloudCliExit(home, [
+    "--profile", fixture.profile, "kv", "get", "vault/secrets/HERMETIC_DELEGATION_CANARY",
+  ]);
+  return (fixture.hermetic.nativeBearerStats().delegations as number) - before;
+}
+
+async function hermeticFixture(options?: Record<string, unknown>): Promise<any> {
+  const authSupport = await import(new URL(
+    "../../operations/test-support/auth-runtime.ts",
+    import.meta.url,
+  ).href) as {
+    createAuthRuntimeFixture: (options?: Record<string, unknown>) => Promise<any>;
+  };
+  return authSupport.createAuthRuntimeFixture(options);
+}
+
+async function disableLocalNodeDiscovery(home: string, profile: string): Promise<void> {
+  const path = join(home, ".tinycloud/profiles", profile, "profile.json");
+  const config = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  await writeFile(path, JSON.stringify({ ...config, autoDiscoverLocalNode: false }, null, 2));
+}
+
+async function runTinyCloudCliExit(
+  home: string,
+  args: readonly string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn({
+    cmd: [nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args],
+    env: { ...globalThis.process.env, TC_HOME: home },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
 function contentOf(result: { structuredContent?: unknown | null }): Record<string, any> | undefined {
   return result.structuredContent as Record<string, any> | undefined;
 }

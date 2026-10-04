@@ -312,6 +312,91 @@ test("imports a real signed hostless delegation idempotently and a fresh runtime
   }
 });
 
+test("a compact import persists its request binding, which replay re-checks", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const request = (await readAuthRequestRecords(fixture.profile)).find((item) => item.requestId === requestId);
+    const delegation = await fixture.hermetic.mintDelegation();
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "ok",
+      output: { alreadyPresent: false },
+    });
+    const [record] = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(record?.authorityRequest).toEqual({ requestId, requested: request?.requested });
+    expect((await runtimeContext(fixture.profile)).runtime.granted)
+      .toEqual(canonicalizeCapabilities(fixture.hermetic.permissions));
+
+    const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [
+      { ...record, authorityRequest: { requestId, requested: kvOnly } },
+    ]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a request-bound re-import binds a compact delegation stored without its request", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    // The first runtime runs the (empty) profile's binding migration.
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    // As the unbound `tc auth import` route stores it: no request binding.
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{
+      delegation,
+      permissions: fixture.hermetic.permissions,
+    }]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted).toEqual([]);
+
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "ok",
+      output: { cid: delegation.cid, alreadyPresent: true },
+    });
+    const records = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ authorityRequest: { requestId } });
+    expect((await runtimeContext(fixture.profile)).runtime.granted)
+      .toEqual(canonicalizeCapabilities(fixture.hermetic.permissions));
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a request-bound re-import replaces a stored binding replay cannot use and collapses duplicate rows", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const other = { delegation: { cid: "bafy-unrelated" }, permissions: [] };
+    // A binding that parses but grants nothing, and a second row for the CID.
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [
+      { delegation, permissions: [], authorityRequest: { requestId: "req_empty", requested: [] } },
+      other,
+      { delegation, permissions: [] },
+    ]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted).toEqual([]);
+
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "ok",
+      output: { cid: delegation.cid, alreadyPresent: true },
+    });
+    const records = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(records).toEqual([
+      expect.objectContaining({ authorityRequest: expect.objectContaining({ requestId }) }),
+      other,
+    ]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted)
+      .toEqual(canonicalizeCapabilities(fixture.hermetic.permissions));
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("imports a real signed delegation with an explicit selected profile host", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {

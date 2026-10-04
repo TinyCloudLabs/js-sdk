@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
@@ -70,6 +70,7 @@ import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
+  appendAdditionalDelegations,
   appendPermissionRequestArtifact,
   createPermissionRequestArtifact,
   getLastPermissionRequestArtifact,
@@ -79,7 +80,6 @@ import {
   appendGrantHistory,
   compactPermission,
   loadAdditionalDelegations,
-  saveAdditionalDelegations,
   loadManifestPermissions,
   loadPermissionRequest,
   parseCapSpec,
@@ -543,6 +543,19 @@ export function registerAuthCommand(program: Command): void {
         }
 
         const imported = normalizeDelegationImport(parsed);
+        // Loaded on use: a static import would evaluate the operations
+        // delegation-binding bundle in every command that registers `auth`.
+        const { activateUnboundCompactImport, storedDelegationKind } = await import(
+          "@tinycloud/operations/delegation-binding"
+        );
+        const kind = storedDelegationKind({ delegation: imported.delegation });
+        if (kind === "refused") {
+          throw new CLIError(
+            "INVALID_AUTH_IMPORT",
+            "Imported delegation must carry exactly one string Authorization header.",
+            ExitCode.USAGE_ERROR,
+          );
+        }
         let node;
         try {
           node = await ensureAuthenticated(ctx);
@@ -552,11 +565,6 @@ export function registerAuthCommand(program: Command): void {
           if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
           node = (await bootstrapDelegatedSession(ctx, imported.delegation)).node;
         }
-        await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
-          imported.delegation,
-          imported.permissions,
-        ));
-
         // A delegation whose audience is this profile's own session key can be
         // installed as a runtime grant (useRuntimeDelegation activates it for
         // matching service calls). A cross-user delegation — audience is this
@@ -567,12 +575,34 @@ export function registerAuthCommand(program: Command): void {
           typeof imported.delegation.delegateDID === "string" &&
           principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
         let activated = false;
-        if (targetsSessionKey) {
-          await node.useRuntimeDelegation(imported.delegation);
+        let permissions = imported.permissions;
+        if (targetsSessionKey && kind === "compact") {
+          // No stored request contains this compact UCAN, so it is validated as
+          // replay validates it and bound to exactly the capabilities it signs.
+          // Replay then holds the stored record to that binding.
+          const record = await activateUnboundCompactImport(
+            node as unknown as RuntimeDelegationActivator,
+            imported.delegation,
+            ctx.host,
+          );
+          await appendAdditionalDelegation(ctx.profile, record);
+          permissions = record.permissions;
           activated = true;
+        } else {
+          await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
+            imported.delegation,
+            imported.permissions,
+          ));
+          if (targetsSessionKey) {
+            await node.useRuntimeDelegation({
+              ...imported.delegation,
+              delegationHeader: { Authorization: imported.delegation.delegationHeader.Authorization },
+            });
+            activated = true;
+          }
         }
         await appendGrantHistory(ctx.profile, {
-          addedCaps: imported.permissions,
+          addedCaps: permissions,
           source: "cli",
           delegationCid: imported.delegation.cid,
           expiry: imported.delegation.expiry.toISOString(),
@@ -584,7 +614,7 @@ export function registerAuthCommand(program: Command): void {
           kind: "tinycloud.auth.delegation",
           requestId: imported.requestId ?? null,
           delegationCid: imported.delegation.cid,
-          permissions: imported.permissions,
+          permissions,
           expiry: imported.delegation.expiry.toISOString(),
         });
       } catch (error) {
@@ -1093,8 +1123,6 @@ async function activateAndStoreOpenKeyGrants(
   for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   if (grants.length === 0) return;
   await ProfileManager.withLock(profileName, async () => {
-    const existing = await loadAdditionalDelegations(profileName);
-    const replacing = new Set(grants.map(({ delegation }) => delegation.cid));
     for (const { delegation, effective } of grants) {
       await appendGrantHistory(profileName, {
         addedCaps: effective,
@@ -1103,10 +1131,11 @@ async function activateAndStoreOpenKeyGrants(
         expiry: delegation.expiry.toISOString(),
       });
     }
-    await saveAdditionalDelegations(profileName, [
-      ...existing.filter(({ delegation }) => !replacing.has(delegation.cid)),
-      ...grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
-    ]);
+    // A stored record for the same CID that carries a request binding is kept.
+    await appendAdditionalDelegations(
+      profileName,
+      grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
+    );
   });
 }
 

@@ -419,11 +419,18 @@ function resourcesMatch(
  * compact UCAN's signed payload, verifies the transport fields agree, then
  * invokes {@link TinyCloudNode.useRuntimeDelegation}. The node activation call
  * remains the authority and delegation-chain validation boundary.
+ *
+ * `options.authorize`, when given, sees the signed capabilities before
+ * anything is activated or installed; returning `false` refuses the
+ * delegation.
  */
 export async function activateValidatedRuntimeDelegation(
   node: RuntimeDelegationActivator,
   delegation: PortableDelegation,
-  options: { host: string },
+  options: {
+    host: string;
+    authorize?: (effectivePermissions: readonly PermissionEntry[]) => boolean;
+  },
 ): Promise<ValidatedRuntimeDelegation> {
   const host = normalizedHost(options.host);
   if (delegation.host !== undefined && normalizedHost(delegation.host) !== host) {
@@ -466,6 +473,9 @@ export async function activateValidatedRuntimeDelegation(
   const declaredResources = canonicalResourcesFromPortableDelegation(delegation);
   if (!resourcesMatch(declaredResources, signed.resources)) {
     throw new Error("Runtime delegation resources do not match signed authority.");
+  }
+  if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
+    throw new Error("Runtime delegation is not authorized for this runtime.");
   }
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()

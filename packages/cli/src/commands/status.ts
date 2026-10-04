@@ -232,7 +232,17 @@ async function readDelegations(
   issues: string[],
 ): Promise<StoredAdditionalDelegation[]> {
   try {
-    return await loadAdditionalDelegations(name);
+    const entries: readonly unknown[] = await loadAdditionalDelegations(name);
+    // Loaded on use: a static import would evaluate node-sdk and the
+    // operations runtime for every status run.
+    const { storedDelegationKind } = await import("@tinycloud/operations/delegation-binding");
+    // Elements replay never installs (not objects, malformed headers, bound
+    // records the legacy path cannot hold) are reported, not inspected.
+    const readable = entries.filter((entry) => storedDelegationKind(entry) !== "refused");
+    if (readable.length < entries.length) {
+      issues.push(`delegations: ${entries.length - readable.length} unreadable stored record(s) skipped`);
+    }
+    return readable as StoredAdditionalDelegation[];
   } catch (error) {
     issues.push(`delegations: ${messageFromError(error)}`);
     return [];

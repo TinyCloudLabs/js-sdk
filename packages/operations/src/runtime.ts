@@ -1,6 +1,5 @@
 import type {
   PermissionEntry,
-  PortableDelegation,
   RuntimeDelegationActivator,
   TinyCloudNode,
 } from "@tinycloud/node-sdk";
@@ -16,6 +15,7 @@ import type {
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
 import { resolveInvocationProfile, resolvePosture } from "./profile.js";
+import { operationSpaceResolver } from "./secrets.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -23,6 +23,7 @@ import {
   readProfile,
   readSession,
 } from "./state.js";
+import { prepareStoredDelegationReplay, replayStoredDelegation } from "./delegation-binding.js";
 
 export type InvocationRuntimeResolution =
   | Readonly<{ ok: true; context: OperationContext }>
@@ -43,10 +44,6 @@ interface StoredSession extends Record<string, unknown> {
   readonly siwe?: unknown;
   readonly signature?: unknown;
   readonly tinycloudHosts?: unknown;
-}
-
-interface StoredAdditionalDelegation extends Record<string, unknown> {
-  readonly delegation?: unknown;
 }
 
 /**
@@ -96,16 +93,14 @@ export async function createInvocationRuntime(
     // Keep the value import namespace-shaped so projection modules remain
     // compatible with lightweight node-sdk test doubles.
     const {
-      activateValidatedRuntimeDelegation,
       TinyCloudNode: TinyCloudNodeConstructor,
     } = nodeSdk;
     const explicitPrivateKeyOverride = typeof target.privateKey === "string";
-    const [session, key, additionalDelegations] = explicitPrivateKeyOverride
-      ? [null, null, [] as StoredAdditionalDelegation[]]
+    const [session, key] = explicitPrivateKeyOverride
+      ? [null, null]
       : await Promise.all([
         readSession<StoredSession>(profileName),
         readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
-        readAdditionalDelegations<StoredAdditionalDelegation>(profileName),
       ]);
     const profile = resolved.profile;
 
@@ -175,22 +170,32 @@ export async function createInvocationRuntime(
     // This API derives from the restored, verified base session rather than
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
+    const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
     const seenCids = new Set<string>();
-    for (const entry of additionalDelegations) {
-      const delegation = normalizeStoredDelegation(entry);
-      if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) continue;
-      try {
-        const activated = await activateValidatedRuntimeDelegation(node as unknown as RuntimeDelegationActivator, delegation, {
+    // An explicit key is another identity: it neither replays nor migrates
+    // this profile's records.
+    if (!explicitPrivateKeyOverride) {
+      const activator = node as unknown as RuntimeDelegationActivator;
+      // Migration runs before the records are read, so the records replayed
+      // here and the migration marker agree.
+      const migrated = await prepareStoredDelegationReplay(profileName, activator, {
+        host: summary.host,
+        // Only the profile's own restored session; a local sign-in without
+        // one uses a fresh session key the stored records do not address.
+        migrate: activeSession !== undefined,
+      });
+      // Elements are untrusted and may not even be objects; the shared rule
+      // classifies each before reading any field.
+      for (const entry of await readAdditionalDelegations<unknown>(profileName)) {
+        const activated = await replayStoredDelegation(activator, entry, {
           host: summary.host,
+          migrated,
+          resolveSpace,
         });
-        if (!seenCids.has(activated.cid)) {
+        if (activated !== undefined && !seenCids.has(activated.cid)) {
           seenCids.add(activated.cid);
           livePermissions.push(...activated.effectivePermissions);
         }
-      } catch {
-        // Stored data is untrusted transport material. Replaying an invalid,
-        // stale, wrong-session, or rejected record must not grant it authority
-        // or reveal its contents through a safe operation channel.
       }
     }
 
@@ -264,33 +269,6 @@ function normalizeSession(
       ? { tinycloudHosts: session.tinycloudHosts }
       : {}),
   };
-}
-
-function normalizeStoredDelegation(
-  entry: StoredAdditionalDelegation,
-): PortableDelegation | undefined {
-  const raw = entry.delegation;
-  if (!isRecord(raw) || !isRecord(raw.delegationHeader)) return undefined;
-  const expiry = parseExpiry(raw.expiry);
-  if (
-    expiry === undefined ||
-    typeof raw.cid !== "string" ||
-    typeof raw.spaceId !== "string" ||
-    typeof raw.path !== "string" ||
-    !Array.isArray(raw.actions) || !raw.actions.every((action) => typeof action === "string") ||
-    typeof raw.delegateDID !== "string" ||
-    typeof raw.ownerAddress !== "string" ||
-    typeof raw.chainId !== "number" ||
-    typeof raw.delegationHeader.Authorization !== "string"
-  ) {
-    return undefined;
-  }
-  return { ...raw, expiry } as PortableDelegation;
-}
-
-function parseExpiry(value: unknown): Date | undefined {
-  const expiry = value instanceof Date ? value : typeof value === "string" ? new Date(value) : undefined;
-  return expiry !== undefined && !Number.isNaN(expiry.getTime()) ? expiry : undefined;
 }
 
 function hasPrivateParameter(value: unknown): value is Record<string, unknown> {

@@ -9,7 +9,7 @@ import { z } from "zod";
 import {
   canonicalizeCapabilities,
   canonicalizeOperationCapabilities,
-  evaluateOperationAuthority,
+  delegationWithinRequest,
   evaluateAuthority,
   validateExactCapabilities,
 } from "../authority.js";
@@ -20,6 +20,7 @@ import {
   listPermissionRequests,
   PermissionEntrySchema,
   type DelegationImportArtifact,
+  type DelegationRequestBinding,
   type PermissionRequestArtifact,
 } from "../artifacts.js";
 import type {
@@ -369,11 +370,7 @@ async function importRequestBoundDelegation(
       context.runtime.node,
       context.summary.space,
     );
-    if (request.requested.length === 0 || !evaluateOperationAuthority(
-      request.requested,
-      effectivePermissions,
-      resolveSpace,
-    ).satisfied) {
+    if (!delegationWithinRequest(request.requested, effectivePermissions, resolveSpace)) {
       return operationFailure(
         "DELEGATION_REJECTED",
         "The delegation exceeds the stored authority request.",
@@ -406,14 +403,26 @@ async function importRequestBoundDelegation(
               ),
             };
           }
-          const alreadyPresent = records.some((entry) => delegationCid(entry) === activated.cid);
+          // Replay re-checks the delegation against this binding; the stored
+          // request itself may later be pruned.
+          const record = {
+            delegation: activated.delegation,
+            permissions: activated.effectivePermissions,
+            authorityRequest: {
+              requestId: request.requestId,
+              requested: request.requested,
+            } satisfies DelegationRequestBinding,
+          };
+          // A validated import replaces every stored row for its CID with this
+          // record, whatever binding those rows carried (none, a synthesized
+          // one, or one replay cannot use), keeping the first row's position.
+          const position = records.findIndex((entry) => delegationCid(entry) === activated.cid);
+          const alreadyPresent = position !== -1;
+          const others = records.filter((entry) => delegationCid(entry) !== activated.cid);
           return {
             records: alreadyPresent
-              ? records
-              : [...records, {
-                delegation: activated.delegation,
-                permissions: activated.effectivePermissions,
-              }],
+              ? [...others.slice(0, position), record, ...others.slice(position)]
+              : [...records, record],
             result: {
               status: "ok",
               output: {

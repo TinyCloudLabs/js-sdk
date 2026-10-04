@@ -94,6 +94,7 @@ export async function createSDKInstance(
       privateKey: effectivePrivateKey,
     });
 
+    let restoredOwnSession = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
       await node.restoreSession({
         delegationHeader: session.delegationHeader as { Authorization: string },
@@ -106,10 +107,18 @@ export async function createSDKInstance(
         siwe: session.siwe as string | undefined,
         signature: session.signature as string | undefined,
       });
+      restoredOwnSession = true;
     } else {
       await node.signIn();
     }
-    await replayAdditionalDelegations(node, ctx.profile);
+    // Only the profile's own restored session may migrate its records: a
+    // fresh sign-in uses a session key they do not address, and an explicit
+    // key is another identity.
+    await replayAdditionalDelegations(node, ctx.profile, {
+      host: ctx.host,
+      ownerSpace: profile.spaceId,
+      migrate: restoredOwnSession && options?.privateKey === undefined,
+    });
     return node;
   }
 
@@ -119,6 +128,8 @@ export async function createSDKInstance(
     privateKey: options?.privateKey,
   });
 
+  // Only the profile's own restored session may run its binding migration.
+  let restoredOwnSession = false;
   if (options?.privateKey) {
     // Sign in with private key (existing behavior)
     await node.signIn();
@@ -135,9 +146,14 @@ export async function createSDKInstance(
       siwe: session.siwe as string | undefined,
       signature: session.signature as string | undefined,
     });
+    restoredOwnSession = true;
   }
 
-  await replayAdditionalDelegations(node, ctx.profile);
+  await replayAdditionalDelegations(node, ctx.profile, {
+    host: ctx.host,
+    ownerSpace: profile?.spaceId,
+    migrate: restoredOwnSession,
+  });
   return node;
 }
 
@@ -288,9 +304,11 @@ export async function ensureAuthenticated(
 
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
 
-  // For local auth, we can sign in directly without a stored session
+  // For local auth, we can sign in directly without a stored session. The
+  // profile's own key is not an override: createSDKInstance reads it from the
+  // profile, so the profile's binding migration may run.
   if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx, { privateKey: profile.privateKey });
+    return createSDKInstance(ctx);
   }
 
   const session = await ProfileManager.getSession(ctx.profile);
