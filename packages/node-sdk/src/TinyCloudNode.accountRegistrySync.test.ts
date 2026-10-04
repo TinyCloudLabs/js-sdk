@@ -17,13 +17,19 @@
  * `syncAccessible()`.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test, type Mock } from "bun:test";
 
 import {
+  AccountService,
   KVService,
   ServiceContext,
+  composeManifestRequest,
+  submitHostDelegation,
   type ISessionManager,
+  type ISpaceService,
   type IWasmBindings,
+  type Manifest,
+  type SpaceHostResult,
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -277,10 +283,76 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
   });
 
-  test.each([401, 403])("real KV put authorization responses stop retries (%i)", async (status) => {
-    const { node } = makeNode();
-    let fetchCalls = 0;
-    const context = new ServiceContext({
+  const AUTH_BODIES = [
+    "",
+    "Unauthorized Action: tinycloud:pkh:eip155:1:0x0:account/kv/applications/ tinycloud.kv/put",
+    "Forbidden",
+    "session expired",
+  ];
+  /**
+   * Where the 401/403 is injected:
+   * - `spaces.syncAccessible`: a real `KVService.put` failure returned as the sync result.
+   * - `applications.register`: the real `AccountService.applications.register`
+   *   (through `accountErr`) over a real failing `KVService.put`.
+   * - `owned-space activation`: the first real `POST /delegate` activation.
+   * - `owned-space create`: activation 404s, then the real host delegation
+   *   (`submitHostDelegation`) fails.
+   * - `post-create activation`: activation 404s, hosting succeeds, then the
+   *   re-activation fails.
+   */
+  type Wrapper =
+    | "spaces.syncAccessible"
+    | "applications.register"
+    | "owned-space activation"
+    | "owned-space create"
+    | "post-create activation";
+  const WRAPPERS: Wrapper[] = [
+    "spaces.syncAccessible",
+    "applications.register",
+    "owned-space activation",
+    "owned-space create",
+    "post-create activation",
+  ];
+  const HOST_DELEGATION_AUTHORIZATION = "host-delegation";
+  const MANIFEST: Manifest = {
+    app_id: "com.example.registry",
+    name: "Registry",
+    defaults: false,
+    permissions: [
+      { service: "tinycloud.kv", space: "applications", path: "com.example.registry/", actions: ["get"] },
+    ],
+  };
+
+  /** The private registry-sync surface these tests drive (test seam). */
+  type RegistrySyncInternals = {
+    _address?: string;
+    _account: unknown;
+    auth: {
+      capabilityRequest?: unknown;
+      hostOwnedSpaceResult?: (spaceId: string) => Promise<SpaceHostResult>;
+    };
+    scheduleAccountRegistrySync(): void;
+    pendingAccountRegistrySync?: { promise: Promise<void> };
+  };
+
+  /**
+   * Run the real `scheduleAccountRegistrySync` chain with the failure injected
+   * at `wrapper`. Reports how many times the failing request hit the wire and
+   * what warned.
+   */
+  async function runRegistrySync(
+    wrapper: Wrapper,
+    status: number,
+    body: string,
+  ): Promise<{ failingCalls: number; warnSpy: Mock<(...args: unknown[]) => void> }> {
+    const internals = makeNode({ hasSiwe: false }).node as unknown as RegistrySyncInternals;
+    let failingCalls = 0;
+    const failingResponse = async () => {
+      failingCalls += 1;
+      return new Response(body, { status });
+    };
+    const kv = new KVService({});
+    kv.initialize(new ServiceContext({
       hosts: ["https://tinycloud.test"],
       session: {
         delegationHeader: { Authorization: "Bearer session" },
@@ -290,30 +362,101 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
         jwk: {},
       },
       invoke: () => ({ Authorization: "Bearer signed-invocation" }),
-      fetch: async () => {
-        fetchCalls += 1;
-        return new Response("", { status });
-      },
-    });
-    const kv = new KVService({});
-    kv.initialize(context);
-    const originalWarn = console.warn;
-    const warnSpy = mock(() => {});
-    console.warn = warnSpy as any;
-    const task = async () => {
-      const result = await kv.put("vault/record", "value");
-      if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
-    };
+      fetch: failingResponse,
+    }));
 
-    try {
-      await (node as any).withAccountRegistryRetry(task);
-    } finally {
-      console.warn = originalWarn;
+    if (wrapper === "spaces.syncAccessible") {
+      internals._account = {
+        index: { ensure: async () => ({ ok: true, data: undefined }) },
+        spaces: { syncAccessible: () => kv.put("spaces/record", { ok: true }) },
+      };
+    } else {
+      const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
+      internals._address = ADDRESS;
+      internals.auth.capabilityRequest = composeManifestRequest([MANIFEST]);
+      internals.auth.hostOwnedSpaceResult = () =>
+        submitHostDelegation("https://tinycloud.test", { Authorization: HOST_DELEGATION_AUTHORIZATION });
+      // Real account service: register → accountErr → the node's wrapper.
+      internals._account = new AccountService({
+        getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
+        getHost: () => "https://tinycloud.test",
+        getPrimarySpaceId: () => SPACE_URI,
+        getAccountSpaceId: () => accountSpaceId,
+        // Only `applications.register` reaches the KV write; the hosting
+        // cases fail before it.
+        getSpaces: () => ({ get: () => ({ kv }) }) as unknown as ISpaceService,
+      });
     }
 
-    expect(fetchCalls).toBe(1);
+    // Activation and host delegation both POST `/delegate` through the global
+    // fetch; the host delegation carries its own Authorization header.
+    let activations = 0;
+    const delegateFetch = async (_input: unknown, init?: { headers?: Record<string, string> }) => {
+      const ok = new Response("{}", { status: 200 });
+      if (init?.headers?.Authorization === HOST_DELEGATION_AUTHORIZATION) {
+        return wrapper === "owned-space create" ? failingResponse() : ok;
+      }
+      activations += 1;
+      switch (wrapper) {
+        case "owned-space activation":
+          return failingResponse();
+        case "owned-space create":
+          return new Response("Space not found", { status: 404 });
+        case "post-create activation":
+          return activations % 2 === 1 ? new Response("Space not found", { status: 404 }) : failingResponse();
+        default:
+          return ok;
+      }
+    };
+
+    const originalFetch = globalThis.fetch;
+    const originalWarn = console.warn;
+    const warnSpy = mock((..._args: unknown[]) => {});
+    globalThis.fetch = delegateFetch as unknown as typeof fetch;
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      internals.scheduleAccountRegistrySync();
+      await internals.pendingAccountRegistrySync?.promise;
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.warn = originalWarn;
+    }
+    return { failingCalls, warnSpy };
+  }
+
+  /** The message of the error passed with the "not retryable" warning. */
+  function stoppedErrorMessage(warnSpy: Mock<(...args: unknown[]) => void>): string | undefined {
+    const call = warnSpy.mock.calls.find((args) =>
+      String(args[0] ?? "").includes("authorization verdict is not retryable"),
+    );
+    return call?.[1] instanceof Error ? call[1].message : undefined;
+  }
+
+  test.each(
+    WRAPPERS.flatMap((wrapper) =>
+      [401, 403].flatMap((status) => AUTH_BODIES.map((body) => ({ wrapper, status, body }))),
+    ),
+  )("$wrapper $status body=$body stops after one request", async ({ wrapper, status, body }) => {
+    const { failingCalls, warnSpy } = await runRegistrySync(wrapper, status, body);
+
+    expect(failingCalls).toBe(1);
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
+    // The wrapper's message keeps the HTTP status for diagnostics.
+    expect(stoppedErrorMessage(warnSpy)).toContain(`: ${status}`);
   });
+
+  test("typed non-authorization status retries even when the body reads Unauthorized Action", async () => {
+    const { failingCalls, warnSpy } = await runRegistrySync(
+      "spaces.syncAccessible",
+      500,
+      "Unauthorized Action: upstream proxy text",
+    );
+
+    expect(failingCalls).toBe(3);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
+    expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+  }, 10_000);
 
   test("generic error still retries the full budget (3 attempts)", async () => {
     const { node } = makeNode();

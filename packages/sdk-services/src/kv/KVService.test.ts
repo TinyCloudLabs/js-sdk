@@ -880,7 +880,9 @@ describe("KVService.createSignedReadUrl", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
-      expect(result.error.message).toBe("signed URL scope is not authorized");
+      expect(result.error.message).toBe(
+        'Failed to create signed read URL for key "audio/conv-1/recording": 403 - signed URL scope is not authorized',
+      );
       expect(result.error.meta?.status).toBe(403);
     }
   });
@@ -903,7 +905,7 @@ describe("KVService.put serialization", () => {
     expect(requestInit?.body).toBe("hello-artifact");
   });
 
-  test.each([401, 403])("preserves KV upload authorization text for status %i", async (status) => {
+  test.each([401, 403])("keeps the status and KV upload authorization text for status %i", async (status) => {
     const serverMessage = "Unauthorized Action: vault/API_KEY / tinycloud.kv/put";
     const service = new KVService({});
     service.initialize(
@@ -917,7 +919,7 @@ describe("KVService.put serialization", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
-    expect(result.error.message).toBe(serverMessage);
+    expect(result.error.message).toBe(`Failed to put key "vault/API_KEY": ${status} - ${serverMessage}`);
     expect(result.error.meta).toMatchObject({
       status,
       resource: "vault/API_KEY",

@@ -795,7 +795,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private async hostSpace(
     targetSpaceId?: string,
     purpose?: SignRequest["purpose"],
-  ): Promise<boolean> {
+  ): Promise<SpaceHostResult> {
     if (!this._tinyCloudSession || !this._address || !this._chainId) {
       throw new Error("Must be signed in to host space");
     }
@@ -822,9 +822,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
-    const result = await submitHostDelegation(host, headers);
-
-    return result.success;
+    return submitHostDelegation(host, headers);
   }
 
   /**
@@ -832,7 +830,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Used for lazy creation of additional spaces (e.g., public).
    */
   async hostPublicSpace(spaceId: string): Promise<boolean> {
-    return this.hostSpace(spaceId);
+    return (await this.hostSpace(spaceId)).success;
   }
 
   /**
@@ -843,6 +841,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
     spaceId: string,
     purpose?: SignRequest["purpose"],
   ): Promise<boolean> {
+    return (await this.hostOwnedSpaceResult(spaceId, purpose)).success;
+  }
+
+  /**
+   * {@link hostOwnedSpace} with the full host-delegation result, so a failure
+   * keeps its HTTP status (e.g. a typed 401/403) instead of collapsing to
+   * `false`.
+   */
+  async hostOwnedSpaceResult(
+    spaceId: string,
+    purpose?: SignRequest["purpose"],
+  ): Promise<SpaceHostResult> {
     return this.hostSpace(spaceId, purpose);
   }
 
@@ -908,7 +918,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
       // Create the primary space
       try {
-        const created = await this.hostSpace();
+        const created = (await this.hostSpace()).success;
         if (!created) {
           const err = new Error(`Failed to create space: ${primarySpaceId}`);
           handler.onSpaceCreationFailed?.(creationContext, err);
@@ -955,7 +965,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
 
       try {
-        const created = await this.hostSpace();
+        const created = (await this.hostSpace()).success;
         if (!created) {
           const err = new Error(`Failed to create space: ${primarySpaceId}`);
           handler.onSpaceCreationFailed?.(creationContext, err);

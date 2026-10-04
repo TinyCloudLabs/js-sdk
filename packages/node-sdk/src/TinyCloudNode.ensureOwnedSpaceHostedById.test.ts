@@ -65,7 +65,7 @@ function makeNode(): TinyCloudNode {
       delegationHeader: { Authorization: `token-${Math.random()}` },
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
-    hostOwnedSpace: mock(async (spaceId: string) => spaceId),
+    hostOwnedSpaceResult: mock(async () => ({ success: true, status: 200 })),
   };
   return node;
 }
