@@ -152,6 +152,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
   const identityChanged = new Error("share history profile or key changed");
   const saltChanged = new Error("share history salt changed");
   let operation = Promise.resolve();
+  const observedProfiles = new Set<string>();
   let preparedKeys: { readonly profile: string; readonly identity: string; readonly material: CryptoKey; readonly legacyKey: CryptoKey } | undefined;
   let preparedKey: { readonly profile: string; readonly identity: string; readonly salt: string; readonly key: CryptoKey } | undefined;
   const path = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), "share-history-v2.json");
@@ -249,11 +250,10 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     // A salt retry must never move its record to that other profile.
     const profile = await profileName();
     let warned = false;
-    let sawProfile = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const snapshot = await identity(profile);
-        sawProfile = true;
+        observedProfiles.add(profile);
         const keys = await prepareKeys(profile, snapshot);
         const salt = await preparedSalt(profile);
         const saltId = b64(salt);
@@ -286,7 +286,7 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
         // Another process may have created the first file or changed this
         // profile's signer inputs. Derive the new key outside the lock.
         if (error === saltChanged || error === identityChanged) continue;
-        if (sawProfile && typeof error === "object" && error !== null && "code" in error && error.code === "PROFILE_NOT_FOUND") {
+        if (observedProfiles.has(profile) && typeof error === "object" && error !== null && "code" in error && error.code === "PROFILE_NOT_FOUND") {
           throw new ShareHistoryRetryError(profile);
         }
         throw error;

@@ -6,6 +6,7 @@ import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud
 import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
 import { historyRecordForPublishedShare, notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
+import { CLIError } from "../output/errors.js";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
@@ -36,6 +37,7 @@ let historyProfileDirectories = false;
 let historyBeforeLock: ((profile: string) => Promise<void>) | undefined;
 let historyOnCacheAccess: ((profile: string) => void) | undefined;
 let historyProfileMissing = false;
+let historyMissingProfileName: string | undefined;
 let historyOnSign: (() => void) | undefined;
 let historyResolvedProfile: string | undefined;
 let uploadErrorCode: string | undefined;
@@ -218,8 +220,10 @@ const node = {
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async ({ profile }: { profile: string }) => ({ profile: historyResolvedProfile ?? profile, host: "https://node.example" }),
-    getProfile: async () => {
-      if (historyProfileMissing) throw Object.assign(new Error("profile missing"), { code: "PROFILE_NOT_FOUND" });
+    getProfile: async (profile: string) => {
+      if (historyProfileMissing || profile === historyMissingProfileName) {
+        throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist. Run tc init first.`);
+      }
       return historyCacheDir === undefined ? { authMethod: "openkey" } : historyLocalKey
         ? { authMethod: "local", privateKey: "test-history-key", spaceName: historySpaceName }
         : { authMethod: "openkey", spaceName: historySpaceName };
@@ -267,6 +271,7 @@ afterEach(() => {
   historyBeforeLock = undefined;
   historyOnCacheAccess = undefined;
   historyProfileMissing = false;
+  historyMissingProfileName = undefined;
   historyOnSign = undefined;
   historyResolvedProfile = undefined;
   encryptionSpaces.length = 0;
@@ -1025,6 +1030,64 @@ describe("TinyCloud share authority adapter", () => {
         });
       });
     } finally {
+      historyCacheDir = undefined;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a history retry when the profile disappears after a successful node revocation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-share-history-revoke-removal-"));
+    try {
+      await withTinyCloudStateRoot(root, async () => {
+        historyCacheDir = join(profilePath("history-test"), "cache");
+        await mkdir(historyCacheDir, { recursive: true });
+        const storage = createEncryptedProfileHistory(async () => "history-test");
+        const record: SenderShareRecord = {
+          shareId: "removed-after-revoke",
+          target: { origin: "https://node.example", nodeAudience: nodeDid, spaceId: "tinycloud:test-space" },
+          resource: { kind: "exact", path: "shares/removed-after-revoke/note.md" },
+          actions: ["tinycloud.kv/get"],
+          recipientMatcher: { kind: "emailDomain", value: "example.com" },
+          ownerDid: credentialHolderDid,
+          enforcementDelegationCid: "bafy-enforcement",
+          registeredAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2030-01-01T00:00:00.000Z",
+        };
+        await storage.put(record);
+        const { configureShareCommandServices } = await import("../commands/share.js");
+        const { runShareCaptured } = await import("../commands/share.integration-harness.js");
+        let revocations = 0;
+        configureShareCommandServices({
+          records: storage,
+          revocation: {
+            async revokePolicyRoot() { revocations++; historyProfileMissing = true; },
+          },
+        });
+        const originalExit = process.exit;
+        const exits: number[] = [];
+        process.exit = ((code?: number) => { exits.push(code ?? 0); }) as typeof process.exit;
+        try {
+          const output = await runShareCaptured(["share", "revoke", record.shareId]);
+          expect(revocations).toBe(1);
+          expect(exits).toEqual([1]);
+          const failure = (JSON.parse(output.stderr) as { error: { code: string; hint?: string } }).error;
+          expect(failure.code).toBe("SHARE_HISTORY_RETRY");
+          expect(failure.hint).toContain("revocation may already have succeeded");
+        } finally {
+          process.exit = originalExit;
+          configureShareCommandServices({});
+        }
+        historyProfileMissing = false;
+        let selected = "history-test";
+        const scoped = createEncryptedProfileHistory(async () => selected);
+        expect(await scoped.get(record.shareId)).toBeDefined();
+        historyMissingProfileName = "history-other";
+        selected = "history-other";
+        await expect(scoped.get(record.shareId)).rejects.toMatchObject({ code: "PROFILE_NOT_FOUND" });
+      });
+    } finally {
+      historyProfileMissing = false;
+      historyMissingProfileName = undefined;
       historyCacheDir = undefined;
       await rm(root, { recursive: true, force: true });
     }
