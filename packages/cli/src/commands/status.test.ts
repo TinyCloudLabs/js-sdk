@@ -97,7 +97,7 @@ function makeDelegation(
       path: permissions[0]?.path ?? "/",
       actions: permissions[0]?.actions ?? ["read"],
       expiry,
-      delegationHeader: {},
+      delegationHeader: { Authorization: "cacao-bytes" },
     },
     permissions,
   };
@@ -335,6 +335,33 @@ describe("CLI status command", () => {
       expired: true,
     }));
     expect(stagingStatus?.permissionsCompact).toEqual([]);
+  });
+
+  test("skips stored elements replay never installs instead of failing", async () => {
+    profileNames = ["default"];
+    profiles.set("default", makeProfile("default"));
+    sessions.set("default", { expiresAt: "2099-01-01T00:00:00.000Z" });
+    delegations.set("default", [
+      null,
+      {},
+      { delegation: { cid: "bafy-mis-keyed", expiry: "2099-01-01T00:00:00.000Z", delegationHeader: { authorization: "x" } } },
+      makeDelegation("bafy-readable", "2099-01-01T00:00:00.000Z", [{
+        service: "tinycloud.kv",
+        space: "default",
+        path: "notes/",
+        actions: ["tinycloud.kv/get"],
+      }]),
+    ] as unknown as StoredDelegationLike[]);
+
+    await runStatusCommand();
+
+    expect(recorded.errors).toEqual([]);
+    const output = recorded.outputs[0] as {
+      profiles: Array<{ name: string; delegations: Array<{ cid: string }>; issues?: string[] }>;
+    };
+    const status = output.profiles.find((profile) => profile.name === "default");
+    expect(status?.delegations.map(({ cid }) => cid)).toEqual(["bafy-readable"]);
+    expect(JSON.stringify(output)).toContain("3 unreadable stored record(s) skipped");
   });
 
   test("renders a simple human status view", async () => {

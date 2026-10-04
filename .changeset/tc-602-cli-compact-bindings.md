@@ -6,4 +6,6 @@ The CLI now replays stored compact-UCAN delegations under the same request-bindi
 
 `tc auth import` of an artifact with no request (a bare portable delegation, a stored record, or an envelope without `requestId`) now validates a compact-UCAN delegation addressed to the profile's session key, and stores it bound to exactly its own signed capabilities (`unbound-import:<cid>`, with an audit note). It therefore keeps working with `tc secrets get` and MCP tools after the profile's one-time binding migration. Importing a CID that is already stored never drops or weakens its binding, and a delegation whose header is not a single string `Authorization` is refused with `INVALID_AUTH_IMPORT`.
 
+`tc status` skips stored records replay never installs (not objects, malformed headers, bound records the legacy path cannot hold) and reports how many it skipped, instead of exiting with an error.
+
 The skill's `AUTH.md` and `REFERENCE.md` describe the bindings, the one-time migration, and how to recover a record that installs nothing.

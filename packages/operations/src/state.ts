@@ -41,14 +41,23 @@ interface HeldProfileLock {
  * bundled operations entry point (`state`, `delegation-binding`, the root)
  * carries its own copy, so module-level context would make lock reentrancy and
  * the invocation state root stop at an entry-point boundary.
+ *
+ * The `.v1` in each key is the format version shared by every copy that reads
+ * it. Bump it whenever the `HeldProfileLock` entry shape or the on-disk lock
+ * protocol changes, so copies with different formats (two operations versions
+ * in one process) stop trusting each other's held-lock entries and simply
+ * wait for the lock instead. TC-633 changes the held-lock shape and adds a
+ * per-process `turnsInProgress` set: whichever of TC-602 and TC-633 lands
+ * second bumps these keys to `.v2` and makes that set process-wide under the
+ * same version.
  */
-function processWideContext<T>(name: string): AsyncLocalStorage<T> {
+function processWideContext<T>(key: string): AsyncLocalStorage<T> {
   const registry = globalThis as unknown as Record<symbol, AsyncLocalStorage<T> | undefined>;
-  return registry[Symbol.for(name)] ??= new AsyncLocalStorage<T>();
+  return registry[Symbol.for(key)] ??= new AsyncLocalStorage<T>();
 }
-const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot");
+const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot.v1");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
-const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks");
+const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v1");
 
 export type ProfileStoreName =
   | "session"

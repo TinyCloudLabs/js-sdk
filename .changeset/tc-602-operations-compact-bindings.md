@@ -10,6 +10,8 @@ New `@tinycloud/operations/delegation-binding` entry point: the replay rule and 
 
 `liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` now counts only stored, unexpired records the replay rule accepts. A stored element that is not an object installs nothing, is never migrated, and no longer blocks migration or runtime initialization.
 
-Profile-lock reentrancy and the invocation state root (`withTinyCloudStateRoot`) are now shared by every operations entry point in a process, so holding a lock through `@tinycloud/operations/state` and calling into `@tinycloud/operations/delegation-binding` no longer waits on that lock.
+Profile-lock reentrancy and the invocation state root (`withTinyCloudStateRoot`) are now shared by every operations entry point in a process, so holding a lock through `@tinycloud/operations/state` and calling into `@tinycloud/operations/delegation-binding` no longer waits on that lock. The shared context lives under versioned process-wide keys (`tinycloud.operations.heldProfileLocks.v1`, `tinycloud.operations.invocationStateRoot.v1`); copies with a different held-lock format use different keys and wait for the lock instead of trusting each other's entries. TC-633 changes the held-lock shape and adds a per-process `turnsInProgress` set: whichever of TC-602 and TC-633 lands second bumps these keys to `.v2` and makes that set process-wide under the same version.
+
+`tinycloud.status.get` and `tinycloud.auth.status` skip stored records replay refuses outright (no delegation object, malformed header) instead of failing with `INTERNAL_ERROR`.
 
 The binding is local profile data. It stops records written by other paths from granting authority. It does not stop someone who can write the profile directory, who already holds the session key and the signed bytes. Older releases do not enforce bindings.

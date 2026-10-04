@@ -8,7 +8,7 @@ import type {
   OperationSensitivity,
   TinyCloudPosture,
 } from "../contract.js";
-import { bindingMigrationRecorded, replayLimit } from "../delegation-binding.js";
+import { bindingMigrationRecorded, replayLimit, storedDelegationKind } from "../delegation-binding.js";
 import { operationError } from "../errors.js";
 import {
   additionalDelegationsPath,
@@ -189,8 +189,9 @@ async function countLiveAdditionalDelegations(profile: string): Promise<number> 
   const migrated = await bindingMigrationRecorded(profile);
   let count = 0;
   for (const entry of rawDelegations) {
-    // An element that is not an object is not a record: it never replays.
-    if (!isRecord(entry)) continue;
+    // Elements replay refuses outright (not objects, no delegation, malformed
+    // headers) never install, so they are not inspected either.
+    if (storedDelegationKind(entry) === "refused") continue;
     const expiry = storedDelegationExpiry(entry);
     // Records replay refuses outright (unbound after migration, malformed,
     // or the CLI's own signed-login grants) are not runtime authority.
