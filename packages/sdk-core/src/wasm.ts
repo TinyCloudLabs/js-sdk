@@ -120,6 +120,17 @@ export interface IWasmBindings {
     proof: PersistedSessionProof,
   ) => ValidatedPersistedSessionProof;
 
+  /**
+   * Verify a wallet-signed session grant with the checks of
+   * `validatePersistedSession`, except that a grant of only raw
+   * encryption-network authority (which names no space) is accepted; a grant
+   * with no ReCap authority is refused. Never used to restore a session.
+   * Optional so pre-existing custom bindings remain type-compatible.
+   */
+  validateSessionGrant?: (
+    proof: PersistedSessionProof,
+  ) => ValidatedPersistedSessionProof;
+
   /** Ensure WASM module is initialized (optional — some bindings auto-init) */
   ensureInitialized?: () => Promise<void>;
 }

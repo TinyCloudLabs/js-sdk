@@ -90,8 +90,8 @@ fn verified_recap_from_siwe(siwe_string: &str) -> Result<Vec<VerifiedRecapEntry>
                 resource.path().map(|path| path.as_str().to_string()).unwrap_or_default(),
             ),
             Err(error) if resource_uri.as_str().starts_with("urn:tinycloud:encryption:") => (
-                "encryption".to_string(),
-                "encryption".to_string(),
+                RAW_ENCRYPTION.to_string(),
+                RAW_ENCRYPTION.to_string(),
                 resource_uri.to_string(),
             ),
             Err(error) => {
@@ -146,6 +146,30 @@ pub fn initPanicHook() {
 #[wasm_bindgen]
 #[allow(non_snake_case)]
 pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
+    validate_signed_session(proof, SignedSessionUse::Session)
+}
+
+/// Verify a wallet-signed session grant (a runtime permission CACAO) with the
+/// same signature, signer, audience, lifetime, ReCap and CID checks as
+/// [`validatePersistedSession`]. A grant may carry only raw encryption-network
+/// authority, which names no space; only such a grant is exempt from the
+/// primary-space check, and a grant with no ReCap authority is refused.
+/// Restoring a session must keep using `validatePersistedSession`.
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn validateSessionGrant(proof: JsValue) -> Result<JsValue, JsValue> {
+    validate_signed_session(proof, SignedSessionUse::Grant)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SignedSessionUse {
+    Session,
+    Grant,
+}
+
+const RAW_ENCRYPTION: &str = "encryption";
+
+fn validate_signed_session(proof: JsValue, usage: SignedSessionUse) -> Result<JsValue, JsValue> {
     let proof: PersistedSessionProof = serde_wasm_bindgen::from_value(proof)?;
     if proof.jwk.get("alg").is_some_and(serde_json::Value::is_null) {
         return Err(JsValue::from_str(
@@ -218,8 +242,17 @@ pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
     // metadata (for example the lazily hosted public space) and are not
     // implicitly elevated to signed authority merely by being present here.
     let recap = verified_recap_from_siwe(&signed.session.siwe.to_string())?;
+    if usage == SignedSessionUse::Grant && recap.is_empty() {
+        return Err(JsValue::from_str("session grant carries no ReCap authority"));
+    }
+    // Raw encryption-network resources are the only authority without a space.
+    let raw_only_grant = usage == SignedSessionUse::Grant
+        && recap
+            .iter()
+            .all(|entry| entry.space == RAW_ENCRYPTION && entry.service == RAW_ENCRYPTION);
     let expected_spaces = [signed.session.space_id.to_string()];
     if !recap.is_empty()
+        && !raw_only_grant
         && expected_spaces
             .iter()
             .any(|space| !recap.iter().any(|entry| entry.space == *space))

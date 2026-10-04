@@ -5116,13 +5116,20 @@ export class TinyCloudNode {
    * verifier rebuilds the CACAO from `siwe` and `signature`, so the grant is
    * accepted only when its authorization bytes and CID are exactly that CACAO,
    * its signer is `address`, its audience is this session key, it is valid
-   * now, and its ReCap covers `spaceId`. Returns the signed ReCap and expiry.
+   * now, and its ReCap covers `spaceId` or names only raw encryption networks
+   * (a decrypt-only grant has no space). Returns the signed ReCap and expiry.
+   * Bindings without `validateSessionGrant` fall back to the session verifier,
+   * which also refuses decrypt-only grants.
    */
   verifySessionGrant(grant: SessionGrantProof): VerifiedSessionGrant {
-    if (typeof this.wasmBindings.validatePersistedSession !== "function") {
+    const bindings = this.wasmBindings;
+    const validate = typeof bindings.validateSessionGrant === "function"
+      ? bindings.validateSessionGrant.bind(bindings)
+      : bindings.validatePersistedSession?.bind(bindings);
+    if (validate === undefined) {
       throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
     }
-    const verified = this.wasmBindings.validatePersistedSession({
+    const verified = validate({
       delegationHeader: { Authorization: grant.delegationHeader.Authorization },
       delegationCid: grant.delegationCid,
       spaceId: grant.spaceId,

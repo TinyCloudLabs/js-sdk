@@ -261,7 +261,8 @@ test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps stderr 
   expect(operand.exit).not.toBe(0);
   expect(() => JSON.parse(operand.stderr)).toThrow();
   expect(operand.stderr).toContain("✗");
-});
+  // Five CLI processes in a row; Node startup alone can approach the 5s default.
+}, 30_000);
 
 test("a plain error from browser approval still carries the skipped grant", async () => {
   expect(staleGrantCid).toBeDefined();

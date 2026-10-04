@@ -473,4 +473,59 @@ describe("activateValidatedRuntimeDelegation with wallet-signed session grants",
       fixture.stop();
     }
   });
+
+  test("a decrypt-only grant verifies as a grant, but never restores as a session", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    try {
+      const decrypt: PermissionEntry = {
+        service: "tinycloud.encryption",
+        // A network the owner's own session does not already cover.
+        path: `urn:tinycloud:encryption:${fixture.ownerDid}:granted`,
+        actions: ["tinycloud.encryption/decrypt"],
+      };
+      // A raw network names no space, so the signed ReCap holds no space entry.
+      const [grant] = await fixture.owner.grantRuntimePermissions([decrypt]);
+      const restored = fixture.createRestoredDelegate();
+      await restored.restoreSession(fixture.ownerRestorableSession);
+
+      const activated = await activateValidatedRuntimeDelegation(restored, grant!, { host: fixture.host });
+      expect(activated.effectivePermissions).toEqual([decrypt]);
+
+      // The same signed bytes as a primary session still fail the space check.
+      const asSession = {
+        ...fixture.ownerRestorableSession,
+        delegationHeader: grant!.delegationHeader,
+        delegationCid: grant!.cid,
+        siwe: grant!.siweProof!.siwe,
+        signature: grant!.siweProof!.signature,
+      };
+      expect(() => new NodeWasmBindings().validatePersistedSession(asSession))
+        .toThrow(/does not authorize every restored space/);
+      await expect(fixture.createRestoredDelegate().restoreSession(asSession)).rejects.toThrow();
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  test("a grant whose spaced authority misses its stated space is still refused", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    try {
+      const { grant } = await ownerGrant(fixture);
+      const wasm = new NodeWasmBindings();
+      const proof = {
+        delegationHeader: grant.delegationHeader,
+        delegationCid: grant.cid,
+        spaceId: fixture.applicationsSpaceId,
+        jwk: fixture.ownerRestorableSession.jwk,
+        address: grant.ownerAddress,
+        chainId: grant.chainId,
+        siwe: grant.siweProof!.siwe,
+        signature: grant.siweProof!.signature,
+      };
+      expect(() => wasm.validateSessionGrant(proof)).toThrow(/does not authorize every restored space/);
+      expect(wasm.validateSessionGrant({ ...proof, spaceId: grant.spaceId }).verifiedRecap).toHaveLength(1);
+    } finally {
+      fixture.stop();
+    }
+  });
 });
