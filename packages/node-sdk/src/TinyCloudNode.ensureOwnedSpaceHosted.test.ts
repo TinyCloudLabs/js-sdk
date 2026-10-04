@@ -50,6 +50,7 @@ function makeNode(): TinyCloudNode {
       delegationHeader: { Authorization: "base-token" },
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
+    hostOwnedSpaceResult: mock(async () => ({ success: true, status: 200 })),
   };
   return node;
 }
@@ -166,7 +167,7 @@ test("TC-473: ensureOwnedSpaceHosted issues one registry write after hosting", a
     })),
     register,
   });
-  (node as any).auth.hostOwnedSpace = mock(async () => true);
+  const hostOwnedSpaceResult = (node as any).auth.hostOwnedSpaceResult;
 
   const spaceId = await withFetch(
     async () =>
@@ -178,6 +179,8 @@ test("TC-473: ensureOwnedSpaceHosted issues one registry write after hosting", a
   );
 
   expect(spaceId).toBe(SECRETS);
+  expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
+  expect(hostOwnedSpaceResult).toHaveBeenCalledWith(SECRETS);
   expect(register).toHaveBeenCalledTimes(1);
 });
 
