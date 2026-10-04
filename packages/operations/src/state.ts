@@ -31,14 +31,24 @@ const TEST_LOCK_CLAIM_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR";
 const TEST_LOCK_CLAIMED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR";
 const TEST_LOCK_FENCED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_FENCED_BARRIER_DIR";
 const TEST_LOCK_VERIFIED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR";
-const invocationStateRoot = new AsyncLocalStorage<string>();
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
   readonly lockPath: string;
   active: boolean;
 }
+/**
+ * Async context shared by every copy of this module in the process. Each
+ * bundled operations entry point (`state`, `delegation-binding`, the root)
+ * carries its own copy, so module-level context would make lock reentrancy and
+ * the invocation state root stop at an entry-point boundary.
+ */
+function processWideContext<T>(name: string): AsyncLocalStorage<T> {
+  const registry = globalThis as unknown as Record<symbol, AsyncLocalStorage<T> | undefined>;
+  return registry[Symbol.for(name)] ??= new AsyncLocalStorage<T>();
+}
+const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
-const heldProfileLocks = new AsyncLocalStorage<readonly HeldProfileLock[]>();
+const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks");
 
 export type ProfileStoreName =
   | "session"

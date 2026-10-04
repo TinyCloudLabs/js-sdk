@@ -777,6 +777,35 @@ test("an ordinary command on a local profile migrates it; one with another --pri
   }
 }, 300_000);
 
+test("the CLI's replay skips stored elements that are not objects and still migrates and installs the rest", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-cli-elements-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  const profileDirectory = join(home, ".tinycloud/profiles", fixture.profile);
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const malformed = [42, "not a record", null];
+
+    // The first CLI run on this profile migrates it.
+    await kvGetActivations(home, fixture, [...malformed, { delegation, permissions: [] }]);
+    expect(JSON.parse(await readFile(join(profileDirectory, "delegation-binding-migration.json"), "utf8")))
+      .toMatchObject({ bound: [delegation.cid], unbound: [] });
+    const stored = JSON.parse(await readFile(join(profileDirectory, "additional-delegations.json"), "utf8")) as unknown[];
+    expect(stored.slice(0, 3)).toEqual(malformed);
+    expect(stored[3]).toMatchObject({ authorityRequest: { requestId: `migrated:${delegation.cid}` } });
+
+    // The migrated record still installs next to the malformed elements.
+    expect(await kvGetActivations(home, fixture, stored)).toBe(await kvGetActivations(home, fixture, malformed) + 1);
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
 /**
  * `/delegate` activations one `tc kv get` makes with `records` stored. The
  * loopback node does not hold reads to the delegation chain, so activations

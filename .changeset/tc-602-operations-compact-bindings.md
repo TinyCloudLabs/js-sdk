@@ -8,6 +8,8 @@ Records stored before bindings existed are migrated once per profile. Before rea
 
 New `@tinycloud/operations/delegation-binding` entry point: the replay rule and migration (`prepareStoredDelegationReplay`, `replayStoredDelegation`), storage for delegations imported without a request (`activateUnboundCompactImport`, and `mergeDelegationsWithoutRequest`, which never replaces a stored record for the same CID that carries a binding), `storedDelegationKind`, `replayLimit`, `bindingMigrationPath`, `bindingMigrationRecorded` and `operationSpaceResolver`, so the CLI applies the same rule. `DelegationRequestBindingSchema` and `DelegationRequestBinding` are new exports of `@tinycloud/operations/artifacts`.
 
-`liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` now counts only stored, unexpired records the replay rule accepts.
+`liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` now counts only stored, unexpired records the replay rule accepts. A stored element that is not an object installs nothing, is never migrated, and no longer blocks migration or runtime initialization.
+
+Profile-lock reentrancy and the invocation state root (`withTinyCloudStateRoot`) are now shared by every operations entry point in a process, so holding a lock through `@tinycloud/operations/state` and calling into `@tinycloud/operations/delegation-binding` no longer waits on that lock.
 
 The binding is local profile data. It stops records written by other paths from granting authority. It does not stop someone who can write the profile directory, who already holds the session key and the signed bytes. Older releases do not enforce bindings.

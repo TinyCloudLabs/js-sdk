@@ -184,7 +184,9 @@ export async function createInvocationRuntime(
         // one uses a fresh session key the stored records do not address.
         migrate: activeSession !== undefined,
       });
-      for (const entry of await readAdditionalDelegations<Record<string, unknown>>(profileName)) {
+      // Elements are untrusted and may not even be objects; the shared rule
+      // classifies each before reading any field.
+      for (const entry of await readAdditionalDelegations<unknown>(profileName)) {
         const activated = await replayStoredDelegation(activator, entry, {
           host: summary.host,
           migrated,

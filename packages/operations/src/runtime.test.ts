@@ -364,6 +364,31 @@ test("a runtime whose session was rotated after its restore leaves the migration
   }
 });
 
+test("stored elements that are not objects install nothing and never block migration or replay", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const delegation = await fixture.hermetic.mintDelegation();
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [
+      42,
+      "not a record",
+      null,
+      { delegation, permissions: [] },
+    ]);
+
+    const first = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(first)).toEqual([delegation.cid]);
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [delegation.cid], unbound: [] });
+    const records = await readAdditionalDelegations<unknown>(fixture.profile);
+    expect(records.slice(0, 3)).toEqual([42, "not a record", null]);
+    expect(records[3]).toMatchObject({ authorityRequest: { requestId: `migrated:${delegation.cid}` } });
+
+    const second = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(second)).toEqual([delegation.cid]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("a local sign-in without the profile's stored session never runs the migration", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {

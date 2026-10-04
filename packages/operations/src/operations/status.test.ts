@@ -235,6 +235,10 @@ test("counts only stored delegations the replay rule accepts", async () => {
     unbound,
     cliGrant,
     misKeyed,
+    // Elements that are not objects are not records: never counted.
+    42,
+    "not a record",
+    null,
   ]);
   const count = async () => {
     const result = await execute(definition("tinycloud.status.get"), delegateContext());

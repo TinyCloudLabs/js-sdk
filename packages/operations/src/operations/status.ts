@@ -189,10 +189,12 @@ async function countLiveAdditionalDelegations(profile: string): Promise<number> 
   const migrated = await bindingMigrationRecorded(profile);
   let count = 0;
   for (const entry of rawDelegations) {
+    // An element that is not an object is not a record: it never replays.
+    if (!isRecord(entry)) continue;
     const expiry = storedDelegationExpiry(entry);
     // Records replay refuses outright (unbound after migration, malformed,
     // or the CLI's own signed-login grants) are not runtime authority.
-    if (expiry.getTime() > now && replayLimit(entry as Record<string, unknown>, migrated) !== undefined) count += 1;
+    if (expiry.getTime() > now && replayLimit(entry, migrated) !== undefined) count += 1;
   }
   return count;
 }

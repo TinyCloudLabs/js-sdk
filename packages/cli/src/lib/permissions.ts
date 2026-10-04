@@ -153,7 +153,7 @@ export async function appendAdditionalDelegations(
   const { mergeDelegationsWithoutRequest } = await import("@tinycloud/operations/delegation-binding");
   // The write goes through this module's state primitives so it takes the
   // same (reentrant) profile lock as callers that already hold it.
-  await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (stored) => ({
+  await updateProfileStore<unknown, void>(profile, "additional-delegations", (stored) => ({
     records: mergeDelegationsWithoutRequest(stored, entries.map((entry) => ({ ...entry }))),
     result: undefined,
   }));
@@ -259,27 +259,29 @@ export async function replayAdditionalDelegations(
     migrate: options.migrate,
   });
   const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
-  const entries = await loadAdditionalDelegations(profile);
-  for (const entry of entries) {
-    const record = { ...entry };
-    const kind = storedDelegationKind(record);
+  // Stored elements are untrusted: classify each before reading any field.
+  const entries: readonly unknown[] = await loadAdditionalDelegations(profile);
+  for (const stored of entries) {
+    const kind = storedDelegationKind(stored);
     if (kind === "compact" || kind === "signed-login") {
-      const installed = await replayStoredDelegation(activator, record, {
+      const installed = await replayStoredDelegation(activator, stored, {
         host: options.host,
         migrated,
         resolveSpace,
       });
       if (installed === undefined && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: refused by validation or its request binding\n`);
+        process.stderr.write("[replay] skipping a stored delegation refused by validation or its request binding\n");
       }
       continue;
     }
     if (kind === "refused") {
       if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping ${String(entry.delegation?.cid)}: malformed header or a binding it cannot be held to\n`);
+        process.stderr.write("[replay] skipping a malformed stored record or one bound to a request it cannot be held to\n");
       }
       continue;
     }
+    // `other`: an object record with a delegation and a single string header.
+    const entry = stored as StoredAdditionalDelegation;
     // Skip expired delegations rather than letting useRuntimeDelegation throw.
     const expiry = entry.delegation.expiry instanceof Date
       ? entry.delegation.expiry

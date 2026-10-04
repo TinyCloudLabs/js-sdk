@@ -94,8 +94,10 @@ export function bindingMigrationPath(profile: string): string {
  * route a bound signed-login delegation around its binding.
  */
 export function storedDelegationKind(
-  entry: Record<string, unknown>,
+  entry: unknown,
 ): "compact" | "signed-login" | "other" | "refused" {
+  // A stored element that is not an object is not a record at all.
+  if (!isRecord(entry)) return "refused";
   const delegation = entry.delegation;
   if (!isRecord(delegation)) return "refused";
   const header = delegation.delegationHeader;
@@ -119,11 +121,11 @@ export function storedDelegationKind(
  * when the record installs nothing.
  */
 export function replayLimit(
-  entry: Record<string, unknown>,
+  entry: unknown,
   migrated: boolean,
 ): readonly PermissionEntry[] | "signed" | undefined {
   const kind = storedDelegationKind(entry);
-  if (kind !== "compact" && kind !== "signed-login") return undefined;
+  if (!isRecord(entry) || (kind !== "compact" && kind !== "signed-login")) return undefined;
   const binding = DelegationRequestBindingSchema.safeParse(entry.authorityRequest);
   if (binding.success) return binding.data.requested;
   return !migrated && kind === "compact" && !("authorityRequest" in entry) ? "signed" : undefined;
@@ -178,13 +180,13 @@ export async function activateUnboundCompactImport(
  * result under the profile lock they already use for this store.
  */
 export function mergeDelegationsWithoutRequest(
-  stored: readonly Record<string, unknown>[],
+  stored: readonly unknown[],
   incoming: readonly ({ readonly delegation: { readonly cid: string } } & Record<string, unknown>)[],
-): Record<string, unknown>[] {
+): unknown[] {
   let records = [...stored];
   for (const record of incoming) {
     const cid = record.delegation.cid;
-    if (records.some((entry) => storedCid(entry) === cid && "authorityRequest" in entry)) continue;
+    if (records.some((entry) => storedCid(entry) === cid && isRecord(entry) && "authorityRequest" in entry)) continue;
     const position = records.findIndex((entry) => storedCid(entry) === cid);
     const others = records.filter((entry) => storedCid(entry) !== cid);
     records = position === -1
@@ -222,28 +224,30 @@ export async function prepareStoredDelegationReplay(
   options: { readonly host: string; readonly migrate: boolean },
 ): Promise<boolean> {
   if (await bindingMigrationRecorded(profile)) return true;
-  if (!options.migrate) return false;
+  // A persisted session without a `verificationMethod`, or one this node did
+  // not restore, never migrates here; skip the lock rather than take it for
+  // nothing on every command.
+  if (!options.migrate || !await holdsPersistedSession(profile, node)) return false;
   try {
     return await withProfileLock(profile, async () => {
       if (await bindingMigrationRecorded(profile)) return true;
-      const persisted = await readSession<Record<string, unknown>>(profile);
-      const persistedKey = typeof persisted?.verificationMethod === "string"
-        ? persisted.verificationMethod.split("#", 1)[0]
-        : undefined;
-      if (persistedKey === undefined || persistedKey !== node.sessionDid.split("#", 1)[0]) return false;
+      // Checked again under the lock: a session rotated since the restore
+      // leaves migration to a runtime of the new session.
+      if (!await holdsPersistedSession(profile, node)) return false;
       const recordedAt = new Date().toISOString();
       const bound = new Map<string, Record<string, unknown>>();
       const unbound: string[] = [];
-      for (const entry of await readAdditionalDelegations<Record<string, unknown>>(profile)) {
-        if ("authorityRequest" in entry || storedDelegationKind(entry) !== "compact") continue;
+      for (const entry of await readAdditionalDelegations<unknown>(profile)) {
+        // Elements that are not objects are skipped: they install nothing.
+        if (!isRecord(entry) || "authorityRequest" in entry || storedDelegationKind(entry) !== "compact") continue;
         const migrated = await migratedRecord(node, entry, options.host, recordedAt);
         if (migrated === undefined) unbound.push(String(storedCid(entry)));
         else bound.set(recordKey(entry)!, migrated);
       }
       if (bound.size > 0) {
-        await updateProfileStore<Record<string, unknown>, void>(profile, "additional-delegations", (records) => ({
+        await updateProfileStore<unknown, void>(profile, "additional-delegations", (records) => ({
           records: records.map((entry) => {
-            const key = "authorityRequest" in entry ? undefined : recordKey(entry);
+            const key = !isRecord(entry) || "authorityRequest" in entry ? undefined : recordKey(entry);
             return (key === undefined ? undefined : bound.get(key)) ?? entry;
           }),
           result: undefined,
@@ -257,6 +261,18 @@ export async function prepareStoredDelegationReplay(
       });
       return true;
     }, { timeoutMs: MIGRATION_LOCK_TIMEOUT_MS });
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the profile's persisted session is the one `node` restored. */
+async function holdsPersistedSession(profile: string, node: RuntimeDelegationActivator): Promise<boolean> {
+  try {
+    const persisted = await readSession<Record<string, unknown>>(profile);
+    return typeof persisted?.verificationMethod === "string" &&
+      typeof node.sessionDid === "string" &&
+      persisted.verificationMethod.split("#", 1)[0] === node.sessionDid.split("#", 1)[0];
   } catch {
     return false;
   }
@@ -293,7 +309,7 @@ async function migratedRecord(
  */
 export async function replayStoredDelegation(
   node: RuntimeDelegationActivator,
-  entry: Record<string, unknown>,
+  entry: unknown,
   options: {
     readonly host: string;
     readonly migrated: boolean;
@@ -350,7 +366,8 @@ async function signedCapabilities(
   return signed;
 }
 
-function normalizeStoredDelegation(entry: Record<string, unknown>): PortableDelegation | undefined {
+function normalizeStoredDelegation(entry: unknown): PortableDelegation | undefined {
+  if (!isRecord(entry)) return undefined;
   const raw = entry.delegation;
   if (!isRecord(raw) || !isRecord(raw.delegationHeader)) return undefined;
   const expiry = raw.expiry instanceof Date
@@ -372,8 +389,8 @@ function normalizeStoredDelegation(entry: Record<string, unknown>): PortableDele
   return { ...raw, expiry } as PortableDelegation;
 }
 
-function storedCid(entry: Record<string, unknown>): string | undefined {
-  const cid = isRecord(entry.delegation) ? entry.delegation.cid : undefined;
+function storedCid(entry: unknown): string | undefined {
+  const cid = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation.cid : undefined;
   return typeof cid === "string" ? cid : undefined;
 }
 
