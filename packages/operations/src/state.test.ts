@@ -752,6 +752,34 @@ test("lock ownership ends with the critical section: deferred work waits for the
   await holding;
 });
 
+test("a writer waiting while a profile deletion removes the profile directory recreates it and writes", async () => {
+  const home = await isolatedHome();
+  const profile = "delegate";
+  const contended = join(home, "contended");
+  process.env.NODE_ENV = "test";
+  process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH = contended;
+  try {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const holding = withProfileLock(profile, async () => {
+      entered.resolve();
+      await finish.promise;
+    });
+    await entered.promise;
+    const writing = writeSession(profile, { value: "after-delete" }, { timeoutMs: 5_000, retryMs: 500 });
+    while (!await stat(contended).then(() => true, () => false)) { /* each stat yields to the writer */ }
+    // A deletion removed the profile's files under the lock; once released,
+    // it removes the empty directory before the writer's next attempt.
+    finish.resolve();
+    await holding;
+    await rmdir(profilePath(profile));
+    await writing;
+    expect(await readSession(profile)).toEqual({ value: "after-delete" });
+  } finally {
+    delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
+  }
+});
+
 test("a lock held in one state root does not stand in for another root's lock", async () => {
   const rootA = await mkdtemp(join(tmpdir(), "tc-lock-root-a-"));
   const rootB = await mkdtemp(join(tmpdir(), "tc-lock-root-b-"));

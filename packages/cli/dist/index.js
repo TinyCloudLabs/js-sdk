@@ -14,7 +14,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_PROFILE, ExitCode;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -23,6 +23,7 @@ var init_constants = __esm({
     CONFIG_FILE = tinycloudConfigPath();
     DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
     DEFAULT_PROFILE = "default";
+    PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
     ExitCode = {
       SUCCESS: 0,
       ERROR: 1,
@@ -281,9 +282,6 @@ async function fileExists(filePath) {
 async function ensureDir(dirPath) {
   await mkdir(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
 }
-async function removeDir(dirPath) {
-  await rm(dirPath, { recursive: true, force: true });
-}
 async function listDirs(dirPath) {
   try {
     const entries = await readdir(dirPath, { withFileTypes: true });
@@ -538,9 +536,10 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod, rm as rm2 } from "fs/promises";
+import { chmod, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
 import { join as join3 } from "path";
 import {
+  profilePath,
   readSession,
   removeSession,
   withProfileLock,
@@ -616,8 +615,8 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profilePath = join3(PROFILES_DIR, name, "profile.json");
-        const profile = await readJson(profilePath);
+        const profilePath2 = join3(PROFILES_DIR, name, "profile.json");
+        const profile = await readJson(profilePath2);
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -652,10 +651,27 @@ var init_profiles = __esm({
         return listDirs(PROFILES_DIR);
       }
       /**
-       * Deletes a profile directory.
-       * Throws if trying to delete the current default profile.
+       * Deletes a profile. Its key, session, settings, stores and cache are
+       * removed while holding the profile lock, so another writer's critical
+       * section never sees them vanish midway: session and key first, settings
+       * last, so a crash midway never leaves a session or key without its
+       * profile. `.lock` itself is left to the lock's release; the then-empty
+       * directory is removed afterwards unless another writer took the lock (or
+       * wrote) meanwhile. A profile directory that is a symlink is unlinked, its
+       * target left alone.
+       * Throws if the name is not one path segment or names the default profile.
        */
       static async deleteProfile(name) {
+        let profileDir;
+        try {
+          profileDir = profilePath(name);
+        } catch {
+          throw new CLIError(
+            "INVALID_PROFILE_NAME",
+            `Invalid profile name "${name}": a profile name is one path segment (no "/", "\\", "." or "..").`,
+            ExitCode.USAGE_ERROR
+          );
+        }
         const config = await _ProfileManager.getConfig();
         if (config.defaultProfile === name) {
           throw new CLIError(
@@ -663,8 +679,24 @@ var init_profiles = __esm({
             `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`
           );
         }
-        const profileDir = join3(PROFILES_DIR, name);
-        await removeDir(profileDir);
+        const isLink = await lstat(profileDir).then((stats) => stats.isSymbolicLink(), (error) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        });
+        if (isLink) {
+          await rm2(profileDir, { force: true });
+          return;
+        }
+        await _ProfileManager.withLock(name, async () => {
+          for (const file of ["session.json", "key.json"]) await rm2(join3(profileDir, file), { force: true });
+          for (const entry of await readdir2(profileDir)) {
+            if (entry !== ".lock" && entry !== "profile.json") await rm2(join3(profileDir, entry), { recursive: true, force: true });
+          }
+          await rm2(join3(profileDir, "profile.json"), { force: true });
+        });
+        await rmdir(profileDir).catch((error) => {
+          if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
+        });
       }
       // ── Key management ──────────────────────────────────────────────────
       /**
@@ -5758,39 +5790,89 @@ async function createSDKInstance(ctx, options) {
   return node;
 }
 async function bootstrapDelegatedSession(ctx, delegation) {
-  const profile = await ProfileManager.getProfile(ctx.profile);
-  if (resolveProfilePosture(profile) !== "delegate-session") {
-    throw new CLIError(
-      "AUTH_REQUIRED",
-      `Profile "${ctx.profile}" is not a delegate-session profile.`,
-      ExitCode.AUTH_REQUIRED
-    );
-  }
-  const sessionDid = profile.sessionDid ?? profile.did;
-  if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
-    throw new CLIError(
-      "DELEGATION_AUDIENCE_MISMATCH",
-      `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const key = await ProfileManager.getKey(ctx.profile);
-  const jwk = signerJwkForProfile(ctx.profile, void 0, key);
-  await ProfileManager.withLock(ctx.profile, async () => {
-    await ProfileManager.setSession(ctx.profile, {
+  const written = await ProfileManager.withLock(ctx.profile, async () => {
+    const previousProfile = await ProfileManager.getProfile(ctx.profile);
+    if (resolveProfilePosture(previousProfile) !== "delegate-session") {
+      throw new CLIError(
+        "AUTH_REQUIRED",
+        `Profile "${ctx.profile}" is not a delegate-session profile.`,
+        ExitCode.AUTH_REQUIRED
+      );
+    }
+    const sessionDid = previousProfile.sessionDid ?? previousProfile.did;
+    if (delegation.delegateDID.split("#", 1)[0] !== sessionDid.split("#", 1)[0]) {
+      throw new CLIError(
+        "DELEGATION_AUDIENCE_MISMATCH",
+        `Delegation targets ${delegation.delegateDID}, but profile "${ctx.profile}" uses ${sessionDid}.`,
+        ExitCode.PERMISSION_DENIED
+      );
+    }
+    if (await ProfileManager.getSession(ctx.profile) !== null) {
+      throw new CLIError(
+        "PROFILE_CHANGED_DURING_IMPORT",
+        `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
+        ExitCode.ERROR
+      );
+    }
+    const jwk = signerJwkForProfile(ctx.profile, void 0, await ProfileManager.getKey(ctx.profile));
+    const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
       spaceId: delegation.spaceId,
       jwk,
       verificationMethod: sessionDid
-    });
-    await ProfileManager.updateProfile(ctx.profile, (current) => ({
-      ...current,
-      sessionDid,
-      spaceId: delegation.spaceId
-    }));
+    };
+    const profile = { ...previousProfile, sessionDid, spaceId: delegation.spaceId };
+    try {
+      await ProfileManager.setSession(ctx.profile, session);
+      await ProfileManager.setProfile(ctx.profile, profile);
+    } catch (error) {
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+    }
+    return { previousProfile, profile, session };
   });
-  return createSDKInstance(ctx);
+  const abandon = async (cause) => {
+    const note = await ProfileManager.withLock(ctx.profile, async () => {
+      const profile = await ProfileManager.getProfile(ctx.profile).catch((error) => {
+        if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
+        throw error;
+      });
+      const session = await ProfileManager.getSession(ctx.profile);
+      if (JSON.stringify(profile) !== JSON.stringify(written.profile) || JSON.stringify(session) !== JSON.stringify(written.session)) {
+        return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
+      }
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+    }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
+      // The lock or a read failed: the import's error stays the one reported.
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${error instanceof Error ? error.message : String(error)}); check \`tc --profile ${ctx.profile} context\`.`
+    ));
+    throw annotate(cause, note);
+  };
+  let node;
+  try {
+    node = await createSDKInstance(ctx);
+  } catch (error) {
+    return abandon(error);
+  }
+  return { node, abandon };
+}
+async function restoreBeforeBootstrap(profileName, previousProfile) {
+  const failures = [];
+  for (const write of [
+    () => ProfileManager.clearSession(profileName),
+    () => ProfileManager.setProfile(profileName, previousProfile)
+  ]) {
+    await write().catch((error) => {
+      failures.push(error instanceof Error ? error.message : String(error));
+    });
+  }
+  if (failures.length === 0) return void 0;
+  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+}
+function annotate(error, note) {
+  if (note === void 0) return error;
+  const cause = wrapError(error);
+  return new CLIError(cause.code, `${cause.message} ${note}`, cause.exitCode, cause.metadata);
 }
 async function ensureAuthenticated(ctx, options) {
   if (options?.privateKey) {
@@ -12900,11 +12982,15 @@ var contentMetadataSchema = external_exports.object({
   /** Encrypted presentation discriminator. The fixed entry point is index.html. */
   artifact: external_exports.literal("html").optional()
 }).strict();
+var deliveryEmailSchema = external_exports.string().email();
+function isEnvelopeDeliveryEmail(value) {
+  return deliveryEmailSchema.safeParse(value).success;
+}
 var unsignedShareEnvelopeV2BaseSchema = external_exports.object({
   version: external_exports.literal(2),
   shareId: external_exports.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: external_exports.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: external_exports.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v2TargetSchema,
@@ -13044,7 +13130,7 @@ var unsignedShareEnvelopeV3BaseSchema = external_exports.object({
   version: external_exports.literal(3),
   shareId: external_exports.string().min(1),
   recipientMatcher: recipientMatcherSchema,
-  deliveryEmail: external_exports.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema.optional(),
   actions: external_exports.array(shareActionSchema).min(1).max(3),
   resource: resourceSelectorSchema,
   target: v3TargetSchema,
@@ -14147,6 +14233,7 @@ function prepareAddressedShare(request) {
   }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
+  if (request.deliveryEmail !== void 0 && !isEnvelopeDeliveryEmail(request.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
   if (target.kind === "recipientDid") return { target };
@@ -15138,7 +15225,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
+import { lstat as lstat2, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
 import { randomBytes as randomBytes2 } from "crypto";
 import { basename as basename2, join as join4, resolve, sep } from "path";
 init_errors();
@@ -15196,7 +15283,7 @@ async function assertDirectory(path) {
   for (const segment of segments) {
     current = current === sep ? join4(current, segment) : join4(current, segment);
     try {
-      const info = await lstat(current);
+      const info = await lstat2(current);
       if (info.isSymbolicLink()) {
         const canonical = await realpath(current);
         if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
@@ -15205,7 +15292,7 @@ async function assertDirectory(path) {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       await mkdir2(current, { mode: 448 });
-      const created = await lstat(current);
+      const created = await lstat2(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
@@ -15224,7 +15311,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   };
   await assertStableDirectory();
   const stagingDirectory = await mkdtemp(join4(stableDirectory, ".tinycloud-share-stage-"));
-  const stagingInfo = await lstat(stagingDirectory);
+  const stagingInfo = await lstat2(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
   const stagingPath = join4(stagingDirectory, `.tinycloud-share-${randomBytes2(16).toString("hex")}.tmp`);
   let temporaryPath;
@@ -15232,7 +15319,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   try {
     await assertStableDirectory();
     try {
-      const existing = await lstat(outputPath);
+      const existing = await lstat2(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -16704,11 +16791,15 @@ var contentMetadataSchema2 = external_exports2.object({
   /** Encrypted presentation discriminator. The fixed entry point is index.html. */
   artifact: external_exports2.literal("html").optional()
 }).strict();
+var deliveryEmailSchema2 = external_exports2.string().email();
+function isEnvelopeDeliveryEmail2(value) {
+  return deliveryEmailSchema2.safeParse(value).success;
+}
 var unsignedShareEnvelopeV2BaseSchema2 = external_exports2.object({
   version: external_exports2.literal(2),
   shareId: external_exports2.string().min(1),
   recipientMatcher: recipientMatcherSchema2,
-  deliveryEmail: external_exports2.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema2.optional(),
   actions: external_exports2.array(shareActionSchema2).min(1).max(3),
   resource: resourceSelectorSchema2,
   target: v2TargetSchema2,
@@ -16848,7 +16939,7 @@ var unsignedShareEnvelopeV3BaseSchema2 = external_exports2.object({
   version: external_exports2.literal(3),
   shareId: external_exports2.string().min(1),
   recipientMatcher: recipientMatcherSchema2,
-  deliveryEmail: external_exports2.string().email().optional(),
+  deliveryEmail: deliveryEmailSchema2.optional(),
   actions: external_exports2.array(shareActionSchema2).min(1).max(3),
   resource: resourceSelectorSchema2,
   target: v3TargetSchema2,
@@ -17354,6 +17445,12 @@ function createShareAuthorityAdapters(input = {}) {
       policyActions,
       contentSource,
       ...prepared.credentialRequirement === void 0 ? {} : { credentialRequirement: prepared.credentialRequirement },
+      // tinycloud-node 1.17.2 signs a delivery receipt only for the envelope's
+      // own signed delivery address (1.17.3 accepts it and no longer requires
+      // it), so an exact-email share pins its canonical mailbox for `--notify`
+      // and `tc share notify`. A mailbox the envelope's `deliveryEmail` rule
+      // rejects (deployed viewers validate with it) is published unpinned.
+      ...prepared.target.kind === "email" && isEnvelopeDeliveryEmail2(prepared.target.address) ? { deliveryEmail: prepared.target.address } : {},
       filename: targetInput.filename,
       mediaType,
       byteLength,

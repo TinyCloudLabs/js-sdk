@@ -26,5 +26,8 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "16.0.0"
   },
-  "changesets": []
+  "changesets": [
+    "tc-548-profile-lock-writers",
+    "tc-571-share-notify-delivery-email"
+  ]
 }

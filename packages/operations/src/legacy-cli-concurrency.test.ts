@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,6 +24,7 @@ const IMPORT_SESSION_JWK = {
 };
 const IMPORT_SESSION_VERIFICATION_METHOD =
   "did:key:z6MkwgCDSaxUVbFokAd689S3EY5b3sxN3Ub22hZMdLBcDKPm#z6MkwgCDSaxUVbFokAd689S3EY5b3sxN3Ub22hZMdLBcDKPm";
+const LEGACY_CLI_ENTRY = new URL("../../cli/src/index.ts", import.meta.url).pathname;
 
 afterEach(async () => {
   await Promise.all(children.splice(0).map(terminateChild));
@@ -41,7 +42,6 @@ test("tc auth import contends for the operations lock and preserves auth request
   const readyPath = join(protocolDir, "holder-ready");
   const releasePath = join(protocolDir, "release-holder");
   const contendedPath = join(protocolDir, "cli-contended");
-  const legacyCliEntry = new URL("../../cli/src/index.ts", import.meta.url).pathname;
   const holderFixture = new URL("../test-support/hold-profile-store-writer.ts", import.meta.url).pathname;
   const env = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
   await mkdir(protocolDir, { recursive: true });
@@ -62,7 +62,7 @@ test("tc auth import contends for the operations lock and preserves auth request
 
   const legacy = Bun.spawn([
     process.execPath,
-    legacyCliEntry,
+    LEGACY_CLI_ENTRY,
     "--profile",
     profile,
     "auth",
@@ -117,7 +117,6 @@ test("tc auth import contends for the operations lock and preserves additional d
     const releasePath = join(protocolDir, "release-holder");
     const contendedPath = join(protocolDir, "cli-contended");
     const holderFixture = new URL("../test-support/hold-profile-store-writer.ts", import.meta.url).pathname;
-    const legacyCliEntry = new URL("../../cli/src/index.ts", import.meta.url).pathname;
     const env = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
     await mkdir(protocolDir, { recursive: true });
     await writeFile(importedArtifactPath, JSON.stringify(appendedDelegation), "utf8");
@@ -137,7 +136,7 @@ test("tc auth import contends for the operations lock and preserves additional d
 
     const writer = Bun.spawn([
       process.execPath,
-      legacyCliEntry,
+      LEGACY_CLI_ENTRY,
       "--profile",
       profile,
       "auth",
@@ -169,6 +168,114 @@ test("tc auth import contends for the operations lock and preserves additional d
     fixture.hermetic.stop();
   }
 }, { timeout: PROFILE_LOCK_TEST_TIMEOUT_MS });
+
+test("tc profile delete waits for the profile lock and never removes a held lock", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-profile-delete-concurrency-"));
+  homes.push(home);
+  const profile = "doomed";
+  const profileDir = join(home, ".tinycloud", "profiles", profile);
+  const session = { delegationCid: "bafy-held-session", spaceId: "space-held" };
+  await mkdir(join(profileDir, "cache"), { recursive: true });
+  await writeFile(join(profileDir, "profile.json"), JSON.stringify({ name: profile, host: "https://node.tinycloud.test" }), "utf8");
+  await writeFile(join(profileDir, "key.json"), JSON.stringify(IMPORT_SESSION_JWK), "utf8");
+  await writeFile(join(profileDir, "session.json"), JSON.stringify(session), "utf8");
+  const protocolDir = join(home, "protocol");
+  const holdersDir = join(home, "holders");
+  const readyPath = join(protocolDir, "holder-ready");
+  const releasePath = join(protocolDir, "release-holder");
+  const contendedPath = join(protocolDir, "cli-contended");
+  const env = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
+  await mkdir(protocolDir, { recursive: true });
+  await mkdir(holdersDir, { recursive: true });
+
+  const holder = spawnLockHolder(profile, holdersDir, readyPath, releasePath, env);
+  children.push(holder);
+  await waitForChildSignal(holder, readyPath, "the lock holder to hold the profile lock");
+
+  const deleter = Bun.spawn([process.execPath, LEGACY_CLI_ENTRY, "profile", "delete", profile], {
+    env: { ...env, TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contendedPath },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  children.push(deleter);
+  await waitForChildSignal(deleter, contendedPath, "tc profile delete to contend on the profile lock");
+  expect(deleter.exitCode).toBeNull();
+  // While the holder's critical section runs, its profile and its lock are intact.
+  expect(await readJsonFile(join(profileDir, "session.json"))).toEqual(session);
+  expect(await readJsonFile(join(profileDir, ".lock", "owner.json"))).toMatchObject({ pid: holder.pid });
+  await signalProfileLockProtocol(releasePath);
+
+  await expectChildExit(holder, "profile lock holder");
+  await expectChildExit(deleter, "tc profile delete");
+  expect(await readdir(holdersDir)).toEqual([]);
+  await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+}, { timeout: PROFILE_LOCK_TEST_TIMEOUT_MS });
+
+test("local tc auth rotate keeps the previous session when the profile changes before its commit", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-local-rotate-concurrency-"));
+  homes.push(home);
+  const fixture = await withTcHome(home, createAuthRuntimeFixture);
+  try {
+    const profile = fixture.ownerProfile;
+    const profileDir = join(home, ".tinycloud", "profiles", profile);
+    const previousSession = await readJsonFile(join(profileDir, "session.json"));
+    const updatedProfile = { ...await readJsonFile(join(profileDir, "profile.json")), defaultSpace: "photos" };
+    const protocolDir = join(home, "protocol");
+    const holdersDir = join(home, "holders");
+    const readyPath = join(protocolDir, "holder-ready");
+    const releasePath = join(protocolDir, "release-holder");
+    const contendedPath = join(protocolDir, "cli-contended");
+    const env = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
+    await mkdir(protocolDir, { recursive: true });
+    await mkdir(holdersDir, { recursive: true });
+
+    const holder = spawnLockHolder(profile, holdersDir, readyPath, releasePath, env);
+    children.push(holder);
+    await waitForChildSignal(holder, readyPath, "the lock holder to hold the profile lock");
+
+    // The rotation reads the profile, signs in with the local owner key, and
+    // only then needs the lock for its compare-and-commit.
+    const rotation = Bun.spawn([process.execPath, LEGACY_CLI_ENTRY, "--profile", profile, "auth", "rotate"], {
+      env: { ...env, TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contendedPath },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    children.push(rotation);
+    await waitForChildSignal(rotation, contendedPath, "tc auth rotate to contend on the profile lock");
+    // The holder's critical section updates the profile, as `tc profile
+    // set-default-space` would.
+    await writeFile(join(profileDir, "profile.json"), JSON.stringify(updatedProfile), "utf8");
+    await signalProfileLockProtocol(releasePath);
+    await expectChildExit(holder, "profile lock holder");
+
+    const [exitCode, stderr] = await Promise.all([
+      waitForChildExit(rotation, "tc auth rotate"),
+      readChildStderr(rotation),
+    ]);
+    expect(exitCode, stderr).toBe(1);
+    expect(stderr).toContain("PROFILE_CHANGED_DURING_LOGIN");
+    expect(await readJsonFile(join(profileDir, "profile.json"))).toEqual(updatedProfile);
+    expect(await readJsonFile(join(profileDir, "session.json"))).toEqual(previousSession);
+  } finally {
+    fixture.hermetic.stop();
+  }
+}, { timeout: PROFILE_LOCK_TEST_TIMEOUT_MS });
+
+/** A child that holds the profile lock (hold-profile-lock.ts) until `releasePath` appears. */
+function spawnLockHolder(
+  profile: string,
+  holdersDir: string,
+  readyPath: string,
+  releasePath: string,
+  env: Record<string, string | undefined>,
+) {
+  const fixture = new URL("../test-support/hold-profile-lock.ts", import.meta.url).pathname;
+  return spawn([process.execPath, fixture, profile, holdersDir, readyPath, releasePath, "10000", "30000"], env);
+}
+
+async function readJsonFile(path: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+}
 
 async function withTcHome<T>(home: string, action: () => Promise<T>): Promise<T> {
   const previousTcHome = process.env.TC_HOME;

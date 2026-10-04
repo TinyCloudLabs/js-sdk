@@ -550,7 +550,7 @@ export function registerAuthCommand(program: Command): void {
           const profile = await ProfileManager.getProfile(ctx.profile);
           const session = await ProfileManager.getSession(ctx.profile);
           if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
-          node = await bootstrapDelegatedSession(ctx, imported.delegation);
+          node = (await bootstrapDelegatedSession(ctx, imported.delegation)).node;
         }
         await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
           imported.delegation,
@@ -987,15 +987,11 @@ async function importRequestBoundDelegationWithBootstrap(
 
   const candidate = artifact as { delegation: PortableDelegation };
   const delegation = normalizePortableDelegation(candidate.delegation);
+  const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
   try {
-    await bootstrapDelegatedSession(ctx, delegation);
     await importRequestBoundDelegation(ctx, artifact);
   } catch (error) {
-    await ProfileManager.withLock(ctx.profile, async () => {
-      await ProfileManager.clearSession(ctx.profile);
-      await ProfileManager.setProfile(ctx.profile, profile);
-    });
-    throw error;
+    await bootstrap.abandon(error);
   }
 }
 
@@ -1417,7 +1413,8 @@ async function rotateAuthKey(
       );
     }
 
-    await ProfileManager.clearSession(profileName);
+    // The new session replaces the old one in local login's compare-and-commit;
+    // if the profile changed meanwhile, the commit refuses and keeps it.
     const result = await handleLocalAuth(profileName, host, {
       emitOutput: false,
       forceSessionKey: true,

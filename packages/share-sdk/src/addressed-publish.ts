@@ -1,7 +1,7 @@
 import { canonicalShareFilename } from "./filename-policy.js";
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, seal,
+  canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, isEnvelopeDeliveryEmail, seal,
   shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
   type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
@@ -289,6 +289,9 @@ export function prepareAddressedShare(request: AddressedShareRequest): PreparedA
   }
   if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
   if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
+  // The envelope schema signs `deliveryEmail` only in a form deployed viewers
+  // accept; refuse anything else before the caller uploads or registers.
+  if (request.deliveryEmail !== undefined && !isEnvelopeDeliveryEmail(request.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
   const target = normalizeShareTarget(request.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
   if (target.kind === "recipientDid") return { target };
