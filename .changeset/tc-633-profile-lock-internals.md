@@ -1,0 +1,8 @@
+---
+"@tinycloud/cli": patch
+"@tinycloud/operations": patch
+---
+
+Make the profile lock safe against paused processes and older releases, and usable without hard links. Processes of this release now take a turn lock (in `~/.tinycloud/profile-locks/<profile>/`) before the `.lock` directory older releases use. The turn lock decides nothing from elapsed time, so a process paused at any point (a suspended recoverer or cleanup) can no longer let two writers in, and only one process of this release at a time reclaims an abandoned `.lock`, so an aged empty lock is no longer removed after a pre-TC-540 writer has just taken it. This release's recovery claims (`.recover-*`) are never removed by TC-540 releases' cleanup. On filesystems without hard links (FAT/exFAT, some SMB mounts), where every profile write used to fail, the owner record is created with an exclusive create instead, and recovery renames rather than links; an incomplete owner record a crash left there is reclaimed once it is older than the stale threshold. Locks held by older releases on the same profile keep excluding this release and it them.
+
+A session or store write that waited for the lock while `tc profile delete` removed the profile now fails with `PROFILE_NOT_FOUND` instead of recreating a profile holding only a session; `recordProfileDeletion` and `ProfileDeletedError` are exported from `@tinycloud/operations/state` for this. The rollback of a failed `tc auth import` bootstrap compares only what the bootstrap wrote (the session, and the profile's session DID and space), so an unrelated profile change made meanwhile, such as a new default space, no longer keeps the provisional session and is itself kept. Its notes name failures by code and never quote file contents.

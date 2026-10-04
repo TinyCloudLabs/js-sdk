@@ -29,11 +29,15 @@ const TEST_LOCK_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_PUBLISH_BARRIER_DIR"
 const TEST_LOCK_RELEASE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR";
 const TEST_LOCK_CLAIM_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIM_BARRIER_DIR";
 const TEST_LOCK_CLAIMED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_CLAIMED_BARRIER_DIR";
-const TEST_LOCK_FENCED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_FENCED_BARRIER_DIR";
 const TEST_LOCK_VERIFIED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_VERIFIED_BARRIER_DIR";
+const TEST_LOCK_TURN_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_PUBLISH_BARRIER_DIR";
+const TEST_LOCK_TURN_SETTLE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_SETTLE_BARRIER_DIR";
+const TEST_LOCK_TURN_COLLECT_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR";
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
   readonly lockPath: string;
+  /** A deletion of the profile ran while this acquisition waited for the lock. */
+  readonly deletedWhileWaiting: boolean;
   active: boolean;
 }
 /**
@@ -85,6 +89,21 @@ export class ProfileLockTimeoutError extends Error {
   constructor(profile: string, timeoutMs: number) {
     super(`Timed out waiting for the profile lock for "${profile}" after ${timeoutMs}ms.`);
     this.name = "ProfileLockTimeoutError";
+  }
+}
+
+/**
+ * A store write that waited for the profile lock while a deletion of that
+ * profile held it, and found no profile settings once it got the lock. The
+ * write is refused rather than recreating a profile with only a session or
+ * store in it.
+ */
+export class ProfileDeletedError extends Error {
+  readonly code = "PROFILE_NOT_FOUND";
+
+  constructor(profile: string) {
+    super(`Profile "${profile}" was deleted while this change waited for its lock, so the change was not written.`);
+    this.name = "ProfileDeletedError";
   }
 }
 
@@ -156,6 +175,15 @@ export function profileLockPath(profile: string): string {
 
 export function profileLockMetadataPath(profile: string): string {
   return join(profileLockPath(profile), "owner.json");
+}
+
+/**
+ * The turn lock of a profile (see acquireTurn). It lives outside the profile
+ * directory, so neither a profile deletion nor an older release's cleanup
+ * removes it.
+ */
+export function profileTurnLockPath(profile: string): string {
+  return join(tinycloudHomePath(), "profile-locks", validateProfileName(profile));
 }
 
 /**
@@ -248,9 +276,9 @@ export async function readProfileStore<T>(
 }
 
 /**
- * Runs a small critical section under the one advisory lock shared by all
- * profile stores. Lock release verifies its ownership token before removing
- * the exact metadata instance it acquired.
+ * Runs a small critical section under the one lock shared by all profile
+ * stores (see acquireProfileLock). Lock release verifies its ownership token
+ * before removing the exact metadata instance it acquired.
  *
  * Reentrant within one async call chain: a critical section that already
  * holds a profile's lock (for example a login's compare-and-commit) can call
@@ -269,14 +297,42 @@ export async function withProfileLock<T>(
   const lockPath = profileLockPath(normalizedProfile);
   const held = (heldProfileLocks.getStore() ?? []).filter((ownership) => ownership.active);
   if (held.some((ownership) => ownership.lockPath === lockPath)) return action();
-  const release = await acquireProfileLock(normalizedProfile, options);
-  const ownership: HeldProfileLock = { lockPath, active: true };
+  const acquired = await acquireProfileLock(normalizedProfile, options);
+  const ownership: HeldProfileLock = { lockPath, deletedWhileWaiting: acquired.deletedWhileWaiting, active: true };
   try {
     return await heldProfileLocks.run([...held, ownership], action);
   } finally {
     ownership.active = false;
-    await release();
+    await acquired.release();
+    // Taking the lock recreated the deleted profile's directory; remove it
+    // again unless something was written into it (rmdir needs it empty).
+    if (acquired.deletedWhileWaiting) await rmdir(profilePath(normalizedProfile)).catch(() => undefined);
   }
+}
+
+/**
+ * Records, inside a profile deletion's critical section and after its files
+ * are gone, that the profile was deleted. A store write that waited for the
+ * lock meanwhile then refuses (ProfileDeletedError) instead of recreating a
+ * profile with only a session or store in it. The caller must hold the
+ * profile's lock.
+ */
+export async function recordProfileDeletion(profile: string): Promise<void> {
+  const lockPath = profileLockPath(profile);
+  if (!(heldProfileLocks.getStore() ?? []).some((ownership) => ownership.active && ownership.lockPath === lockPath)) {
+    throw new Error(`Recording the deletion of profile "${profile}" requires holding its lock.`);
+  }
+  await writeJsonAtomic(join(profileTurnLockPath(profile), "deleted.json"), { id: randomUUID() });
+}
+
+/** Store writers call this inside their critical section, before writing. */
+async function refuseWriteToDeletedProfile(profile: string): Promise<void> {
+  const lockPath = profileLockPath(profile);
+  const ownership = (heldProfileLocks.getStore() ?? []).find((candidate) => candidate.active && candidate.lockPath === lockPath);
+  if (!ownership?.deletedWhileWaiting) return;
+  // Recreated meanwhile (or by this critical section): writing is fine.
+  if (await exists(profileConfigPath(profile))) return;
+  throw new ProfileDeletedError(profile);
 }
 
 /**
@@ -295,6 +351,7 @@ export async function upsertProfileRecord<T>(
   if (!key) throw new TypeError("A non-empty record key is required.");
 
   return withProfileLock(profile, async () => {
+    await refuseWriteToDeletedProfile(profile);
     const current = (await readProfileStore<T>(profile, store)).records;
     const next = current.filter((candidate) => getKey(candidate) !== key);
     next.push(record);
@@ -338,6 +395,7 @@ async function updateProfileStoreWhileLocked<T, Result>(
     readonly result: Result;
   },
 ): Promise<Result> {
+  await refuseWriteToDeletedProfile(profile);
   const current = await readProfileStore<T>(profile, store);
   const next = await update(current.records);
   await writeJsonAtomic(profileStorePath(profile, store), next.records);
@@ -351,6 +409,7 @@ export async function writeSession<T extends object>(
   options: ProfileLockOptions = {},
 ): Promise<void> {
   await withProfileLock(profile, async () => {
+    await refuseWriteToDeletedProfile(profile);
     await readStoreMetadata(profile, "session");
     await writeJsonAtomic(sessionPath(profile), session);
     await writeFormatOneMetadata(profile, "session");
@@ -371,18 +430,48 @@ async function writeFormatOneMetadata(profile: string, store: ProfileStoreName):
   await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
 }
 
+interface AcquiredProfileLock {
+  readonly deletedWhileWaiting: boolean;
+  release(): Promise<void>;
+}
+
+interface LockDeadline {
+  readonly startedAt: number;
+  readonly timeoutMs: number;
+  readonly retryMs: number;
+}
+
+/**
+ * Takes a profile's lock in two layers:
+ *
+ * 1. The turn lock (acquireTurn), used by this release and later ones. It
+ *    decides nothing from elapsed time, so a process paused anywhere, for
+ *    any length of time, cannot let a second holder in.
+ * 2. Holding a turn, the `.lock` directory every older release uses
+ *    (publishProfileLock), so they keep excluding this release and it them.
+ *    Only one process of this release at a time acquires, recovers or
+ *    releases `.lock`.
+ *
+ * Also reports whether a profile deletion (recordProfileDeletion) ran while
+ * this acquisition waited.
+ */
 async function acquireProfileLock(
   profile: string,
   options: ProfileLockOptions,
-): Promise<() => Promise<void>> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
-  const retryMs = options.retryMs ?? DEFAULT_LOCK_RETRY_MS;
+): Promise<AcquiredProfileLock> {
+  const deadline: LockDeadline = {
+    startedAt: Date.now(),
+    timeoutMs: options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
+    retryMs: options.retryMs ?? DEFAULT_LOCK_RETRY_MS,
+  };
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_LOCK_MS;
-  const startedAt = Date.now();
   const lockPath = profileLockPath(profile);
+  const turnDirectory = profileTurnLockPath(profile);
+  const deletionPath = join(turnDirectory, "deleted.json");
 
   const directory = profilePath(profile);
   await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await mkdir(dirname(turnDirectory), { recursive: true, mode: PRIVATE_DIR_MODE });
   // Every store write takes this lock: tighten the tree older releases
   // created 0775 before writing sessions or delegations into it.
   for (const path of [tinycloudHomePath(), profilesPath(), directory]) {
@@ -393,36 +482,327 @@ async function acquireProfileLock(
     });
   }
 
+  const deletionBefore = (await readJson<{ id?: unknown }>(deletionPath))?.id;
+  const turn = await acquireTurn(profile, turnDirectory, deadline);
+  try {
+    const deletedWhileWaiting = (await readJson<{ id?: unknown }>(deletionPath))?.id !== deletionBefore;
+    while (true) {
+      const token = randomUUID();
+      if (await publishProfileLock(profile, lockPath, token)) {
+        return {
+          deletedWhileWaiting,
+          release: async () => {
+            try {
+              await releaseProfileLock(profile, lockPath, token);
+            } finally {
+              await releaseTurn(profile, turn);
+            }
+          },
+        };
+      }
+      await signalTestLockContention(profile);
+      if (await recoverStaleLock(profile, lockPath, staleAfterMs)) continue;
+      await waitOrTimeOut(profile, deadline);
+    }
+  } catch (error) {
+    await releaseTurn(profile, turn).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Sleeps one retry interval, or throws once the acquisition's time is up. */
+async function waitOrTimeOut(profile: string, deadline: LockDeadline): Promise<void> {
+  const elapsedMs = Date.now() - deadline.startedAt;
+  if (elapsedMs >= deadline.timeoutMs) {
+    throw new ProfileLockTimeoutError(profile, deadline.timeoutMs);
+  }
+  await sleep(Math.min(deadline.retryMs, deadline.timeoutMs - elapsedMs));
+}
+
+/** One granted turn of the turn lock. */
+interface Turn {
+  readonly directory: string;
+  readonly slot: number;
+  readonly token: string;
+}
+
+/** A turn as recorded on disk. */
+interface TurnState {
+  readonly slot: number;
+  readonly token: string;
+  readonly pid: number;
+  /** The token of the turn before it that its creator observed; null for turn 0. */
+  readonly after: string | null;
+  readonly held: boolean;
+  readonly done: boolean;
+}
+
+/** Turn directory names: decimal turn numbers. */
+const TURN = /^(?:0|[1-9][0-9]*)$/;
+
+/**
+ * The turn lock: mutual exclusion among processes of this release that does
+ * not depend on how long any of them is paused. It uses only `mkdir`,
+ * `rename`, exclusive file creation, and a check that a holder's PID is gone
+ * (as `.lock` recovery always has), so it needs no hard links.
+ *
+ * Turns are numbered directories in profileTurnLockPath(profile). Turn n has
+ * `owner.json` ({ pid, createdAt, token, after }), where `after` is the token
+ * of the turn n-1 its creator observed, and gains `<token>.held` when granted
+ * and `<token>.done` when over. Markers name the turn's own token, so one
+ * written late into a recreated directory of the same number means nothing.
+ *
+ * - A turn is published by renaming a fully written staging directory to
+ *   `n`, which fails while `n` exists (rename never replaces a non-empty
+ *   directory, and turn directories are never empty). The turn directory
+ *   itself is published the same way, with a granted, finished turn 0.
+ * - A process takes turn n only after reading turn n-1 granted and done.
+ *   Once `n` is published it checks that turn n-1 is still the one it read
+ *   (same token, granted, done) and only then writes `held`; otherwise the
+ *   turn is void: it writes `done` alone and starts over.
+ * - Turns are removed by renaming them aside: a void turn at any time, a
+ *   granted one only once no older turn is left and turn n+1 is granted and
+ *   done. The latest turn is never removed.
+ *
+ * Why at most one granted turn is ever not done: a removed number can be
+ * published again, but turn n-1 is always removed before turn n, so a
+ * process whose stale read led it to republish n finds n-1 gone or holding
+ * another token, and its turn is void. A process that finds n-1 as it read
+ * it published `n` for the first time, so it is the only process granted n,
+ * and n-1 was done before. A turn is marked done only by its holder, or by
+ * another process once the holder's PID is gone; a paused holder is alive.
+ * Nothing above is decided from elapsed time.
+ */
+async function acquireTurn(profile: string, directory: string, deadline: LockDeadline): Promise<Turn> {
   while (true) {
-    const token = randomUUID();
-    if (await publishProfileLock(profile, lockPath, token)) {
-      return async () => {
-        await releaseProfileLock(profile, lockPath, token);
-      };
+    const latest = await readLatestTurn(directory);
+    if (latest === "missing") {
+      await createTurnDirectory(directory);
+      continue;
     }
-    await signalTestLockContention(profile);
-
-    if (await recoverStaleLock(profile, lockPath, staleAfterMs)) continue;
-
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= timeoutMs) {
-      throw new ProfileLockTimeoutError(profile, timeoutMs);
+    if (latest === "empty") {
+      // Usually a listing that straddled a turn's publication and an older
+      // turn's removal (readdir is not a snapshot). One that stays empty
+      // means the directory was changed outside tc.
+      if (Date.now() - deadline.startedAt >= deadline.timeoutMs) {
+        throw new Error(
+          `The profile lock directory ${directory} has no turns; it was changed outside tc. ` +
+            `Remove it if no tc or MCP process is using profile "${profile}".`,
+        );
+      }
+    } else if (latest !== null && latest.held && latest.done) {
+      const turn = await takeTurn(profile, directory, latest);
+      if (turn !== null) return turn;
+    } else if (latest !== null && !latest.done && !isProcessAlive(latest.pid)) {
+      await waitForTestBarrier(TEST_LOCK_TURN_SETTLE_BARRIER_DIR, profile);
+      await settleAbandonedTurn(directory, latest);
+      continue;
+    } else if (latest !== null) {
+      await signalTestLockContention(profile);
     }
-    await sleep(Math.min(retryMs, timeoutMs - elapsedMs));
+    await waitOrTimeOut(profile, deadline);
+  }
+}
+
+/** The highest-numbered turn, null if it went away while being read. */
+async function readLatestTurn(directory: string): Promise<TurnState | "missing" | "empty" | null> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return "missing";
+    throw error;
+  }
+  const slots = names.filter((name) => TURN.test(name)).map(Number);
+  if (slots.length === 0) return "empty";
+  return readTurn(directory, Math.max(...slots));
+}
+
+/**
+ * Turn `slot` as recorded now, or null if it is gone. `done` is read before
+ * `held`, which every writer creates first, so a turn read as done is never
+ * misread as void.
+ */
+async function readTurn(directory: string, slot: number): Promise<TurnState | null> {
+  const path = join(directory, String(slot));
+  const owner = await readJson<{ pid?: unknown; token?: unknown; after?: unknown }>(join(path, "owner.json"))
+    .catch(() => null);
+  if (owner === null || typeof owner.token !== "string" || typeof owner.pid !== "number") return null;
+  const done = await exists(join(path, `${owner.token}.done`));
+  const held = await exists(join(path, `${owner.token}.held`));
+  return {
+    slot,
+    token: owner.token,
+    pid: owner.pid,
+    after: typeof owner.after === "string" ? owner.after : null,
+    held,
+    done,
+  };
+}
+
+/** Whether turn `slot` is still the one with `token`, granted and done. */
+async function isFinishedTurn(directory: string, slot: number, token: string): Promise<boolean> {
+  const turn = await readTurn(directory, slot);
+  return turn !== null && turn.token === token && turn.held && turn.done;
+}
+
+/**
+ * Publishes the turn after `latest` and claims it. Null if another process
+ * published that number first, or the turn is void.
+ */
+async function takeTurn(profile: string, directory: string, latest: TurnState): Promise<Turn | null> {
+  const token = randomUUID();
+  const slot = latest.slot + 1;
+  const path = join(directory, String(slot));
+  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: latest.token };
+  const published = await publishDirectory(
+    join(directory, `.stage-${process.pid}-${token}`),
+    path,
+    { "owner.json": `${JSON.stringify(owner, null, 2)}\n` },
+    () => waitForTestBarrier(TEST_LOCK_TURN_PUBLISH_BARRIER_DIR, profile),
+  );
+  if (!published) return null;
+  if (await isFinishedTurn(directory, latest.slot, latest.token) && await markTurn(path, token, "held")) {
+    return { directory, slot, token };
+  }
+  await markTurn(path, token, "done");
+  return null;
+}
+
+/**
+ * Finishes the turn of a process that is gone. A turn its creator never got
+ * to grant is granted first if the turn before it is still the one its
+ * creator read (the check the creator would have made; that turn cannot
+ * have been removed, since that needs this turn done), else left void.
+ */
+async function settleAbandonedTurn(directory: string, abandoned: TurnState): Promise<void> {
+  const path = join(directory, String(abandoned.slot));
+  if (!abandoned.held && abandoned.after !== null &&
+    await isFinishedTurn(directory, abandoned.slot - 1, abandoned.after)) {
+    await markTurn(path, abandoned.token, "held");
+  }
+  await markTurn(path, abandoned.token, "done");
+}
+
+/** Creates `<token>.<kind>` in a turn directory; false if the directory is gone. */
+async function markTurn(path: string, token: string, kind: "held" | "done"): Promise<boolean> {
+  try {
+    await writeFile(join(path, `${token}.${kind}`), "", { mode: PRIVATE_FILE_MODE, flag: "wx" });
+    return true;
+  } catch (error) {
+    if (isErrno(error, "EEXIST")) return true;
+    if (isErrno(error, "ENOENT")) return false;
+    throw error;
+  }
+}
+
+/** Creates the turn directory with a granted, finished turn 0, unless another process did. */
+async function createTurnDirectory(directory: string): Promise<void> {
+  const token = randomUUID();
+  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token, after: null };
+  await publishDirectory(join(dirname(directory), `.stage-${basename(directory)}-${process.pid}-${token}`), directory, {
+    "0/owner.json": `${JSON.stringify(owner, null, 2)}\n`,
+    [`0/${token}.held`]: "",
+    [`0/${token}.done`]: "",
+  });
+}
+
+/**
+ * Writes `files` into a new staging directory and renames it to `target`.
+ * False if `target` already exists (or the turn directory is gone); the
+ * caller starts over. Nothing else removes a live process's staging
+ * directory (see collectTurns), so `target` never appears incomplete.
+ */
+async function publishDirectory(
+  stage: string,
+  target: string,
+  files: Readonly<Record<string, string>>,
+  beforeRename?: () => Promise<void>,
+): Promise<boolean> {
+  try {
+    for (const [name, contents] of Object.entries(files)) {
+      await mkdir(dirname(join(stage, name)), { recursive: true, mode: PRIVATE_DIR_MODE });
+      await writeFile(join(stage, name), contents, { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
+    }
+    await beforeRename?.();
+    await rename(stage, target);
+    return true;
+  } catch (error) {
+    // ENOTEMPTY/EEXIST: `target` exists, though it may be gone again by now.
+    // Windows reports an existing target directory as EPERM.
+    if (["ENOTEMPTY", "EEXIST", "ENOENT"].some((code) => isErrno(error, code)) || await exists(target)) return false;
+    throw error;
+  } finally {
+    await rm(stage, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function releaseTurn(profile: string, turn: Turn): Promise<void> {
+  await markTurn(join(turn.directory, String(turn.slot)), turn.token, "done");
+  await collectTurns(profile, turn).catch(() => undefined);
+}
+
+/**
+ * Leftovers in a turn directory whose writer is gone: trash (a removed turn
+ * renamed aside, garbage from then on), and staging directories and
+ * deletion-record temporaries named after their writer's PID.
+ */
+function isAbandonedTurnEntry(name: string): boolean {
+  if (name.startsWith(".trash-")) return true;
+  const writer = /^\.(?:stage|deleted\.json)[-.]([0-9]+)[-.]/.exec(name)?.[1];
+  return writer !== undefined && !isProcessAlive(Number(writer));
+}
+
+/**
+ * Removes the turns before `turn`, which just finished: void turns, and
+ * granted ones oldest first, each once no older turn is left and the next is
+ * granted and done (see acquireTurn). A turn is renamed aside before it is
+ * deleted, so its number is never an empty directory. Leftovers of crashed
+ * processes go too, judged by PID, never by age: removing a paused process's
+ * staging directory could publish an incomplete turn.
+ */
+async function collectTurns(profile: string, turn: Turn): Promise<void> {
+  const names = await readdir(turn.directory);
+  for (const name of names.filter(isAbandonedTurnEntry)) {
+    await rm(join(turn.directory, name), { recursive: true, force: true }).catch(() => undefined);
+  }
+  const older = names.filter((name) => TURN.test(name)).map(Number)
+    .filter((slot) => slot < turn.slot)
+    .sort((left, right) => left - right);
+  for (const slot of older) {
+    const candidate = await readTurn(turn.directory, slot);
+    if (candidate === null || !candidate.done) continue;
+    if (candidate.held) {
+      if (await exists(join(turn.directory, String(slot - 1)))) continue;
+      const next = await readTurn(turn.directory, slot + 1);
+      if (next === null || !next.held || !next.done) continue;
+    }
+    await waitForTestBarrier(TEST_LOCK_TURN_COLLECT_BARRIER_DIR, profile);
+    const trash = join(turn.directory, `.trash-${randomUUID()}`);
+    if (await rename(join(turn.directory, String(slot)), trash).then(() => true, () => false)) {
+      await rm(trash, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
 /**
- * One attempt to take the lock. Nothing here replaces an existing path:
+ * One attempt to take `.lock`, made while holding a turn. Nothing here
+ * replaces an existing path:
  *
  * 1. `mkdir(.lock)` (never recursive) is exclusive, and is the primitive
  *    older releases use too, so they exclude each other.
  * 2. Ownership is published by `link`ing a fully written owner file (staged
  *    beside `.lock`, on the same filesystem) to `.lock/owner.json`. `link`
  *    fails with EEXIST if an owner exists, and with ENOENT if the directory
- *    was removed meanwhile (an aged ownerless-lock reclaim). Only a
- *    successful link holds the lock; on either failure nothing is released,
- *    since nothing was acquired, and the caller retries.
+ *    was removed meanwhile (an aged ownerless-lock reclaim by an older
+ *    release). Only a successful link holds the lock; on either failure
+ *    nothing is released, since nothing was acquired, and the caller retries.
+ *    On a filesystem without hard links (FAT/exFAT, some SMB mounts) the
+ *    owner file is created in place with an exclusive create instead, with
+ *    the same EEXIST/ENOENT outcomes. A reader may then briefly see it
+ *    incomplete; every release treats an owner file it cannot parse as a
+ *    held lock, and this release removes one only once it has aged (see
+ *    isAbandonedOwner).
  *
  * A profile deletion removes the profile directory once it has released its
  * lock, so `mkdir(.lock)` can see ENOENT; the directory is recreated (0700)
@@ -430,7 +810,7 @@ async function acquireProfileLock(
  * profile.
  *
  * Only one owner.json can exist at the lock path, and it is removed only by
- * its holder's release or by recovery of a dead holder, so at most one
+ * its holder's release or by recovery of an abandoned holder, so at most one
  * process holds the lock. Returns false when the lock is not acquired.
  */
 async function publishProfileLock(profile: string, lockPath: string, token: string): Promise<boolean> {
@@ -443,11 +823,17 @@ async function publishProfileLock(profile: string, lockPath: string, token: stri
     return false;
   }
   await waitForTestBarrier(TEST_LOCK_PUBLISH_BARRIER_DIR, profile);
+  const ownerPath = join(lockPath, "owner.json");
   const staged = join(dirname(lockPath), `.lock-owner-${token}.tmp`);
-  const owner = { pid: process.pid, createdAt: new Date().toISOString(), token };
+  const owner = `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), token }, null, 2)}\n`;
   try {
-    await writeFile(staged, `${JSON.stringify(owner, null, 2)}\n`, { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
-    await link(staged, join(lockPath, "owner.json"));
+    await writeFile(staged, owner, { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
+    try {
+      await link(staged, ownerPath);
+    } catch (error) {
+      if (!lacksHardLinks(error)) throw error;
+      await writeFile(ownerPath, owner, { encoding: "utf8", mode: PRIVATE_FILE_MODE, flag: "wx" });
+    }
     return true;
   } catch (error) {
     if (isErrno(error, "EEXIST") || isErrno(error, "ENOENT")) return false;
@@ -462,10 +848,24 @@ async function publishProfileLock(profile: string, lockPath: string, token: stri
 }
 
 /**
+ * Errors `link` reports on a filesystem without hard links: EPERM (Linux
+ * FAT/exFAT), ENOTSUP/EOPNOTSUPP (macOS FAT/exFAT, SMB), ENOSYS, EISDIR
+ * (libuv's code for Windows' ERROR_INVALID_FUNCTION on FAT32), and EMLINK
+ * (too many links), for which the same fallback is just as correct.
+ */
+const NO_HARD_LINK_ERRORS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EISDIR", "EMLINK"]);
+
+function lacksHardLinks(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    NO_HARD_LINK_ERRORS.has(String((error as { code?: unknown }).code));
+}
+
+/**
  * Releases the lock if `.lock/owner.json` is still this acquisition's. No
  * one else can put an owner record there while it exists (owners are only
- * linked into a directory their own `mkdir` created, and recovery removes
- * only a dead holder's record), so the record read is the one unlinked.
+ * published into a directory their own `mkdir` created, and recovery
+ * removes only an abandoned holder's record), so the record read is the one
+ * unlinked.
  */
 async function releaseProfileLock(profile: string, lockPath: string, token: string): Promise<void> {
   const ownerPath = join(lockPath, "owner.json");
@@ -512,20 +912,29 @@ async function signalTestLockContention(profile: string): Promise<void> {
 }
 
 /**
- * Reclaims a lock directory with no owner record that is older than the
- * stale threshold: one left by a crash, or by an older release. A process
- * killed while recovering (or releasing, in older releases) can leave its
- * `.stale-*` / `.release-*` claim file behind; such claim files are removed
- * first. owner.json is never touched, and the directory itself is only
- * `rmdir`ed, which succeeds only while it is empty, so a published lock is
- * never removed. If the directory was a contender's lock not yet published,
- * that contender's `link` fails with ENOENT and it retries without holding
- * anything.
+ * Reclaims a `.lock` with no owner record, while holding a turn. Claims of
+ * this release's recovery (`.recover-*`) are then orphans of a crashed
+ * recoverer, so a directory holding nothing else is removed at once.
+ * Otherwise the directory must be older than the stale threshold: one left by
+ * a crash, or by an older release, whose `.stale-*` / `.release-*` claim
+ * files are removed too. owner.json is never touched, and the directory
+ * itself is only `rmdir`ed, which succeeds only while it is empty, so a
+ * published lock is never removed; a TC-540 release whose unpublished
+ * directory this was sees its `link` fail and retries.
+ *
+ * Holding a turn, no other process of this release reclaims concurrently.
+ * That closes the race in which two reclaimers' age checks let the later one
+ * remove a directory a pre-TC-540 release had just created, which holds the
+ * lock from its `mkdir`. That race remains only if a TC-540 release reclaims
+ * at the same moment, or the pre-TC-540 process stays paused between its
+ * `mkdir` and its owner write for longer than the stale threshold;
+ * recoveryFenced bounds how stale this process's age check can be.
  */
 async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
+  let aged: boolean;
   try {
     const { mtimeMs } = await stat(lockPath);
-    if (Date.now() - mtimeMs < staleAfterMs) return false;
+    aged = Date.now() - mtimeMs >= staleAfterMs;
   } catch {
     return false;
   }
@@ -534,9 +943,9 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
   try {
     const entries = await readdir(lockPath);
     if (entries.includes("owner.json")) return false;
-    // The age check above is only good for a while; see recoveryFenced.
-    if (recoveryFenced(checkedAt, staleAfterMs)) return false;
-    for (const name of entries.filter((entry) => ABANDONED_CLAIM.test(entry))) {
+    const onlyOrphanedClaims = entries.length > 0 && entries.every((entry) => RECOVERY_CLAIM.test(entry));
+    if (!onlyOrphanedClaims && (!aged || recoveryFenced(checkedAt, staleAfterMs))) return false;
+    for (const name of entries.filter((entry) => RECOVERY_CLAIM.test(entry) || ABANDONED_CLAIM.test(entry))) {
       await rm(join(lockPath, name), { force: true });
     }
     await rmdir(lockPath);
@@ -548,20 +957,18 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, staleAfte
 }
 
 /**
- * Whether a recovery step decided at `since` (a monotonic timestamp) is too
- * old to act on. Claim-only and ownerless cleanup act only on a `.lock`
- * unchanged for `staleAfterMs`, and a recoverer's claim (or the change that
- * made a directory look abandoned) dates the directory no earlier than
- * `since`. Acting within half that window means no such cleanup can have
- * removed the directory and let a new holder in meanwhile; past it, the
- * recoverer drops only its own claim and starts the acquisition over.
+ * Whether an ownerless-reclaim decision made at `since` (a monotonic
+ * timestamp) is too old to act on. The age check is only good for a while:
+ * past half the stale threshold the reclaim starts over.
  */
 function recoveryFenced(since: number, staleAfterMs: number): boolean {
   return performance.now() - since >= staleAfterMs / 2;
 }
 
-/** Claim files of stale recovery (and of release in older releases). */
+/** Claim files of older releases' stale recovery and release. */
 const ABANDONED_CLAIM = /^\.(?:release|stale)-[0-9a-f-]+\.json$/;
+/** Claim files of this release's stale recovery; older releases never remove them. */
+const RECOVERY_CLAIM = /^\.recover-[0-9a-f-]+\.json$/;
 /** Owner files staged by publishProfileLock beside `.lock`. */
 const STAGED_OWNER = /^\.lock-owner-[0-9a-f-]+\.tmp$/;
 
@@ -581,64 +988,86 @@ async function removeAgedOwnerFiles(lockPath: string, staleAfterMs: number): Pro
   }
 }
 
+
 /**
- * Removes a dead holder's lock. The claim is a hard link to owner.json, so
- * the owner record is never moved away: a recoverer whose observation is
- * outdated (the dead holder's lock was already recovered and a live holder
- * now owns `.lock`) sees another token, drops its link and leaves the live
- * owner record in place. Only after the claimed record is confirmed to be
- * the observed dead holder's is owner.json unlinked. Nothing can link a new
- * owner.json meanwhile: the claim keeps `.lock` non-empty, so it cannot be
- * removed and recreated.
+ * Removes an abandoned owner record (see isAbandonedOwner) and its `.lock`,
+ * while holding a turn, so no other process of this release recovers,
+ * reclaims or acquires `.lock` meanwhile.
+ *
+ * The record is claimed first: hard-linked to `.recover-<uuid>.json` (or,
+ * without hard links, renamed there). The claim is compared with the exact
+ * bytes read, so a record that replaced the observed one is left in place
+ * (moved back, without hard links). While the claim is inside `.lock`, the
+ * directory cannot be removed and recreated, and older releases never remove
+ * a `.recover-*` claim (they clean up only their own claim names), so the
+ * unlink of owner.json can only remove the claimed record. No step depends
+ * on how long this process takes.
  */
 async function recoverStaleLock(profile: string, lockPath: string, staleAfterMs: number): Promise<boolean> {
   const ownerPath = join(lockPath, "owner.json");
-  const owner = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(ownerPath)
-    .catch(() => null);
-  if (owner === null) return recoverOwnerlessLock(profile, lockPath, staleAfterMs);
-  if (!isStaleOwner(owner, staleAfterMs)) return false;
+  const observed = await readFile(ownerPath, "utf8").catch(() => null);
+  if (observed === null) return recoverOwnerlessLock(profile, lockPath, staleAfterMs);
+  if (!await isAbandonedOwner(observed, ownerPath, staleAfterMs)) return false;
 
-  const observedToken = typeof owner?.token === "string" && owner.token.length > 0
-    ? owner.token
-    : "legacy";
   await waitForTestBarrier(TEST_LOCK_RECOVERY_BARRIER_DIR, profile);
-  const claimPath = join(lockPath, `.stale-${randomUUID()}.json`);
+  const claimPath = join(lockPath, `.recover-${randomUUID()}.json`);
+  let moved = false;
   try {
     await link(ownerPath, claimPath);
-  } catch {
-    return false;
+  } catch (error) {
+    if (!lacksHardLinks(error)) return false;
+    try {
+      await rename(ownerPath, claimPath);
+      moved = true;
+    } catch {
+      return false;
+    }
   }
-  const claimedAt = performance.now();
   await waitForTestBarrier(TEST_LOCK_CLAIM_BARRIER_DIR, profile);
-
-  const claimed = await readJson<{ pid?: unknown; createdAt?: unknown; token?: unknown }>(claimPath)
-    .catch(() => null);
-  const sameInstance = claimed !== null && (
-    observedToken === "legacy"
-      ? claimed.token === undefined
-      : claimed.token === observedToken
-  );
+  const sameInstance = await readFile(claimPath, "utf8").then((claimed) => claimed === observed, () => false);
   await waitForTestBarrier(TEST_LOCK_VERIFIED_BARRIER_DIR, profile);
-  if (sameInstance && recoveryFenced(claimedAt, staleAfterMs)) {
-    // Paused too long: another recoverer may have finished this recovery and
-    // a cleanup may have removed this claim, so owner.json may now be a live
-    // holder's. Touch nothing but this claim.
-    await rm(claimPath, { force: true });
-    await waitForTestBarrier(TEST_LOCK_FENCED_BARRIER_DIR, profile);
-    return false;
-  }
   if (sameInstance) {
-    await rm(ownerPath, { force: true });
+    if (!moved) await rm(ownerPath, { force: true });
     await waitForTestBarrier(TEST_LOCK_CLAIMED_BARRIER_DIR, profile);
+  } else if (moved) {
+    // The rename moved a record that replaced the observed one: put it back.
+    // No other owner.json can have appeared meanwhile, since only a process
+    // whose mkdir created this `.lock` publishes one, and the claim kept the
+    // directory from being removed and recreated.
+    await rename(claimPath, ownerPath).catch(() => undefined);
   }
-  await rm(claimPath, { force: true });
-  // Empty now if the claimed holder is gone or a live holder released while
-  // this claim kept `.lock` from being removed: remove it rather than leave
-  // an ownerless lock to age out. rmdir fails while an owner record exists.
+  // Drop this claim and any a crashed recoverer of this release left.
+  for (const name of (await readdir(lockPath).catch(() => [])).filter((entry) => RECOVERY_CLAIM.test(entry))) {
+    await rm(join(lockPath, name), { force: true });
+  }
+  // Empty now if the claimed holder is gone: remove it rather than leave an
+  // ownerless lock to age out. rmdir fails while an owner record exists.
   await rmdir(lockPath).catch(() => undefined);
   if (!sameInstance) return false;
   await removeAgedOwnerFiles(lockPath, staleAfterMs);
   return true;
+}
+
+/**
+ * Whether an owner record (its exact bytes, read from `ownerPath`) is
+ * abandoned: a holder's whose PID is gone, older than the stale threshold;
+ * or, if it is not a complete record, a file older than that threshold.
+ * Every release publishes complete records (by link or rename) except this
+ * one's no-hard-link fallback, which writes in place while holding a turn;
+ * so an incomplete record seen while holding a turn was left by a crash.
+ */
+async function isAbandonedOwner(observed: string, ownerPath: string, staleAfterMs: number): Promise<boolean> {
+  let owner: unknown;
+  try {
+    owner = JSON.parse(observed);
+  } catch {
+    owner = null;
+  }
+  if (typeof owner === "object" && owner !== null && "pid" in owner) {
+    return isStaleOwner(owner as { pid?: unknown; createdAt?: unknown }, staleAfterMs);
+  }
+  const modifiedAt = await stat(ownerPath).then(({ mtimeMs }) => mtimeMs, () => Number.NaN);
+  return Date.now() - modifiedAt >= staleAfterMs;
 }
 
 /** Test-only rendezvous (NODE_ENV=test and the named barrier directory set). */
@@ -677,6 +1106,10 @@ function isStaleOwner(
     return false;
   }
   return !isProcessAlive(owner.pid);
+}
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, () => false);
 }
 
 function isProcessAlive(pid: number): boolean {

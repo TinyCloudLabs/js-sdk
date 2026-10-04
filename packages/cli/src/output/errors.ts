@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
-import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
 
 let activeProfileName: string | undefined;
@@ -54,6 +54,11 @@ export function wrapError(error: unknown): CLIError {
       ExitCode.ERROR,
       { hint: "Wait for the other command to finish and retry. A crashed process's lock is reclaimed automatically after 30 s." },
     );
+  }
+
+  // A store write that waited out a `tc profile delete` of its profile.
+  if (error instanceof ProfileDeletedError) {
+    return new CLIError("PROFILE_NOT_FOUND", message);
   }
 
   // Map known error patterns to exit codes

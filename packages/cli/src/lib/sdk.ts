@@ -165,13 +165,18 @@ export interface DelegatedSessionBootstrap {
   readonly node: TinyCloudNode;
   /**
    * Abandons the bootstrap after `cause` failed a later step, then rethrows
-   * `cause`. Under the profile lock, the session is removed and the profile
-   * restored only if both still hold exactly what the bootstrap wrote.
-   * Otherwise another writer (a login, logout or profile update) replaced
-   * them meanwhile; its state is kept and the rethrown error says so.
+   * `cause`. Under the profile lock, the session is removed and the
+   * profile's session DID and space put back only if the session and those
+   * two fields still hold exactly what the bootstrap wrote; other profile
+   * fields are left as they are. Otherwise another writer (a login, logout
+   * or profile update) replaced them meanwhile; its state is kept and the
+   * rethrown error says so.
    */
   abandon(cause: unknown): Promise<never>;
 }
+
+/** The profile fields a bootstrap writes, and a rollback compares and restores. */
+const BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"] as const;
 
 /** What a bootstrap replaced and what it wrote, read and written under the profile lock. */
 interface BootstrapWrite {
@@ -243,13 +248,17 @@ export async function bootstrapDelegatedSession(
         throw error;
       });
       const session = await ProfileManager.getSession(ctx.profile);
-      if (JSON.stringify(profile) !== JSON.stringify(written.profile) || JSON.stringify(session) !== JSON.stringify(written.session)) {
+      if (
+        profile === null ||
+        BOOTSTRAP_PROFILE_FIELDS.some((field) => profile[field] !== written.profile[field]) ||
+        JSON.stringify(session) !== JSON.stringify(written.session)
+      ) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
       return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) =>
       // The lock or a read failed: the import's error stays the one reported.
-      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${error instanceof Error ? error.message : String(error)}); check \`tc --profile ${ctx.profile} context\`.`);
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`);
     throw annotate(cause, note);
   };
 
@@ -263,21 +272,41 @@ export async function bootstrapDelegatedSession(
 }
 
 /**
- * Removes the bootstrap's session and puts back the profile it replaced.
+ * Removes the bootstrap's session and puts back the session DID and space
+ * the profile had before it, keeping any other profile field as it is now.
  * Both writes are attempted; returns a note naming any failure.
  */
 async function restoreBeforeBootstrap(profileName: string, previousProfile: ProfileConfig): Promise<string | undefined> {
   const failures: string[] = [];
   for (const write of [
     () => ProfileManager.clearSession(profileName),
-    () => ProfileManager.setProfile(profileName, previousProfile),
+    () => ProfileManager.updateProfile(profileName, (current) => {
+      const restored = { ...current };
+      for (const field of BOOTSTRAP_PROFILE_FIELDS) {
+        if (previousProfile[field] === undefined) delete restored[field];
+        else restored[field] = previousProfile[field];
+      }
+      return restored;
+    }),
   ]) {
     await write().catch((error: unknown) => {
-      failures.push(error instanceof Error ? error.message : String(error));
+      failures.push(failureName(error));
     });
   }
   if (failures.length === 0) return undefined;
   return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+}
+
+/**
+ * Names a failure for a rollback note by its code (a CLI error code or an
+ * errno such as EACCES), never by its message: messages can quote file
+ * contents (Node's JSON parse errors quote the malformed text, which may be
+ * session material).
+ */
+function failureName(error: unknown): string {
+  if (error instanceof SyntaxError) return "a profile file is not valid JSON";
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
+  return error instanceof Error ? error.name : "unknown error";
 }
 
 /** `error` as a CLIError (same code and exit code) with `note` appended, or unchanged without a note. */

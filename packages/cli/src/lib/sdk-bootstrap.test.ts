@@ -152,6 +152,28 @@ describe("bootstrapDelegatedSession under the profile lock", () => {
     expect(await ProfileManager.getProfile(PROFILE)).toEqual(newerProfile);
   });
 
+  test("abandon rolls back when only an unrelated profile field changed meanwhile, and keeps that change", async () => {
+    const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+    // `tc profile set-default-space` while the import was pending.
+    await ProfileManager.updateProfile(PROFILE, (profile) => ({ ...profile, defaultSpace: "photos" }));
+    const cause = new Error("import rejected");
+
+    await expect(bootstrap.abandon(cause)).rejects.toBe(cause);
+    expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    expect(await ProfileManager.getProfile(PROFILE)).toEqual({ ...fresh, defaultSpace: "photos" });
+  });
+
+  test("a rollback note never quotes the contents of a malformed session file", async () => {
+    const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+    await writeFile(join(PROFILES_DIR, PROFILE, "session.json"), '{"jwk": {"d": privateScalarMaterial}}');
+
+    const error = await bootstrap.abandon(new CLIError("DELEGATION_REJECTED", "The delegation exceeds the stored authority request.", 1))
+      .catch((cause: unknown) => cause as CLIErrorInstance);
+    expect(error).toMatchObject({ code: "DELEGATION_REJECTED", exitCode: 1 });
+    expect(error.message).toContain("could not run (a profile file is not valid JSON)");
+    expect(error.message).not.toContain("privateScalarMaterial");
+  });
+
   test("a rollback that cannot run still reports the import's error, with a note", async () => {
     const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
     const provisional = await ProfileManager.getSession(PROFILE);

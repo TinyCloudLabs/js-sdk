@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   profilePath,
   readSession,
+  recordProfileDeletion,
   removeSession,
   withProfileLock,
   writeSession,
@@ -144,10 +145,12 @@ export class ProfileManager {
    * removed while holding the profile lock, so another writer's critical
    * section never sees them vanish midway: session and key first, settings
    * last, so a crash midway never leaves a session or key without its
-   * profile. `.lock` itself is left to the lock's release; the then-empty
-   * directory is removed afterwards unless another writer took the lock (or
-   * wrote) meanwhile. A profile directory that is a symlink is unlinked, its
-   * target left alone.
+   * profile. The deletion is then recorded, so a store write that waited for
+   * the lock meanwhile refuses rather than recreating a profile with only a
+   * session in it. `.lock` itself is left to the lock's release; the
+   * then-empty directory is removed afterwards unless another writer took
+   * the lock (or wrote) meanwhile. A profile directory that is a symlink is
+   * unlinked, its target left alone.
    * Throws if the name is not one path segment or names the default profile.
    */
   static async deleteProfile(name: string): Promise<void> {
@@ -182,6 +185,7 @@ export class ProfileManager {
         if (entry !== ".lock" && entry !== "profile.json") await rm(join(profileDir, entry), { recursive: true, force: true });
       }
       await rm(join(profileDir, "profile.json"), { force: true });
+      await recordProfileDeletion(name);
     });
     await rmdir(profileDir).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
