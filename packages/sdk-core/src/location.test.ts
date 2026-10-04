@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { authorizationVerdictOf } from "@tinycloud/sdk-services";
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   DEFAULT_LOCAL_NODE_PIN_STORAGE_KEY,
+  CloudLocationResolutionError,
   DEFAULT_LOCAL_NODE_URL,
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
   DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
@@ -11,7 +13,10 @@ import {
   createInMemoryLocalNodeIdentityStore,
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
+  fetchLocationRecord,
   httpUrlToMultiaddr,
+  LocationRecordValidationError,
+  LocationRegistryHttpError,
   locationPayloadForRecord,
   multiaddrToHttpUrl,
   publishLocationRecord,
@@ -24,6 +29,21 @@ import {
   type LocationRecordPayload,
   type WebStorageLike,
 } from "./location";
+
+const HTTP_FAILURES = [
+  [401, "", "unauthenticated"],
+  [401, "Forbidden", "unauthenticated"],
+  [401, "Unauthorized Action: host", "unauthenticated"],
+  [401, "session expired", "unauthenticated"],
+  [403, "", "forbidden"],
+  [403, "Forbidden", "forbidden"],
+  [403, "Unauthorized Action: host", "forbidden"],
+  [403, "session expired", "forbidden"],
+  [404, "session expired", "other"],
+  [408, "Forbidden", "other"],
+  [429, "Unauthorized Action: host", "other"],
+  [500, "session expired", "other"],
+] as const;
 
 const TEST_SUBJECT =
   "did:pkh:eip155:1:0x0000000000000000000000000000000000000000";
@@ -339,6 +359,94 @@ describe("location records", () => {
   });
 });
 
+describe("location HTTP failures", () => {
+  it("classifies registry GET statuses without interpreting server text or changing 404 lookup", async () => {
+    for (const [status, body, verdict] of HTTP_FAILURES) {
+      const fetchFn = (async () => new Response(body, { status })) as unknown as typeof fetch;
+      if (status === 404) {
+        expect(await fetchLocationRecord("https://registry.example", TEST_SUBJECT, fetchFn)).toBeNull();
+        continue;
+      }
+      const error: unknown = await fetchLocationRecord("https://registry.example", TEST_SUBJECT, fetchFn)
+        .catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(LocationRegistryHttpError);
+      expect(error).toMatchObject({
+        status,
+        message: `location registry returned HTTP ${status}`,
+      });
+      expect(authorizationVerdictOf(error)).toBe(verdict);
+    }
+  });
+
+  it("classifies registry PUT statuses while retaining the publish error", async () => {
+    const privateKey = new Uint8Array(32).fill(13);
+    const ownerDid = `did:key:${bases.base58btc.encode(
+      Uint8Array.of(0xed, 0x01, ...ed25519.getPublicKey(privateKey)),
+    )}`;
+    for (const [status, body, verdict] of HTTP_FAILURES) {
+      const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) =>
+        init?.method === "PUT"
+          ? new Response(body, { status })
+          : new Response(null, { status: 404 })) as unknown as typeof fetch;
+      const error: unknown = await publishLocationRecord({
+        registryUrl: "https://registry.example",
+        subject: ownerDid,
+        nodeOrigin: "https://owner-node.example",
+        signer: { type: "did:key", signBytes: async (bytes) => ed25519.sign(bytes, privateKey) },
+        fetch: fetchFn,
+      }).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(LocationRegistryHttpError);
+      expect(error).toMatchObject({
+        status,
+        message: `location registry publish returned HTTP ${status}`,
+      });
+      expect(authorizationVerdictOf(error)).toBe(verdict);
+    }
+  });
+
+  it("classifies target /info statuses without consuming an unbounded error body", async () => {
+    const privateKey = new Uint8Array(32).fill(9);
+    const ownerDid = `did:key:${bases.base58btc.encode(
+      Uint8Array.of(0xed, 0x01, ...ed25519.getPublicKey(privateKey)),
+    )}`;
+    const record = await signLocationRecord({
+      version: 1,
+      subject: ownerDid,
+      multiaddrs: [httpUrlToMultiaddr("https://owner-node.example")],
+      updated_at: "2026-04-28T16:00:00.000Z",
+      sequence: 1,
+    }, { type: "did:key", signBytes: async (bytes) => ed25519.sign(bytes, privateKey) });
+    for (const [status, body, verdict] of HTTP_FAILURES) {
+      let bodyRead = false;
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (String(input).includes("/v1/locations/")) return Response.json({ record });
+        const response = new Response(body, { status });
+        Object.defineProperty(response, "text", {
+          value: async () => {
+            bodyRead = true;
+            throw new Error("unbounded error response must not be read");
+          },
+        });
+        return response;
+      }) as unknown as typeof fetch;
+      const error: unknown = await verifyOwnerNodeBinding({
+        registryUrl: "https://registry.example",
+        ownerDid,
+        nodeOrigin: "https://owner-node.example",
+        nodeDid: NODE_DID,
+        fetch: fetchFn,
+      }).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(LocationRecordValidationError);
+      expect(error).toMatchObject({
+        status,
+        message: `Location record validation failed: target node /info returned HTTP ${status}`,
+      });
+      expect(authorizationVerdictOf(error)).toBe(verdict);
+      expect(bodyRead).toBe(false);
+    }
+  });
+});
+
 describe("resolveTinyCloudHosts", () => {
   it("uses the default registry and hosted node fallback", async () => {
     const subject =
@@ -441,6 +549,37 @@ describe("resolveCloudLocation", () => {
 
     expect(resolved.source).toBe("fallback");
     expect(resolved.attempts[1].error?.message).toBe("chain unavailable");
+  });
+
+  it("retains a single registry HTTP failure as the resolution error cause", async () => {
+    for (const [status, body, verdict] of HTTP_FAILURES) {
+      if (status === 404) continue; // Registry lookup treats 404 as no record.
+      const error: unknown = await resolveCloudLocation(TEST_SUBJECT, {
+        centralizedRegistryUrl: "https://registry.example",
+        fetch: (async () => new Response(body, { status })) as unknown as typeof fetch,
+      }).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(CloudLocationResolutionError);
+      const resolutionError = error as CloudLocationResolutionError;
+      expect(resolutionError.message).toBe(`Unable to resolve TinyCloud location for ${TEST_SUBJECT}`);
+      expect(resolutionError.attempts[2].error).toBeInstanceOf(LocationRegistryHttpError);
+      expect(resolutionError.cause).toBe(resolutionError.attempts[2].error);
+      expect(authorizationVerdictOf(error)).toBe(verdict);
+    }
+  });
+
+  it("keeps ambiguous independent failures in attempts without attributing a single verdict", async () => {
+    const error: unknown = await resolveCloudLocation(TEST_SUBJECT, {
+      blockchain: async () => { throw new Error("chain unavailable"); },
+      centralizedRegistryUrl: "https://registry.example",
+      fetch: (async () => new Response("Forbidden", { status: 401 })) as unknown as typeof fetch,
+    }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(CloudLocationResolutionError);
+    const resolutionError = error as CloudLocationResolutionError;
+    expect(resolutionError.message).toBe(`Unable to resolve TinyCloud location for ${TEST_SUBJECT}`);
+    expect(resolutionError.cause).toBeUndefined();
+    expect(authorizationVerdictOf(error)).toBeUndefined();
+    expect(authorizationVerdictOf(resolutionError.attempts[2].error)).toBe("unauthenticated");
+    expect(resolutionError.attempts[1].error?.message).toBe("chain unavailable");
   });
 });
 

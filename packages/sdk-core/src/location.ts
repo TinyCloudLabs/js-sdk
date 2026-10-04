@@ -318,11 +318,24 @@ export class LocationRegistryHttpError extends Error {
 
 export class CloudLocationResolutionError extends Error {
   public readonly attempts: LocationResolutionAttempt[];
+  public readonly cause?: Error;
 
   constructor(subject: string, attempts: LocationResolutionAttempt[]) {
     super(`Unable to resolve TinyCloud location for ${subject}`);
     this.name = "CloudLocationResolutionError";
     this.attempts = attempts;
+    // A lone failed source has an unambiguous cause; multiple independent
+    // failures remain in attempts rather than inventing one HTTP verdict.
+    let failure: Error | undefined;
+    for (const attempt of attempts) {
+      if (attempt.error === undefined) continue;
+      if (failure !== undefined) {
+        failure = undefined;
+        break;
+      }
+      failure = attempt.error;
+    }
+    this.cause = failure;
   }
 }
 
@@ -1015,7 +1028,9 @@ export async function verifyOwnerNodeBinding(
       signal: lookup.signal,
     });
     if (!response.ok) {
-      throw new LocationRecordValidationError(`target node /info returned HTTP ${response.status}`);
+      const failure = new LocationRecordValidationError(`target node /info returned HTTP ${response.status}`);
+      Object.assign(failure, { status: response.status });
+      throw failure;
     }
     const text = await boundedResponseText(response, "target node /info", 16 * 1024);
     let body: unknown;

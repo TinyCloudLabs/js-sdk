@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { authorizationVerdictOf } from "@tinycloud/sdk-services";
 
 import {
   DEFAULT_EXPIRY,
@@ -15,6 +16,7 @@ import {
   composeManifestRequest,
   expandActionShortNames,
   expandPermissionEntries,
+  loadManifest,
   normalizeDefaults,
   parseExpiry,
   resolveManifest,
@@ -25,6 +27,42 @@ import {
   type PermissionEntry,
   type ResourceCapability,
 } from "./manifest";
+
+const HTTP_FAILURES = [
+  [401, "", "unauthenticated"],
+  [401, "Forbidden", "unauthenticated"],
+  [401, "Unauthorized Action: host", "unauthenticated"],
+  [401, "session expired", "unauthenticated"],
+  [403, "", "forbidden"],
+  [403, "Forbidden", "forbidden"],
+  [403, "Unauthorized Action: host", "forbidden"],
+  [403, "session expired", "forbidden"],
+  [404, "session expired", "other"],
+  [408, "Forbidden", "other"],
+  [429, "Unauthorized Action: host", "other"],
+  [500, "session expired", "other"],
+] as const;
+
+describe("loadManifest HTTP failures", () => {
+  it("preserves the validation error and classifies HTTP status rather than body text", async () => {
+    const originalFetch = globalThis.fetch;
+    const url = "https://app.example/manifest.json";
+    try {
+      for (const [status, body, verdict] of HTTP_FAILURES) {
+        globalThis.fetch = (async () => new Response(body, { status })) as unknown as typeof fetch;
+        const error: unknown = await loadManifest(url).catch((failure: unknown) => failure);
+        expect(error).toBeInstanceOf(ManifestValidationError);
+        expect(error).toMatchObject({
+          message: `Manifest validation failed: failed to fetch manifest from ${url}: HTTP ${status}`,
+          status,
+        });
+        expect(authorizationVerdictOf(error)).toBe(verdict);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // parseExpiry

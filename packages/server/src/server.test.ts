@@ -255,6 +255,8 @@ describe("@tinycloud/server sharing session refresh", () => {
     'Failed to put key "report(401)": {s} - Forbidden',
     'Failed to put key "report\\"": {s} - upstream said "session expired"',
     'Failed to put key "report\\"HTTP 401\\"x": {s} - Forbidden',
+    "Failed to put key 'report HTTP 401': {s} - Forbidden",
+    "Failed to put key 'report \\'HTTP 401': {s} - Forbidden",
   ];
   const MESSAGE_TABLE: Array<[message: string, refreshes: boolean]> = [
     ...STATUS_FORMATS.flatMap((format): Array<[string, boolean]> => [
