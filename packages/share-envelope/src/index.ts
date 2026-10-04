@@ -40,6 +40,7 @@ export {
   isCanonicalHttpsOrigin,
   isCanonicalPathSegment,
   isCanonicalResourcePath,
+  isEnvelopeDeliveryEmail,
   policyTargetSchema,
   recipientDidTargetSchema,
   resourceSelectorSchema,
