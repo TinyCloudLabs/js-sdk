@@ -32,6 +32,7 @@
     "tc-571-share-notify-delivery-email",
     "tc-601-revocation-whole-seconds",
     "tc-619-storage-full-reads",
+    "tc-635-share-notify-followups",
     "tc-649-secret-setup-link"
   ]
 }

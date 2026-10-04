@@ -14899,11 +14899,12 @@ function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()
   };
 }
 var ShareNotifyError = class extends Error {
-  code = "delivery-failed";
-  constructor(message = "share delivery did not complete") {
+  constructor(message = "share delivery did not complete", reason) {
     super(message);
+    this.reason = reason;
     this.name = "ShareNotifyError";
   }
+  code = "delivery-failed";
 };
 function recipientMatchesShareRecord(record, recipient) {
   const matcher = record.recipientMatcher;
@@ -14912,6 +14913,11 @@ function recipientMatchesShareRecord(record, recipient) {
   if (matcher.kind === "exactEmail") return canonicalMailbox(matcher.value)?.email === mailbox.email;
   if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
   return false;
+}
+function shareDeliveryWindowExpiresAt(record) {
+  const expiresAt = Math.min(Date.parse(record.expiresAt), Date.parse(record.registeredAt) + 5 * 60 * 1e3);
+  if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
+  return expiresAt;
 }
 async function notifyShare(input) {
   const mailbox = canonicalMailbox(input.recipient);
@@ -14923,6 +14929,19 @@ async function notifyShare(input) {
   const idempotencyKey = input.idempotencyKey ?? await defaultIdempotencyKey(input.shareId, recipient);
   const attemptsLimit = input.maxAttempts ?? 3;
   if (!Number.isSafeInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 8) throw new ShareNotifyError("maxAttempts is invalid");
+  if (input.signal?.aborted) throw new ShareNotifyError("share delivery was cancelled");
+  if (input.checkDeliveryWindow && input.record !== void 0 && shareDeliveryWindowExpiresAt(input.record) <= Date.now()) {
+    return {
+      protocol: "tinycloud-share",
+      version: 1,
+      shareId: input.shareId,
+      state: "partial-failure",
+      idempotencyKey,
+      attempts: 1,
+      retryable: false,
+      reason: "delivery-window-expired"
+    };
+  }
   let attempts = 0;
   let lastError;
   while (attempts < attemptsLimit) {
@@ -14930,8 +14949,27 @@ async function notifyShare(input) {
     attempts += 1;
     try {
       const state = await input.adapter.deliver({ shareId: input.shareId, recipient, idempotencyKey, ...input.record === void 0 ? {} : { record: input.record }, ...input.signal === void 0 ? {} : { signal: input.signal } });
-      return { protocol: "tinycloud-share", version: 1, shareId: input.shareId, state, idempotencyKey, attempts };
+      return {
+        protocol: "tinycloud-share",
+        version: 1,
+        shareId: input.shareId,
+        state: state === "delivered" && input.record?.deliveredRecipients?.includes(recipient) ? "already-delivered" : state,
+        idempotencyKey,
+        attempts
+      };
     } catch (error) {
+      if (error instanceof ShareNotifyError && error.reason === "delivery-window-expired") {
+        return {
+          protocol: "tinycloud-share",
+          version: 1,
+          shareId: input.shareId,
+          state: "partial-failure",
+          idempotencyKey,
+          attempts,
+          retryable: false,
+          reason: "delivery-window-expired"
+        };
+      }
       lastError = error;
     }
   }
@@ -15090,7 +15128,11 @@ async function revokeShare(input) {
     });
   }
   const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
-  if (input.records !== void 0) await input.records.put({ ...input.record, revokedAt });
+  if (input.records?.update !== void 0) {
+    await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt }));
+  } else if (input.records !== void 0) {
+    await input.records.put({ ...input.record, revokedAt });
+  }
   return { state: "revoked", target, delegationCid, revokedAt };
 }
 function redactRecord(record, revealLink, link2) {
@@ -15158,545 +15200,6 @@ function parseNativeShareUrl(value) {
   if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
   return token;
 }
-
-// src/lib/duration.ts
-function parseDuration(input) {
-  const match = input.match(/^(\d+)(m|h|d|w)$/);
-  if (match) {
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
-    const multipliers = {
-      m: 60 * 1e3,
-      h: 60 * 60 * 1e3,
-      d: 24 * 60 * 60 * 1e3,
-      w: 7 * 24 * 60 * 60 * 1e3
-    };
-    return value * multipliers[unit];
-  }
-  const date = new Date(input);
-  if (!isNaN(date.getTime())) {
-    const ms = date.getTime() - Date.now();
-    if (ms <= 0) {
-      throw new Error(`Expiry date "${input}" is in the past`);
-    }
-    return ms;
-  }
-  throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
-}
-
-// src/commands/share.ts
-init_formatter();
-init_errors();
-
-// src/share/output.ts
-function writeJson2(value) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}
-`);
-}
-function authorizationRequiredJson(result) {
-  return {
-    state: "authorization-required",
-    method: result.method,
-    next: "complete authorization through the configured authority adapter, then retry with the required proof"
-  };
-}
-function publishHuman(result) {
-  process.stdout.write(`${result.url}
-`);
-}
-function inspectHuman(result) {
-  const metadata = result.metadata;
-  process.stdout.write([
-    `Share ${metadata.shareId}`,
-    `File: ${metadata.display.filename ?? "unnamed"}`,
-    `Target: ${metadata.target.kind === "bearer" ? "bearer (anyone with the complete link can read)" : metadata.target.kind}`,
-    `Expires: ${metadata.expiresAt}`,
-    `Resource: ${metadata.resource.path}`,
-    `Link format: ${result.link.kind}`
-  ].join("\n") + "\n");
-}
-function receiveHuman(path) {
-  process.stdout.write(`${path}
-`);
-}
-function receiveJson(result, path) {
-  writeJson2({ protocol: "tinycloud-share", version: 1, path, metadata: result.metadata });
-}
-
-// src/share/io.ts
-import { constants } from "fs";
-import { lstat as lstat2, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
-import { randomBytes as randomBytes2 } from "crypto";
-import { basename as basename2, join as join4, resolve, sep } from "path";
-init_errors();
-var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
-var MAX_SHARE_URL_BYTES = 64 * 1024;
-async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of process.stdin) {
-    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-    total += bytes.byteLength;
-    if (total > limit) throw new Error("MAX_BYTES_EXCEEDED");
-    chunks.push(bytes);
-  }
-  return new Uint8Array(Buffer.concat(chunks, total));
-}
-async function readBoundedUrlStdin() {
-  const bytes = await readBoundedStdin(MAX_SHARE_URL_BYTES);
-  const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
-  if (value.length === 0 || /\s/.test(value)) throw new Error("INVALID_ARGUMENT");
-  return value;
-}
-function safeFilename(value) {
-  return shareFilename(value);
-}
-function shareFilename(value) {
-  try {
-    return canonicalShareFilename(value);
-  } catch {
-    throw new CLIError(
-      "UNSAFE_FILENAME",
-      hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
-      8
-    );
-  }
-}
-function shareInputFilename(input, name) {
-  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename2(resolve(input))));
-}
-async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
-  const filename = shareInputFilename(input, name);
-  if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
-  const path = resolve(input);
-  const info = await stat2(path);
-  if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile2(path));
-  if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  return { bytes, filename };
-}
-async function assertDirectory(path) {
-  const absolute = resolve(path);
-  const segments = absolute.split(sep).filter(Boolean);
-  let current = absolute.startsWith(sep) ? sep : "";
-  for (const segment of segments) {
-    current = current === sep ? join4(current, segment) : join4(current, segment);
-    try {
-      const info = await lstat2(current);
-      if (info.isSymbolicLink()) {
-        const canonical = await realpath(current);
-        if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
-        if (canonical !== `/private${current}`) throw new Error("OUTPUT_EXISTS");
-      } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      await mkdir2(current, { mode: 448 });
-      const created = await lstat2(current);
-      if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
-    }
-  }
-}
-async function writeShareOutput(directory, filename, bytes, force) {
-  const outputDirectory = resolve(directory);
-  await assertDirectory(outputDirectory);
-  const safeName = safeFilename(filename);
-  const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
-  const stableDirectory = await realpath(outputDirectory);
-  const outputPath = join4(stableDirectory, safeName);
-  const directoryIdentity = await directoryHandle.stat();
-  const assertStableDirectory = async () => {
-    const current = await stat2(stableDirectory);
-    if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
-  };
-  await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join4(stableDirectory, ".tinycloud-share-stage-"));
-  const stagingInfo = await lstat2(stagingDirectory);
-  if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join4(stagingDirectory, `.tinycloud-share-${randomBytes2(16).toString("hex")}.tmp`);
-  let temporaryPath;
-  let handle;
-  try {
-    await assertStableDirectory();
-    try {
-      const existing = await lstat2(outputPath);
-      if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    temporaryPath = stagingPath;
-    handle = await open2(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
-    await handle.writeFile(bytes);
-    await handle.close();
-    handle = void 0;
-    await assertStableDirectory();
-    if (force) {
-      await rename2(temporaryPath, outputPath);
-    } else {
-      await link(temporaryPath, outputPath);
-      await unlink(temporaryPath);
-    }
-    await assertStableDirectory();
-  } catch (error) {
-    if (error.code === "EEXIST") throw new Error("OUTPUT_EXISTS");
-    if (error.code === "ELOOP") throw new Error("UNSAFE_FILENAME");
-    throw error;
-  } finally {
-    await handle?.close();
-    try {
-      if (temporaryPath !== void 0) await unlink(temporaryPath);
-    } catch {
-    }
-    await rm3(stagingDirectory, { recursive: true, force: true });
-    await directoryHandle.close();
-  }
-  return join4(outputDirectory, safeName);
-}
-
-// src/share/errors.ts
-var SharePublishAuthorityError = class extends Error {
-  constructor(failure) {
-    super(failure.kind);
-    this.failure = failure;
-    this.name = "SharePublishAuthorityError";
-  }
-};
-
-// src/commands/share.ts
-var SHARE_ORIGIN = "https://share.tinycloud.xyz";
-var shareServices = {};
-function configureShareCommandServices(services) {
-  shareServices = services;
-}
-function parseShareTarget(value) {
-  if (value === "anyone" || value === "bearer") return { kind: "bearer" };
-  if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
-  if (value.startsWith("domain:")) return canonicalMailboxTarget({ kind: "emailDomain", domain: value.slice("domain:".length) });
-  if (value.startsWith("email:")) return canonicalMailboxTarget({ kind: "email", address: value.slice("email:".length) });
-  if (value.includes("@")) return canonicalMailboxTarget({ kind: "email", address: value });
-  throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
-}
-function canonicalMailboxTarget(target) {
-  try {
-    return normalizeShareTarget(target);
-  } catch (error) {
-    throw new CLIError("INVALID_ARGUMENT", error instanceof TypeError ? error.message : "share recipient is invalid", 2);
-  }
-}
-function shareCliError(error) {
-  if (error instanceof CLIError) return error;
-  if (error instanceof SharePublishAuthorityError) {
-    const failure = error.failure;
-    const profileName = "profileName" in failure ? failure.profileName : void 0;
-    const localKey = "localKey" in failure && failure.localKey === true;
-    const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
-    const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
-    if (failure.kind === "caveated-session") {
-      const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
-      return new CLIError(
-        "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
-        5
-      );
-    }
-    if (failure.kind === "owner-space-unresolved") {
-      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
-    }
-    if (failure.kind === "scope-denied") {
-      const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
-      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `verify the session includes the builtin:share-publishing scope; if it does not, request it with ${loginHint}`;
-      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
-    }
-    if (failure.kind === "lifetime-exceeds-session") {
-      const expiresAt = failure.sessionExpiresAt.toISOString();
-      if (failure.reason === "session-too-close") {
-        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with ${loginHint}`, 3);
-      }
-      if (failure.reason === "below-minimum") {
-        return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
-      }
-      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with ${loginHint}`, 2);
-    }
-    if (failure.kind === "origin-mismatch") {
-      return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
-    }
-    if (failure.kind === "invalid-request") {
-      return new CLIError("INVALID_ARGUMENT", failure.reason, 2);
-    }
-    if (failure.kind === "registry-unavailable") {
-      return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
-    }
-    if (failure.kind === "registry-rejected") {
-      return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
-    }
-    if (failure.kind === "storage-quota-exceeded") {
-      const sizes = failure.usedBytes === void 0 || failure.limitBytes === void 0 ? "" : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
-      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
-    }
-    if (failure.kind === "upload-failed") {
-      return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
-    }
-  }
-  if (error instanceof ShareNotifyError) {
-    return new CLIError("INVALID_ARGUMENT", error.message, 2);
-  }
-  if (error instanceof SharePublishError) {
-    const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
-    const code3 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
-    return new CLIError(code3, error.message, exit);
-  }
-  if (error instanceof ShareReceiveError) {
-    const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
-    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
-    const code3 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
-    return new CLIError(code3, error.message, exit);
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-  const known = {
-    MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
-    INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
-    "share not found": { code: "NOT_FOUND", exit: 4 },
-    AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
-    UNAVAILABLE: { code: "UNAVAILABLE", exit: 4 }
-  };
-  if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
-  if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
-  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
-  const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
-  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
-}
-function inputUrl(value, stdin) {
-  if (stdin || value === "-") return readBoundedUrlStdin();
-  if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
-  return Promise.resolve(value);
-}
-async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
-  const link2 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
-  try {
-    parseNativeShareUrl(link2);
-  } catch {
-    return (dependencies.inspect ?? inspectShare)(link2, { expectedOrigin });
-  }
-  throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
-}
-function jsonOutput(options, command) {
-  return options.json === true || command.optsWithGlobals().json === true;
-}
-function expires(value) {
-  try {
-    return new Date(Date.now() + parseDuration(value));
-  } catch {
-    throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2);
-  }
-}
-async function rememberPublishedShare(result) {
-  const record = historyRecordForPublishedShare(result);
-  if (shareServices.records !== void 0) await shareServices.records.put(record);
-  return record;
-}
-function byteLimit(value) {
-  if (value === void 0) return void 0;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
-  return parsed;
-}
-function mediaTypeFor(filename) {
-  const extension = filename.toLowerCase().split(".").at(-1);
-  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : "application/octet-stream";
-}
-function requestedActions(values) {
-  const actions = values === void 0 || values.length === 0 ? ["read"] : values;
-  if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
-  return [...new Set(actions)];
-}
-function assertAggregateInputLimit(inputs, maxBytes) {
-  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
-  let total = 0;
-  for (const input of inputs) {
-    total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
-  }
-}
-function registerShareCommand(program2) {
-  const share = program2.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Request idempotent email delivery for addressed targets").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      const maxBytes = byteLimit(options.maxBytes);
-      if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
-      const name = files.length === 1 ? options.name : void 0;
-      for (const file of files) shareInputFilename(file, name);
-      const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
-      assertAggregateInputLimit(inputs, maxBytes);
-      const target = parseShareTarget(options.to);
-      const actions = requestedActions(options.action);
-      if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
-      if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
-      if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
-      if (options.notify === true && target.kind !== "email") throw new CLIError("INVALID_ARGUMENT", "--notify requires an exact email target", 2);
-      const result = await publishTargetShare({
-        source: inputs[0].bytes,
-        filename: inputs[0].filename,
-        files: inputs.map((input) => ({ bytes: input.bytes, filename: input.filename, mediaType: mediaTypeFor(input.filename) })),
-        mediaType: options.mediaType ?? mediaTypeFor(inputs[0].filename),
-        allowBinary: options.binary === true,
-        target,
-        resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
-        actions,
-        expiresAt: expires(options.expires ?? "7d"),
-        expiryWasExplicit: options.expires !== void 0,
-        origin: options.viewerOrigin,
-        ...maxBytes === void 0 ? {} : { maxBytes },
-        notify: options.notify === true,
-        targetAdapter: shareServices.targetAdapter
-      });
-      if ("state" in result) {
-        if (json) {
-          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
-          process.exitCode = 6;
-          return;
-        }
-        throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
-      }
-      const record = await rememberPublishedShare(result);
-      if (options.notify === true && target.kind === "email") {
-        if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-        const recipient = record.recipientMatcher.kind === "exactEmail" ? record.recipientMatcher.value : target.address;
-        const delivery = await notifyShare({ shareId: record.shareId, recipient, record, adapter: shareServices.delivery });
-        if (delivery.state === "partial-failure") process.exitCode = 9;
-      }
-      if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
-`);
-      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true });
-      else publishHuman(result);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
-      if (json) writeJson2(result);
-      else inspectHuman(result);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
-      const maxBytes = byteLimit(options.maxBytes);
-      const link2 = await inputUrl(url, options.stdin === true);
-      let nativeLink = false;
-      try {
-        parseNativeShareUrl(link2);
-        nativeLink = true;
-      } catch {
-      }
-      if (nativeLink) {
-        if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
-        const native = await shareServices.nativeReader(link2);
-        if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
-        if (options.stdout) {
-          process.stdout.write(Buffer.from(native.bytes));
-          return;
-        }
-        const output2 = await writeShareOutput(options.output ?? ".", native.filename, native.bytes, options.force === true);
-        if (json) writeJson2({ protocol: "tinycloud-share", version: 1, path: output2, transport: "native" });
-        else receiveHuman(output2);
-        return;
-      }
-      const result = await receiveShare(link2, {
-        expectedOrigin: options.viewerOrigin,
-        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
-      });
-      if ("state" in result) {
-        if (json) {
-          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
-          process.exitCode = 6;
-          return;
-        }
-        throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
-      }
-      if (options.stdout) {
-        process.stdout.write(Buffer.from(result.bytes));
-        return;
-      }
-      const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
-      if (json) receiveJson(result, output);
-      else receiveHuman(output);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("list").description("List encrypted sender history without complete bearer URLs").option("--json", "Print versioned redacted JSON").action(async (options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const result = await listShares(shareServices.records);
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
-      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("show <id>").description("Show one redacted sender-history record").option("--reveal-link", "Explicitly include the complete link").option("--json", "Print versioned redacted JSON").action(async (id, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (options.revealLink && json) throw new CLIError("INVALID_ARGUMENT", "--reveal-link cannot be combined with --json", 2);
-      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : void 0 });
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, share: result });
-      else writeJson2(result);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("notify <id>").description("Retry idempotent delivery without recreating the share").requiredOption("--to <address>", "Recipient email").option("--json", "Print versioned JSON").action(async (id, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record = await shareServices.records.get(id);
-      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await notifyShare({ shareId: id, recipient: options.to, record, adapter: shareServices.delivery });
-      if (json) writeJson2(result);
-      else process.stdout.write(`${result.state}
-`);
-      if (result.state === "partial-failure") process.exitCode = 9;
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-  share.command("revoke <id>").description("Revoke addressed shares; report bearer retention honestly").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
-    try {
-      const json = jsonOutput(options, command);
-      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
-      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
-      if (result.state === "unsupported") {
-        throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
-      }
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
-      else process.stdout.write(`${result.state}
-`);
-    } catch (error) {
-      handleError(shareCliError(error));
-    }
-  });
-}
-
-// src/share/adapters.ts
-init_profiles();
-import { readFile as readFile4, writeFile as writeFile2 } from "fs/promises";
-import { join as join6 } from "path";
-import { createHash } from "crypto";
 
 // ../share-envelope/dist/index.js
 init_zod();
@@ -17051,9 +16554,639 @@ function serialize2(value) {
 function canonicalize2(value) {
   return serialize2(value);
 }
+var LABEL2 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+function isCanonicalEmailDomain2(value) {
+  if (value.length === 0 || value.length > 253) return false;
+  const labels = value.split(".");
+  return labels.length >= 2 && labels.every((label) => LABEL2.test(label)) && !/^[0-9]+$/.test(labels.at(-1));
+}
+function canonicalMailbox2(value) {
+  const email = value.trim().toLowerCase();
+  const at = email.indexOf("@");
+  if (at <= 0 || at !== email.lastIndexOf("@")) return void 0;
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain2(domain)) return void 0;
+  return Object.freeze({ email, domain });
+}
 var MAX_INLINE_BYTES2 = 256 * 1024;
 
+// src/commands/share.ts
+import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
+
+// src/lib/duration.ts
+function parseDuration(input) {
+  const match = input.match(/^(\d+)(m|h|d|w)$/);
+  if (match) {
+    const value = parseInt(match[1], 10);
+    const unit = match[2];
+    const multipliers = {
+      m: 60 * 1e3,
+      h: 60 * 60 * 1e3,
+      d: 24 * 60 * 60 * 1e3,
+      w: 7 * 24 * 60 * 60 * 1e3
+    };
+    return value * multipliers[unit];
+  }
+  const date = new Date(input);
+  if (!isNaN(date.getTime())) {
+    const ms = date.getTime() - Date.now();
+    if (ms <= 0) {
+      throw new Error(`Expiry date "${input}" is in the past`);
+    }
+    return ms;
+  }
+  throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
+}
+
+// src/commands/share.ts
+init_formatter();
+init_errors();
+
+// src/share/output.ts
+function writeJson2(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}
+`);
+}
+function authorizationRequiredJson(result) {
+  return {
+    state: "authorization-required",
+    method: result.method,
+    next: "complete authorization through the configured authority adapter, then retry with the required proof"
+  };
+}
+function publishHuman(result) {
+  process.stdout.write(`${result.url}
+`);
+}
+function inspectHuman(result) {
+  const metadata = result.metadata;
+  process.stdout.write([
+    `Share ${metadata.shareId}`,
+    `File: ${metadata.display.filename ?? "unnamed"}`,
+    `Target: ${metadata.target.kind === "bearer" ? "bearer (anyone with the complete link can read)" : metadata.target.kind}`,
+    `Expires: ${metadata.expiresAt}`,
+    `Resource: ${metadata.resource.path}`,
+    `Link format: ${result.link.kind}`
+  ].join("\n") + "\n");
+}
+function receiveHuman(path) {
+  process.stdout.write(`${path}
+`);
+}
+function receiveJson(result, path) {
+  writeJson2({ protocol: "tinycloud-share", version: 1, path, metadata: result.metadata });
+}
+
+// src/share/io.ts
+import { constants } from "fs";
+import { lstat as lstat2, mkdir as mkdir2, mkdtemp, open as open2, readFile as readFile2, realpath, stat as stat2, link, rename as rename2, rm as rm3, unlink } from "fs/promises";
+import { randomBytes as randomBytes2 } from "crypto";
+import { basename as basename2, join as join4, resolve, sep } from "path";
+init_errors();
+var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+var MAX_SHARE_URL_BYTES = 64 * 1024;
+async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    total += bytes.byteLength;
+    if (total > limit) throw new Error("MAX_BYTES_EXCEEDED");
+    chunks.push(bytes);
+  }
+  return new Uint8Array(Buffer.concat(chunks, total));
+}
+async function readBoundedUrlStdin() {
+  const bytes = await readBoundedStdin(MAX_SHARE_URL_BYTES);
+  const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+  if (value.length === 0 || /\s/.test(value)) throw new Error("INVALID_ARGUMENT");
+  return value;
+}
+function safeFilename(value) {
+  return shareFilename(value);
+}
+function shareFilename(value) {
+  try {
+    return canonicalShareFilename(value);
+  } catch {
+    throw new CLIError(
+      "UNSAFE_FILENAME",
+      hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
+      8
+    );
+  }
+}
+function shareInputFilename(input, name) {
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename2(resolve(input))));
+}
+async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
+  const filename = shareInputFilename(input, name);
+  if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
+  const path = resolve(input);
+  const info = await stat2(path);
+  if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
+  const bytes = new Uint8Array(await readFile2(path));
+  if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
+  return { bytes, filename };
+}
+async function assertDirectory(path) {
+  const absolute = resolve(path);
+  const segments = absolute.split(sep).filter(Boolean);
+  let current = absolute.startsWith(sep) ? sep : "";
+  for (const segment of segments) {
+    current = current === sep ? join4(current, segment) : join4(current, segment);
+    try {
+      const info = await lstat2(current);
+      if (info.isSymbolicLink()) {
+        const canonical = await realpath(current);
+        if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
+        if (canonical !== `/private${current}`) throw new Error("OUTPUT_EXISTS");
+      } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      await mkdir2(current, { mode: 448 });
+      const created = await lstat2(current);
+      if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
+    }
+  }
+}
+async function writeShareOutput(directory, filename, bytes, force) {
+  const outputDirectory = resolve(directory);
+  await assertDirectory(outputDirectory);
+  const safeName = safeFilename(filename);
+  const directoryHandle = await open2(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const stableDirectory = await realpath(outputDirectory);
+  const outputPath = join4(stableDirectory, safeName);
+  const directoryIdentity = await directoryHandle.stat();
+  const assertStableDirectory = async () => {
+    const current = await stat2(stableDirectory);
+    if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
+  };
+  await assertStableDirectory();
+  const stagingDirectory = await mkdtemp(join4(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingInfo = await lstat2(stagingDirectory);
+  if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
+  const stagingPath = join4(stagingDirectory, `.tinycloud-share-${randomBytes2(16).toString("hex")}.tmp`);
+  let temporaryPath;
+  let handle;
+  try {
+    await assertStableDirectory();
+    try {
+      const existing = await lstat2(outputPath);
+      if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    temporaryPath = stagingPath;
+    handle = await open2(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    await handle.writeFile(bytes);
+    await handle.close();
+    handle = void 0;
+    await assertStableDirectory();
+    if (force) {
+      await rename2(temporaryPath, outputPath);
+    } else {
+      await link(temporaryPath, outputPath);
+      await unlink(temporaryPath);
+    }
+    await assertStableDirectory();
+  } catch (error) {
+    if (error.code === "EEXIST") throw new Error("OUTPUT_EXISTS");
+    if (error.code === "ELOOP") throw new Error("UNSAFE_FILENAME");
+    throw error;
+  } finally {
+    await handle?.close();
+    try {
+      if (temporaryPath !== void 0) await unlink(temporaryPath);
+    } catch {
+    }
+    await rm3(stagingDirectory, { recursive: true, force: true });
+    await directoryHandle.close();
+  }
+  return join4(outputDirectory, safeName);
+}
+
+// src/share/errors.ts
+var SharePublishAuthorityError = class extends Error {
+  constructor(failure) {
+    super(failure.kind);
+    this.failure = failure;
+    this.name = "SharePublishAuthorityError";
+  }
+};
+var ShareHistoryRetryError = class extends Error {
+  constructor(profile) {
+    super("sender history changed during the operation");
+    this.profile = profile;
+    this.name = "ShareHistoryRetryError";
+  }
+  code = "SHARE_HISTORY_RETRY";
+};
+
+// src/commands/share.ts
+var SHARE_ORIGIN = "https://share.tinycloud.xyz";
+var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
+var shareServices = {};
+function configureShareCommandServices(services) {
+  shareServices = services;
+}
+function parseShareTarget(value) {
+  if (value === "anyone" || value === "bearer") return { kind: "bearer" };
+  if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
+  if (value.startsWith("domain:")) return canonicalMailboxTarget({ kind: "emailDomain", domain: value.slice("domain:".length) });
+  if (value.startsWith("email:")) return canonicalMailboxTarget({ kind: "email", address: value.slice("email:".length) });
+  if (value.includes("@")) return canonicalMailboxTarget({ kind: "email", address: value });
+  throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
+}
+function canonicalMailboxTarget(target) {
+  try {
+    return normalizeShareTarget(target);
+  } catch (error) {
+    throw new CLIError("INVALID_ARGUMENT", error instanceof TypeError ? error.message : "share recipient is invalid", 2);
+  }
+}
+function shareCliError(error, operation = "publish") {
+  if (error instanceof CLIError) return error;
+  if (error instanceof ProfileLockTimeoutError2) return wrapError(error);
+  if (error instanceof ShareHistoryRetryError) {
+    return new CLIError(
+      "SHARE_HISTORY_RETRY",
+      `sender history for profile ${JSON.stringify(error.profile)} changed or disappeared during this command`,
+      1,
+      { hint: `Retry this command with --profile ${JSON.stringify(error.profile)}. If this was a revoke, check its node state first: revocation may already have succeeded.` }
+    );
+  }
+  if (error instanceof SharePublishAuthorityError) {
+    const failure = error.failure;
+    const profileName = "profileName" in failure ? failure.profileName : void 0;
+    const localKey = "localKey" in failure && failure.localKey === true;
+    const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
+    const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+    if (failure.kind === "caveated-session") {
+      const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
+      return new CLIError(
+        "PERMISSION_DENIED",
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
+        5
+      );
+    }
+    if (failure.kind === "owner-space-unresolved") {
+      return new CLIError("AUTH_REQUIRED", `a valid signed TinyCloud session is required; run ${loginHint}`, 3);
+    }
+    if (failure.kind === "scope-denied") {
+      const requiredAction = failure.requiredAction === void 0 ? "" : ` (${failure.requiredAction})`;
+      const renew = localKey ? `renew it with ${loginHint} using the required capability` : `verify the session includes the builtin:share-publishing scope; if it does not, request it with ${loginHint}`;
+      return new CLIError("PERMISSION_DENIED", `the session lacks ${failure.capability} authority${requiredAction}; ${renew}`, 5);
+    }
+    if (failure.kind === "lifetime-exceeds-session") {
+      const expiresAt = failure.sessionExpiresAt.toISOString();
+      if (failure.reason === "session-too-close") {
+        return new CLIError("AUTH_REQUIRED", `the signed session expires too soon (${expiresAt}); log in again with ${loginHint}`, 3);
+      }
+      if (failure.reason === "below-minimum") {
+        return new CLIError("SESSION_LIFETIME_EXCEEDED", "share expiry must be at least 60 seconds from now; use a longer --expires value", 2);
+      }
+      return new CLIError("SESSION_LIFETIME_EXCEEDED", `requested share lifetime exceeds session expiry ${expiresAt}; use a shorter --expires value or renew the session with ${loginHint}`, 2);
+    }
+    if (failure.kind === "origin-mismatch") {
+      return new CLIError("ORIGIN_MISMATCH", "share origin does not match the configured service", 2);
+    }
+    if (failure.kind === "invalid-request") {
+      return new CLIError("INVALID_ARGUMENT", failure.reason, 2);
+    }
+    if (failure.kind === "registry-unavailable") {
+      return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
+    }
+    if (failure.kind === "node-info-unavailable") {
+      const outcome = operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent";
+      return new CLIError("UNAVAILABLE", `could not verify TinyCloud node 1.17.3 domain delivery support; ${outcome}. Check the node and retry`, 4);
+    }
+    if (failure.kind === "registry-rejected") {
+      return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
+    }
+    if (failure.kind === "storage-quota-exceeded") {
+      const sizes = failure.usedBytes === void 0 || failure.limitBytes === void 0 ? "" : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
+      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
+    }
+    if (failure.kind === "upload-failed") {
+      return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
+    }
+  }
+  if (error instanceof ShareNotifyError) {
+    return new CLIError("INVALID_ARGUMENT", error.message, 2);
+  }
+  if (error instanceof SharePublishError) {
+    const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
+    const code3 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
+    return new CLIError(code3, error.message, exit);
+  }
+  if (error instanceof ShareReceiveError) {
+    const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
+    const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
+    const code3 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
+    return new CLIError(code3, error.message, exit);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  const known = {
+    MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
+    "share not found": { code: "NOT_FOUND", exit: 4 },
+    AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
+    UNAVAILABLE: { code: "UNAVAILABLE", exit: 4 }
+  };
+  if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
+  if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
+  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
+  const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
+  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
+}
+function inputUrl(value, stdin) {
+  if (stdin || value === "-") return readBoundedUrlStdin();
+  if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
+  return Promise.resolve(value);
+}
+async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
+  const link2 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
+  try {
+    parseNativeShareUrl(link2);
+  } catch {
+    return (dependencies.inspect ?? inspectShare)(link2, { expectedOrigin });
+  }
+  throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
+}
+function jsonOutput(options, command) {
+  return options.json === true || command.optsWithGlobals().json === true;
+}
+function expires(value) {
+  try {
+    return new Date(Date.now() + parseDuration(value));
+  } catch {
+    throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2);
+  }
+}
+async function rememberPublishedShare(result) {
+  const record = historyRecordForPublishedShare(result);
+  if (shareServices.records === void 0) return { record, recorded: false };
+  try {
+    await shareServices.records.put(record);
+    return { record, recorded: true };
+  } catch {
+    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
+    return { record, recorded: false };
+  }
+}
+async function notifyRecordedShare(record, recipient, adapter, storage) {
+  const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter, checkDeliveryWindow: true });
+  if (result.state !== "partial-failure" && storage !== void 0) {
+    const mailbox = canonicalMailbox2(recipient).email;
+    if (!record.deliveredRecipients?.includes(mailbox)) {
+      try {
+        if (storage.update === void 0) throw new Error("atomic sender history update is unavailable");
+        const updated = await storage.update(record.shareId, (current) => ({
+          ...current,
+          deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
+        }));
+        if (updated === void 0) throw new Error("sender history record was removed");
+      } catch {
+        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      }
+    }
+  }
+  return result;
+}
+function byteLimit(value) {
+  if (value === void 0) return void 0;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  return parsed;
+}
+function mediaTypeFor(filename) {
+  const extension = filename.toLowerCase().split(".").at(-1);
+  return extension === "md" || extension === "markdown" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "html" || extension === "htm" ? "text/html" : extension === "json" ? "application/json" : extension === "css" ? "text/css" : extension === "js" ? "text/javascript" : "application/octet-stream";
+}
+function requestedActions(values) {
+  const actions = values === void 0 || values.length === 0 ? ["read"] : values;
+  if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
+  return [...new Set(actions)];
+}
+function assertAggregateInputLimit(inputs, maxBytes) {
+  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+  let total = 0;
+  for (const input of inputs) {
+    total += input.bytes.byteLength;
+    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+  }
+}
+function registerShareCommand(program2) {
+  const share = program2.command("share").description("Publish and consume TinyCloud Share links");
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share").option("--name <filename>", "Filename for stdin input").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      const maxBytes = byteLimit(options.maxBytes);
+      if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
+      const name = files.length === 1 ? options.name : void 0;
+      for (const file of files) shareInputFilename(file, name);
+      const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+      assertAggregateInputLimit(inputs, maxBytes);
+      const target = parseShareTarget(options.to);
+      const actions = requestedActions(options.action);
+      if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+      if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
+      if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
+      if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
+      if (options.notifyTo !== void 0 && (options.notify !== true || target.kind !== "emailDomain")) {
+        throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
+      }
+      let notifyRecipient;
+      if (options.notify === true && target.kind === "email") notifyRecipient = target.address;
+      else if (options.notify === true && target.kind === "emailDomain") {
+        const mailbox = options.notifyTo === void 0 ? void 0 : canonicalMailbox2(options.notifyTo);
+        if (mailbox === void 0 || mailbox.domain !== target.domain) {
+          throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+)", 2);
+        }
+        notifyRecipient = mailbox.email;
+      } else if (options.notify === true) {
+        throw new CLIError("INVALID_ARGUMENT", "--notify requires an email target, or a domain target with --notify-to on node 1.17.3+", 2);
+      }
+      const result = await publishTargetShare({
+        source: inputs[0].bytes,
+        filename: inputs[0].filename,
+        files: inputs.map((input) => ({ bytes: input.bytes, filename: input.filename, mediaType: mediaTypeFor(input.filename) })),
+        mediaType: options.mediaType ?? mediaTypeFor(inputs[0].filename),
+        allowBinary: options.binary === true,
+        target,
+        resourceKind: options.prefix || inputs.length > 1 ? "prefix" : "exact",
+        actions,
+        expiresAt: expires(options.expires ?? "7d"),
+        expiryWasExplicit: options.expires !== void 0,
+        origin: options.viewerOrigin,
+        ...maxBytes === void 0 ? {} : { maxBytes },
+        notify: options.notify === true,
+        targetAdapter: shareServices.targetAdapter
+      });
+      if ("state" in result) {
+        if (json) {
+          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
+          process.exitCode = 6;
+          return;
+        }
+        throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
+      }
+      const { record, recorded } = await rememberPublishedShare(result);
+      let notification;
+      if (notifyRecipient !== void 0) {
+        if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+        notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : void 0);
+        if (notification.state === "partial-failure") process.exitCode = 9;
+        if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
+      }
+      if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
+`);
+      if (json) writeJson2({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...notification === void 0 ? {} : { notification } });
+      else publishHuman(result);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("inspect [url]").description("Verify a share link and print safe metadata").option("--stdin", "Read the complete URL from stdin").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      const result = await inspectShareInputOnce(url, options.stdin === true, options.viewerOrigin);
+      if (json) writeJson2(result);
+      else inspectHuman(result);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("receive [url]").description("Verify and receive a share link").option("--stdin", "Read the complete URL from stdin").option("--output <directory>", "Create the file in this directory").option("--stdout", "Write verified plaintext bytes to stdout").option("--force", "Allow replacing an existing non-symlink output").option("--max-bytes <bytes>", "Bound received content bytes").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN).action(async (url, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
+      const maxBytes = byteLimit(options.maxBytes);
+      const link2 = await inputUrl(url, options.stdin === true);
+      let nativeLink = false;
+      try {
+        parseNativeShareUrl(link2);
+        nativeLink = true;
+      } catch {
+      }
+      if (nativeLink) {
+        if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
+        const native = await shareServices.nativeReader(link2);
+        if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
+        if (options.stdout) {
+          process.stdout.write(Buffer.from(native.bytes));
+          return;
+        }
+        const output2 = await writeShareOutput(options.output ?? ".", native.filename, native.bytes, options.force === true);
+        if (json) writeJson2({ protocol: "tinycloud-share", version: 1, path: output2, transport: "native" });
+        else receiveHuman(output2);
+        return;
+      }
+      const result = await receiveShare(link2, {
+        expectedOrigin: options.viewerOrigin,
+        ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
+      });
+      if ("state" in result) {
+        if (json) {
+          writeJson2({ protocol: "tinycloud-share", version: 1, authorization: authorizationRequiredJson(result) });
+          process.exitCode = 6;
+          return;
+        }
+        throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
+      }
+      if (options.stdout) {
+        process.stdout.write(Buffer.from(result.bytes));
+        return;
+      }
+      const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
+      if (json) receiveJson(result, output);
+      else receiveHuman(output);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("list").description("List encrypted sender history without complete bearer URLs").option("--json", "Print versioned redacted JSON").action(async (options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const result = await listShares(shareServices.records);
+      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
+      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("show <id>").description("Show one redacted sender-history record").option("--reveal-link", "Explicitly include the complete link").option("--json", "Print versioned redacted JSON").action(async (id, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      if (options.revealLink && json) throw new CLIError("INVALID_ARGUMENT", "--reveal-link cannot be combined with --json", 2);
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : void 0 });
+      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, share: result });
+      else writeJson2(result);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+  share.command("notify <id>").description("Retry idempotent delivery within 5 minutes of publication; after that publish a new share").requiredOption("--to <address>", "Recipient email").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const record = await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      if (!record.actions.includes("tinycloud.kv/get")) {
+        throw new CLIError("INVALID_ARGUMENT", "share notify requires a stored share with the read action; no invitation was sent", 2);
+      }
+      const mailbox = canonicalMailbox2(options.to);
+      if (mailbox === void 0) throw new ShareNotifyError("recipient is invalid");
+      if (!recipientMatchesShareRecord(record, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
+      if (record.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record) > Date.now()) {
+        if (shareServices.assertDomainDelivery === void 0) throw new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent", 4);
+        await shareServices.assertDomainDelivery();
+      }
+      const result = await notifyRecordedShare(record, options.to, shareServices.delivery, shareServices.records);
+      if (json) writeJson2(result);
+      else process.stdout.write(`${result.state}
+`);
+      if (result.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
+      if (result.state === "partial-failure") process.exitCode = 9;
+    } catch (error) {
+      handleError(shareCliError(error, "notify"));
+    }
+  });
+  share.command("revoke <id>").description("Revoke addressed shares; report bearer retention honestly").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+    try {
+      const json = jsonOutput(options, command);
+      if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
+      const record = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await revokeShare({ record, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      if (result.state === "unsupported") {
+        throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
+      }
+      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
+      else process.stdout.write(`${result.state}
+`);
+    } catch (error) {
+      handleError(shareCliError(error));
+    }
+  });
+}
+
 // src/share/adapters.ts
+init_profiles();
+init_constants();
+import { readFile as readFile4 } from "fs/promises";
+import { join as join6 } from "path";
+import { createHash } from "crypto";
+import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { LocationRecordValidationError, LocationRegistryHttpError, revokePolicyRootV3 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError } from "@tinycloud/node-sdk";
 function requiredKvAction(meta) {
@@ -17073,6 +17206,28 @@ function throwKvUploadFailure(error) {
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
+var MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
+function supportsDomainDelivery(version2) {
+  if (typeof version2 !== "string") return false;
+  const normalized = version2.trim();
+  if (normalized.length > 128) return false;
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(normalized);
+  if (match === null) return false;
+  if (match[4] !== void 0 && /(?:^|\.)0[0-9]+(?:\.|$)/.test(match[4])) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)) return false;
+  if (major !== 1) return major > 1;
+  if (minor !== 17) return minor > 17;
+  if (patch !== 3) return patch > 3;
+  return match[4] === void 0;
+}
+function displayedNodeVersion(version2) {
+  if (typeof version2 !== "string") return "(unrecognized)";
+  const trimmed = version2.trim();
+  return /^[A-Za-z0-9.+_-]{1,64}$/.test(trimmed) ? trimmed : "(unrecognized)";
+}
 var URI_SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function safeStorageFilename(filename) {
   if (URI_SAFE_FILENAME.test(filename) && !filename.includes("..")) return filename;
@@ -17083,6 +17238,12 @@ function safeStorageFilename(filename) {
 }
 function createEncryptedSessionHistory() {
   const records = /* @__PURE__ */ new Map();
+  let operation = Promise.resolve();
+  const serial = (action) => {
+    const next = operation.then(action, action);
+    operation = next.then(() => void 0, () => void 0);
+    return next;
+  };
   let keyPromise;
   const key = async () => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   const encode6 = async (record) => {
@@ -17097,35 +17258,45 @@ function createEncryptedSessionHistory() {
   const decode10 = async (value) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12))));
   return {
     async put(record) {
-      records.set(record.shareId, await encode6(record));
+      return serial(async () => {
+        records.set(record.shareId, await encode6(record));
+      });
+    },
+    async update(shareId, change) {
+      return serial(async () => {
+        const value = records.get(shareId);
+        if (value === void 0) return void 0;
+        const updated = await change(await decode10(value));
+        records.set(shareId, await encode6(updated));
+        return updated;
+      });
     },
     async list() {
-      return Promise.all([...records.values()].map(decode10));
+      return serial(() => Promise.all([...records.values()].map(decode10)));
     },
     async get(shareId) {
-      const value = records.get(shareId);
-      return value === void 0 ? void 0 : decode10(value);
+      return serial(async () => {
+        const value = records.get(shareId);
+        return value === void 0 ? void 0 : decode10(value);
+      });
     },
     async delete(shareId) {
-      records.delete(shareId);
+      return serial(async () => {
+        records.delete(shareId);
+      });
     }
   };
 }
 function createEncryptedProfileHistory(profileName, sessionSigner) {
   const HISTORY_VERSION = 2;
-  let profileSecretPromise;
+  const identityChanged = new Error("share history profile or key changed");
+  const saltChanged = new Error("share history salt changed");
   let operation = Promise.resolve();
-  const profileSecret = async () => profileSecretPromise ??= (async () => {
-    const profile = await profileName();
-    const config = await ProfileManager.getProfile(profile);
-    if (typeof config.privateKey === "string" && config.privateKey.length > 0) return new TextEncoder().encode(config.privateKey);
-    if (sessionSigner === void 0) {
-      throw new Error("share history requires an initialized profile");
-    }
-    return sessionSigner(new TextEncoder().encode("xyz.tinycloud.share/history-key/v1"));
-  })();
-  const path = async () => join6(await ProfileManager.getCacheDir(await profileName()), "share-history-v2.json");
-  const legacyPath = async () => join6(await ProfileManager.getCacheDir(await profileName()), "share-history-v1.bin");
+  const observedProfiles = /* @__PURE__ */ new Set();
+  let preparedKeys;
+  let preparedKey;
+  const path = async (profile) => join6(await ProfileManager.getCacheDir(profile), "share-history-v2.json");
+  const legacyPath = async (profile) => join6(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
   const b64 = (value) => Buffer.from(value).toString("base64url");
   const unb64 = (value) => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share history is unavailable");
@@ -17133,81 +17304,165 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     if (b64(bytes) !== value) throw new Error("share history is unavailable");
     return bytes;
   };
-  const derive = async (salt, legacy = false) => {
-    const secret = await profileSecret();
-    if (legacy) {
-      const digest = await crypto.subtle.digest("SHA-256", secret);
-      return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-    }
-    const material = await crypto.subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 1e5, hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const isStoredRecord = (value) => typeof value === "object" && value !== null && "shareId" in value && typeof value.shareId === "string";
+  const identity = async (profile) => {
+    const config = await ProfileManager.getProfile(profile);
+    const localKey = typeof config.privateKey === "string" && config.privateKey.length > 0;
+    const [key, session] = localKey ? [null, null] : await Promise.all([ProfileManager.getKey(profile), ProfileManager.getSession(profile)]);
+    const sessionJwk = session !== null && "jwk" in session ? session.jwk : void 0;
+    const signerJwk = sessionJwk !== null && typeof sessionJwk === "object" && "d" in sessionJwk && typeof sessionJwk.d === "string" && sessionJwk.d.length > 0 ? sessionJwk : key;
+    const method = session !== null && "verificationMethod" in session ? session.verificationMethod ?? config.did : config.did;
+    const fingerprint = createHash("sha256").update(JSON.stringify(localKey ? ["local", config.privateKey] : ["openkey", sessionJwk, signerJwk, method])).digest("hex");
+    return { config, fingerprint };
   };
-  const read4 = async () => {
+  const prepareKeys = async (profile, snapshot) => {
+    if (preparedKeys?.profile === profile && preparedKeys.identity === snapshot.fingerprint) return preparedKeys;
+    let secret;
+    if (typeof snapshot.config.privateKey === "string" && snapshot.config.privateKey.length > 0) {
+      secret = new TextEncoder().encode(snapshot.config.privateKey);
+    } else {
+      if (sessionSigner === void 0) throw new Error("share history requires an initialized profile");
+      secret = await sessionSigner(new TextEncoder().encode("xyz.tinycloud.share/history-key/v1"), profile);
+    }
+    if ((await identity(profile)).fingerprint !== snapshot.fingerprint) throw identityChanged;
+    const material = await crypto.subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]);
+    const digest = await crypto.subtle.digest("SHA-256", secret);
+    const legacyKey = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["decrypt"]);
+    return preparedKeys = { profile, identity: snapshot.fingerprint, material, legacyKey };
+  };
+  const preparedSalt = async (profile) => {
     try {
-      const encoded = new Uint8Array(await readFile4(await path()));
-      const envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded));
+      const envelope = JSON.parse(await readFile4(await path(profile), "utf8"));
       if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
       const salt = unb64(envelope.kdfSalt);
+      if (salt.length < 16) throw new Error("share history is unavailable");
+      return salt;
+    } catch (error) {
+      if (error.code === "ENOENT") return crypto.getRandomValues(new Uint8Array(16));
+      throw new Error("share history is unavailable");
+    }
+  };
+  const read4 = async (profile, ready) => {
+    try {
+      const envelope = JSON.parse(await readFile4(await path(profile), "utf8"));
+      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
+      if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
       const iv = unb64(envelope.iv);
       const ciphertext = unb64(envelope.ciphertext);
-      if (salt.length < 16 || iv.length !== 12 || ciphertext.length <= 16) throw new Error("share history is unavailable");
-      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, await derive(salt), ciphertext);
+      if (iv.length !== 12 || ciphertext.length <= 16) throw new Error("share history is unavailable");
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, ready.key, ciphertext);
       const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      return { values: Array.isArray(values) ? values.filter((value) => typeof value === "object" && value !== null && typeof value.shareId === "string") : [], salt };
+      return Array.isArray(values) ? values.filter(isStoredRecord) : [];
     } catch (error) {
+      if (error === saltChanged) throw error;
       if (error.code !== "ENOENT") throw new Error("share history is unavailable");
       try {
-        const legacy = new Uint8Array(await readFile4(await legacyPath()));
-        if (legacy.length <= 12) return { values: [], salt: crypto.getRandomValues(new Uint8Array(16)) };
-        const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, await derive(new Uint8Array(0), true), legacy.slice(12));
+        const legacy = new Uint8Array(await readFile4(await legacyPath(profile)));
+        if (legacy.length <= 12) return [];
+        const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, ready.legacyKey, legacy.slice(12));
         const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-        return { values: Array.isArray(values) ? values.filter((value) => typeof value === "object" && value !== null && typeof value.shareId === "string") : [], salt: crypto.getRandomValues(new Uint8Array(16)) };
+        return Array.isArray(values) ? values.filter(isStoredRecord) : [];
       } catch (legacyError) {
-        if (legacyError.code === "ENOENT") return { values: [], salt: crypto.getRandomValues(new Uint8Array(16)) };
+        if (legacyError.code === "ENOENT") return [];
         throw new Error("share history is unavailable");
       }
     }
   };
-  const write = async (values, salt) => {
+  const write = async (profile, values, ready) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const bytes = new TextEncoder().encode(JSON.stringify(values));
-    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await derive(salt), bytes));
-    const output = new TextEncoder().encode(JSON.stringify({ version: HISTORY_VERSION, kdfSalt: b64(salt), iv: b64(iv), ciphertext: b64(encrypted) }));
-    await writeFile2(await path(), output, { mode: 384 });
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, ready.key, bytes));
+    await writeJsonAtomic2(await path(profile), { version: HISTORY_VERSION, kdfSalt: b64(ready.salt), iv: b64(iv), ciphertext: b64(encrypted) });
   };
-  const serial = (operationFn) => {
-    const next = operation.then(operationFn, operationFn);
+  const serial = (action) => {
+    const next = operation.then(action, action);
     operation = next.then(() => void 0, () => void 0);
     return next;
   };
+  const locked = (action, writing = false) => serial(async () => {
+    const profile = await profileName();
+    let warned = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const snapshot = await identity(profile);
+        observedProfiles.add(profile);
+        const keys = await prepareKeys(profile, snapshot);
+        const salt = await preparedSalt(profile);
+        const saltId = b64(salt);
+        const key = preparedKey?.profile === profile && preparedKey.identity === snapshot.fingerprint && preparedKey.salt === saltId ? preparedKey.key : await crypto.subtle.deriveKey(
+          { name: "PBKDF2", salt, iterations: 1e5, hash: "SHA-256" },
+          keys.material,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["encrypt", "decrypt"]
+        );
+        preparedKey = { profile, identity: snapshot.fingerprint, salt: saltId, key };
+        const warning = writing ? setTimeout(() => {
+          if (!warned) {
+            warned = true;
+            process.stderr.write(`Waiting for profile lock for ${JSON.stringify(profile)} before updating sender history.
+`);
+          }
+        }, 2e3) : void 0;
+        warning?.unref();
+        try {
+          return await ProfileManager.withLock(profile, async () => {
+            clearTimeout(warning);
+            if ((await identity(profile)).fingerprint !== snapshot.fingerprint) throw identityChanged;
+            return action(profile, { salt, key, legacyKey: keys.legacyKey });
+          }, writing ? { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS } : void 0);
+        } finally {
+          clearTimeout(warning);
+        }
+      } catch (error) {
+        if (error === saltChanged || error === identityChanged) continue;
+        if (observedProfiles.has(profile) && typeof error === "object" && error !== null && "code" in error && error.code === "PROFILE_NOT_FOUND") {
+          throw new ShareHistoryRetryError(profile);
+        }
+        throw error;
+      }
+    }
+    throw new ShareHistoryRetryError(profile);
+  });
   return {
     async put(record) {
-      return serial(async () => {
-        const state = await read4();
-        const values = [...state.values];
+      return locked(async (profile, ready) => {
+        const values = await read4(profile, ready);
         const index = values.findIndex((value) => value.shareId === record.shareId);
         if (index >= 0) values[index] = record;
         else values.push(record);
-        await write(values, state.salt);
-      });
+        await write(profile, values, ready);
+      }, true);
+    },
+    async update(shareId, change) {
+      return locked(async (profile, ready) => {
+        const values = await read4(profile, ready);
+        const index = values.findIndex((record) => record.shareId === shareId);
+        if (index < 0) return void 0;
+        const updated = await change(values[index]);
+        values[index] = updated;
+        await write(profile, values, ready);
+        return updated;
+      }, true);
     },
     async list() {
-      return serial(async () => (await read4()).values);
+      return locked((profile, ready) => read4(profile, ready));
     },
     async get(shareId) {
-      return serial(async () => (await read4()).values.find((record) => record.shareId === shareId));
+      return locked(async (profile, ready) => (await read4(profile, ready)).find((record) => record.shareId === shareId));
     },
     async delete(shareId) {
-      return serial(async () => {
-        const state = await read4();
-        await write(state.values.filter((record) => record.shareId !== shareId), state.salt);
-      });
+      return locked(async (profile, ready) => {
+        await write(profile, (await read4(profile, ready)).filter((record) => record.shareId !== shareId), ready);
+      }, true);
     }
   };
 }
 function createShareAuthorityAdapters(input = {}) {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
+  let selectedProfile;
+  const profileName = () => selectedProfile ??= input.profileName?.() ?? selectedProfileName();
   const canonicalOrigin2 = (value, label) => {
     if (typeof value !== "string") throw new Error(`share ${label} is unavailable`);
     const parsed = new URL(value);
@@ -17237,7 +17492,7 @@ function createShareAuthorityAdapters(input = {}) {
   let nodePromise;
   let activeProfileName2;
   const authenticatedNode = async () => nodePromise ??= (async () => {
-    const profile = await (input.profileName?.() ?? selectedProfileName());
+    const profile = await profileName();
     activeProfileName2 = profile;
     const context = await ProfileManager.resolveContext({ profile, ...input.nodeOrigin === void 0 ? {} : { host: input.nodeOrigin } });
     const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
@@ -17256,6 +17511,38 @@ function createShareAuthorityAdapters(input = {}) {
       throw error;
     }
   })();
+  const assertDomainDeliveryForOrigin = async (nodeOrigin, operation) => {
+    let response;
+    try {
+      response = await fetchFn(`${nodeOrigin}/info`, { signal: AbortSignal.timeout(5e3) });
+    } catch {
+      throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+    let body;
+    try {
+      body = await response.text();
+    } catch {
+      throw new SharePublishAuthorityError({ kind: "node-info-unavailable" });
+    }
+    let info;
+    try {
+      info = JSON.parse(body);
+    } catch {
+      info = void 0;
+    }
+    const version2 = typeof info === "object" && info !== null && "version" in info ? info.version : void 0;
+    if (!supportsDomainDelivery(version2)) {
+      throw new SharePublishAuthorityError({
+        kind: "invalid-request",
+        reason: `domain notifications require tinycloud-node ${MIN_DOMAIN_DELIVERY_VERSION} or later; node reports version ${displayedNodeVersion(version2)}. Upgrade the node before inviting; ${operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent"}`
+      });
+    }
+  };
+  const assertDomainDelivery = async () => {
+    const node = await authenticatedNode();
+    await assertDomainDeliveryForOrigin((await node.activeNodeIdentity()).origin, "notify");
+  };
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
@@ -17306,6 +17593,9 @@ function createShareAuthorityAdapters(input = {}) {
       });
     }
     const activeNode = await node.activeNodeIdentity();
+    if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
+      await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
+    }
     const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === void 0 || targetInput.files.length === 0 ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }] : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? "exact";
@@ -17470,12 +17760,10 @@ function createShareAuthorityAdapters(input = {}) {
   const delivery = { deliver: input.deliver ?? (async (request) => {
     const record = request.record;
     if (record === void 0 || record.link === void 0 || record.deliveryMaterial === void 0 || request.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
+    const expiry = shareDeliveryWindowExpiresAt(record);
+    if (expiry <= Date.now()) throw new ShareNotifyError("share delivery authorization window has expired", "delivery-window-expired");
+    const authorizationExpiresAt = new Date(expiry).toISOString();
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
-    const authorizationExpiresAt = new Date(Math.min(
-      Date.parse(record.expiresAt),
-      Date.parse(record.registeredAt) + 5 * 60 * 1e3
-    )).toISOString();
-    if (Date.parse(authorizationExpiresAt) <= Date.now()) throw new Error("share delivery authorization retry window has expired");
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope,
       sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
@@ -17536,14 +17824,16 @@ function createShareAuthorityAdapters(input = {}) {
   };
   return {
     targetAdapter,
-    records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(input.profileName, async (bytes) => {
-      const profileName = await input.profileName();
-      const context = await ProfileManager.resolveContext({ profile: profileName });
+    records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, async (bytes, profile) => {
+      const context = await ProfileManager.resolveContext({ profile });
+      if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
       const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
-      return (await ensureAuthenticated2(context)).signSessionBytes(bytes);
+      const signer = await ensureAuthenticated2(context);
+      return signer.signSessionBytes(bytes);
     }),
     delivery,
     revocation,
+    assertDomainDelivery,
     nativeReader
   };
 }
@@ -17602,6 +17892,7 @@ configureShareCommandServices({
   targetAdapter: shareAuthority.targetAdapter,
   records: shareAuthority.records,
   delivery: shareAuthority.delivery,
+  assertDomainDelivery: shareAuthority.assertDomainDelivery,
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader
 });
