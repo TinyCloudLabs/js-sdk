@@ -110,6 +110,23 @@ describe("parseCapabilityResource", () => {
     });
   });
 
+  test("rejects dot traversal both inside nested spaces and after the service delimiter", () => {
+    const root = "tinycloud:pkh:eip155:1:0xabc:default";
+    for (const resource of [
+      `${root}/./notes/kv/vault/key`,
+      `${root}/../notes/kv/vault/key`,
+      `${root}/notes/kv/./vault/key`,
+      `${root}/notes/kv/../vault/key`,
+    ]) {
+      expect(parseCapabilityResource(resource, "kv")).toBeUndefined();
+      expect(validatedCapabilityOf({
+        service: "kv",
+        code: ErrorCodes.AUTH_UNAUTHORIZED,
+        meta: { status: 401, resource, requiredAction: "tinycloud.kv/get" },
+      })).toBeUndefined();
+    }
+  });
+
   test.each([
     "https://attacker.example/kv/x",
     `${space}/kv/vault/key#fragment`,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { CLIError, cliErrorFromService, handleError, setActiveProfileName, wrapError } from "./errors.js";
 
@@ -205,7 +206,7 @@ describe("handleError authorization output", () => {
     }));
     const output = JSON.parse(result.rendered);
     expect(result.code).toBe(5);
-    expect(output.error.hint).toContain('tc auth request --cap "tinycloud.sql:default/notes:default:read"');
+    expect(output.error.hint).toContain("tc auth request --cap 'tinycloud.sql:default/notes:default:read'");
     expect(output.error.meta).toEqual({
       status: 401,
       resource,
@@ -223,21 +224,29 @@ describe("handleError authorization output", () => {
       }));
       const output = JSON.parse(result.rendered);
       expect(result.code).toBe(5);
-      expect(output.error.hint).toContain(`tc auth request --cap "tinycloud.kv:default:${path}:list"`);
+      expect(output.error.hint).toContain(`tc auth request --cap 'tinycloud.kv:default:${path}:list'`);
       expect(output.error.meta).toEqual({ status: 403, resource, requiredAction: "tinycloud.kv/list" });
     }
   });
 
-  test("renders valid punctuation in KV keys as shell-literal grant hints", () => {
-    const path = 'vault/a+b@c=d%e(f)~g/日本語//key?x="$HOME!`echo`\\tail';
+  test("the emitted grant command preserves every valid key byte through POSIX sh", () => {
+    const path = "vault/a!b$HOME`true`\"quote\"'single\\tail-日本語";
+    const spec = `tinycloud.kv:default:${path}:get`;
     const resource = `tinycloud:pkh:eip155:1:0xabc:default/kv/${path}`;
     const result = captureHandleError(new CLIError("PERMISSION_DENIED", "Unauthorized Action", 5, {
       status: 401, resource, requiredAction: "tinycloud.kv/get",
     }));
     const output = JSON.parse(result.rendered);
     expect(output.error.meta).toEqual({ status: 401, resource, requiredAction: "tinycloud.kv/get" });
-    expect(output.error.hint).toContain('tc auth request --cap "tinycloud.kv:default:vault/a+b@c=d%e(f)~g/日本語//key?x=');
-    expect(output.error.hint).toContain('\\"\\$HOME\\!\\`echo\\`\\\\tail');
+    const command = output.error.hint.split("\n").find((line: string) => line.startsWith("Request it with: "));
+    expect(command).toBeDefined();
+    const captured = spawnSync("sh", [
+      "-c",
+      `tc() { printf '%s\\0' "$@"; }; ${command!.slice("Request it with: ".length)}`,
+    ], { encoding: "utf8" });
+    expect(captured.status).toBe(0);
+    expect(captured.stderr).toBe("");
+    expect(captured.stdout.split("\0").slice(0, -1)).toEqual(["auth", "request", "--cap", spec]);
   });
 
   test("rejects server-controlled URL fragments and unsafe action values inside allowed meta fields", () => {

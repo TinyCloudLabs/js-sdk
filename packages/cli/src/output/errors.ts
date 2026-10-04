@@ -150,7 +150,7 @@ function buildAuthHint(error: CLIError): string | undefined {
   if (!spec) return undefined;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap "${spec.replace(/[$`"\\!]/g, "\\$&")}"`,
+    `Request it with: tc auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
     "Then retry the original command.",
   ].join("\n");
 }

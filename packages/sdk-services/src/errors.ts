@@ -213,7 +213,9 @@ export function parseCapabilityResource(
     index > 0 && capabilityServices.has(segment)
   );
   if (serviceIndex < 1 || segments[serviceIndex] !== service) return undefined;
-  if (segments.slice(1, serviceIndex).some((segment) => segment.length === 0)) return undefined;
+  if (segments.slice(1, serviceIndex).some((segment) =>
+    segment.length === 0 || segment === "." || segment === ".."
+  )) return undefined;
   const pathSegments = segments.slice(serviceIndex + 1);
   if (pathSegments.some((segment) => segment === "." || segment === "..")) return undefined;
   if (service !== "kv" && (pathSegments.length === 0 || pathSegments[pathSegments.length - 1] === "")) return undefined;
