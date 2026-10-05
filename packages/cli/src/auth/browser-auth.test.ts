@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { once } from "node:events";
-import { Server } from "node:http";
+import { createServer, Server } from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import {
   buildAuthUrl,
@@ -11,11 +11,13 @@ import {
 import { CLIError } from "../output/errors.js";
 
 /** Run the paste flow with `chunks` as stdin. */
-async function pasteWithStdin(chunks: string[]) {
+async function pasteWithStdin(chunks: string[], options: { did?: string; jwk?: object; openkeyApiHost?: string } = {}) {
   const stdin = Object.getOwnPropertyDescriptor(process, "stdin");
   Object.defineProperty(process, "stdin", { configurable: true, value: Readable.from(chunks) });
   try {
-    return await startAuthFlow("did:key:z6MkDelegate", { paste: true, openkeyHost: "https://openkey.test" });
+    return await startAuthFlow(options.did ?? "did:key:z6MkDelegate", {
+      paste: true, openkeyHost: "https://openkey.test", jwk: options.jwk, openkeyApiHost: options.openkeyApiHost,
+    });
   } finally {
     if (stdin) Object.defineProperty(process, "stdin", stdin);
   }
@@ -126,6 +128,38 @@ describe("paste login", () => {
     expect(await pasteWithStdin([JSON.stringify(code)])).toEqual(code);
     expect(await pasteWithStdin(["\n", Buffer.from(JSON.stringify(code)).toString("base64"), "\n"])).toEqual(code);
   });
+  test("looks up an eight-character code and rejects a result bound to another CLI key", async () => {
+    const delegation = {
+      delegationHeader: { Authorization: "Bearer signed" },
+      delegationCid: "bafy",
+      spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
+      verificationMethod: "did:key:z6MkDelegate",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "public-key" },
+    };
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ delegation }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing test server address");
+      const options = {
+        openkeyApiHost: `http://127.0.0.1:${address.port}`,
+        jwk: { ...delegation.jwk, d: "private-key" },
+      };
+      expect(await pasteWithStdin(["sf23-22cs\n"], options)).toEqual(delegation);
+      expect(requests).toEqual(["/api/delegation-codes/sf23-22cs"]);
+      await expect(pasteWithStdin(["sf23-22cs\n"], { ...options, did: "did:key:z6MkOther" }))
+        .rejects.toThrow(/different CLI key/);
+      await expect(pasteWithStdin(["sf23-22cs\n"], { ...options, jwk: { ...delegation.jwk, x: "wrong-key" } }))
+        .rejects.toThrow(/different CLI key/);
+    } finally {
+      server.close();
+    }
+  });
 
   test("fails non-zero and names the approval URL when stdin ends without a code", async () => {
     const failure = await pasteWithStdin([]).catch((error: unknown) => error);
@@ -145,7 +179,6 @@ describe("browser callback login", () => {
       delegationCid: "bafy-pasted",
       spaceId: "tinycloud:pkh:eip155:1:0xabc:secrets",
     };
-    const callbackCode = { ...code, delegationCid: "bafy-callback" };
     const input = new PassThrough();
     Object.defineProperty(input, "isTTY", { value: true });
     const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
@@ -173,25 +206,9 @@ describe("browser callback login", () => {
       await once(callbackServer, "listening");
       // Let the listen callback install the paste reader before providing input.
       await new Promise<void>((resolve) => setImmediate(resolve));
-      let result: typeof code;
-      if (messages.some((message) => message.includes("paste the delegation code here"))) {
-        input.end(`${JSON.stringify(code)}\n`);
-        result = await flow;
-      } else {
-        // The pre-fix flow never offers paste. Complete its actual HTTP callback
-        // so the test fails promptly rather than leaving a five-minute timer.
-        const addr = callbackServer.address();
-        if (!addr || typeof addr === "string") throw new Error("Callback server did not start");
-        const response = await fetch(`http://127.0.0.1:${addr.port}/callback`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(callbackCode),
-        });
-        expect(response.ok).toBe(true);
-        result = await flow;
-      }
+      input.end(`${JSON.stringify(code)}\n`);
+      const result = await flow;
       expect(messages.join("\n")).toContain("https://openkey.test/delegate?");
-      expect(messages.join("\n")).toContain("paste the delegation code here");
       expect(result).toEqual(code);
       expect(callbackServer.listening).toBe(false);
     } finally {

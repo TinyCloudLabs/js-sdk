@@ -7061,31 +7061,11 @@ function authRequiredError(service) {
     service
   };
 }
-var RequestTimeoutError = class extends Error {
-  constructor(timeoutMs) {
-    super(`Request timed out after ${timeoutMs}ms.`);
-    this.name = "TimeoutError";
-    this.timeoutMs = timeoutMs;
-  }
-};
-function isRequestTimeoutError(error) {
-  return error instanceof RequestTimeoutError || error instanceof Error && error.name === "TimeoutError" && typeof error.timeoutMs === "number";
-}
-function timeoutError(service, timeoutMs, cause) {
-  if (timeoutMs === void 0) {
-    return {
-      code: ErrorCodes.TIMEOUT,
-      message: "Request timed out.",
-      service,
-      ...cause === void 0 ? {} : { cause }
-    };
-  }
+function timeoutError(service) {
   return {
     code: ErrorCodes.TIMEOUT,
-    message: `Request timed out after ${timeoutMs}ms.`,
-    service,
-    ...cause === void 0 ? {} : { cause },
-    meta: { timeoutMs }
+    message: "Request timed out.",
+    service
   };
 }
 function abortedError(service) {
@@ -7232,9 +7212,6 @@ function storageRejectionError(service, status, meta, responseText) {
 }
 function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
   if (error instanceof Error) {
-    if (isRequestTimeoutError(error)) {
-      return timeoutError(service, error.timeoutMs, error);
-    }
     if (error.name === "AbortError") {
       return abortedError(service);
     }
@@ -7254,7 +7231,6 @@ function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
     service
   };
 }
-var MAX_TIMER_DELAY_MS = 2147483647;
 var BaseService = class {
   constructor() {
     this.abortController = new AbortController();
@@ -7427,64 +7403,6 @@ var BaseService = class {
       });
     }
     return controller.signal;
-  }
-  /**
-   * Create the abort signal for one request, bounded by the request timeout.
-   *
-   * The signal aborts when the service signs out, the context aborts, the
-   * caller's `signal` aborts, or the timeout elapses, whichever comes first.
-   * A timeout aborts with a {@link RequestTimeoutError} (`TimeoutError`), which
-   * `wrapError` maps to `ErrorCodes.TIMEOUT`; the other sources keep their own
-   * reason (normally `AbortError`, mapped to `ErrorCodes.ABORTED`).
-   *
-   * The timeout is `timeoutMs` when given, otherwise `config.timeout`. Only a
-   * positive, finite value (at most 2^31-1 ms) applies; `undefined`, `0`, and
-   * `Infinity` mean no timeout, so a per-call `0` opts out of a configured one.
-   *
-   * Callers must call `dispose()` once the response body has been consumed,
-   * which clears the timer and removes the listeners this adds to the
-   * long-lived service and context signals.
-   *
-   * @param signal - The caller's abort signal for this request
-   * @param timeoutMs - Per-request timeout override in milliseconds
-   */
-  createRequestSignal(signal, timeoutMs) {
-    const controller = new AbortController();
-    const detachers = [];
-    let timer;
-    const dispose = () => {
-      if (timer !== void 0) {
-        clearTimeout(timer);
-        timer = void 0;
-      }
-      for (const detach of detachers.splice(0)) {
-        detach();
-      }
-    };
-    const abort = (reason) => {
-      dispose();
-      controller.abort(reason);
-    };
-    const requestSignal = { signal: controller.signal, dispose };
-    const parents = [
-      this.abortController.signal,
-      this.context?.abortSignal,
-      signal
-    ].filter((parent) => parent !== void 0);
-    for (const parent of parents) {
-      if (parent.aborted) {
-        abort(parent.reason);
-        return requestSignal;
-      }
-      const onAbort = () => abort(parent.reason);
-      parent.addEventListener("abort", onAbort, { once: true });
-      detachers.push(() => parent.removeEventListener("abort", onAbort));
-    }
-    const timeout = timeoutMs ?? this._config.timeout;
-    if (typeof timeout === "number" && timeout > 0 && timeout <= MAX_TIMER_DELAY_MS) {
-      timer = setTimeout(() => abort(new RequestTimeoutError(timeout)), timeout);
-    }
-    return requestSignal;
   }
   /**
    * Wrap an operation with error handling and telemetry.
@@ -7740,7 +7658,7 @@ var KVService = class extends BaseService {
    * @param path - Resource path
    * @param action - KV action
    * @param body - Optional request body
-   * @param signal - Request signal from createRequestSignal()
+   * @param signal - Optional abort signal
    * @returns Fetch response
    */
   async invokeOperation(path, action, body, signal, extraHeaders) {
@@ -7756,7 +7674,7 @@ var KVService = class extends BaseService {
       method: "POST",
       headers: requestHeaders,
       body,
-      signal
+      signal: this.combineSignals(signal)
     });
   }
   /**
@@ -7933,7 +7851,6 @@ var KVService = class extends BaseService {
         "kv"
       ));
     }
-    const request = this.createRequestSignal(options?.signal, options?.timeout);
     try {
       const session = this.context.session;
       const invocationHeaders = this.context.invokeAny(
@@ -7955,7 +7872,7 @@ var KVService = class extends BaseService {
       const response = await this.context.fetch(`${this.host}/invoke`, {
         method: "POST",
         headers,
-        signal: request.signal
+        signal: this.combineSignals(options?.signal)
       });
       if (!response.ok) {
         const errorText = response.status === 401 || response.status === 403 ? await this.readAuthorizationText(response) : await response.text();
@@ -8020,8 +7937,6 @@ var KVService = class extends BaseService {
       return ok({ results, count: results.length });
     } catch (error) {
       return err(wrapError2("kv", error));
-    } finally {
-      request.dispose();
     }
   }
   /**
@@ -8154,13 +8069,12 @@ var KVService = class extends BaseService {
         ));
       }
       const path = this.getFullPath(key, options?.prefix);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.GET,
           void 0,
-          request.signal,
+          options?.signal,
           options?.maxResponseBytes === void 0 ? void 0 : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
         );
         if (!response.ok) {
@@ -8217,8 +8131,6 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8246,13 +8158,12 @@ var KVService = class extends BaseService {
       }
       const path = this.getFullPath(key, options?.prefix);
       const body = this.serializePutValue(value, options?.contentType);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.PUT,
           body,
-          request.signal,
+          options?.signal,
           {
             ...options?.ifMatch === void 0 ? {} : { "if-match": options.ifMatch },
             ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
@@ -8308,8 +8219,6 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8349,7 +8258,6 @@ var KVService = class extends BaseService {
         seen.add(path);
       }
       let requestMayHaveDispatched = false;
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const body = new FormData();
         for (let index = 0; index < items.length; index++) {
@@ -8372,7 +8280,7 @@ var KVService = class extends BaseService {
           method: "POST",
           headers,
           body,
-          signal: request.signal
+          signal: this.combineSignals(options?.signal)
         };
         const fetchFn = this.context.fetch;
         requestMayHaveDispatched = true;
@@ -8423,16 +8331,14 @@ var KVService = class extends BaseService {
           rawBody = await response.json();
         } catch (jsonError) {
           const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
-          const timedOut = isRequestTimeoutError(cause);
           return err(
             serviceError(
-              timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
-              timedOut ? `KV batchPut response body did not arrive in time: ${cause.message}` : `KV batchPut response was not valid JSON: ${cause.message}`,
+              ErrorCodes.NETWORK_ERROR,
+              `KV batchPut response was not valid JSON: ${cause.message}`,
               "kv",
               {
                 cause,
                 meta: {
-                  ...timedOut ? { timeoutMs: cause.timeoutMs } : {},
                   requestMayHaveDispatched: true,
                   responseReceived: true,
                   status: response.status,
@@ -8487,8 +8393,6 @@ var KVService = class extends BaseService {
           ...wrapped,
           meta: { ...wrapped.meta, requestMayHaveDispatched }
         });
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8511,13 +8415,12 @@ var KVService = class extends BaseService {
       if (options?.path) {
         listPath = listPath ? `${listPath}/${options.path}` : options.path;
       }
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           listPath,
           KVAction.LIST,
           void 0,
-          request.signal,
+          options?.signal,
           options?.limit === void 0 && options?.cursor === void 0 ? void 0 : {
             ...options?.limit === void 0 ? {} : { "x-tinycloud-limit": String(options.limit) },
             ...options?.cursor === void 0 ? {} : { "x-tinycloud-cursor": options.cursor }
@@ -8558,8 +8461,6 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8572,13 +8473,12 @@ var KVService = class extends BaseService {
         return err(authRequiredError("kv"));
       }
       const path = this.getFullPath(key, options?.prefix);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.DELETE,
           void 0,
-          request.signal,
+          options?.signal,
           options?.ifMatch === void 0 ? void 0 : { "if-match": options.ifMatch }
         );
         if (!response.ok) {
@@ -8626,8 +8526,6 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8640,13 +8538,12 @@ var KVService = class extends BaseService {
         return err(authRequiredError("kv"));
       }
       const path = this.getFullPath(key, options?.prefix);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.HEAD,
           void 0,
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
@@ -8677,8 +8574,6 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8716,13 +8611,12 @@ var KVService = class extends BaseService {
       if (options?.etag !== void 0) {
         body.etag = options.etag;
       }
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.context.fetch(`${this.host}/signed/kv`, {
           method: "POST",
           headers: this.withJsonContentType(headers),
           body: JSON.stringify(body),
-          signal: request.signal
+          signal: this.combineSignals(options?.signal)
         });
         if (!response.ok) {
           return this.createSignedReadUrlError(response, key, path);
@@ -8742,8 +8636,6 @@ var KVService = class extends BaseService {
         return ok(signedUrl);
       } catch (error) {
         return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8943,7 +8835,6 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "query",
@@ -8957,7 +8848,7 @@ var SQLService = class extends BaseService {
           dbName,
           action,
           body,
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "query", dbName, [action]);
@@ -8966,8 +8857,6 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -8976,7 +8865,6 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "execute",
@@ -8997,7 +8885,7 @@ var SQLService = class extends BaseService {
           dbName,
           requestedActions2,
           body,
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "execute", dbName, requestedActions2);
@@ -9006,8 +8894,6 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9016,14 +8902,13 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const requestedActions2 = this.actionsForSqlBatch(statements);
         const response = await this.invokeSQL(
           dbName,
           requestedActions2,
           { action: "batch", statements },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "batch", dbName, requestedActions2);
@@ -9032,8 +8917,6 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9042,13 +8925,12 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeSQL(
           dbName,
           SQLAction.WRITE,
           { action: "execute_statement", name, params: params ?? [] },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
@@ -9057,8 +8939,6 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9067,13 +8947,12 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeSQL(
           dbName,
           SQLAction.READ,
           { action: "export" },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
@@ -9087,8 +8966,6 @@ var SQLService = class extends BaseService {
         return ok(text);
       } catch (error) {
         return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9179,7 +9056,7 @@ var SQLService = class extends BaseService {
         "Content-Type": "application/json"
       },
       body: JSON.stringify(body),
-      signal
+      signal: this.combineSignals(signal)
     });
   }
   actionForSql(sql, fallback) {
@@ -9436,13 +9313,12 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "query", sql, params: params ?? [] },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "query");
@@ -9451,8 +9327,6 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9461,13 +9335,12 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "query", sql, params: params ?? [] },
-          request.signal,
+          options?.signal,
           { Accept: "application/vnd.apache.arrow.stream" }
         );
         if (!response.ok) {
@@ -9477,8 +9350,6 @@ var DuckDbService = class extends BaseService {
         return ok(buffer);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9487,7 +9358,6 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "execute",
@@ -9501,7 +9371,7 @@ var DuckDbService = class extends BaseService {
           dbName,
           DuckDbAction.WRITE,
           body,
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "execute");
@@ -9510,8 +9380,6 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9520,7 +9388,6 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "batch",
@@ -9533,7 +9400,7 @@ var DuckDbService = class extends BaseService {
           dbName,
           DuckDbAction.WRITE,
           body,
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "batch");
@@ -9542,8 +9409,6 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9552,13 +9417,12 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.WRITE,
           { action: "executeStatement", name, params: params ?? [] },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "executeStatement");
@@ -9567,8 +9431,6 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9577,13 +9439,12 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "describe" },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "describe");
@@ -9592,8 +9453,6 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9602,13 +9461,12 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.EXPORT,
           { action: "export" },
-          request.signal
+          options?.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "export");
@@ -9617,8 +9475,6 @@ var DuckDbService = class extends BaseService {
         return ok(blob);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9627,7 +9483,6 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
-      const request = this.createRequestSignal(options?.signal);
       try {
         const session = this.context.session;
         const headers = this.context.invoke(
@@ -9643,7 +9498,7 @@ var DuckDbService = class extends BaseService {
             "Content-Type": "application/x-duckdb"
           },
           body: new Blob([data]),
-          signal: request.signal
+          signal: this.combineSignals(options?.signal)
         });
         if (!response.ok) {
           return this.handleErrorResponse(response, "import");
@@ -9651,8 +9506,6 @@ var DuckDbService = class extends BaseService {
         return ok(void 0);
       } catch (error) {
         return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
       }
     });
   }
@@ -9668,7 +9521,7 @@ var DuckDbService = class extends BaseService {
         ...extraHeaders
       },
       body: JSON.stringify(body),
-      signal
+      signal: this.combineSignals(signal)
     });
   }
   async handleErrorResponse(response, operation) {
@@ -14556,6 +14409,41 @@ function validateDelegationCallbackPayload(value) {
   }
   return null;
 }
+async function delegationFromInput(input, did, options) {
+  const trimmed = input.trim();
+  let parsed;
+  if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
+    if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ?? (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
+    const response = await fetch(`${apiHost.replace(/\/$/, "")}/api/delegation-codes/${trimmed.toLowerCase()}`, {
+      redirect: "error"
+    });
+    if (!response.ok) {
+      throw new Error(response.status === 404 ? "Delegation code not found or expired. Use the full code shown in OpenKey instead." : `Could not retrieve delegation code (HTTP ${response.status}).`);
+    }
+    const result = await response.json();
+    parsed = result.delegation;
+    const delegation = parsed;
+    const jwk = delegation?.jwk;
+    const localJwk = publicJwkForDelegation(options.jwk);
+    if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
+      throw new Error("Delegation is bound to a different CLI key.");
+    }
+  } else {
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      try {
+        parsed = JSON.parse(Buffer.from(trimmed, "base64").toString("utf-8"));
+      } catch {
+        throw new Error("Invalid delegation code. Expected JSON, base64-encoded JSON, or XXXX-XXXX.");
+      }
+    }
+  }
+  const invalid = validateDelegationCallbackPayload(parsed);
+  if (invalid) throw new Error(`Invalid delegation code: ${invalid}`);
+  return parsed;
+}
 function shouldOpenBrowser(options) {
   if (options.noPopup) return false;
   const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
@@ -14579,21 +14467,6 @@ async function callbackFlow(did, options = {}) {
       } else {
         reject(result.error);
       }
-    }
-    function parsePasteInput(input) {
-      const trimmed = input.trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        parsed = JSON.parse(decoded);
-      }
-      const invalid = validateDelegationCallbackPayload(parsed);
-      if (invalid) {
-        throw new Error(`Invalid delegation code: ${invalid}`);
-      }
-      return parsed;
     }
     const server = createServer((req, res) => {
       if (req.method === "POST" && req.url === "/callback") {
@@ -14663,18 +14536,21 @@ async function callbackFlow(did, options = {}) {
       }
       if (process.stdin.isTTY) {
         console.error(`
-If the browser can't connect back, paste the delegation code here:`);
+If the browser can't connect back, enter the short code or paste the full delegation code here:`);
         rl = createInterface({
           input: process.stdin,
           output: process.stderr
         });
-        rl.on("line", (input) => {
-          if (settled) return;
+        let resolving = false;
+        rl.on("line", async (input) => {
+          if (settled || resolving) return;
+          resolving = true;
           try {
-            const data = parsePasteInput(input);
-            settle({ data });
-          } catch {
-            console.error("Invalid delegation code. Expected JSON or base64-encoded JSON. Try again:");
+            settle({ data: await delegationFromInput(input, did, options) });
+          } catch (error) {
+            console.error(error instanceof Error ? error.message : "Invalid delegation code. Try again:");
+          } finally {
+            resolving = false;
           }
         });
       }
@@ -14701,24 +14577,7 @@ Open this URL in a browser to authenticate:
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
-      let parsed;
-      try {
-        parsed = JSON.parse(input.trim());
-      } catch {
-        try {
-          const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          parsed = JSON.parse(decoded);
-        } catch {
-          reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
-          return;
-        }
-      }
-      const invalid = validateDelegationCallbackPayload(parsed);
-      if (invalid) {
-        reject(new Error(`Invalid delegation code: ${invalid}`));
-        return;
-      }
-      resolve4(parsed);
+      void delegationFromInput(input, did, options).then(resolve4, reject);
     });
     rl.on("close", () => {
       if (answered) return;
@@ -14733,7 +14592,7 @@ Open this URL in a browser to authenticate:
         }
       ));
     });
-    rl.setPrompt("Paste delegation code: ");
+    rl.setPrompt("Enter short code or paste full delegation code: ");
     rl.prompt();
   });
 }
