@@ -3,6 +3,13 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-05
+
+- Added `packages/replica` (`@tinycloud/replica`, TC-18) and `tc replica`. It must never import
+  `@tinycloud/web-sdk` or `@tinycloud/node-sdk`; the CLI bundles it. Its live CLI smoke
+  (`packages/cli/test/replica.e2e.test.ts`) needs `TC_REPLICA_E2E_NODE_BIN`, a node serving
+  `kv-sync-v1`.
+
 ## 2026-10-03
 
 - Agents never bump a major version (TC-615). Changesets are `minor` or `patch`; a maintainer

@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 1 migrated registration(s).
 - 1 partially migrated registration(s).
-- 116 legacy registration(s) remain Commander-owned.
+- 122 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -145,6 +145,36 @@ tc --profile agent secrets get OPENAI_API_KEY --raw
 `secrets: { NAME: true }` requests, in the owner's `secrets` space, `kv/get` on `vault/secrets/NAME` and `capabilities/read` on `""`, plus the raw network entry `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`. The owner DID comes from the profile's recorded owner, else `--owner`, and its address is EIP-55 checksummed in the URN; with neither the login fails with `OWNER_DID_UNKNOWN`. The JSON result lists approved `permissions` and `declined` entries. A decrypt signed inside the owner's space by an older OpenKey deployment is not a raw grant: scoped login reports it in `declined` and omits it from saved permissions. Browser `auth request --grant` or secret-read escalation refuses that old nested proof before activating or storing a grant (`OPENKEY_GRANT_BROADENED`); a renewed approval must sign the raw network grant.
 
 When neither stdin nor stderr is a terminal, `secrets get|list|put|delete` on an OpenKey profile that lacks the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. Missing or expired sessions instead fail with `AUTH_REQUIRED` (exit 3) before a canonical read invokes the node or starts an unscoped browser refresh. On any profile kind, a stored signed session that has expired or no longer verifies fails with `AUTH_REQUIRED` (exit 3) and a sign-in hint before any node request, never as a retryable `NODE_ERROR`; operations and MCP report a non-retryable `AUTH_REQUIRED`. Any service result coded `AUTH_REQUIRED` or `PERMISSION_DENIED` without an HTTP status now exits 3 or 5 instead of 1 in commands using `cliErrorFromService` (account, delegation, duckdb, kv, secrets list/put/delete, space, sql, vars and vault); for example, `tc secrets list` without a grant returns the NodeSecretsService's status-less `PERMISSION_DENIED` with exit 5. `tc secrets get` and `tc auth import` additionally supply the profile kind's sign-in hint for `AUTH_REQUIRED`. A delegate session bootstrapped by `tc auth import` stores no SIWE or expiry, so its expiry is found only when the node refuses it. At a terminal, the owner approves a missing grant in OpenKey: the request adds `tinycloud.capabilities/read` on the space root and keeps raw decrypt in the `encryption` pseudo-space, and a decrypt-only request is placed in the secrets space. The grant is stored with its signed SIWE proof and bound to exactly its signed capabilities, and `secrets get` (like every operation, including MCP) re-verifies it against the session key and owner, and holds it to that binding, in the same process or a new one; a stored grant that fails (such as one from an earlier release, stored without a proof) is skipped and reported as a `STORED_GRANT_SKIPPED` warning with a fixed reason code and its CID when that CID is the CID of the stored bytes: inside the JSON error's `warnings` (including a failed `-o` write), as one `{"warnings": [...]}` stderr line after a successful read's output, or as one human-readable stderr line. `--json` selects the JSON forms even with stdout on a terminal, and suppresses progress spinners. Expired grants are dropped silently. Operations and MCP results carry the same `warnings` array. A JSON error can carry both `meta` (validated authorization fields) and `warnings`. A canonical `secrets get` that still lacks authority fails with `PERMISSION_DENIED` (exit 5). Redirected stdout alone does not disable an owner's browser approval; its URL appears on stderr and terminal stdin accepts a code. `secrets get -o` validates the destination and existing directory before any read or decrypt, then syncs a fresh 0600 inode and atomically replaces an existing regular file. Directory sync is best-effort after replacement and cannot turn a completed write into a reported failure. It refuses symlinks, directories, devices and absent parent directories (`INVALID_ARGUMENT`); an unreplaceable filesystem target fails with a sanitized error naming the destination, without a non-atomic fallback. A node that refuses decrypt (HTTP 401/403) is reported as missing authority on the invoked network, not as an undecryptable secret.
+
+## Local Replicas
+
+`tc replica` keeps a durable, read-only copy of one KV prefix on this device. `sync` pulls the node's `tinycloud.kv/sync` change feed (node feature `kv-sync-v1`) and fetches each changed value, accepting bytes only if they hash to the ETag the node attested. `get`, `list`, `status` and `reset` never touch the network, so they work with the host offline. Reads report observed state from one source host, not global finality. Needs Node.js 22.13+ or Bun (built-in SQLite); on older Node every `tc replica` command fails with `RUNTIME_UNSUPPORTED` (exit 1) and other commands are unaffected.
+
+A replica needs a device grant carrying `get` and `sync` on the prefix. Neither `*` nor `tinycloud.kv/*` implies `sync`, and the owner's default session does not hold it; `tc auth grant` acquires it for that grant only:
+
+```bash
+# device
+tc --profile device auth request --cap tinycloud.kv:SPACE:notes/:get,list,metadata,sync --expiry 30d --emit req.json
+# owner
+tc --profile owner auth grant req.json > grant.json
+# device
+tc --profile device auth import grant.json
+tc --profile device replica sync --prefix notes/       # first sync creates the replica "notes"
+tc --profile device replica get notes/todo.md --raw     # offline
+tc --profile device replica list notes/ --json
+tc --profile device replica status
+tc --profile device replica sync                       # catch up: updates and deletes
+tc --profile device replica reset [--purge]
+```
+
+- The first `sync` needs `--prefix` (and `--space` when grants cover several spaces); it pins the source host (`--host` or the profile host, never a discovered local node). Later runs use the stored configuration; a different `--prefix`, `--space` or `--host` is `REPLICA_CONFIG_MISMATCH` (exit 2). `--replica <name>` selects or names a replica (default: named after the prefix, or the profile's only replica).
+- The grant must be a compact UCAN issued to this device's key; SIWE/CACAO sessions cannot back a replica. A newer covering grant is installed as pending and takes over after the node accepts a sync under it.
+- Reads are allowed only inside the authority window the node attested at the last successful sync (the earliest expiry across the whole delegation chain, which can be before the grant's own `exp`). After expiry, reads fail with `GRANT_EXPIRED` (exit 5) and no new sync starts. A revocation is learned on the next online sync: the replica purges its entries and content and later reads fail with `GRANT_REVOKED`, including after restart.
+- `--retention-grant <cid>` presents an owner-issued `tinycloud.kv/retain` grant on the prefix (never invoked; nothing implies it). Reads then continue after the sync grant expires, marked `authority: "expired"`, until the node-attested `retainUntil`. Once the sync grant has expired the device cannot learn that the retain grant was revoked.
+- Syncing the `secrets` space or a prefix in the `vault` namespace needs `--allow-secrets`.
+- `get` statuses: present; `KEY_DELETED`, `KEY_ABSENT` (only once the first sync completed), `CONTENT_MISSING` (known key whose bytes are not local yet; the next sync repairs it) and `COVERAGE_INCOMPLETE` exit 4; `NOT_COVERED` (outside the prefix) exits 2. `-o FILE` writes atomically with mode 0600; stored content is re-hashed on every read unless `--no-verify`.
+- Exit codes: 0 ok; 1 busy, runtime or storage error; 2 usage, `NOT_COVERED`, `SECRETS_OPT_IN_REQUIRED`; 3 grant missing; 4 key absent, deleted, content missing or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network; 7 node, protocol or integrity error (`SOURCE_CHANGED`, `SCOPE_VIOLATION`, `CONTENT_MISMATCH`); 10 storage full.
+- Store: `profiles/<profile>/replicas/<name>/` (honours `TC_HOME`): `replica.db` (SQLite WAL, `synchronous=FULL`; each feed page and its cursor commit in one transaction) and content-addressed `blobs/`, directories 0700 and files 0600. Only one process syncs a replica at a time (`REPLICA_BUSY`). A node answer `410 RESET_REQUIRED` resets the replica in place and re-bootstraps; `status.lastReset` records it.
 
 ## Node Health
 

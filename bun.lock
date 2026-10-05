@@ -201,10 +201,10 @@
         "tc": "./bin/tc",
       },
       "dependencies": {
-        "@tinycloud/node-sdk": "3.1.0-beta.7",
-        "@tinycloud/node-sdk-wasm": "1.7.6",
-        "@tinycloud/operations": "0.4.0-beta.11",
-        "@tinycloud/sdk-core": "3.1.0-beta.7",
+        "@tinycloud/node-sdk": "3.1.0-beta.8",
+        "@tinycloud/node-sdk-wasm": "1.7.7-beta.0",
+        "@tinycloud/operations": "0.4.0-beta.12",
+        "@tinycloud/sdk-core": "3.1.0-beta.8",
         "@tinycloud/share-envelope": "1.1.0-beta.0",
         "@tinycloud/share-sdk": "1.1.0-beta.2",
         "chalk": "^5.3.0",
@@ -214,6 +214,7 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
+        "@tinycloud/replica": "0.0.0",
         "@types/node": "^20",
         "tsup": "^8.0.0",
         "typescript": "^5.9.3",
@@ -245,8 +246,8 @@
       "name": "@tinycloud/node-sdk",
       "version": "3.1.0-beta.8",
       "dependencies": {
-        "@tinycloud/node-sdk-wasm": "1.7.6",
-        "@tinycloud/sdk-core": "3.1.0-beta.7",
+        "@tinycloud/node-sdk-wasm": "1.7.7-beta.0",
+        "@tinycloud/sdk-core": "3.1.0-beta.8",
         "@tinycloud/sdk-services": "3.1.0-beta.7",
         "siwe": "^3.0.0",
       },
@@ -260,12 +261,25 @@
       "name": "@tinycloud/operations",
       "version": "0.4.0-beta.12",
       "dependencies": {
-        "@tinycloud/node-sdk": "3.1.0-beta.7",
-        "@tinycloud/sdk-core": "3.1.0-beta.7",
+        "@tinycloud/node-sdk": "3.1.0-beta.8",
+        "@tinycloud/sdk-core": "3.1.0-beta.8",
         "@tinycloud/sdk-services": "3.1.0-beta.7",
         "node-sql-parser": "5.4.0",
         "zod": "^3.22.0",
         "zod-to-json-schema": "^3.22.0",
+      },
+      "devDependencies": {
+        "@types/node": "^20",
+        "tsup": "^8.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/replica": {
+      "name": "@tinycloud/replica",
+      "version": "0.0.0",
+      "dependencies": {
+        "@noble/curves": "^1.9.2",
+        "@noble/hashes": "^1.8.0",
       },
       "devDependencies": {
         "@types/node": "^20",
@@ -337,7 +351,7 @@
         "zod": "^3.23.0",
       },
       "devDependencies": {
-        "@tinycloud/node-sdk-wasm": "1.7.6",
+        "@tinycloud/node-sdk-wasm": "1.7.7-beta.0",
         "@types/node": "^20",
         "tsup": "^8.0.0",
         "typescript": "^5.9.3",
@@ -1900,6 +1914,8 @@
     "@tinycloud/operations": ["@tinycloud/operations@workspace:packages/operations"],
 
     "@tinycloud/operations-mcp-conformance": ["@tinycloud/operations-mcp-conformance@workspace:tests/operations-mcp-conformance"],
+
+    "@tinycloud/replica": ["@tinycloud/replica@workspace:packages/replica"],
 
     "@tinycloud/sdk-core": ["@tinycloud/sdk-core@workspace:packages/sdk-core"],
 

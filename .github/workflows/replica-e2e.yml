@@ -1,0 +1,80 @@
+name: Replica e2e
+
+# `tc replica` (TC-18) against a real TinyCloud node through the public CLI:
+# device grant, sync, offline restart reads, catch-up, scope. The node binary
+# comes from the pinned GHCR image of the tinycloud-node commit that serves
+# `tinycloud.kv/sync` (TC-732, d7f511f on main).
+
+on:
+  pull_request:
+    paths:
+      - "packages/replica/**"
+      - "packages/cli/**"
+      - "packages/sdk-services/src/kv/**"
+      - ".github/workflows/replica-e2e.yml"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:d7f511f
+
+jobs:
+  replica-e2e:
+    name: Replica (Node 22, Bun 1.3.14, SQLite node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the CLI and its packages
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/replica build
+          bun run --cwd packages/cli build
+
+      - name: Extract the pinned node binary
+        run: |
+          docker pull "$TINYCLOUD_NODE_IMAGE"
+          container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
+          docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
+          docker rm "$container"
+          chmod +x "$RUNNER_TEMP/tinycloud"
+
+      - name: Replica engine and store conformance
+        run: bun run --cwd packages/replica test
+
+      - name: tc replica against the node
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test packages/cli/test/replica.e2e.test.ts

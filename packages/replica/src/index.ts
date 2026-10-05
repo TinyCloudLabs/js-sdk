@@ -1,0 +1,10 @@
+export { Replica, contentHash } from "./engine.js";
+export type { ReadMeta, ReplicaListEntry, ReplicaListResult, ReplicaOptions, ReplicaReadResult, SyncReport } from "./engine.js";
+export { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
+export { assertGrantInstallable, grantCovers, parseUcanGrant, syncGrantSpaces, ucanCid } from "./grant.js";
+export type { ParsedUcanGrant } from "./grant.js";
+export { assertReadable, effectiveAuthority, hashFromEtag, kvPrefixCovers, requiresSecretsOptIn } from "./scope.js";
+export type { EffectiveAuthority } from "./scope.js";
+export { kvSyncTransport, replicaErrorFromService } from "./transport.js";
+export type { KVSyncClient } from "./transport.js";
+export type * from "./types.js";

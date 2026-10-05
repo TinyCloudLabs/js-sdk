@@ -42,6 +42,7 @@ jobs:
           bun run check:operations-mcp-boundaries
       - name: Build operations, CLI, and MCP
         run: |
+          bun run --cwd packages/replica build
           bun run --cwd packages/cli build
           bun run --cwd packages/mcp build
       - name: Run focused conformance and concurrency tests

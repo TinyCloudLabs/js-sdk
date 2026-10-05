@@ -44,6 +44,8 @@ tc --profile publisher auth login --device --manifest builtin:share-publishing
 
 SQL commands need a profile whose session the owner granted through browser login; a device-login session has no SQL authority.
 
+To read a KV prefix while the host is unreachable, keep a local replica: `tc replica sync --prefix PREFIX` under a device grant with `sync`, then `tc replica get|list` read only local storage. See [REFERENCE.md](REFERENCE.md#local-replicas) for the grant flow, expiry and exit codes.
+
 ```bash
 tc --profile PROFILE kv get KEY --space SPACE --json
 tc --profile PROFILE kv get KEY --space SPACE --raw -o ./resource.txt

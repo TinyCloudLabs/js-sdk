@@ -16,6 +16,9 @@ Important areas:
 - `packages/node-sdk`: Node/Bun-facing SDK used for server-side and integration test paths.
 - `packages/sdk-rs`: Rust/WASM support packages for web and node targets.
 - `packages/cli`: CLI package.
+- `packages/replica`: durable read-only local KV replicas over `tinycloud.kv/sync` (engine,
+  contracts, signed-grant parser, SQLite store). Keep it free of `@tinycloud/web-sdk` and
+  `@tinycloud/node-sdk` imports; the browser worker build (TC-19) depends on that.
 - `apps/*`: demos and examples, including OpenKey-related examples.
 - `tests/node-sdk`: integration tests against a real TinyCloud Node server.
 

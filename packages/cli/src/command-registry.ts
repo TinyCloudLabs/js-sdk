@@ -13,6 +13,7 @@ import { registerKvCommand } from "./commands/kv.js";
 import { registerManifestCommand } from "./commands/manifest.js";
 import { registerNodeCommand } from "./commands/node.js";
 import { registerProfileCommand } from "./commands/profile.js";
+import { registerReplicaCommand } from "./commands/replica.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerShareCommand } from "./commands/share.js";
 import { registerSpaceCommand } from "./commands/space.js";
@@ -29,6 +30,7 @@ export function registerTinyCloudCommands(program: Command): void {
   registerAuthCommand(program);
   registerEnableCommand(program);
   registerKvCommand(program);
+  registerReplicaCommand(program);
   registerSpaceCommand(program);
   registerDelegationCommand(program);
   registerShareCommand(program);

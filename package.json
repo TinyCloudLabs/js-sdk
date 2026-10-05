@@ -18,6 +18,7 @@
     "packages/server",
     "packages/vfs",
     "packages/operations",
+    "packages/replica",
     "packages/mcp",
     "packages/cli",
     "apps/*",
