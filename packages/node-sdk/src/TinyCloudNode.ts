@@ -1223,7 +1223,8 @@ export class TinyCloudNode {
       const operation = this.operationFromInvokeAnyEntry(entry);
       return operation ? [operation] : [];
     });
-    const grant = this.findGrantForOperations(operations);
+    const grant = this.findGrantForOperations(operations) ??
+      this.findRuntimeRevocationGrant(operations);
     // When the primary grant wins, invoke with the PASSED session (its scoped
     // target `spaceId`), not the stored primary `ServiceSession` — see
     // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
@@ -6600,6 +6601,35 @@ export class TinyCloudNode {
     // authorizes (TC-111). Otherwise fall back to insertion order — the same
     // semantics as the previous `.find`.
     return covering.find((grant) => grant.provenance === "primary") ?? covering[0];
+  }
+
+  /**
+   * Revocation control proofs target a CID resource, while a runtime grant is
+   * represented by its owner space. Route only the exact revoke action through
+   * that space grant; the node independently verifies that its principal is
+   * the delegation issuer, recipient, or owner of a granted space.
+   */
+  private findRuntimeRevocationGrant(
+    operations: RuntimePermissionOperation[],
+  ): RuntimePermissionGrant | undefined {
+    if (operations.length !== 1) return undefined;
+    const [requested] = operations;
+    if (
+      requested?.resource?.startsWith("urn:cid:") !== true ||
+      requested.service !== "delegation" ||
+      requested.action !== "tinycloud.delegation/revoke"
+    ) {
+      return undefined;
+    }
+    this.pruneExpiredRuntimePermissionGrants();
+    return this.runtimePermissionGrants.find((grant) =>
+      (grant.provenance === "runtime" || grant.provenance === "delegated") &&
+      grant.operations.some((operation) =>
+        operation.service === requested.service &&
+        operation.action === requested.action &&
+        this.pathContains(operation.path, requested.path)
+      )
+    );
   }
 
   private findGrantForOperation(

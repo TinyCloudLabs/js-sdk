@@ -1,11 +1,12 @@
 import { Command } from "commander";
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
+import { ensureDelegationAuthority } from "./auth.js";
 import { parseExpiry } from "../lib/duration.js";
-
 function normalizeDid(input: string): string {
   const normalized = input.trim();
   const fragmentIndex = normalized.indexOf("#");
@@ -138,6 +139,27 @@ export function registerDelegationCommand(program: Command): void {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        const revokePermission: PermissionEntry = {
+          service: "tinycloud.delegation",
+          space: profile.spaceId ?? "default",
+          path: "",
+          actions: ["tinycloud.delegation/revoke"],
+        };
+
+        if (!node.hasRuntimePermissions([revokePermission])) {
+          await ensureDelegationAuthority({
+            ctx,
+            profile,
+            node,
+            requested: [revokePermission],
+            expiryOption: undefined,
+            reason: `Revoke delegation ${cid}`,
+            // Running this explicit command is consent to acquire its one
+            // required ability; no general session or manifest is widened.
+            yes: true,
+          });
+        }
 
         const result = await node.delegationManager.revoke(cid);
         if (!result.ok) {

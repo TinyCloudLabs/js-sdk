@@ -1490,6 +1490,59 @@ describe("TinyCloudNode runtime permission delegations", () => {
     );
   });
 
+
+  test("routes CID revoke control proofs through the activated runtime ability", async () => {
+    const invoke = mock((session: { delegationHeader: { Authorization: string } }) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as IWasmBindings["invoke"];
+    const node = makeNode(invoke);
+    const spaceId = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:default";
+
+    await withActivatedDelegations(async () => {
+      const [delegation] = await node.grantRuntimePermissions([{
+        service: "tinycloud.delegation",
+        space: spaceId,
+        path: "",
+        actions: ["tinycloud.delegation/revoke"],
+      }]);
+      await node.useRuntimeDelegation(delegation!);
+    });
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+    const invocation = node as unknown as {
+      invokeAnyWithRuntimePermissions: (
+        session: NonNullable<TinyCloudNode["restorableSession"]>,
+        entries: Array<{ resource: string; service: string; path: string; action: string }>,
+        facts: Record<string, unknown>[],
+      ) => unknown;
+      wasmBindings: {
+        invokeAny: {
+          mock: { calls: Array<[NonNullable<TinyCloudNode["restorableSession"]>]> };
+        };
+      };
+    };
+    invocation.invokeAnyWithRuntimePermissions(fallback, [{
+      resource: "urn:cid:bafkreirevocationtarget",
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/revoke",
+    }], [{}]);
+    invocation.invokeAnyWithRuntimePermissions(fallback, [{
+      resource: "urn:cid:bafkreirevocationtarget",
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/status",
+    }], [{}]);
+
+    expect(invocation.wasmBindings.invokeAny.mock.calls[0]?.[0]?.delegationHeader.Authorization).toBe("runtime-token");
+    expect(invocation.wasmBindings.invokeAny.mock.calls[1]?.[0]?.delegationHeader.Authorization).toBe("base-token");
+  });
   test("uses a single runtime SQL grant for migration-style schema and write batches", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
