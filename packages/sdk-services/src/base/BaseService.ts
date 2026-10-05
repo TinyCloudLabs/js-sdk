@@ -17,7 +17,11 @@ import {
   err,
   Result,
 } from "../types";
-import { authRequiredError, wrapError } from "../errors";
+import { authRequiredError, wrapError, RequestTimeoutError } from "../errors";
+import type { RequestSignal } from "./types";
+
+/** setTimeout's delay is a signed 32-bit integer; larger values fire at once. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /**
  * Abstract base class for TinyCloud services.
@@ -257,6 +261,76 @@ export abstract class BaseService implements IService {
     }
 
     return controller.signal;
+  }
+
+  /**
+   * Create the abort signal for one request, bounded by the request timeout.
+   *
+   * The signal aborts when the service signs out, the context aborts, the
+   * caller's `signal` aborts, or the timeout elapses, whichever comes first.
+   * A timeout aborts with a {@link RequestTimeoutError} (`TimeoutError`), which
+   * `wrapError` maps to `ErrorCodes.TIMEOUT`; the other sources keep their own
+   * reason (normally `AbortError`, mapped to `ErrorCodes.ABORTED`).
+   *
+   * The timeout is `timeoutMs` when given, otherwise `config.timeout`. Only a
+   * positive, finite value (at most 2^31-1 ms) applies; `undefined`, `0`, and
+   * `Infinity` mean no timeout, so a per-call `0` opts out of a configured one.
+   *
+   * Callers must call `dispose()` once the response body has been consumed,
+   * which clears the timer and removes the listeners this adds to the
+   * long-lived service and context signals.
+   *
+   * @param signal - The caller's abort signal for this request
+   * @param timeoutMs - Per-request timeout override in milliseconds
+   */
+  protected createRequestSignal(
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): RequestSignal {
+    const controller = new AbortController();
+    const detachers: Array<() => void> = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const dispose = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      for (const detach of detachers.splice(0)) {
+        detach();
+      }
+    };
+    const abort = (reason: unknown): void => {
+      dispose();
+      controller.abort(reason);
+    };
+    const requestSignal: RequestSignal = { signal: controller.signal, dispose };
+
+    const parents = [
+      this.abortController.signal,
+      this.context?.abortSignal,
+      signal,
+    ].filter((parent): parent is AbortSignal => parent !== undefined);
+    for (const parent of parents) {
+      if (parent.aborted) {
+        abort(parent.reason);
+        return requestSignal;
+      }
+      const onAbort = (): void => abort(parent.reason);
+      parent.addEventListener("abort", onAbort, { once: true });
+      detachers.push(() => parent.removeEventListener("abort", onAbort));
+    }
+
+    const timeout = timeoutMs ?? this._config.timeout;
+    if (
+      typeof timeout === "number" &&
+      timeout > 0 &&
+      timeout <= MAX_TIMER_DELAY_MS
+    ) {
+      timer = setTimeout(() => abort(new RequestTimeoutError(timeout)), timeout);
+    }
+
+    return requestSignal;
   }
 
   /**
