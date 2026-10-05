@@ -401,6 +401,16 @@ function isInteractiveSigner(config: TinyCloudNodeConfig): boolean {
   return config.signer !== undefined;
 }
 
+/**
+ * Storage is one budget per owner. Key a space id by its owner
+ * (`eip155:<chain>:<address>`, case-folded); a non-PKH space id is its own key.
+ */
+function spaceOwnerKey(spaceId: string | undefined): string | undefined {
+  if (!spaceId) return undefined;
+  const match = /^tinycloud:pkh:(eip155:\d+:0x[0-9a-fA-F]{40}):/.exec(spaceId);
+  return match ? match[1]!.toLowerCase() : spaceId;
+}
+
 function didPrincipalMatches(actual: string, expected: string): boolean {
   try {
     return principalDidEquals(actual, expected);
@@ -1162,14 +1172,34 @@ export class TinyCloudNode {
     return this.storageFull.on(handler);
   }
 
+  /** Owner key of the account the current session's own storage belongs to. */
+  private currentStorageOwner(): string | undefined {
+    return spaceOwnerKey(this._serviceContext?.session?.spaceId ?? this.currentTinyCloudSession()?.spaceId);
+  }
+
+  /**
+   * True once a write to the signed-in account's own storage was rejected.
+   * A rejection on another owner's space (a delegated space) does not stop
+   * this account's read-path maintenance writes.
+   */
+  private get ownStorageFull(): boolean {
+    const rejection = this.storageFull.rejection;
+    if (!rejection) return false;
+    const owner = spaceOwnerKey(rejection.spaceId);
+    return owner === undefined || owner === this.currentStorageOwner();
+  }
+
   /**
    * The owner's TinyCloud storage. `storage.status()` reads usage and plan
    * from the node (`tinycloud.space/info`) and returns
    * `{ usedBytes, limitBytes, account, plan, state, manageUrl }`, where
    * `state` is `ok`, `nearly_full` (≥ 90%) or `full`, taken from the account
-   * totals when the node has them. Needs a session whose recap grants
-   * `tinycloud.space/info` on the space; default sessions do not request it
-   * yet, so without it this returns `PERMISSION_DENIED` and sends nothing.
+   * totals when the node has them. Needs `tinycloud.space/info` on the space,
+   * from the session's recap or an installed runtime delegation; default
+   * sessions do not request it yet. When that grant cannot be confirmed
+   * locally (including restored sessions without a parseable recap), this
+   * returns `PERMISSION_DENIED` and sends nothing. A node 401/403 after a
+   * confirmed grant (e.g. an expired session) stays `AUTH_UNAUTHORIZED`.
    */
   get storage(): IStorageService {
     return {
@@ -1187,12 +1217,9 @@ export class TinyCloudNode {
       : options.space.startsWith("tinycloud:") ? options.space : this.ownedSpaceId(options.space);
     const action = "tinycloud.space/info";
 
-    // A recap that does not grant space/info would only earn a 401. A session
-    // without a parseable recap (session-only restore) has unknown authority,
-    // so let the node decide.
-    const tcSession = this.currentTinyCloudSession();
-    const recapKnown = tcSession !== undefined && this.recapOperationsFromSession(tcSession).length > 0;
-    if (recapKnown && !this.findGrantForOperation({ spaceId, service: "space", path: "", action })) {
+    // Fail closed: without a grant we can confirm, the request would only earn
+    // a 401. The primary recap and installed runtime delegations both count.
+    if (!this.findGrantForOperation({ spaceId, service: "space", path: "", action })) {
       return err(serviceError(
         ErrorCodes.PERMISSION_DENIED,
         `Reading storage status needs ${action} on ${spaceId}, which this session was not granted.`,
@@ -1233,9 +1260,17 @@ export class TinyCloudNode {
           { meta: { status: response.status } },
         ));
       }
-      // Space again: let read paths register and repair, and let the next
-      // rejection announce itself.
-      if (status.state !== "full") this.storageFull.clear();
+      // Room again on the account whose write was rejected: let read paths
+      // register and repair, and let the next rejection announce itself. A
+      // status for another owner's space says nothing about that account.
+      const rejection = this.storageFull.rejection;
+      if (
+        status.state !== "full" &&
+        rejection &&
+        spaceOwnerKey(spaceId) === (spaceOwnerKey(rejection.spaceId) ?? this.currentStorageOwner())
+      ) {
+        this.storageFull.clear();
+      }
       return ok(status);
     } catch (error) {
       return err(serviceError(
@@ -1786,10 +1821,11 @@ export class TinyCloudNode {
     await this.wasmBindings.ensureInitialized?.();
 
     const address = canonicalizeAddress(await this.signer.getAddress());
-    // Storage is per account: a different account starts with no known rejection.
-    if (address !== this._address) this.storageFull.clear();
+    const chainId = await this.signer.getChainId();
+    // Storage is one budget per account: another account starts with no known rejection.
+    if (address !== this._address || chainId !== this._chainId) this.storageFull.clear();
     this._address = address;
-    this._chainId = await this.signer.getChainId();
+    this._chainId = chainId;
 
     // Reset services so they get recreated with new session
     this._kv = undefined;
@@ -1902,7 +1938,7 @@ export class TinyCloudNode {
         this._bootstrapStatus = { skipped: true, reason: "already-provisioned" };
         return false;
       }
-      if (decision.mode === "repair" && this.storageFull.isFull) {
+      if (decision.mode === "repair" && this.ownStorageFull) {
         // A repair ends with the marker write, and a write was already
         // rejected because storage is full. Re-running it on every sign-in
         // only repeats rejected writes; it runs again once storage has room.
@@ -2423,21 +2459,28 @@ export class TinyCloudNode {
     if (!session || this.pendingAccountRegistrySync?.session === session) {
       return;
     }
+    // Index and registry writes would only be refused while this account's
+    // storage is full; they run again on a sign-in after it has room.
+    if (this.ownStorageFull) {
+      return;
+    }
 
     const promise = this.enqueueAccountRegistryOperation(session, async () => {
       await this.withAccountRegistryRetry(async () => {
-        if (this.currentTinyCloudSession() !== session) {
+        // Re-check before each write: storage may have been found full while
+        // this sync waited in the queue, or by the step just before.
+        if (this.currentTinyCloudSession() !== session || this.ownStorageFull) {
           return;
         }
 
         await this.account.index.ensure();
-        if (this.currentTinyCloudSession() !== session) {
+        if (this.currentTinyCloudSession() !== session || this.ownStorageFull) {
           return;
         }
 
         await this.writeManifestRegistryRecords();
 
-        if (this.currentTinyCloudSession() !== session) {
+        if (this.currentTinyCloudSession() !== session || this.ownStorageFull) {
           return;
         }
 
@@ -3092,7 +3135,14 @@ export class TinyCloudNode {
     this.sessionKeyId = stagedKeyId;
     this.sessionKeyJwk = stagedJwk;
     if (resolvedHost) this.config.host = resolvedHost;
-    if (stagedAddress !== this._address) this.storageFull.clear();
+    // A metadata-light restore has no address, so compare the owner of the
+    // primary space too: another account starts with no known rejection.
+    if (
+      stagedAddress !== this._address ||
+      spaceOwnerKey(serviceSession.spaceId) !== this.currentStorageOwner()
+    ) {
+      this.storageFull.clear();
+    }
     this._address = stagedAddress;
     this._chainId = stagedChainId;
     this._serviceContext = stagedGraph.serviceContext;
@@ -3424,7 +3474,7 @@ export class TinyCloudNode {
         graph.assertActive();
         await this.account.spaces.register(space);
       },
-      isStorageFull: () => this.storageFull.isFull,
+      isStorageFull: () => this.ownStorageFull,
     });
     spaceService.updateConfig({ sharingService });
     return { core, graph, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
@@ -4380,7 +4430,7 @@ export class TinyCloudNode {
         graph.assertActive();
         await this.account.spaces.register(space);
       },
-      isStorageFull: () => this.storageFull.isFull,
+      isStorageFull: () => this.ownStorageFull,
     });
 
     // A SharingService retains its invoke/fetch functions and lifetime guard.

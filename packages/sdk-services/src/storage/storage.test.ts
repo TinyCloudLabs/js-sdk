@@ -3,7 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { ServiceContext } from "../context";
 import { parseStorageRejection } from "../errors";
 import { KVService } from "../kv/KVService";
-import { ErrorCodes, TelemetryEvents, type FetchFunction } from "../types";
+import { SQLService } from "../sql/SQLService";
+import { DuckDbService } from "../duckdb/DuckDbService";
+import { TinyCloudQuota } from "../quota";
+import { ErrorCodes, TelemetryEvents, type FetchFunction, type StorageQuotaInfo } from "../types";
 import { StorageFullMonitor, type StorageFullEvent } from "./StorageFullMonitor";
 import { STORAGE_MANAGE_URL, parseStorageStatus, storageUsageState } from "./status";
 
@@ -229,5 +232,88 @@ describe("storage status", () => {
     expect(
       parseStorageStatus({ space: { usedBytes: 1, limitBytes: 2 }, manageUrl: "javascript:alert(1)" })?.manageUrl,
     ).toBe(STORAGE_MANAGE_URL);
+  });
+});
+
+const LIMIT_BODY = JSON.stringify({
+  error: "storage_limit_reached",
+  message: "Write exceeds remaining storage. Used: 900 bytes, Limit: 1000 bytes",
+  space: { usedBytes: 900, limitBytes: 1000 },
+  account: { usedBytes: 99_000_000, limitBytes: 104857600, plan: "free" },
+});
+
+function contextAnswering(status: number, body: string): ServiceContext {
+  return new ServiceContext({
+    hosts: ["https://node.test"],
+    session: {
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy",
+      spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
+      verificationMethod: "did:key:test",
+      jwk: {},
+    },
+    invoke: () => ({ Authorization: "Bearer x" }),
+    invokeAny: () => ({ Authorization: "Bearer x" }),
+    fetch: async () => new Response(body, { status, statusText: "Payload Too Large" }),
+  });
+}
+
+describe("SQL and DuckDB storage 413", () => {
+  const services: Array<{ name: string; code: string; make: () => SQLService | DuckDbService }> = [
+    { name: "sql", code: ErrorCodes.SQL_RESPONSE_TOO_LARGE, make: () => new SQLService() },
+    { name: "duckdb", code: ErrorCodes.DUCKDB_RESPONSE_TOO_LARGE, make: () => new DuckDbService() },
+  ];
+
+  test.each(services)("$name: the node's storage 413 is STORAGE_LIMIT_REACHED with the account, and fires storage.full", async ({ name, make }) => {
+    const context = contextAnswering(413, LIMIT_BODY);
+    const monitor = new StorageFullMonitor();
+    monitor.observe(context);
+    const events: StorageFullEvent[] = [];
+    monitor.on((event) => events.push(event));
+    const service = make();
+    service.initialize(context);
+
+    const result = await service.execute("INSERT INTO notes (body) VALUES (?)", ["x".repeat(200)]);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.STORAGE_LIMIT_REACHED);
+    expect(result.error.service).toBe(name);
+    expect(result.error.meta).toMatchObject({
+      status: 413,
+      usedBytes: 900,
+      limitBytes: 1000,
+      account: { usedBytes: 99_000_000, limitBytes: 104857600, plan: "free" },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ service: name, spaceId: "tinycloud:pkh:eip155:1:0xabc:default" });
+  });
+
+  test.each(services)("$name: a 413 without the node's storage body stays a response-size error", async ({ code, make }) => {
+    const context = contextAnswering(413, "<html><body>413 Request Entity Too Large</body></html>");
+    const monitor = new StorageFullMonitor();
+    monitor.observe(context);
+    const service = make();
+    service.initialize(context);
+
+    const result = await service.execute("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(code);
+    expect(monitor.isFull).toBe(false);
+  });
+});
+
+describe("deprecated quota API (kept for minor-release compatibility)", () => {
+  test("TinyCloudQuota still forwards a quota error to onUpgradeRequired", () => {
+    const seen: StorageQuotaInfo[] = [];
+    const quota = new TinyCloudQuota({ onUpgradeRequired: (info) => seen.push(info) });
+    const info: StorageQuotaInfo = { usedBytes: 1, limitBytes: 0, service: "kv" };
+
+    quota.handleQuotaError(info);
+
+    expect(seen).toEqual([info]);
+    expect(quota.available).toBe(false);
   });
 });

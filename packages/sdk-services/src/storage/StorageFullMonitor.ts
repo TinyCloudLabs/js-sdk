@@ -23,6 +23,11 @@ export interface StorageFullEvent {
   limitBytes?: number;
   /** Account-wide totals, when the node had them from billing. */
   account?: StorageAccountUsage;
+  /**
+   * Space the rejected write targeted, when the service context knew it.
+   * Storage is one budget per owner, so this says whose storage is full.
+   */
+  spaceId?: string;
 }
 
 export type StorageFullHandler = (event: StorageFullEvent) => void;
@@ -44,6 +49,11 @@ export class StorageFullMonitor {
     return this.event !== undefined;
   }
 
+  /** The rejection that made storage full, until {@link clear}. */
+  get rejection(): StorageFullEvent | undefined {
+    return this.event;
+  }
+
   /** Watch a context's service errors. Returns the unsubscribe function. */
   observe(context: IServiceContext): () => void {
     return context.on(TelemetryEvents.SERVICE_ERROR, (data) => {
@@ -56,6 +66,8 @@ export class StorageFullMonitor {
       if (typeof meta.account === "object" && meta.account !== null) {
         event.account = meta.account as StorageAccountUsage;
       }
+      const spaceId = context.session?.spaceId;
+      if (spaceId) event.spaceId = spaceId;
       this.event = event;
       context.emit(TelemetryEvents.STORAGE_FULL, event);
       for (const handler of this.handlers) {

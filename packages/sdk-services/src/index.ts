@@ -39,6 +39,7 @@ export type {
   Result,
   ServiceError,
   PermissionHint,
+  StorageQuotaInfo,
   ErrorCode,
   IServiceContext,
   IService,
@@ -281,6 +282,10 @@ export type {
   StorageUsage,
   StorageUsageState,
 } from "./storage";
+
+// Quota (deprecated: use storage.status() and on("storage.full"))
+export { TinyCloudQuota } from "./quota";
+export type { QuotaConfig, QuotaStatus } from "./quota";
 
 // Vault service
 export {

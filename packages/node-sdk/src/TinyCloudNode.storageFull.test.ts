@@ -15,10 +15,13 @@ import {
   type StorageFullEvent,
 } from "@tinycloud/sdk-core";
 
+import { NodeWasmBindings } from "./NodeWasmBindings";
 import { TinyCloudNode } from "./TinyCloudNode";
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 const SPACE_URI = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+/** A space owned by a different account, e.g. one shared with this user. */
+const OTHER_SPACE = "tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000aa:shared";
 const SPACE_INFO = "tinycloud.space/info";
 
 const REJECTION = JSON.stringify({
@@ -42,6 +45,10 @@ interface NodeInternals {
   runAccountBootstrap(): Promise<unknown[]>;
   writeBootstrapCompletionMarker(): Promise<void>;
   bootstrapAccountIfNeeded(): Promise<boolean>;
+  _account?: unknown;
+  writeManifestRegistryRecords(): Promise<void>;
+  scheduleAccountRegistrySync(): void;
+  pendingAccountRegistrySync?: { promise: Promise<void> };
 }
 
 function makeWasm(recap: Array<{ service: string; space: string; path: string; actions: string[] }>): IWasmBindings {
@@ -79,12 +86,15 @@ function makeWasm(recap: Array<{ service: string; space: string; path: string; a
 }
 
 /** A signed-in node wired to a fake TinyCloud host whose storage is full. */
-function fullAccount(options: { grantsSpaceInfo?: boolean } = {}) {
+function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?: boolean; withoutRecap?: boolean } = {}) {
   const recap = [
     { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] },
     ...(options.grantsSpaceInfo === false
       ? []
       : [{ service: "space", space: SPACE_URI, path: "", actions: [SPACE_INFO] }]),
+    ...(options.grantsOtherSpaceInfo
+      ? [{ service: "space", space: OTHER_SPACE, path: "", actions: [SPACE_INFO] }]
+      : []),
   ];
   const node = new TinyCloudNode({
     host: "https://tinycloud.test",
@@ -100,7 +110,8 @@ function fullAccount(options: { grantsSpaceInfo?: boolean } = {}) {
     delegationCid: "base-cid",
     jwk: { kty: "OKP", crv: "Ed25519", x: "test" },
     sessionKey: "default",
-    siwe: [
+    // No SIWE models a metadata-light restore: no recap to confirm grants from.
+    siwe: options.withoutRecap ? undefined : [
       "tinycloud.test wants you to sign in with your Ethereum account:",
       ADDRESS,
       "",
@@ -163,6 +174,26 @@ function fullAccount(options: { grantsSpaceInfo?: boolean } = {}) {
   const events: StorageFullEvent[] = [];
   node.on("storage.full", (event) => events.push(event));
   return { node, internals, kv, host, events };
+}
+
+/** Have the full node refuse one write on `spaceId`, through a context the node's graph observes. */
+async function rejectWriteOn(internals: NodeInternals, spaceId: string): Promise<void> {
+  const context = internals._serviceGraph.track(new ServiceContext({
+    hosts: ["https://tinycloud.test"],
+    session: {
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy-session",
+      spaceId,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    },
+    invoke: () => ({ Authorization: "Bearer invocation" }),
+    fetch: async () => new Response(REJECTION, { status: 402, statusText: "Payment Required" }),
+  }));
+  const kv = new KVService({});
+  kv.initialize(context);
+  const written = await kv.put("record", "v");
+  expect(written.ok).toBe(false);
 }
 
 describe("TC-628: a full account", () => {
@@ -265,5 +296,104 @@ describe("TC-628: a full account", () => {
     expect(runAccountBootstrap).toHaveBeenCalledTimes(1);
     expect(writeMarker).toHaveBeenCalledTimes(1);
     expect(internals.bootstrapStatus).toEqual({ skipped: true, reason: "storage-full" });
+  });
+
+  test("sign-in schedules no account registry sync while the account's storage is full", async () => {
+    const { internals, kv } = fullAccount();
+    const ensure = mock(async () => ({ ok: true as const, data: undefined }));
+    const writeRecords = mock(async () => {});
+    internals._account = { index: { ensure } };
+    internals.writeManifestRegistryRecords = writeRecords;
+
+    await kv.put("API_KEY", "v1");
+    internals.scheduleAccountRegistrySync();
+    await internals.pendingAccountRegistrySync?.promise;
+
+    expect(ensure).not.toHaveBeenCalled();
+    expect(writeRecords).not.toHaveBeenCalled();
+  });
+
+  test("a registry sync stops at the first write the full storage refuses", async () => {
+    const { internals, kv } = fullAccount();
+    // The index write is the one that discovers storage is full.
+    const ensure = mock(async () => kv.put("index", "v"));
+    const writeRecords = mock(async () => {});
+    internals._account = { index: { ensure } };
+    internals.writeManifestRegistryRecords = writeRecords;
+
+    internals.scheduleAccountRegistrySync();
+    await internals.pendingAccountRegistrySync?.promise;
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(writeRecords).not.toHaveBeenCalled();
+  });
+
+  test("storage.status() fails closed when the session has no recap to confirm the grant", async () => {
+    const { node, host } = fullAccount({ withoutRecap: true });
+
+    const status = await node.storage.status();
+
+    expect(status.ok).toBe(false);
+    if (status.ok) return;
+    expect(status.error.code).toBe(ErrorCodes.PERMISSION_DENIED);
+    expect(host.statusReads).toBe(0);
+  });
+
+  test("room on another owner's space does not clear this account's full state", async () => {
+    const { node, internals, kv, host, events } = fullAccount({ grantsOtherSpaceInfo: true });
+    await kv.put("API_KEY", "v1");
+
+    host.full = false;
+    const other = await node.storage.status({ space: OTHER_SPACE });
+    expect(other.ok && other.data.state).toBe("ok");
+    expect(internals.storageFull.isFull).toBe(true);
+
+    host.full = true;
+    await kv.put("API_KEY", "v2");
+    expect(events).toHaveLength(1);
+  });
+
+  test("a rejection on another owner's space does not stop this account's repair", async () => {
+    const { internals } = fullAccount();
+    internals.config.privateKey = "0x" + "11".repeat(32);
+    internals.resolveBootstrapDecision = async () => ({ action: "run", mode: "repair" });
+    const runAccountBootstrap = mock(async () => []);
+    internals.runAccountBootstrap = runAccountBootstrap;
+    internals.writeBootstrapCompletionMarker = async () => {};
+
+    await rejectWriteOn(internals, OTHER_SPACE);
+    expect(internals.storageFull.isFull).toBe(true);
+
+    expect(await internals.bootstrapAccountIfNeeded()).toBe(true);
+    expect(runAccountBootstrap).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TC-628: restoring another account", () => {
+  test("a metadata-light restore of a different account starts a new storage-full episode", async () => {
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const jwk = JSON.parse(manager.jwk("default")!);
+    const node = new TinyCloudNode({ host: "https://tinycloud.test", wasmBindings: wasm });
+    const internals = node as unknown as NodeInternals;
+    // No address, chain or SIWE: both restores look the same apart from the space.
+    const restore = (spaceId: string) => node.restoreSession({
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy-session",
+      spaceId,
+      jwk,
+      verificationMethod: manager.getDID("default"),
+      tinycloudHosts: ["https://tinycloud.test"],
+    });
+
+    await restore(SPACE_URI);
+    expect(node.address).toBeUndefined();
+    await rejectWriteOn(internals, SPACE_URI);
+
+    await restore(SPACE_URI);
+    expect(internals.storageFull.isFull).toBe(true);
+
+    await restore(OTHER_SPACE);
+    expect(internals.storageFull.isFull).toBe(false);
   });
 });
