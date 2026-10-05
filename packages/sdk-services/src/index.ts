@@ -39,7 +39,6 @@ export type {
   Result,
   ServiceError,
   PermissionHint,
-  StorageQuotaInfo,
   ErrorCode,
   IServiceContext,
   IService,
@@ -155,6 +154,9 @@ export {
   storageLimitReachedError,
   storageRejectionError,
   parseStorageQuotaBytes,
+  parseStorageRejection,
+  type StorageAccountUsage,
+  type StorageRejectionDetails,
   isStorageFullError,
   STORAGE_FULL_MESSAGE,
   STORAGE_WRITE_TOO_LARGE_MESSAGE,
@@ -262,9 +264,23 @@ export type {
   HooksServiceConfig,
 } from "./hooks";
 
-// Quota
-export { TinyCloudQuota } from "./quota";
-export type { QuotaConfig, QuotaStatus } from "./quota";
+// Storage status and the single storage.full event
+export {
+  StorageFullMonitor,
+  STORAGE_MANAGE_URL,
+  STORAGE_NEARLY_FULL_RATIO,
+  parseStorageStatus,
+  storageUsageState,
+} from "./storage";
+export type {
+  IStorageService,
+  StorageFullEvent,
+  StorageFullHandler,
+  StorageStatus,
+  StorageStatusOptions,
+  StorageUsage,
+  StorageUsageState,
+} from "./storage";
 
 // Vault service
 export {

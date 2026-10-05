@@ -19,7 +19,7 @@ import {
   authRequiredError,
   wrapError,
   storageRejectionError,
-  parseStorageQuotaBytes,
+  parseStorageRejection,
   parseAuthError,
   parsePermissionHintFromErrorText,
   authUnauthorizedError,
@@ -133,7 +133,7 @@ export class KVService extends BaseService implements IKVService {
     }
     // A 413 is about storage only when the node says so. A proxy's own
     // request-size limit (Cloudflare's HTML 413) is not.
-    if (response.status === 413 && !parseStorageQuotaBytes(errorText)) {
+    if (response.status === 413 && !parseStorageRejection(errorText)) {
       return undefined;
     }
     return err(
