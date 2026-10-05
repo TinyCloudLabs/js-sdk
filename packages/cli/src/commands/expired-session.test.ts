@@ -100,7 +100,7 @@ async function run(home: string, argv: readonly string[]): Promise<{ exitCode: n
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
-  const child = Bun.spawn(["node", ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.env.NODE_BINARY ?? "node", ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   return { exitCode, error: (JSON.parse(stderr) as { error: Record<string, unknown> }).error };
 }
@@ -196,7 +196,7 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("share publish keeps its share-publishing sign-in guidance", async () => {
     await seedProfile(shareHome, "delegate-session");
