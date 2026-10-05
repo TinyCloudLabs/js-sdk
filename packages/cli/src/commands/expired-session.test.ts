@@ -5,10 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
-// Real modules end to end against a stored session that is a real
-// owner-signed SIWE: either expired an hour ago, or (for "tampered") still
-// within its lifetime but no longer verifying. Commands run in child processes
-// from source; the node is a local server that records every request.
+// Owner-signed SIWE sessions expired an hour ago (or tampered but within
+// their lifetime) exercise the built public CLI against a recording node.
 
 // Share modules read the profile store at import, so the in-process share case
 // gets its own home before they load.
@@ -20,8 +18,7 @@ const { createShareAuthorityAdapters } = await import("../share/adapters.js");
 const { shareCliError } = await import("./share.js");
 
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
-const secretsEntry = join(import.meta.dir, "../../test-support/secrets-json-error.ts");
-const cliEntry = join(import.meta.dir, "../index.ts");
+const cliEntry = join(import.meta.dir, "../../bin/tc");
 const requests: string[] = [];
 let node: Server<undefined>;
 
@@ -98,12 +95,12 @@ async function seedProfile(home: string, posture: Posture, state: "expired" | "t
   }
 }
 
-async function run(home: string, argv: string[]): Promise<{ exitCode: number; error: Record<string, unknown> }> {
+async function run(home: string, argv: readonly string[]): Promise<{ exitCode: number; error: Record<string, unknown> }> {
   // No TC_HOST: commands must resolve the profile's host (the recording server).
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
-  const child = Bun.spawn([process.execPath, ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(["node", ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   return { exitCode, error: (JSON.parse(stderr) as { error: Record<string, unknown> }).error };
 }
@@ -120,9 +117,13 @@ const ownerLogin = {
   code: "AUTH_REQUIRED",
   hint: "Sign in again with: tc --profile expired auth login --method openkey",
 };
+const scopedOwnerLogin = {
+  code: "AUTH_REQUIRED",
+  hint: expect.stringContaining("tc --profile expired auth login --method openkey --paste --manifest"),
+};
 
 describe("an expired or invalid stored session needs a new sign-in, not a retry", () => {
-  const secrets = (...args: string[]) => [secretsEntry, "--profile", "expired", "--json", "secrets", ...args];
+  const secrets = (...args: string[]) => [cliEntry, "--profile", "expired", "--json", "secrets", ...args];
   const cases: Array<[string, Posture, "expired" | "tampered", string[], Record<string, unknown>]> = [
     ["delegate-session secrets get", "delegate-session", "expired", secrets("get", "KEY"), delegateLogin],
     ["delegate-session secrets list", "delegate-session", "expired", secrets("list"), delegateLogin],
@@ -130,6 +131,12 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     ["delegate-session secrets delete", "delegate-session", "expired", secrets("delete", "KEY"), delegateLogin],
     ["local-owner-key secrets get", "local-owner-key", "expired", secrets("get", "KEY"), localLogin],
     ["local-owner-key secrets list", "local-owner-key", "expired", secrets("list"), localLogin],
+    ["local-owner-key secrets put", "local-owner-key", "expired", secrets("put", "KEY", "value"), localLogin],
+    ["local-owner-key secrets delete", "local-owner-key", "expired", secrets("delete", "KEY"), localLogin],
+    ["owner-openkey secrets get", "owner-openkey", "expired", secrets("get", "KEY"), scopedOwnerLogin],
+    ["owner-openkey secrets list", "owner-openkey", "expired", secrets("list"), scopedOwnerLogin],
+    ["owner-openkey secrets put", "owner-openkey", "expired", secrets("put", "KEY", "value"), scopedOwnerLogin],
+    ["owner-openkey secrets delete", "owner-openkey", "expired", secrets("delete", "KEY"), scopedOwnerLogin],
     // Within its lifetime, so the secrets expiry pre-check passes; the owner still gets the owner sign-in.
     ["owner-openkey secrets get with a session that no longer verifies", "owner-openkey", "tampered", secrets("get", "KEY"), ownerLogin],
   ];
@@ -146,12 +153,17 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
       await rm(home, { recursive: true, force: true });
     }
   });
-
-  test("auth import of a request-bound delegation exits 3 with AUTH_REQUIRED", async () => {
-    const home = await mkdtemp(join(tmpdir(), "tc-expired-import-"));
+  test.each([
+    ["delegate-session", delegateLogin],
+    ["local-owner-key", localLogin],
+    ["owner-openkey", ownerLogin],
+  ] as const)("%s rejects expired sessions for kv get, auth import and share publish through the public CLI", async (posture, expected) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-expired-public-"));
     try {
-      await seedProfile(home, "delegate-session");
+      await seedProfile(home, posture);
       const artifact = join(home, "delegation.json");
+      const source = join(home, "share.txt");
+      await writeFile(source, "hello");
       await writeFile(artifact, JSON.stringify({
         kind: "tinycloud.auth.delegation",
         version: 1,
@@ -168,10 +180,19 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
           delegationHeader: { Authorization: "header.payload.signature" },
         },
       }));
-      requests.length = 0;
-      const { exitCode, error } = await run(home, [cliEntry, "--quiet", "--json", "--profile", "expired", "auth", "import", artifact]);
-      expect({ exitCode, error }).toMatchObject({ exitCode: 3, error: delegateLogin });
-      expect(requests).toEqual([]);
+      for (const [argv, expectedError] of [
+        [[cliEntry, "--json", "--profile", "expired", "kv", "get", "KEY"], expected],
+        [[cliEntry, "--json", "--profile", "expired", "auth", "import", artifact], expected],
+        [[cliEntry, "--json", "--profile", "expired", "share", "publish", source], { code: "AUTH_REQUIRED" }],
+      ] as const) {
+        requests.length = 0;
+        const { exitCode, error } = await run(home, argv);
+        expect({ exitCode, error }).toMatchObject({ exitCode: 3, error: expectedError });
+        expect(requests).toEqual([]);
+        if (argv.includes("publish")) {
+          expect(JSON.stringify(error)).toContain(posture === "local-owner-key" ? "auth login --method local" : "builtin:share-publishing");
+        }
+      }
     } finally {
       await rm(home, { recursive: true, force: true });
     }
