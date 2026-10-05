@@ -59,15 +59,6 @@ export interface PermissionHint {
 }
 
 /**
- * Storage quota information returned with quota-related errors.
- */
-export interface StorageQuotaInfo {
-  usedBytes: number;
-  limitBytes: number;
-  service: string;
-}
-
-/**
  * Standard error codes used across services.
  */
 export const ErrorCodes = {
@@ -110,6 +101,8 @@ export const ErrorCodes = {
   // Storage quota errors
   STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
   STORAGE_LIMIT_REACHED: "STORAGE_LIMIT_REACHED",
+  /** The node answered the usage read without usage numbers (it predates the read). */
+  STORAGE_STATUS_UNAVAILABLE: "STORAGE_STATUS_UNAVAILABLE",
 
   // DuckDB-specific errors
   DUCKDB_ERROR: "DUCKDB_ERROR",
@@ -443,6 +436,8 @@ export const TelemetryEvents = {
   REPLICATION_SYNC: "replication.sync",
   REPLICATION_STATE: "replication.state",
   REPLICATION_DIVERGENCE: "replication.divergence",
+  /** Emitted once, on the first write rejected because storage is full. */
+  STORAGE_FULL: "storage.full",
 } as const;
 
 // =============================================================================
