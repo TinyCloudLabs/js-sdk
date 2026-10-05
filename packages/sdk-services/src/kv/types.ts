@@ -390,6 +390,107 @@ export interface KVListResponse {
 }
 
 /**
+ * Options for {@link IKVService.changes}, the `tinycloud.kv/sync` change feed.
+ */
+export interface KVChangesOptions {
+  /**
+   * The space-relative KV prefix to follow, sent as the invocation path. It
+   * is not joined with the service's configured prefix, and must be non-empty.
+   * Prefixes match whole path segments: `notes` covers `notes` and
+   * `notes/a`, while `notes/` covers everything under `notes/` but not
+   * `notes` itself. The session must hold `tinycloud.kv/sync` on it by name.
+   */
+  prefix: string;
+
+  /**
+   * The `cursor` from the previous page. Omit it to bootstrap from the start
+   * of the prefix. Opaque; never parse or build one.
+   */
+  cursor?: string;
+
+  /**
+   * Page size, 1 through 1000 (node default 500). A page never splits one
+   * invocation's changes, so it can hold more than `limit` changes.
+   */
+  limit?: number;
+
+  /**
+   * CID of a never-invoked delegation carrying `tinycloud.kv/retain` on the
+   * prefix. When valid, the node attests `authority.retainUntil`.
+   */
+  retentionGrant?: string;
+
+  /**
+   * Custom timeout for this operation in milliseconds. Overrides
+   * `KVServiceConfig.timeout`; `0` disables a configured timeout.
+   */
+  timeout?: number;
+
+  /**
+   * Custom abort signal for this operation.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * One key's latest state in a change feed page. Content is not included:
+ * read it with `get`/`batchGet` and check it against `etag`.
+ */
+export type KVChange =
+  | {
+      key: string;
+      deleted: false;
+      /** The strong ETag `get` returns for this state. */
+      etag: string;
+      metadata: Record<string, string>;
+    }
+  | {
+      key: string;
+      deleted: true;
+    };
+
+/**
+ * The node-attested window in which the caller's authority holds. Values are
+ * RFC 3339 timestamps, or `null` when nothing in the chain sets one.
+ */
+export interface KVChangesAuthority {
+  /** The latest `nbf` across the invocation's whole delegation chain. */
+  notBefore: string | null;
+  /** The earliest `exp` across the invocation's whole delegation chain. */
+  expiresAt: string | null;
+  /**
+   * The earliest `exp` across a valid retention grant's own chain. `null`
+   * means no retention: none was presented, or its chain sets no expiry.
+   */
+  retainUntil: string | null;
+}
+
+/**
+ * One page of the `tinycloud.kv/sync` change feed.
+ */
+export interface KVChangesResponse {
+  /** Each changed key's latest state, in commit order. */
+  changes: KVChange[];
+  /**
+   * More changes are available now. A page may be empty with `more: true`;
+   * keep paging with the returned cursor.
+   */
+  more: boolean;
+  /**
+   * The cursor for the next request. An empty poll returns the request's
+   * cursor unchanged.
+   */
+  cursor: string;
+  /** The node, space and prefix that served the page. */
+  source: {
+    nodeDid: string;
+    space: string;
+    prefix: string;
+  };
+  authority: KVChangesAuthority;
+}
+
+/**
  * Response from signed KV read URL creation.
  */
 export interface KVSignedReadUrlResponse {
@@ -423,6 +524,10 @@ export const KVAction = {
   LIST: "tinycloud.kv/list",
   DELETE: "tinycloud.kv/del",
   HEAD: "tinycloud.kv/metadata",
+  /** The change feed; never implied by `*` or `tinycloud.kv/*`. */
+  SYNC: "tinycloud.kv/sync",
+  /** Retention attestation; presented through `retentionGrant`, never invoked or implied. */
+  RETAIN: "tinycloud.kv/retain",
 } as const;
 
 export type KVActionType = (typeof KVAction)[keyof typeof KVAction];

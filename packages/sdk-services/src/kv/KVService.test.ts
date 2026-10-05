@@ -12,6 +12,7 @@ import { KVService } from "./KVService";
 import {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVAction,
+  type KVChangesResponse,
 } from "./types";
 
 function response(
@@ -1385,5 +1386,159 @@ describe("KVService authorization responses", () => {
     expect(result.error.meta?.resource).toBeUndefined();
     expect(result.error.meta?.requiredAction).toBeUndefined();
     expect(validatedCapabilityOf(result.error)).toBeUndefined();
+  });
+});
+
+describe("KVService.changes (tinycloud.kv/sync)", () => {
+  const page: KVChangesResponse = {
+    changes: [
+      { key: "notes/a", deleted: false, etag: '"blake3-aa"', metadata: { "content-type": "text/plain" } },
+      { key: "notes/b", deleted: true },
+    ],
+    more: true,
+    cursor: "cursor-2",
+    source: { nodeDid: "did:key:node", space: "tinycloud:pkh:eip155:1:0xabc:default", prefix: "notes/" },
+    authority: { notBefore: null, expiresAt: "2026-10-05T11:12:08Z", retainUntil: null },
+  };
+
+  test("invokes kv/sync on the prefix with limit, cursor and retention headers", async () => {
+    const requests: FetchRequestInit[] = [];
+    const invocations: Array<{ service: string; path: string; action: string }> = [];
+    const service = new KVService({ prefix: "ignored-config-prefix" });
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      return response(true, 200, page);
+    }, invocations));
+
+    const result = await service.changes({
+      prefix: "notes/",
+      cursor: "cursor-1",
+      limit: 25,
+      retentionGrant: "bafyretain",
+    });
+
+    expect(result).toEqual({ ok: true, data: page });
+    expect(invocations).toEqual([{ service: "kv", path: "notes/", action: KVAction.SYNC }]);
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-limit")).toBe("25");
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-cursor")).toBe("cursor-1");
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-retention-grant")).toBe("bafyretain");
+  });
+
+  test("a bootstrap request sends no cursor, limit or retention header", async () => {
+    const requests: FetchRequestInit[] = [];
+    const service = new KVService({});
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      return response(true, 200, page);
+    }));
+
+    expect((await service.changes({ prefix: "notes/" })).ok).toBe(true);
+    for (const name of ["x-tinycloud-limit", "x-tinycloud-cursor", "x-tinycloud-retention-grant"]) {
+      expect(headerValue(requests[0]?.headers, name)).toBeUndefined();
+    }
+  });
+
+  test.each([
+    ["an empty prefix", { prefix: "" }],
+    ["a zero limit", { prefix: "notes/", limit: 0 }],
+    ["a limit above 1000", { prefix: "notes/", limit: 1001 }],
+    ["a fractional limit", { prefix: "notes/", limit: 1.5 }],
+  ])("rejects %s before any request", async (_label, options) => {
+    let fetched = false;
+    const service = new KVService({});
+    service.initialize(createContext(async () => {
+      fetched = true;
+      return response(true, 200, page);
+    }));
+
+    const result = await service.changes(options);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+    expect(fetched).toBe(false);
+  });
+
+  test.each(["cursor-invalid", "position-unknown"])("maps 410 %s to KV_SYNC_RESET_REQUIRED with its reason", async (reason) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 410, { error: { code: "RESET_REQUIRED", reason } })
+    ));
+
+    const result = await service.changes({ prefix: "notes/", cursor: "stale" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_SYNC_RESET_REQUIRED);
+    expect(result.error.meta?.reason).toBe(reason);
+    expect(result.error.meta?.status).toBe(410);
+  });
+
+  test.each([
+    ["delegation-revoked: bafyleaf", ErrorCodes.AUTH_DELEGATION_REVOKED],
+    ["Invalid invocation: delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf", ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED],
+  ])("maps 401 %s to a typed revocation code", async (body, code) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 401, body)));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(code);
+    expect(result.error.meta?.status).toBe(401);
+    expect(authorizationVerdictOf(result.error)).toBe("unauthenticated");
+  });
+
+  test("a missing sync grant stays AUTH_UNAUTHORIZED", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 401, "Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:default/kv/notes / tinycloud.kv/sync")
+    ));
+
+    const result = await service.changes({ prefix: "notes" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(validatedCapabilityOf(result.error)).toEqual({
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/kv/notes",
+      requiredAction: KVAction.SYNC,
+    });
+  });
+
+  test("maps a refused retention grant to KV_RETENTION_GRANT_REFUSED", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 403, { error: { code: "RETENTION_GRANT_REFUSED", reason: "retention-grant-expired" } })
+    ));
+
+    const result = await service.changes({ prefix: "notes/", retentionGrant: "bafyretain" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_RETENTION_GRANT_REFUSED);
+    expect(result.error.meta?.reason).toBe("retention-grant-expired");
+  });
+
+  test.each([
+    ["a list body", ["notes/a"]],
+    ["a live change without an etag", { ...page, changes: [{ key: "notes/a", deleted: false, metadata: {} }] }],
+    ["a missing authority", { ...page, authority: undefined }],
+  ])("rejects %s as a malformed page", async (_label, body) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, body)));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+  });
+
+  test("a prefixed view follows everything under its prefix and returns relative keys", async () => {
+    const invocations: Array<{ service: string; path: string; action: string }> = [];
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, page), invocations));
+
+    const result = await service.withPrefix("notes").changes({ limit: 10 });
+
+    expect(invocations).toEqual([{ service: "kv", path: "notes/", action: KVAction.SYNC }]);
+    expect(result.ok && result.data.changes.map((change) => change.key)).toEqual(["a", "b"]);
+    expect(result.ok && result.data.source.prefix).toBe("notes/");
   });
 });

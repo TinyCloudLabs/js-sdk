@@ -18,6 +18,8 @@ import type {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVChangesOptions,
+  KVChangesResponse,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,
@@ -45,6 +47,7 @@ export interface RecordedOperation {
     | "put"
     | "batchPut"
     | "list"
+    | "changes"
     | "delete"
     | "head"
     | "batchHead"
@@ -124,6 +127,9 @@ export class MockKVService implements IKVService {
   private _config: MockKVServiceConfig;
   private _context!: IServiceContext;
   private _store: Map<string, StoredValue> = new Map();
+  /** Change-feed position of each key's last put or delete. */
+  private _changePositions: Map<string, number> = new Map();
+  private _changeSeq = 0;
   private _operations: RecordedOperation[] = [];
   private _errorInjections: ErrorInjection[];
   private _latencyMs: number;
@@ -137,7 +143,7 @@ export class MockKVService implements IKVService {
     // Initialize with seed data
     if (config.initialData) {
       for (const [key, value] of Object.entries(config.initialData)) {
-        this._store.set(key, this.createStoredValue(value));
+        this.setStored(key, this.createStoredValue(value));
       }
     }
   }
@@ -267,7 +273,7 @@ export class MockKVService implements IKVService {
     }
 
     const stored = this.createStoredValue(value, options?.contentType);
-    this._store.set(fullKey, stored);
+    this.setStored(fullKey, stored);
 
     return ok({
       data: undefined as void,
@@ -319,7 +325,7 @@ export class MockKVService implements IKVService {
     }
 
     for (const { item, fullKey } of entries) {
-      this._store.set(
+      this.setStored(
         fullKey,
         this.createStoredValue(item.value, item.contentType)
       );
@@ -327,6 +333,50 @@ export class MockKVService implements IKVService {
 
     const written = entries.map(({ fullKey }) => fullKey);
     return ok({ written, count: written.length });
+  }
+
+  /**
+   * In-memory `tinycloud.kv/sync`: each key's latest state under the prefix,
+   * in change order. The cursor is the last delivered position; a bootstrap
+   * (no cursor) skips keys already deleted.
+   */
+  async changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>> {
+    this.recordOperation("changes", options.prefix, undefined, options);
+
+    const injectedError = this.checkErrorInjection(options.prefix, "changes");
+    if (injectedError) {
+      return err(injectedError);
+    }
+
+    await this.simulateLatency();
+
+    if (options.signal?.aborted) {
+      return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
+    }
+
+    const after = options.cursor === undefined ? 0 : Number(options.cursor);
+    const pending = [...this._changePositions]
+      .filter(([key, position]) =>
+        key.startsWith(options.prefix) &&
+        position > after &&
+        (options.cursor !== undefined || this._store.has(key))
+      )
+      .sort((a, b) => a[1] - b[1]);
+    const page = pending.slice(0, options.limit ?? 500);
+    const last = page[page.length - 1]?.[1];
+
+    return ok({
+      changes: page.map(([key]) => {
+        const stored = this._store.get(key);
+        return stored
+          ? { key, deleted: false as const, etag: stored.etag, metadata: { "content-type": stored.contentType } }
+          : { key, deleted: true as const };
+      }),
+      more: pending.length > page.length,
+      cursor: last === undefined ? (options.cursor ?? "0") : String(last),
+      source: { nodeDid: "did:key:mock-node", space: this._context?.session?.spaceId ?? "mock-space", prefix: options.prefix },
+      authority: { notBefore: null, expiresAt: null, retainUntil: null },
+    });
   }
 
   async list(options?: KVListOptions): Promise<Result<KVListResponse>> {
@@ -399,6 +449,7 @@ export class MockKVService implements IKVService {
     }
 
     this._store.delete(fullKey);
+    this._changePositions.set(fullKey, ++this._changeSeq);
     return ok({
       data: undefined as void,
       headers: this.createHeaders(stored),
@@ -568,7 +619,7 @@ export class MockKVService implements IKVService {
    * Directly set a value in the store (bypasses operation recording).
    */
   setStoreValue(key: string, value: unknown): void {
-    this._store.set(key, this.createStoredValue(value));
+    this.setStored(key, this.createStoredValue(value));
   }
 
   /**
@@ -576,6 +627,7 @@ export class MockKVService implements IKVService {
    */
   clearStore(): void {
     this._store.clear();
+    this._changePositions.clear();
   }
 
   /**
@@ -616,6 +668,11 @@ export class MockKVService implements IKVService {
   // ============================================================
   // Private Helpers
   // ============================================================
+
+  private setStored(fullKey: string, stored: StoredValue): void {
+    this._store.set(fullKey, stored);
+    this._changePositions.set(fullKey, ++this._changeSeq);
+  }
 
   private getFullKey(key: string, prefixOverride?: string): string {
     const prefix = prefixOverride ?? this._config.prefix ?? "";

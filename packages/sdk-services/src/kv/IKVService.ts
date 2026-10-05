@@ -16,6 +16,8 @@ import {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVChangesOptions,
+  KVChangesResponse,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,
@@ -169,6 +171,36 @@ export interface IKVService extends IService {
     keys: string[],
     options?: KVHeadOptions
   ): Promise<Result<KVBatchReadResponse<void>>>;
+
+  /**
+   * Read one page of the ordered, delete-aware change feed for a KV prefix
+   * (`tinycloud.kv/sync`). Each change is a key's latest state; read content
+   * with `get`/`batchGet` and check it against the change's `etag`.
+   *
+   * The session must hold `tinycloud.kv/sync` on `options.prefix` by name: no
+   * wildcard grants it. Page with the returned `cursor` while `more` is true;
+   * a page can exceed `limit`, or be empty with `more: true`.
+   *
+   * Errors: `KV_SYNC_RESET_REQUIRED` (410, `meta.reason`) means discard sync
+   * state and restart without a cursor. `AUTH_DELEGATION_REVOKED` and
+   * `AUTH_DELEGATION_ANCESTOR_REVOKED` mean the grant is revoked.
+   * `KV_RETENTION_GRANT_REFUSED` (403, `meta.reason`) rejects `retentionGrant`.
+   *
+   * Requires a node that advertises the `kv-sync-v1` feature in `/info`.
+   *
+   * @example
+   * ```typescript
+   * let cursor: string | undefined;
+   * do {
+   *   const page = await kv.changes({ prefix: 'notes/', cursor });
+   *   if (!page.ok) throw new Error(page.error.message);
+   *   for (const change of page.data.changes) apply(change);
+   *   cursor = page.data.cursor;
+   *   if (!page.data.more) break;
+   * } while (true);
+   * ```
+   */
+  changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>>;
 
   /**
    * Create a short-lived signed URL for reading a KV object.

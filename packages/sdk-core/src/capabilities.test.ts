@@ -9,14 +9,23 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  ACCOUNT_MANIFEST_PERMISSIONS,
+  BOOTSTRAP_ALLOWLIST,
+  BOOTSTRAP_MANIFEST,
+  BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS,
+  BOOTSTRAP_SESSION_REQUESTS,
+} from "@tinycloud/bootstrap";
+import {
   PermissionNotInManifestError,
   SessionExpiredError,
+  actionContains,
   isCapabilitySubset,
+  isExplicitOnlyAction,
   normalizeSpace,
   parseRecapCapabilities,
   type WasmRecapEntry,
 } from "./capabilities";
-import type { PermissionEntry } from "./manifest";
+import { resolveManifest, type PermissionEntry } from "./manifest";
 
 // ---------------------------------------------------------------------------
 // isCapabilitySubset — exact match
@@ -660,5 +669,65 @@ describe("ReCap caveats", () => {
       ...requested,
       caveats: [constrained],
     }]).subset).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Explicit-only actions (TC-732): no wildcard grants kv/sync or kv/retain
+// ---------------------------------------------------------------------------
+
+describe("explicit-only actions", () => {
+  const EXPLICIT = ["tinycloud.kv/sync", "tinycloud.kv/retain"];
+
+  it.each(EXPLICIT)("no wildcard covers %s, but naming it does", (action) => {
+    expect(isExplicitOnlyAction(action)).toBe(true);
+    expect(actionContains("*", action)).toBe(false);
+    expect(actionContains("tinycloud.kv/*", action)).toBe(false);
+    expect(actionContains(action, action)).toBe(true);
+  });
+
+  it("wildcards still cover every other kv action", () => {
+    expect(isExplicitOnlyAction("tinycloud.kv/get")).toBe(false);
+    expect(actionContains("*", "tinycloud.kv/get")).toBe(true);
+    expect(actionContains("tinycloud.kv/*", "tinycloud.kv/list")).toBe(true);
+  });
+
+  it("a kv/* session cannot delegate kv/sync onward", () => {
+    const space = "tinycloud:pkh:eip155:1:0xabc:default";
+    const result = isCapabilitySubset(
+      [{ service: "tinycloud.kv", space, path: "notes/", actions: ["tinycloud.kv/sync"] }],
+      [{ service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/*"] }],
+    );
+    expect(result.subset).toBe(false);
+  });
+
+  it("no default session or manifest action list contains kv/sync or kv/retain", () => {
+    const strings = (value: unknown): string[] =>
+      typeof value === "string"
+        ? [value]
+        : Array.isArray(value)
+          ? value.flatMap(strings)
+          : typeof value === "object" && value !== null
+            ? Object.values(value).flatMap(strings)
+            : [];
+    const defaults = [
+      ...(["true", "all", "admin"] as const).map((tier) =>
+        resolveManifest({
+          app_id: "com.example.defaults",
+          name: "Defaults",
+          defaults: tier === "true" ? true : tier,
+        }),
+      ),
+      BOOTSTRAP_MANIFEST,
+      BOOTSTRAP_SESSION_REQUESTS,
+      BOOTSTRAP_ALLOWLIST,
+      BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS,
+      ACCOUNT_MANIFEST_PERMISSIONS,
+    ];
+    const found = strings(defaults);
+    expect(found).toContain("tinycloud.kv/get");
+    for (const action of EXPLICIT) {
+      expect(found.some((value) => value.endsWith(action) || value === action.split("/")[1])).toBe(false);
+    }
   });
 });

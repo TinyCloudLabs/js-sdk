@@ -38,6 +38,9 @@ import {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVChange,
+  KVChangesOptions,
+  KVChangesResponse,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,
@@ -133,6 +136,21 @@ export interface IPrefixedKVService {
    * ```
    */
   list(options?: Omit<KVListOptions, 'prefix'>): Promise<Result<KVListResponse>>;
+
+  /**
+   * Read one page of the change feed for everything under this prefix
+   * (`tinycloud.kv/sync` on `<prefix>/`). Keys are returned relative to the
+   * prefix, like `list`; `source.prefix` stays the node's full prefix.
+   * See `IKVService.changes` for paging and errors.
+   *
+   * @example
+   * ```typescript
+   * const notes = kv.withPrefix('notes');
+   * const page = await notes.changes({ limit: 100 });
+   * // -> Feed of: notes/*, keys like 'a.md'
+   * ```
+   */
+  changes(options?: Omit<KVChangesOptions, 'prefix'>): Promise<Result<KVChangesResponse>>;
 
   /**
    * Delete a key.
@@ -239,6 +257,8 @@ interface IKVServiceLike {
   ): Promise<Result<KVBatchPutResponse>>;
 
   list(options?: KVListOptions): Promise<Result<KVListResponse>>;
+
+  changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>>;
 
   delete(key: string, options?: KVDeleteOptions): Promise<Result<KVResponse<void>>>;
 
@@ -397,6 +417,26 @@ export class PrefixedKVService implements IPrefixedKVService {
       ...options,
       prefix: this._prefix,
       removePrefix,
+    });
+  }
+
+  /**
+   * Read the change feed for everything under this prefix.
+   */
+  async changes(
+    options?: Omit<KVChangesOptions, 'prefix'>
+  ): Promise<Result<KVChangesResponse>> {
+    const syncPrefix = `${this._prefix}/`;
+    const response = await this._kv.changes({ ...options, prefix: syncPrefix });
+    if (!response.ok) return response;
+    return ok({
+      ...response.data,
+      changes: response.data.changes.map((change): KVChange => ({
+        ...change,
+        key: change.key.startsWith(syncPrefix)
+          ? change.key.slice(syncPrefix.length)
+          : change.key,
+      })),
     });
   }
 

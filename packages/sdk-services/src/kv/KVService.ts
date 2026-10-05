@@ -38,6 +38,9 @@ import {
   KVBatchPutResponse,
   KVBatchReadResponse,
   KVListOptions,
+  KVChange,
+  KVChangesOptions,
+  KVChangesResponse,
   KVDeleteOptions,
   KVHeadOptions,
   KVCreateSignedReadUrlOptions,
@@ -67,6 +70,10 @@ interface KvBatchNodeResponse {
 }
 
 const MAX_KV_BATCH_READ_ITEMS = 100;
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function encodeKvBatchPartName(path: string): string {
   return encodeURIComponent(path).replace(/[!'()*]/g, (char) =>
@@ -1325,6 +1332,198 @@ export class KVService extends BaseService implements IKVService {
         request.dispose();
       }
     });
+  }
+
+  /**
+   * Read one page of the `tinycloud.kv/sync` change feed for a prefix.
+   */
+  async changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>> {
+    return this.withTelemetry("changes", options.prefix, async () => {
+      if (!this.requireAuth()) {
+        return err(authRequiredError("kv"));
+      }
+
+      if (options.prefix.length === 0) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV changes prefix must not be empty",
+          "kv"
+        ));
+      }
+      if (
+        options.limit !== undefined &&
+        (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000)
+      ) {
+        return err(serviceError(
+          ErrorCodes.INVALID_INPUT,
+          "KV changes limit must be an integer from 1 through 1000",
+          "kv"
+        ));
+      }
+
+      const headers: Record<string, string> = {};
+      if (options.limit !== undefined) headers["x-tinycloud-limit"] = String(options.limit);
+      if (options.cursor !== undefined) headers["x-tinycloud-cursor"] = options.cursor;
+      if (options.retentionGrant !== undefined) {
+        headers["x-tinycloud-retention-grant"] = options.retentionGrant;
+      }
+
+      const request = this.createRequestSignal(options.signal, options.timeout);
+      try {
+        const response = await this.invokeOperation(
+          options.prefix,
+          KVAction.SYNC,
+          undefined,
+          request.signal,
+          headers
+        );
+
+        if (!response.ok) {
+          return this.changesFailure(response, options.prefix);
+        }
+
+        const text = await response.text();
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = undefined;
+        }
+        const page = this.normalizeChangesResponse(body);
+        if (!page) {
+          return err(serviceError(
+            ErrorCodes.NETWORK_ERROR,
+            "KV changes response was not a tinycloud.kv/sync page",
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          ));
+        }
+        return ok(page);
+      } catch (error) {
+        return err(wrapError("kv", error));
+      } finally {
+        request.dispose();
+      }
+    });
+  }
+
+  /**
+   * Map a failed `kv/sync` response. 410 and the retention 403 carry
+   * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose text names
+   * `delegation-revoked` or `delegation-ancestor-revoked`.
+   */
+  private async changesFailure(
+    response: FetchResponse,
+    prefix: string
+  ): Promise<Result<never>> {
+    const errorText = await this.readAuthorizationText(response);
+    const meta = { status: response.status, statusText: response.statusText };
+    let reason: string | undefined;
+    let bodyCode: string | undefined;
+    try {
+      const body: unknown = JSON.parse(errorText);
+      const error = isJsonObject(body) ? body.error : undefined;
+      if (isJsonObject(error)) {
+        if (typeof error.code === "string") bodyCode = error.code;
+        if (typeof error.reason === "string") reason = error.reason;
+      }
+    } catch {
+      // Plain-text body.
+    }
+    const context = `Failed to read KV changes for ${JSON.stringify(prefix)}`;
+
+    if (response.status === 410) {
+      return err(serviceError(
+        ErrorCodes.KV_SYNC_RESET_REQUIRED,
+        `${context}: the node requires a reset (${reason ?? "reason not given"}); discard sync state and restart without a cursor`,
+        "kv",
+        { meta: { ...meta, reason } }
+      ));
+    }
+    if (response.status === 403 && bodyCode === "RETENTION_GRANT_REFUSED") {
+      return err(serviceError(
+        ErrorCodes.KV_RETENTION_GRANT_REFUSED,
+        `${context}: the retention grant was refused (${reason ?? "reason not given"})`,
+        "kv",
+        { meta: { ...meta, reason } }
+      ));
+    }
+    if (response.status === 401) {
+      const revoked = /\bdelegation-ancestor-revoked\b/.test(errorText)
+        ? ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED
+        : /\bdelegation-revoked\b/.test(errorText)
+          ? ErrorCodes.AUTH_DELEGATION_REVOKED
+          : undefined;
+      if (revoked !== undefined) {
+        return err(serviceError(revoked, `${context}: 401 - ${errorText}`, "kv", { meta }));
+      }
+    }
+    if (response.status === 401 || response.status === 403) {
+      return this.authorizationFailure(context, response, errorText, [prefix], KVAction.SYNC);
+    }
+    return err(serviceError(
+      response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR,
+      `${context}: ${response.status} - ${errorText}`,
+      "kv",
+      { meta }
+    ));
+  }
+
+  private normalizeChangesResponse(data: unknown): KVChangesResponse | undefined {
+    if (!isJsonObject(data)) return undefined;
+    const { changes, more, cursor, source, authority } = data;
+    if (
+      !Array.isArray(changes) ||
+      typeof more !== "boolean" ||
+      typeof cursor !== "string" ||
+      !isJsonObject(source) ||
+      typeof source.nodeDid !== "string" ||
+      typeof source.space !== "string" ||
+      typeof source.prefix !== "string" ||
+      !isJsonObject(authority)
+    ) {
+      return undefined;
+    }
+    const { notBefore, expiresAt, retainUntil } = authority;
+    if (
+      (notBefore !== null && typeof notBefore !== "string") ||
+      (expiresAt !== null && typeof expiresAt !== "string") ||
+      (retainUntil !== null && typeof retainUntil !== "string")
+    ) {
+      return undefined;
+    }
+
+    const parsed: KVChange[] = [];
+    for (const change of changes) {
+      if (!isJsonObject(change) || typeof change.key !== "string") return undefined;
+      if (change.deleted === true) {
+        parsed.push({ key: change.key, deleted: true });
+        continue;
+      }
+      const { metadata } = change;
+      if (
+        change.deleted !== false ||
+        typeof change.etag !== "string" ||
+        !isJsonObject(metadata) ||
+        !Object.values(metadata).every((value) => typeof value === "string")
+      ) {
+        return undefined;
+      }
+      parsed.push({
+        key: change.key,
+        deleted: false,
+        etag: change.etag,
+        metadata: metadata as Record<string, string>,
+      });
+    }
+
+    return {
+      changes: parsed,
+      more,
+      cursor,
+      source: { nodeDid: source.nodeDid, space: source.space, prefix: source.prefix },
+      authority: { notBefore, expiresAt, retainUntil },
+    };
   }
 
   /**

@@ -76,6 +76,10 @@ export const ErrorCodes = {
   AUTH_EXPIRED: "AUTH_EXPIRED",
   AUTH_REQUIRED: "AUTH_REQUIRED",
   AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
+  /** HTTP 401: the delegation the invocation cites was revoked. */
+  AUTH_DELEGATION_REVOKED: "AUTH_DELEGATION_REVOKED",
+  /** HTTP 401: a delegation the cited one rests on was revoked. */
+  AUTH_DELEGATION_ANCESTOR_REVOKED: "AUTH_DELEGATION_ANCESTOR_REVOKED",
   NETWORK_ERROR: "NETWORK_ERROR",
   TIMEOUT: "TIMEOUT",
   ABORTED: "ABORTED",
@@ -88,6 +92,10 @@ export const ErrorCodes = {
   KV_PRECONDITION_FAILED: "KV_PRECONDITION_FAILED",
   KV_CONFLICT: "KV_CONFLICT",
   KV_RESPONSE_TOO_LARGE: "KV_RESPONSE_TOO_LARGE",
+  /** HTTP 410 from the change feed: discard sync state and restart without a cursor; `meta.reason` says why. */
+  KV_SYNC_RESET_REQUIRED: "KV_SYNC_RESET_REQUIRED",
+  /** HTTP 403 from the change feed: the retention grant was refused; `meta.reason` says why. */
+  KV_RETENTION_GRANT_REFUSED: "KV_RETENTION_GRANT_REFUSED",
 
   // SQL-specific errors
   SQL_ERROR: "SQL_ERROR",

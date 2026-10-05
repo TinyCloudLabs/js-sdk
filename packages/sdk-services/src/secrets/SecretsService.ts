@@ -128,6 +128,9 @@ export class SecretsService implements ISecretsService {
 
   async listAll(): Promise<Result<SecretCatalogEntry[], SecretsError>> {
     const entries = new Map<string, SecretCatalogEntry>();
+    // A node older than bounded list paging ignores the cursor and returns the
+    // same page again; a repeated cursor would loop forever, so it fails.
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
 
     do {
@@ -152,6 +155,14 @@ export class SecretsService implements ISecretsService {
         return invalidSecretInput(
           "Secret catalog listing was truncated without a continuation cursor.",
         );
+      }
+      if (cursor !== undefined) {
+        if (seenCursors.has(cursor)) {
+          return invalidSecretInput(
+            "Secret catalog listing repeated a continuation cursor; the node does not support paged KV lists.",
+          );
+        }
+        seenCursors.add(cursor);
       }
     } while (cursor !== undefined);
 

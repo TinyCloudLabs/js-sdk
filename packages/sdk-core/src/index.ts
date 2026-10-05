@@ -453,6 +453,10 @@ export {
   type KVBatchReadResponse,
   type KVListResponse,
   type KVSignedReadUrlResponse,
+  type KVChange,
+  type KVChangesAuthority,
+  type KVChangesOptions,
+  type KVChangesResponse,
   type KVResponseHeaders,
   // Result pattern
   type Result,
@@ -974,6 +978,7 @@ export {
   // Functions
   isCapabilitySubset,
   actionContains,
+  isExplicitOnlyAction,
   canonicalizeRecapCaveats,
   parseRecapCapabilities,
   recapCaveatsEqual,
