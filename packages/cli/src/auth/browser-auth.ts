@@ -1,7 +1,7 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
-import { DEFAULT_OPENKEY_HOST, ExitCode } from "../config/constants.js";
+import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 
 interface DelegationData {
@@ -29,6 +29,8 @@ interface AuthFlowOptions {
    * module stays free of profile lookups.
    */
   openkeyHost?: string;
+  /** API origin for short-code lookup when OpenKey uses a separate API host. */
+  openkeyApiHost?: string;
   /**
    * Lifetime hint for the resulting delegation. Encoded into the
    * `/delegate?expiry=<value>` URL parameter so OpenKey can sign for the
@@ -181,6 +183,53 @@ export function validateDelegationCallbackPayload(value: unknown): string | null
   return null;
 }
 
+async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
+  const trimmed = input.trim();
+  let parsed: unknown;
+  if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
+    if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ??
+      (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST
+        ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
+    const response = await fetch(`${apiHost.replace(/\/$/, "")}/api/delegation-codes/${trimmed.toLowerCase()}`, {
+      redirect: "error",
+    });
+    if (!response.ok) {
+      throw new Error(response.status === 404
+        ? "Delegation code not found or expired. Use the full code shown in OpenKey instead."
+        : `Could not retrieve delegation code (HTTP ${response.status}).`);
+    }
+    const result = await response.json() as { delegation?: unknown };
+    parsed = result.delegation;
+    const delegation = parsed as Record<string, unknown> | null;
+    const jwk = delegation?.jwk as Record<string, unknown> | undefined;
+    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
+    if (
+      typeof delegation?.verificationMethod !== "string" ||
+      delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
+      !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
+      jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
+      typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
+      [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
+    ) {
+      throw new Error("Delegation is bound to a different CLI key.");
+    }
+  } else {
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      try {
+        parsed = JSON.parse(Buffer.from(trimmed, "base64").toString("utf-8"));
+      } catch {
+        throw new Error("Invalid delegation code. Expected JSON, base64-encoded JSON, or XXXX-XXXX.");
+      }
+    }
+  }
+  const invalid = validateDelegationCallbackPayload(parsed);
+  if (invalid) throw new Error(`Invalid delegation code: ${invalid}`);
+  return parsed as DelegationData;
+}
+
 function shouldOpenBrowser(options: AuthFlowOptions): boolean {
   if (options.noPopup) return false;
   const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
@@ -206,24 +255,6 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       } else {
         reject(result.error);
       }
-    }
-
-    function parsePasteInput(input: string): DelegationData {
-      const trimmed = input.trim();
-      let parsed: unknown;
-      // Try parsing as JSON directly
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        // Try base64 decoding first
-        const decoded = Buffer.from(trimmed, "base64").toString("utf-8");
-        parsed = JSON.parse(decoded);
-      }
-      const invalid = validateDelegationCallbackPayload(parsed);
-      if (invalid) {
-        throw new Error(`Invalid delegation code: ${invalid}`);
-      }
-      return parsed as DelegationData;
     }
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -298,18 +329,21 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
 
       // In interactive mode, also accept paste input while waiting for callback
       if (process.stdin.isTTY) {
-        console.error(`\nIf the browser can't connect back, paste the delegation code here:`);
+        console.error(`\nIf the browser can't connect back, enter the short code or paste the full delegation code here:`);
         rl = createInterface({
           input: process.stdin,
           output: process.stderr,
         });
-        rl.on("line", (input) => {
-          if (settled) return;
+        let resolving = false;
+        rl.on("line", async (input) => {
+          if (settled || resolving) return;
+          resolving = true;
           try {
-            const data = parsePasteInput(input);
-            settle({ data });
-          } catch {
-            console.error("Invalid delegation code. Expected JSON or base64-encoded JSON. Try again:");
+            settle({ data: await delegationFromInput(input, did, options) });
+          } catch (error) {
+            console.error(error instanceof Error ? error.message : "Invalid delegation code. Try again:");
+          } finally {
+            resolving = false;
           }
         });
       }
@@ -341,24 +375,7 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(input.trim());
-      } catch {
-        try {
-          const decoded = Buffer.from(input.trim(), "base64").toString("utf-8");
-          parsed = JSON.parse(decoded);
-        } catch {
-          reject(new Error("Invalid delegation code. Expected JSON or base64-encoded JSON."));
-          return;
-        }
-      }
-      const invalid = validateDelegationCallbackPayload(parsed);
-      if (invalid) {
-        reject(new Error(`Invalid delegation code: ${invalid}`));
-        return;
-      }
-      resolve(parsed as DelegationData);
+      void delegationFromInput(input, did, options).then(resolve, reject);
     });
     rl.on("close", () => {
       if (answered) return;
@@ -373,7 +390,7 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
         },
       ));
     });
-    rl.setPrompt("Paste delegation code: ");
+    rl.setPrompt("Enter short code or paste full delegation code: ");
     rl.prompt();
   });
 }
