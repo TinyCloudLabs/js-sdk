@@ -19,6 +19,15 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+describe("ProfileManager.getProfile", () => {
+  test("a missing profile is PROFILE_NOT_FOUND and names the init command for that profile", async () => {
+    await expect(ProfileManager.getProfile("owner")).rejects.toMatchObject({
+      code: "PROFILE_NOT_FOUND",
+      message: expect.stringContaining("`tc init --name owner`"),
+    });
+  });
+});
+
 describe("ProfileManager.deleteProfile", () => {
   test("refuses a name that is not one path segment and removes nothing", async () => {
     await writeFile(join(home, ".tinycloud", "config.json"), JSON.stringify({ defaultProfile: "default", version: 1 }));

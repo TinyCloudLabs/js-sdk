@@ -81,7 +81,7 @@ export async function createSDKInstance(
   if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
+      `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED,
     );
   }
