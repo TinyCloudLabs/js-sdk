@@ -193,7 +193,11 @@ mock.module("../config/profiles.js", () => ({
     }),
     getProfile: async (name: string) => {
       const profile = profiles.get(name);
-      if (!profile) throw new Error(`Profile "${name}" does not exist.`);
+      if (!profile) {
+        // Same code as the real ProfileManager, so callers can tell a missing profile apart.
+        const { CLIError } = await import("../output/errors.js");
+        throw new CLIError("PROFILE_NOT_FOUND", `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`, 1);
+      }
       return profile;
     },
     setProfile: async (name: string, data: ProfileLike) => {
@@ -694,6 +698,63 @@ describe("CLI auth login command", () => {
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "MANIFEST_REQUIRED" })]);
     expect(recorded.startAuthFlows).toEqual([]);
     expect(sessions.has("default")).toBe(false);
+  });
+});
+
+describe("CLI auth commands on a missing profile (TC-682)", () => {
+  beforeEach(() => {
+    resetState();
+    activeProfile = "owner";
+  });
+
+  test("logout refuses a profile that does not exist instead of reporting it logged out", async () => {
+    await runAuthCommand(["auth", "logout"]);
+
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.clearSessions).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({
+      code: "PROFILE_NOT_FOUND",
+      message: expect.stringContaining("tc init --name owner"),
+    })]);
+  });
+
+  test("logout clears the session of an existing profile and keeps its key", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("owner", makeProfile({ name: "owner" }));
+    keys.set("owner", key);
+    sessions.set("owner", { delegationCid: "bafy-session" });
+
+    await runAuthCommand(["auth", "logout"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.clearSessions).toEqual(["owner"]);
+    expect(keys.get("owner")).toBe(key);
+    expect(recorded.outputs).toEqual([{ profile: "owner", authenticated: false }]);
+  });
+
+  test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({
+      code: "PROFILE_NOT_FOUND",
+      message: expect.stringContaining("tc init --name owner"),
+    })]);
+    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
+    expect(profiles.has("owner")).toBe(false);
+  });
+
+  test("OpenKey login on an existing profile without a key keeps NO_KEY with a hint for that profile", async () => {
+    profiles.set("owner", makeProfile({ name: "owner", authMethod: "openkey" }));
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    const error = recorded.errors[0] as CLIErrorLike;
+    expect(error.code).toBe("NO_KEY");
+    expect(error.message).toContain("tc --profile owner auth rotate");
+    expect(error.message).not.toContain("Run `tc init` first");
+    expect(recorded.startAuthFlows).toEqual([]);
   });
 });
 

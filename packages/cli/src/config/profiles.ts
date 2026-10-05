@@ -106,7 +106,7 @@ export class ProfileManager {
     if (!profile) {
       throw new CLIError(
         "PROFILE_NOT_FOUND",
-        `Profile "${name}" does not exist. Run \`tc init\` or \`tc profile create ${name}\` first.`,
+        `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`,
       );
     }
     return profile;

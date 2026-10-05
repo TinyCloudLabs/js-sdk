@@ -246,6 +246,8 @@ export function registerAuthCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        // Refuse a profile that does not exist rather than report it logged out.
+        await ProfileManager.getProfile(ctx.profile);
         await ProfileManager.clearSession(ctx.profile);
         outputJson({ profile: ctx.profile, authenticated: false });
       } catch (error) {
@@ -392,7 +394,7 @@ export function registerAuthCommand(program: Command): void {
         if (profile.authMethod === "openkey" || options.device) {
           const key = await ProfileManager.getKey(ctx.profile);
           if (!key) {
-            throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc init\` first.`, ExitCode.AUTH_REQUIRED);
+            throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
           }
           const openkeyHost = resolveOpenKeyHost(profile);
           const grants: StagedOpenKeyGrant[] = [];
@@ -1158,7 +1160,7 @@ export async function ensureDelegationAuthority(params: {
     if (!key) {
       throw new CLIError(
         "NO_KEY",
-        `No key found for profile "${params.ctx.profile}". Run \`tc init\` first.`,
+        `No key found for profile "${params.ctx.profile}". Run \`tc --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
         ExitCode.AUTH_REQUIRED,
       );
     }
@@ -1715,15 +1717,17 @@ export async function refreshOpenKeySession(
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   const snapshot = await readProfileSnapshot(profileName);
+  // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
+  // would create the default profile instead of this one.
+  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
   const key = snapshot.key;
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${profileName}". Run \`tc init\` first.`,
+      `No key found for profile "${profileName}". Run \`tc --profile ${profileName} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED,
     );
   }
-  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
   // The requested scope: the manifest plus the capability read OpenKey needs to sign it.
   if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
   const permissions = options.permissions === undefined ? undefined : scopedLoginPermissions(options.permissions);
