@@ -828,6 +828,8 @@ export interface HermeticEncryptedNode {
     kvWrites: number;
   }>;
   provisionKvSpace(spaceId: string): void;
+  /** Serve the encrypted secret without minting a delegation, for grants authorized elsewhere. */
+  provisionSecret(): void;
   createRestoredDelegate(): TinyCloudNode;
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
@@ -1041,6 +1043,12 @@ export async function createHermeticEncryptedNode(
       kvWrites: transport.observed.kvWrites,
     }),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
+    provisionSecret: () => transport.configure({
+      spaceId,
+      networkId,
+      delegationCid: delegateSession.delegationCid,
+      envelope: encrypted.data,
+    }),
     createRestoredDelegate: () =>
       new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
     async createRotatedRestorableSession() {

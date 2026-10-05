@@ -5,12 +5,15 @@ import type {
 } from "@tinycloud/node-sdk";
 import * as nodeSdk from "@tinycloud/node-sdk";
 
-import type {
-  InvocationTarget,
-  OperationContext,
-  OperationRuntime,
-  OperationRuntimeRequirement,
-  RuntimeOperationContext,
+import {
+  DELEGATION_CID_PATTERN,
+  type InvocationTarget,
+  type OperationContext,
+  type OperationRuntime,
+  type OperationRuntimeRequirement,
+  type OperationWarning,
+  type RuntimeOperationContext,
+  type StoredGrantSkipReason,
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
@@ -156,7 +159,22 @@ export async function createInvocationRuntime(
         ));
       }
     } else {
-      await node.restoreSession(activeSession);
+      try {
+        await node.restoreSession(activeSession);
+      } catch (error) {
+        // node-sdk refuses expired or otherwise unusable persisted authority
+        // (`AUTH_EXPIRED`) while verifying it locally, before any node request.
+        // Only a new sign-in fixes that: the same non-retryable `AUTH_REQUIRED`
+        // a node's 401 for a stale session produces.
+        if (isRecord(error) && error.code === "AUTH_EXPIRED") {
+          return failed(summary, operationError(
+            "AUTH_REQUIRED",
+            "The stored session has expired or is no longer valid. Sign in again.",
+            { retryable: false },
+          ));
+        }
+        throw error;
+      }
     }
 
     // The restored node is the authority for the active session identity. In
@@ -172,6 +190,7 @@ export async function createInvocationRuntime(
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
     const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
     const seenCids = new Set<string>();
+    const warnings: OperationWarning[] = [];
     // An explicit key is another identity: it neither replays nor migrates
     // this profile's records.
     if (!explicitPrivateKeyOverride) {
@@ -187,14 +206,22 @@ export async function createInvocationRuntime(
       // Elements are untrusted and may not even be objects; the shared rule
       // classifies each before reading any field.
       for (const entry of await readAdditionalDelegations<unknown>(profileName)) {
-        const activated = await replayStoredDelegation(activator, entry, {
+        const replay = await replayStoredDelegation(activator, entry, {
           host: summary.host,
           migrated,
           resolveSpace,
         });
-        if (activated !== undefined && !seenCids.has(activated.cid)) {
-          seenCids.add(activated.cid);
-          livePermissions.push(...activated.effectivePermissions);
+        if (replay.status === "installed") {
+          if (!seenCids.has(replay.delegation.cid)) {
+            seenCids.add(replay.delegation.cid);
+            livePermissions.push(...replay.delegation.effectivePermissions);
+          }
+        } else if (replay.status === "skipped") {
+          // A skipped record never grants authority. Skipping (not failing)
+          // keeps one stale record from blocking what the session or other
+          // grants cover; the result says which grant and why, in fixed
+          // codes only. An expired grant is routine and is not reported.
+          warnings.push(skippedGrantWarning(node, entry, replay.reason));
         }
       }
     }
@@ -202,6 +229,7 @@ export async function createInvocationRuntime(
     const runtime: OperationRuntime = {
       node,
       granted: canonicalizeCapabilities(livePermissions),
+      ...(warnings.length === 0 ? {} : { warnings }),
     };
     return {
       ok: true,
@@ -227,6 +255,33 @@ export async function createInvocationRuntime(
     ));
   }
 }
+
+/**
+ * A stored CID is published only when it is the CID of the stored
+ * authorization bytes, recomputed here. Any other value (free text, or a
+ * well-formed CID of different bytes) is caller-controlled data and is omitted.
+ */
+function skippedGrantWarning(node: unknown, entry: unknown, reason: StoredGrantSkipReason): OperationWarning {
+  const grantCid = verifiedStoredCid(node, entry);
+  return { code: "STORED_GRANT_SKIPPED", reason, ...(grantCid === undefined ? {} : { grantCid }) };
+}
+
+function verifiedStoredCid(node: unknown, entry: unknown): string | undefined {
+  const delegation = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation : undefined;
+  const header = isRecord(delegation?.delegationHeader) ? delegation.delegationHeader : undefined;
+  const cid = delegation?.cid;
+  const computeDelegationCid = isRecord(node) ? node.computeDelegationCid : undefined;
+  if (typeof cid !== "string" || typeof header?.Authorization !== "string" || typeof computeDelegationCid !== "function") {
+    return undefined;
+  }
+  try {
+    return computeDelegationCid.call(node, header.Authorization) === cid && DELEGATION_CID.test(cid) ? cid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const DELEGATION_CID = new RegExp(DELEGATION_CID_PATTERN);
 
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
   if (principal === undefined) return undefined;

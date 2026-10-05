@@ -9,7 +9,16 @@ import type { IncomingMessage } from "node:http";
 import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { ProfileManager } from "../config/profiles.js";
-import { outputJson, shouldOutputJson, formatField, formatTable, isInteractive, withSpinner } from "../output/formatter.js";
+import {
+  outputJson,
+  outputWarnings,
+  operationWarnings,
+  shouldOutputJson,
+  formatField,
+  formatTable,
+  isInteractive,
+  withSpinner,
+} from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
@@ -43,6 +52,7 @@ import {
   declinedPermissions,
   parseRequestedExpiry,
   pinnedOwner,
+  grantRequestPermissions,
   scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
@@ -68,6 +78,7 @@ import {
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
 import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
+import { withSignInHint } from "../auth/session-expired.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendAdditionalDelegation,
@@ -79,6 +90,7 @@ import {
   isCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact,
   appendGrantHistory,
+  cliGrantRecord,
   compactPermission,
   loadAdditionalDelegations,
   loadManifestPermissions,
@@ -411,6 +423,7 @@ export function registerAuthCommand(program: Command): void {
               "Grant requested TinyCloud permissions from `tc auth request --grant`.",
               group,
             );
+            const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
             let delegationData: Record<string, unknown>;
             if (options.device) {
               const approval = await acquireDeviceDelegation({
@@ -418,7 +431,7 @@ export function registerAuthCommand(program: Command): void {
                 jwk: key,
                 nodeOrigin: ctx.host,
                 shareOrigin: DEFAULT_SHARE_ORIGIN,
-                permissions: group,
+                permissions: request,
                 expiry: parseRequestedExpiry(expiryOption ?? "7d"),
                 reason,
                 expectedOwner: pinnedOwner(profile),
@@ -430,17 +443,17 @@ export function registerAuthCommand(program: Command): void {
               delegationData = await startAuthFlow(profile.did, {
                 jwk: key,
                 host: ctx.host,
-                permissions: group,
+                permissions: request,
                 reason,
                 openkeyHost,
                 expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                 noPopup: options.popup === false,
               });
             }
-            const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host, proof);
+            const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
             grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
           }
-          await activateAndStoreOpenKeyGrants(ctx.profile, node, grants, options.manifest ? "manifest" : "cli");
+          await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options.manifest ? "manifest" : "cli");
           const delegationCids = grants.map(({ delegation }) => delegation.cid);
           const expiry = grants.at(-1)?.delegation.expiry.toISOString();
           reportDeclined(declined);
@@ -484,8 +497,7 @@ export function registerAuthCommand(program: Command): void {
         for (const delegation of delegations) {
           const covering = permissionsFromDelegation(delegation);
           localEffective.push(...covering);
-          const stored = storedAdditionalDelegation(delegation, covering);
-          await appendAdditionalDelegation(ctx.profile, stored);
+          await appendAdditionalDelegation(ctx.profile, await cliGrantRecord(node, delegation, covering, ctx.host));
           delegationCids.push(delegation.cid);
           expiry = delegation.expiry.toISOString();
           await appendGrantHistory(ctx.profile, {
@@ -1041,9 +1053,12 @@ async function importRequestBoundDelegation(
     artifact,
   );
 
+  const warnings = operationWarnings(result.warnings);
+  const metadata = warnings.length === 0 ? undefined : { warnings };
   switch (result.status) {
     case "ok": {
       const output = result.output as AuthImportOutput;
+      // Diagnostics follow the command's output, never precede a failure of it.
       outputJson({
         imported: true,
         activated: output.activated,
@@ -1056,6 +1071,7 @@ async function importRequestBoundDelegation(
         permissions: output.effectivePermissions,
         expiry: output.expiry,
       });
+      outputWarnings(warnings);
       return;
     }
     case "authority_required":
@@ -1063,15 +1079,17 @@ async function importRequestBoundDelegation(
         "AUTHORITY_REQUIRED",
         "The active session requires additional authority before importing this delegation.",
         ExitCode.PERMISSION_DENIED,
+        metadata,
       );
     case "setup_required":
       throw new CLIError(
         "SETUP_REQUIRED",
         "The active profile requires setup before importing this delegation.",
         ExitCode.ERROR,
+        metadata,
       );
     case "error":
-      throw cliErrorFromService(result.error);
+      throw withSignInHint(cliErrorFromService({ ...result.error, meta: metadata }), ctx.profile, result.context.posture);
   }
 }
 
@@ -1118,12 +1136,17 @@ interface StagedOpenKeyGrant {
 /** Validate and activate the complete batch before committing any stored authority. */
 async function activateAndStoreOpenKeyGrants(
   profileName: string,
+  host: string,
   node: TinyCloudNode,
   grants: StagedOpenKeyGrant[],
   source: "cli" | "manifest",
 ): Promise<void> {
-  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   if (grants.length === 0) return;
+  // Bound before anything is activated: a grant whose signed authority the
+  // replay rule cannot read fails the batch rather than be stored unusable.
+  const records = await Promise.all(grants.map(({ delegation, effective }) =>
+    cliGrantRecord(node, delegation, effective, host)));
+  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   await ProfileManager.withLock(profileName, async () => {
     for (const { delegation, effective } of grants) {
       await appendGrantHistory(profileName, {
@@ -1134,10 +1157,7 @@ async function activateAndStoreOpenKeyGrants(
       });
     }
     // A stored record for the same CID that carries a request binding is kept.
-    await appendAdditionalDelegations(
-      profileName,
-      grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective)),
-    );
+    await appendAdditionalDelegations(profileName, records);
   });
 }
 
@@ -1150,6 +1170,11 @@ export async function ensureDelegationAuthority(params: {
   reason: string;
   yes: boolean;
   force?: boolean;
+  /**
+   * Space a decrypt-only grant is requested in. OpenKey signs only a request
+   * with one space; defaults to the profile's primary space.
+   */
+  anchorSpace?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<void> {
@@ -1173,20 +1198,24 @@ export async function ensureDelegationAuthority(params: {
       expectedOwner: pinnedOwner(params.profile),
       expiry: expiryCap,
     };
+    const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     const grants: StagedOpenKeyGrant[] = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
+      // capabilities/read is part of the request, so the signed proof may
+      // carry it without broadening the grant.
+      const request = grantRequestPermissions(group, anchorSpace);
       const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key,
         host: params.ctx.host,
-        permissions: group,
+        permissions: request,
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
       });
-      const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host, proof);
+      const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
-    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.node, grants, "cli");
+    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
     return;
   }
 
@@ -1210,7 +1239,7 @@ export async function ensureDelegationAuthority(params: {
     const covering = permissionsFromDelegation(delegation);
     await appendAdditionalDelegation(
       params.ctx.profile,
-      storedAdditionalDelegation(delegation, covering),
+      await cliGrantRecord(params.node, delegation, covering, params.ctx.host),
     );
     await appendGrantHistory(params.ctx.profile, {
       addedCaps: covering,
@@ -1394,7 +1423,10 @@ export function portableFromOpenKeyDelegation(
   }
   const returnedSpace = data.spaceId as string; // Bound to the signed proof by verifyScopedLogin.
   const effective = session.permissions;
-  const primary = effective.find((permission) => !isRawEncryptionPermission(permission)) ?? effective[0]!;
+  // The headline resource is a requested data entry, not the
+  // capabilities/read every OpenKey grant carries or a raw network.
+  const spaced = effective.filter((permission) => !isRawEncryptionPermission(permission));
+  const primary = spaced.find((permission) => permission.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0]!;
   const resources = effective.map((permission) => ({
     service: permission.service.slice("tinycloud.".length),
     space: isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
@@ -1415,6 +1447,8 @@ export function portableFromOpenKeyDelegation(
     ownerAddress: ownerParts[4]!,
     chainId: Number(ownerParts[3]),
     host,
+    // Verified above; replay rebuilds the CACAO from it before trusting the grant.
+    siweProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
 }
 

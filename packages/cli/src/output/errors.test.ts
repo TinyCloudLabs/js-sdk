@@ -51,6 +51,17 @@ describe("wrapError", () => {
     expect(cliErrorFromService(deliberate)).toBe(deliberate);
   });
 
+  test("an operation's typed auth decision without an HTTP status keeps its exit code; a status still decides", () => {
+    expect(cliErrorFromService({ code: "AUTH_REQUIRED", message: "The stored session has expired." }))
+      .toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });
+    expect(cliErrorFromService({ code: "PERMISSION_DENIED", message: "Permission is denied to read." }))
+      .toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(cliErrorFromService({ code: "AUTH_REQUIRED", message: "refused", meta: { status: 403 } }))
+      .toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(cliErrorFromService({ code: "NODE_ERROR", message: "The node failed." }))
+      .toMatchObject({ code: "NODE_ERROR", exitCode: 1 });
+  });
+
   test("preserves the shipped not-found, permission, and network exit mappings", () => {
     expect(wrapError(new Error("NOT_FOUND: secret missing"))).toMatchObject({
       code: "NOT_FOUND",

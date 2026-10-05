@@ -183,7 +183,7 @@ test("snapshots the shipped session, delegation, and request writer layouts", as
 
   try {
     const child = Bun.spawn([process.execPath, "-e", script], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, TC_HOME: home },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -230,7 +230,7 @@ test("reads the minimal public node-sdk auth request artifact from the request s
 
   try {
     const child = Bun.spawn([process.execPath, "-e", script], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, TC_HOME: home },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -289,7 +289,7 @@ test("reads empty requests and prior legacy request shapes from the request stor
 
   try {
     const child = Bun.spawn([process.execPath, "-e", script], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, TC_HOME: home },
       stdout: "pipe",
       stderr: "pipe",
     });

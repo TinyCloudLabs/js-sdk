@@ -240,9 +240,9 @@ export async function getLastPermissionRequestArtifact(
  * signed-login records follow the operations runtime's binding rule
  * (validated activation, and a request binding the signed capabilities fit
  * inside); `migrate` is true only when `node` holds the profile's own session,
- * so the one-time binding migration may run. Unbound records of the CLI's
- * own signed-login grants are installed as before; any other record installs
- * nothing.
+ * so the one-time binding migration may run. Unbound signed-login records an
+ * earlier release stored without a `siweProof` are installed as before; any
+ * other record installs nothing.
  */
 export async function replayAdditionalDelegations(
   node: TinyCloudNode,
@@ -267,13 +267,13 @@ export async function replayAdditionalDelegations(
   for (const stored of entries) {
     const kind = storedDelegationKind(stored);
     if (kind === "compact" || kind === "signed-login") {
-      const installed = await replayStoredDelegation(activator, stored, {
+      const replay = await replayStoredDelegation(activator, stored, {
         host: options.host,
         migrated,
         resolveSpace,
       });
-      if (installed === undefined && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write("[replay] skipping a stored delegation refused by validation or its request binding\n");
+      if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}\n`);
       }
       continue;
     }
@@ -319,6 +319,28 @@ export function storedAdditionalDelegation(
   permissions: PermissionEntry[],
 ): StoredAdditionalDelegation {
   return { delegation, permissions };
+}
+
+/**
+ * The persisted record of one of the CLI's own grants (`tc auth request
+ * --grant`, permission escalation), once checked against the request it
+ * answers. Its signed-login record carries a `siweProof`, so replay holds it
+ * to a binding; the binding is exactly its signed capabilities as validated
+ * activation reads them for `node`'s session. Throws when they cannot be read.
+ */
+export async function cliGrantRecord(
+  node: TinyCloudNode,
+  delegation: PortableDelegation,
+  permissions: PermissionEntry[],
+  host: string,
+): Promise<StoredAdditionalDelegation> {
+  // Loaded on use, as in appendAdditionalDelegations.
+  const { bindCliGrant } = await import("@tinycloud/operations/delegation-binding");
+  return bindCliGrant(
+    node as unknown as RuntimeDelegationActivator,
+    storedAdditionalDelegation(delegation, permissions),
+    host,
+  );
 }
 
 export async function appendGrantHistory(
@@ -557,9 +579,11 @@ export function permissionsFromDelegation(
 
 export function compactPermission(permission: PermissionEntry): string {
   const service = permission.service;
-  const space = permission.space.startsWith("tinycloud:")
-    ? permission.space.slice(permission.space.lastIndexOf(":") + 1)
-    : permission.space;
+  // A raw network entry from an operation's `missing` set carries no space.
+  const fullSpace = permission.space ?? (isRawEncryptionPermission(permission) ? ENCRYPTION_MANIFEST_SPACE : "");
+  const space = fullSpace.startsWith("tinycloud:")
+    ? fullSpace.slice(fullSpace.lastIndexOf(":") + 1)
+    : fullSpace;
   const actions = permission.actions
     .map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action)
     .join(",");

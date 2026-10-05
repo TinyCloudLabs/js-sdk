@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import { PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
+import { isSessionExpiredError } from "../auth/session-expired.js";
 import { writeJsonAtomic } from "@tinycloud/operations/state";
 import {
   createNativeShare,
@@ -371,7 +372,7 @@ export function createShareAuthorityAdapters(input: {
     } catch (error) {
       const profileConfig = await ProfileManager.getProfile(profile).catch(() => undefined);
       const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-      if (error instanceof InvalidRestoredSessionError || code === "AUTH_EXPIRED") {
+      if (error instanceof InvalidRestoredSessionError || code === "AUTH_EXPIRED" || isSessionExpiredError(error)) {
         throw new SharePublishAuthorityError({
           kind: "owner-space-unresolved",
           localKey: profileConfig?.authMethod === "local",

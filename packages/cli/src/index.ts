@@ -7,7 +7,7 @@ const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
 import { theme } from "./output/theme.js";
-import { isInteractive } from "./output/formatter.js";
+import { setJsonOutputRequested, shouldOutputJson } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
@@ -41,6 +41,7 @@ program
 
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
+  setJsonOutputRequested(opts.json === true);
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
@@ -52,7 +53,7 @@ program.hook("preAction", async (thisCommand) => {
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
   const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
                     fullCommand === "profile create";
-  if (!skipGuard && !opts.quiet && isInteractive()) {
+  if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();
       const profileName = opts.profile || config.defaultProfile;

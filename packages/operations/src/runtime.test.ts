@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
 import { BINDING_NOTES, bindingMigrationPath } from "./delegation-binding.js";
+import { invokeOperation } from "./invoke.js";
 import { createInvocationRuntime } from "./runtime.js";
 import {
   additionalDelegationsPath,
   profileConfigPath,
+  profilePath,
   readAdditionalDelegations,
   readJson,
   sessionPath,
@@ -105,8 +107,9 @@ test("includes cryptographically restored base-session ReCap authority in runtim
   }
 });
 
-test("replay rejects expired and CID-tampered stored records instead of trusting display metadata", async () => {
+test("replay skips expired and CID-tampered stored records, reporting the invalid one", async () => {
   const fixture = await createAuthRuntimeFixture();
+  const processWarnings = spyOn(process, "emitWarning");
   try {
     const delegation = await fixture.hermetic.mintDelegation();
     await persistRuntimeDelegations(fixture, [
@@ -119,6 +122,39 @@ test("replay rejects expired and CID-tampered stored records instead of trusting
     if (!runtime.ok) throw new Error("expected a runtime");
     expect(runtime.context.runtime.granted).toEqual([]);
     expect((runtime.context.runtime.node as RuntimeNode).getRuntimePermissionDelegations()).toEqual([]);
+    // Only the record that failed validation is reported, as data; an expired
+    // grant is routine. A malformed stored CID is not echoed.
+    expect(runtime.context.runtime.warnings).toEqual([{ code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" }]);
+    expect(processWarnings).not.toHaveBeenCalled();
+  } finally {
+    processWarnings.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("skipped-grant warnings publish fixed codes, never a node response or a stored host", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  // The loopback node answers a refused activation with this body.
+  const responseCanary = "delegation chain rejected by loopback transport";
+  const userinfoCanary = "tc-grant-userinfo-canary";
+  try {
+    const refused = await fixture.hermetic.mintUntrustedDelegation();
+    const foreignHost = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [
+      refused,
+      { ...foreignHost, host: `https://agent:${userinfoCanary}@evil.example` },
+    ]);
+
+    const result = await invokeOperation("tinycloud.secrets.get", 1, { profile: fixture.profile }, { name: "KEY" });
+
+    expect(result.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: refused.cid },
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: foreignHost.cid },
+    ]);
+    const published = JSON.stringify(result);
+    expect(published).not.toContain(responseCanary);
+    expect(published).not.toContain(userinfoCanary);
+    expect(published).not.toContain("evil.example");
   } finally {
     fixture.hermetic.stop();
   }
@@ -408,6 +444,32 @@ test("a local sign-in without the profile's stored session never runs the migrat
   }
 });
 
+test("a stored CID is published only when it is the CID of the stored authorization", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const cidCanary = "TCGRANTCIDSECRETCANARY";
+  try {
+    const first = await fixture.hermetic.mintDelegation();
+    const second = await fixture.hermetic.mintDelegationWithPermissions(
+      fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv"),
+    );
+    await persistRuntimeDelegations(fixture, [
+      // Free text in the CID field, and a well-formed CID of other bytes.
+      { ...first, cid: cidCanary, host: "https://elsewhere.example" },
+      { ...second, cid: first.cid, host: "https://elsewhere.example" },
+    ]);
+
+    const result = await invokeOperation("tinycloud.secrets.get", 1, { profile: fixture.profile }, { name: "KEY" });
+
+    expect(result.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
+      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(cidCanary);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("never falls back to a configured profile when the pinned profile disappears", async () => {
   await writeJsonAtomic(profileConfigPath("fallback"), {
     name: "fallback",
@@ -473,6 +535,76 @@ test("rejects a delegate profile with local owner material before sign-in or run
     signIn.mockRestore();
   }
 });
+
+test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED before any node request", async () => {
+  await persistExpiredSignedSession("expired-agent");
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
+    throw new Error("an expired session must not reach the node");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  const expired = {
+    code: "AUTH_REQUIRED",
+    message: "The stored session has expired or is no longer valid. Sign in again.",
+    retryable: false,
+  };
+
+  try {
+    const runtime = await createInvocationRuntime({ profile: "expired-agent" });
+    expect(runtime).toMatchObject({
+      ok: false,
+      context: { profile: "expired-agent", posture: "delegate-session" },
+      error: expired,
+    });
+
+    const read = await invokeOperation("tinycloud.secrets.get", 1, { profile: "expired-agent" }, { name: "KEY" });
+    expect(read).toMatchObject({ status: "error", error: expired });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+/** A delegate-session profile whose stored session is a real owner-signed SIWE that has expired. */
+async function persistExpiredSignedSession(profile: string): Promise<void> {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
+  const address = await signer.getAddress();
+  const ownerDid = `did:pkh:eip155:1:${address}`;
+  const spaceId = wasm.makeSpaceId(address, 1, "secrets");
+  const manager = wasm.createSessionManager();
+  const jwk = JSON.parse(manager.jwk("default")!);
+  const sessionDid = manager.getDID("default");
+  const expiresAt = new Date(Date.now() - 3_600_000).toISOString();
+  const prepared = wasm.prepareSession({
+    abilities: {
+      capabilities: { "": ["tinycloud.capabilities/read"] },
+      kv: { "vault/secrets/KEY": ["tinycloud.kv/get"] },
+    },
+    rawAbilities: { [`urn:tinycloud:encryption:${ownerDid}:default`]: ["tinycloud.encryption/decrypt"] },
+    address, chainId: 1, domain: "cli.example.test", spaceId, jwk,
+    issuedAt: new Date(Date.now() - 7_200_000).toISOString(),
+    expirationTime: expiresAt,
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  await writeJsonAtomic(profileConfigPath(profile), {
+    name: profile,
+    host: "https://node.example",
+    chainId: 1,
+    spaceName: "secrets",
+    did: sessionDid,
+    sessionDid,
+    ownerDid,
+    spaceId,
+    authMethod: "openkey",
+    posture: "delegate-session",
+    createdAt: "2026-07-14T12:00:00.000Z",
+  });
+  await writeJsonAtomic(`${profilePath(profile)}/key.json`, jwk);
+  await writeJsonAtomic(sessionPath(profile), {
+    ...wasm.completeSessionSetup({ ...prepared, signature }),
+    jwk, address, chainId: 1, spaceId, verificationMethod: sessionDid,
+    siwe: prepared.siwe, signature, ownerDid, expiresAt,
+  });
+}
 
 function validatedDelegation(
   delegation: StoredRuntimeDelegation,

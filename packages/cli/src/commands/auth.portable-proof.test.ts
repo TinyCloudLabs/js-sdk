@@ -3,29 +3,29 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
-import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry, type TinyCloudNode } from "@tinycloud/node-sdk";
+import { openKeyDelegate, type OpenKeyCallback, type OpenKeyDelegate } from "../test-support/openkey-delegate.js";
+import { restoredOwnerNode } from "../test-support/restored-owner-node.js";
 
 const originalHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-portable-proof-"));
 process.env.TC_HOME = home;
 const recordedErrors: unknown[] = [];
-type SignedCallback = { delegationHeader: { Authorization: string }; delegationCid: string; spaceId: string; [key: string]: unknown };
+type SignedCallback = OpenKeyCallback;
 let callback: SignedCallback;
+const staticCallback: OpenKeyDelegate = async () => callback;
+let acquire: OpenKeyDelegate = staticCallback;
 let activationError: Error | undefined;
 const activated: unknown[] = [];
-const node = {
-  hasRuntimePermissions: () => false,
-  useRuntimeDelegation: async (delegation: unknown) => {
-    if (activationError) throw activationError;
-    activated.push(delegation);
-  },
-};
+// A real node restored offline below; only activation is recorded instead of
+// installed, so binding a grant reads its signed authority as replay does.
+let node: TinyCloudNode;
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => node,
   bootstrapDelegatedSession: async () => node,
 }));
 mock.module("../auth/browser-auth.js", () => ({
-  startAuthFlow: async () => callback,
+  startAuthFlow: async (did: string, options: { permissions?: PermissionEntry[] }) => acquire(did, options),
   publicJwkForDelegation: (jwk: Record<string, unknown>) => {
     const { d: _privateKey, ...publicKey } = jwk;
     return publicKey;
@@ -44,6 +44,9 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 mock.module("../output/formatter.js", () => ({
+  // Warning rendering is covered end to end in stored-grant-warnings.test.ts.
+  operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
+  outputWarnings: () => {},
   isInteractive: () => false,
   shouldOutputJson: () => true,
   withSpinner: async (_label: string, action: () => Promise<unknown>) => action(),
@@ -100,6 +103,16 @@ async function signedProof(options: { nested?: boolean; broad?: boolean; raw?: b
   };
 }
 
+node = await restoredOwnerNode({ wasm, signer, sessionKey: jwk, sessionDid: did, spaceId, host });
+node.hasRuntimePermissions = () => false;
+node.useRuntimeDelegation = async (delegation) => {
+  if (activationError) throw activationError;
+  activated.push(delegation);
+};
+
+const openKey = openKeyDelegate({ wasm, signer, sessionKey: jwk, sessionDid: did });
+const openKeyRequests = openKey.requests;
+
 let profileName: string;
 let profileNumber = 0;
 
@@ -107,6 +120,8 @@ beforeEach(async () => {
   recordedErrors.length = 0;
   activated.length = 0;
   activationError = undefined;
+  acquire = staticCallback;
+  openKeyRequests.length = 0;
   profileName = `portable-${++profileNumber}`;
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setConfig({ defaultProfile: profileName, version: 1 });
@@ -199,7 +214,7 @@ describe("signed portable OpenKey grants", () => {
     await expect(ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
-      node: node as never,
+      node,
       requested: [...requested, otherSpace],
       expiryOption: undefined, reason: "Read secret and application", yes: true,
       openKeyAcquisition: async () => callback,
@@ -321,5 +336,69 @@ describe("signed portable OpenKey grants", () => {
     expect(recordedErrors).toEqual([activationError]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
     expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("a missing read and decrypt escalate as a request OpenKey signs; its capabilities/read is requested authority", async () => {
+    // The canonical `secrets get` missing set: KV in the owner space URI, raw decrypt without a space.
+    const missing = [requested[0]!, { service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry];
+    await ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested: missing, expiryOption: undefined, reason: "Read named secret", yes: true, force: true,
+      anchorSpace: "secrets",
+      openKeyAcquisition: openKey.delegate,
+    });
+    expect(openKeyRequests).toEqual([[
+      { service: "tinycloud.capabilities", space: spaceId, path: "", actions: ["tinycloud.capabilities/read"] },
+      requested[0],
+      { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+    ]]);
+    const stored = await loadAdditionalDelegations(profileName);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.delegation.path).toBe("vault/secrets/KEY");
+    expect(stored[0]!.permissions).toEqual(expect.arrayContaining([
+      ...requested,
+      { service: "tinycloud.capabilities", space: spaceId, path: "", actions: ["tinycloud.capabilities/read"] },
+    ]));
+    expect(activated).toHaveLength(1);
+  });
+
+  test("a decrypt-only escalation is anchored on the secrets space so OpenKey can sign it", async () => {
+    await ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: { ...await ProfileManager.getProfile(profileName), spaceName: "default", spaceId: undefined },
+      node,
+      requested: [{ service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry],
+      expiryOption: undefined, reason: "Decrypt named secret", yes: true, force: true,
+      anchorSpace: "secrets",
+      openKeyAcquisition: openKey.delegate,
+    });
+    expect(openKeyRequests).toEqual([[
+      { service: "tinycloud.capabilities", space: "secrets", path: "", actions: ["tinycloud.capabilities/read"] },
+      { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+    ]]);
+    const stored = await loadAdditionalDelegations(profileName);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.delegation.spaceId).toBe(spaceId);
+    expect(stored[0]!.delegation.resources).toContainEqual({
+      service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"],
+    });
+    expect(activated).toHaveLength(1);
+  });
+
+  test("auth request --grant sends OpenKey the capabilities/read it requires and stores the signed grant", async () => {
+    acquire = openKey.delegate;
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(["node", "tc", "--profile", profileName, "auth", "request", "--grant",
+      "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get"], { from: "node" });
+    expect(recordedErrors).toEqual([]);
+    expect(openKeyRequests[0]).toContainEqual({
+      service: "tinycloud.capabilities", space: spaceId.toLowerCase(), path: "", actions: ["tinycloud.capabilities/read"],
+    });
+    expect(activated).toHaveLength(1);
+    expect(await loadAdditionalDelegations(profileName)).toHaveLength(1);
   });
 });

@@ -306,7 +306,8 @@ mock.module("@tinycloud/operations", () => ({
     operationInvokeHook?.();
     const result = operationRecorded.results.shift();
     if (result === undefined) throw new Error("No operation result queued");
-    return result;
+    // Every real result envelope reports the invocation context.
+    return { context: { profile: "default", host: "https://node.example", posture: "delegate-session" }, ...result };
   },
 }));
 
@@ -379,6 +380,7 @@ mock.module("../lib/permissions.js", () => ({
   isCompatiblePermissionRequestArtifact: validateCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
   appendGrantHistory: async () => {},
+  cliGrantRecord: async (_node: unknown, delegation: object, permissions: object[]) => ({ delegation, permissions }),
   compactPermission: () => "",
   loadAdditionalDelegations: async () => [],
   loadManifestPermissions: async () => [],
@@ -399,6 +401,9 @@ mock.module("../lib/permissions.js", () => ({
 }));
 
 mock.module("../output/formatter.js", () => ({
+  // Warning rendering is covered end to end in stored-grant-warnings.test.ts.
+  operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
+  outputWarnings: () => {},
   formatField: (label: string, value: unknown) => `${label}: ${String(value)}`,
   formatTable: (_headers: string[], rows: string[][]) =>
     rows.map((row) => row.join("  ")).join("\n"),

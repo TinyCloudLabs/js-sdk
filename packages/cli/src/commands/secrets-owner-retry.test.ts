@@ -3,11 +3,15 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
-import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
+import { openKeyDelegate } from "../test-support/openkey-delegate.js";
+import { restoredOwnerNode } from "../test-support/restored-owner-node.js";
 
 const TEST_HOME = await mkdtemp(join(tmpdir(), "tc-secrets-owner-retry-"));
 const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_TC_HOME = process.env.TC_HOME;
 process.env.HOME = TEST_HOME;
+process.env.TC_HOME = TEST_HOME;
 
 const SECRET_VALUE_CANARY = "tc-191-owner-secret-value-canary";
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -19,6 +23,16 @@ const manager = wasm.createSessionManager();
 const key = JSON.parse(manager.jwk("default")!);
 const sessionDid = manager.getDID("default");
 const NETWORK_ID = `urn:tinycloud:encryption:${ownerDid}:default`;
+const openKey = openKeyDelegate({ wasm, signer, sessionKey: key, sessionDid });
+const KV_GET: PermissionEntry = {
+  service: "tinycloud.kv",
+  space: "secrets",
+  path: "vault/secrets/ANTHROPIC_API_KEY",
+  actions: ["tinycloud.kv/get"],
+};
+// The canonical operation reports raw decrypt without a space.
+const DECRYPT = { service: "tinycloud.encryption", path: NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry;
+let firstMissing: PermissionEntry[] = [KV_GET, DECRYPT];
 
 const profile = {
   name: "default",
@@ -40,15 +54,17 @@ let operationAttempts = 0;
 const installedDelegations: string[] = [];
 let currentSession: Record<string, unknown> | null = { expiresAt: "2099-01-01T00:00:00.000Z" };
 
-const node = {
-  did: "did:key:z6MkOwner",
-  hasRuntimePermissions: () => false,
-  getDefaultEncryptionNetworkId: () => NETWORK_ID,
-  getEncryptionNetworkIdForSpace: () => NETWORK_ID,
-  useRuntimeDelegation: async (delegation: { cid: string }) => {
-    installedDelegations.push(delegation.cid);
-  },
-  secrets: {
+// A real node restored offline, so storing the approved grant reads its signed
+// authority as replay does; activation and secret reads are recorded instead.
+const node = await restoredOwnerNode({ wasm, signer, sessionKey: key, sessionDid, spaceId, host: profile.host });
+node.hasRuntimePermissions = () => false;
+node.getDefaultEncryptionNetworkId = () => NETWORK_ID;
+node.getEncryptionNetworkIdForSpace = () => NETWORK_ID;
+node.useRuntimeDelegation = async (delegation) => {
+  installedDelegations.push(delegation.cid);
+};
+Object.defineProperty(node, "secrets", {
+  value: {
     get: async (name: string) => {
       secretAttempts.push(name);
       if (secretAttempts.length === 1) {
@@ -66,7 +82,7 @@ const node = {
       throw new Error("secrets get retried more than once");
     },
   },
-};
+});
 
 async function signedApproval() {
   const now = Date.now();
@@ -123,19 +139,7 @@ mock.module("@tinycloud/operations", () => ({
         status: "authority_required" as const,
         operation: { operationId, operationVersion },
         context: { profile: "default", host: profile.host, posture: "owner-openkey" as const },
-        missing: [
-          {
-            service: "tinycloud.kv",
-            space: "secrets",
-            path: "vault/secrets/ANTHROPIC_API_KEY",
-            actions: ["tinycloud.kv/get"],
-          },
-          {
-            service: "tinycloud.encryption",
-            path: NETWORK_ID,
-            actions: ["tinycloud.encryption/decrypt"],
-          },
-        ],
+        missing: firstMissing,
         request: { requestId: "request-owner" },
         approval: { kind: "openkey" as const, requestId: "request-owner", fallback: "tc auth grant" },
         retry: { operationId, operationVersion, inputDigest: "digest", requiresCallerInput: false },
@@ -171,6 +175,8 @@ afterAll(async () => {
   } else {
     process.env.HOME = ORIGINAL_HOME;
   }
+  if (ORIGINAL_TC_HOME === undefined) delete process.env.TC_HOME;
+  else process.env.TC_HOME = ORIGINAL_TC_HOME;
   await rm(TEST_HOME, { recursive: true, force: true });
 });
 
@@ -189,10 +195,17 @@ describe("owner secrets get OpenKey retry", () => {
     else Reflect.deleteProperty(process.stderr, "isTTY");
   });
 
-  test("acquires once and retries the secret exactly once through the real owner path", async () => {
+  const CAPABILITIES_READ = { service: "tinycloud.capabilities", space: "secrets", path: "", actions: ["tinycloud.capabilities/read"] };
+  const RAW_DECRYPT = { ...DECRYPT, space: "encryption" };
+  test.each([
+    ["a missing read and decrypt", [KV_GET, DECRYPT], [CAPABILITIES_READ, KV_GET, RAW_DECRYPT]],
+    ["a missing decrypt only", [DECRYPT], [CAPABILITIES_READ, RAW_DECRYPT]],
+  ])("%s: OpenKey signs the escalation once and the secret is retried exactly once", async (_label, missing, request) => {
     secretAttempts.length = 0;
     operationAttempts = 0;
     installedDelegations.length = 0;
+    openKey.requests.length = 0;
+    firstMissing = missing;
     let acquisitions = 0;
     let grantedCid = "";
     let stdout = "";
@@ -207,9 +220,9 @@ describe("owner secrets get OpenKey retry", () => {
 
     try {
       const program = new Command();
-      registerSecretsCommand(program, async () => {
+      registerSecretsCommand(program, async (did, options) => {
         acquisitions += 1;
-        const approval = await signedApproval();
+        const approval = await openKey.delegate(did, options);
         grantedCid = approval.delegationCid;
         return approval;
       });
@@ -221,6 +234,7 @@ describe("owner secrets get OpenKey retry", () => {
       output.write = originalWrite;
     }
 
+    expect(openKey.requests).toEqual([request]);
     expect(acquisitions).toBe(1);
     expect(operationAttempts).toBe(2);
     expect(installedDelegations).toEqual([grantedCid]);
@@ -239,6 +253,7 @@ describe("owner secrets get OpenKey retry", () => {
     secretAttempts.length = 0;
     operationAttempts = 0;
     installedDelegations.length = 0;
+    firstMissing = [KV_GET, DECRYPT];
     currentSession = null;
     let acquisitions = 0;
     const program = new Command();

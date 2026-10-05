@@ -4,6 +4,7 @@ import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../c
 import { CLIError, wrapError } from "../output/errors.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
+import { sessionExpiredError } from "../auth/session-expired.js";
 
 /**
  * Returns true when a JWK carries the private-key parameter required by the
@@ -56,6 +57,27 @@ function signerJwkForProfile(
 }
 
 /**
+ * Restore the stored session. node-sdk refuses expired or otherwise unusable
+ * persisted authority (`AUTH_EXPIRED`) while verifying it locally, before any
+ * node request; only a new sign-in fixes that.
+ */
+async function restoreProfileSession(
+  node: TinyCloudNode,
+  profileName: string,
+  profile: ProfileConfig | null,
+  sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+): Promise<void> {
+  try {
+    await node.restoreSession(sessionData);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+      throw sessionExpiredError(profileName, profile === null ? undefined : resolveProfilePosture(profile));
+    }
+    throw error;
+  }
+}
+
+/**
  * Create a TinyCloudNode instance from the current CLI context.
  * Uses the profile's persisted session and key.
  *
@@ -96,7 +118,7 @@ export async function createSDKInstance(
 
     let restoredOwnSession = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-      await node.restoreSession({
+      await restoreProfileSession(node, ctx.profile, profile, {
         delegationHeader: session.delegationHeader as { Authorization: string },
         delegationCid: session.delegationCid as string,
         spaceId: session.spaceId as string,
@@ -135,7 +157,7 @@ export async function createSDKInstance(
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
     // Restore session from stored delegation data (browser auth flow)
-    await node.restoreSession({
+    await restoreProfileSession(node, ctx.profile, profile, {
       delegationHeader: session.delegationHeader as { Authorization: string },
       delegationCid: session.delegationCid as string,
       spaceId: session.spaceId as string,

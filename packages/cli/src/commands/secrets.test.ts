@@ -522,6 +522,9 @@ mock.module("./auth.js", () => ({
 }));
 
 mock.module("../output/formatter.js", () => ({
+  // Warning rendering is covered end to end in stored-grant-warnings.test.ts.
+  operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
+  outputWarnings: () => {},
   formatCheck: (ok: boolean | "warn", label: string, detail?: string) =>
     `${String(ok)} ${label}${detail ? ` (${detail})` : ""}`,
   formatSection: (title: string) => title,
@@ -547,20 +550,26 @@ mock.module("../output/theme.js", () => {
   };
 });
 
+class MockCLIError extends Error implements CLIErrorLike {
+  constructor(
+    public code: string,
+    message: string,
+    public exitCode: number,
+    public metadata?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "CLIError";
+  }
+}
+
 mock.module("../output/errors.js", () => ({
-  CLIError: class CLIError extends Error implements CLIErrorLike {
-    constructor(
-      public code: string,
-      message: string,
-      public exitCode: number,
-      public metadata?: Record<string, unknown>,
-    ) {
-      super(message);
-      this.name = "CLIError";
-    }
-  },
+  CLIError: MockCLIError,
   cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
-    Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
+    new MockCLIError(error.code, error.message, 1, error.meta),
+  // Classification itself is covered by output/errors.test.ts.
+  wrapError: (error: unknown) => error instanceof MockCLIError
+    ? error
+    : new MockCLIError("ERROR", error instanceof Error ? error.message : String(error), 1),
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },
@@ -753,7 +762,7 @@ describe("CLI secrets commands", () => {
         "not-a-secret",
       ], {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home },
+        env: { ...process.env, HOME: home, TC_HOME: home },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -791,7 +800,7 @@ describe("CLI secrets commands", () => {
       getResult: { ok: false, error: { code: "PERMISSION_DENIED", message: "permission denied" } },
     });
     await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
-    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 1 });
+    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
     expect(recorded.outputs).toEqual([]);
 
     resetRecorded();
@@ -919,7 +928,7 @@ describe("CLI secrets commands", () => {
 
     expect(recorded.getCalls).toEqual([{ name: "ANTHROPIC_API_KEY", options: undefined }]);
     expect(recorded.permissionRequests).toEqual([]);
-    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 1 });
+    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
   });
 
   test("routes --space operations and permission requests to the requested TinyCloud space", async () => {

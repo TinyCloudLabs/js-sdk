@@ -12,6 +12,7 @@ import type {
 
 import { DelegationRequestBindingSchema } from "./artifacts.js";
 import { delegationWithinRequest, type OperationSpaceResolver } from "./authority.js";
+import { STORED_GRANT_SKIP_REASONS, type StoredGrantSkipReason } from "./contract.js";
 import {
   profilePath,
   readAdditionalDelegations,
@@ -38,23 +39,28 @@ export { operationSpaceResolver } from "./secrets.js";
  *   own signed capabilities (`unbound-import:<cid>`).
  * - The one-time migration of records stored before bindings existed: exactly
  *   each record's own signed capabilities (`migrated:<cid>`).
+ * - The CLI's own grants (`tc auth request --grant`, permission escalation),
+ *   once checked against the request they answer: exactly each grant's own
+ *   signed capabilities (`cli-grant:<cid>`). Their signed-login records carry
+ *   the `siweProof` replay verifies them from.
  *
- * Records the CLI stores from its own signed-login grants carry no
- * `siweProof`, cannot be verified here, and keep their legacy CLI replay.
+ * Signed-login records the CLI stored before it kept a `siweProof` cannot be
+ * verified here and keep their legacy CLI replay.
  *
  * The binding is local profile data. It stops records written by any other
  * path from granting authority. It does not stop someone who can write the
  * profile directory, who already holds the session key and the signed bytes.
  */
 
-export type BindingSource = "migration" | "unbound-import";
+export type BindingSource = "migration" | "unbound-import" | "cli-grant";
 
 const REQUEST_ID_PREFIX: Record<BindingSource, string> = {
   migration: "migrated",
   "unbound-import": "unbound-import",
+  "cli-grant": "cli-grant",
 };
 
-/** The audit note written beside a binding synthesized from a record's own signed capabilities. */
+/** The audit note written beside a binding the record's writer synthesized. */
 export const BINDING_NOTES: Record<BindingSource, string> = {
   migration:
     "Stored without a request binding before bindings were required. Bound at migration to exactly " +
@@ -62,6 +68,10 @@ export const BINDING_NOTES: Record<BindingSource, string> = {
   "unbound-import":
     "Imported by `tc auth import` without a stored request. Bound to exactly its own signed " +
     "capabilities, so replay refuses any delegation in this record that exceeds them.",
+  "cli-grant":
+    "Granted to this CLI by `tc auth request --grant` or a permission escalation, and checked " +
+    "against the request it answered. Bound to exactly its own signed capabilities, so replay " +
+    "refuses any delegation in this record that exceeds them.",
 };
 
 /** Short so a busy profile only defers migration to a later runtime. */
@@ -78,9 +88,9 @@ export function bindingMigrationPath(profile: string): string {
  * - `compact` and `signed-login` records go through validated activation and
  *   the binding rule.
  * - `other` records keep the CLI's legacy replay: an unbound record whose
- *   bytes are not compact and that has no `siweProof`, which is how the CLI
- *   stores its own signed-login grants. The operations runtime never installs
- *   them.
+ *   bytes are not compact and that has no `siweProof`, which is how earlier
+ *   CLI releases stored their own signed-login grants. The operations runtime
+ *   never installs them.
  * - `refused` records install nothing anywhere.
  *
  * A record is `refused` unless its `delegationHeader` has exactly one own
@@ -132,12 +142,12 @@ export function replayLimit(
 }
 
 /**
- * Binds a record to exactly the capabilities its signed bytes grant, with an
- * audit note naming where the binding came from.
+ * Binds a record to `requested`, with an audit note naming where the binding
+ * came from. Throws when `requested` cannot form a valid binding.
  */
-function bindToSignedCapabilities<T extends { readonly delegation: { readonly cid: string } }>(
+function bindToRequest<T extends { readonly delegation: { readonly cid: string } }>(
   record: T,
-  signed: readonly PermissionEntry[],
+  requested: readonly PermissionEntry[],
   source: BindingSource,
   recordedAt = new Date().toISOString(),
 ): T & Record<"authorityRequest" | "authorityRequestAudit", unknown> {
@@ -145,10 +155,29 @@ function bindToSignedCapabilities<T extends { readonly delegation: { readonly ci
     ...record,
     authorityRequest: DelegationRequestBindingSchema.parse({
       requestId: `${REQUEST_ID_PREFIX[source]}:${record.delegation.cid}`,
-      requested: structuredClone(signed),
+      requested: structuredClone(requested),
     }),
     authorityRequestAudit: { source, recordedAt, note: BINDING_NOTES[source] },
   };
+}
+
+/**
+ * Binds the record of one of the CLI's own grants, already checked against
+ * the request it answers, to exactly the capabilities its signed bytes grant.
+ * They are read through the validated activation replay uses (nothing is
+ * activated), so the binding is the authority replay will derive. Throws when
+ * validated activation cannot read them for `node`'s session.
+ */
+export async function bindCliGrant<T extends { readonly delegation: PortableDelegation }>(
+  node: RuntimeDelegationActivator,
+  record: T,
+  host: string,
+): Promise<T & Record<"authorityRequest" | "authorityRequestAudit", unknown>> {
+  const signed = await signedCapabilities(node, record.delegation, host);
+  if (signed === undefined) {
+    throw new Error("The grant's signed authority could not be validated for this session.");
+  }
+  return bindToRequest(record, signed, "cli-grant");
 }
 
 /**
@@ -163,7 +192,7 @@ export async function activateUnboundCompactImport(
   host: string,
 ): Promise<{ delegation: PortableDelegation; permissions: PermissionEntry[] } & Record<string, unknown>> {
   const activated = await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host });
-  return bindToSignedCapabilities(
+  return bindToRequest(
     // The record keeps the delegation as imported; replay validates it again.
     { delegation, permissions: [...activated.effectivePermissions] },
     activated.effectivePermissions,
@@ -291,7 +320,7 @@ async function migratedRecord(
   if (signed === undefined) return undefined;
   try {
     // The stored delegation is kept exactly as it was; only the binding is added.
-    return bindToSignedCapabilities({ ...entry, delegation: { ...entry.delegation as object, cid: delegation.cid } }, signed, "migration", recordedAt);
+    return bindToRequest({ ...entry, delegation: { ...entry.delegation as object, cid: delegation.cid } }, signed, "migration", recordedAt);
   } catch {
     // Signed capabilities a request binding cannot hold (an empty action, say).
     return undefined;
@@ -299,13 +328,30 @@ async function migratedRecord(
 }
 
 /**
+ * What replay did with one stored record. `skipped` records grant nothing and
+ * carry a fixed reason code that is safe to publish; `not-replayed` records
+ * are routine (expired) and give nothing to act on.
+ */
+export type StoredDelegationReplay =
+  | { readonly status: "installed"; readonly delegation: ValidatedRuntimeDelegation }
+  | { readonly status: "skipped"; readonly reason: StoredGrantSkipReason }
+  | { readonly status: "not-replayed" };
+
+const NOT_REPLAYED: StoredDelegationReplay = { status: "not-replayed" };
+
+function skipped(reason: StoredGrantSkipReason): StoredDelegationReplay {
+  return { status: "skipped", reason };
+}
+
+/**
  * Replays one stored record under the binding rule. A record with a valid
  * binding installs only if its signed capabilities fit inside it. Before the
  * profile has migrated, an unbound compact record installs with its signed
  * authority as it always did; after, it installs nothing. A signed-login
- * record installs only with a binding. Returns the installed delegation, or
- * `undefined` when the record installs nothing. Never throws: stored data is
- * untrusted transport material.
+ * record installs only with a binding. A record with neither compact bytes
+ * nor a `siweProof` cannot be verified here and installs nothing. Never
+ * throws, and never reports exception text: stored data is untrusted
+ * transport material, and messages can quote it or a node's response.
  */
 export async function replayStoredDelegation(
   node: RuntimeDelegationActivator,
@@ -315,21 +361,37 @@ export async function replayStoredDelegation(
     readonly migrated: boolean;
     readonly resolveSpace: OperationSpaceResolver;
   },
-): Promise<ValidatedRuntimeDelegation | undefined> {
+): Promise<StoredDelegationReplay> {
+  const kind = storedDelegationKind(entry);
   const delegation = normalizeStoredDelegation(entry);
-  if (delegation === undefined || delegation.expiry.getTime() <= Date.now()) return undefined;
+  if (kind === "refused" || delegation === undefined) return skipped("malformed");
+  if (delegation.expiry.getTime() <= Date.now()) return NOT_REPLAYED;
+  if (kind === "other") return skipped("proof_missing");
   const limit = replayLimit(entry, options.migrated);
-  if (limit === undefined) return undefined;
+  if (limit === undefined) return skipped("unbound");
+  let outsideRequest = false;
   const authorize = limit === "signed"
     ? () => true
-    : (effective: readonly PermissionEntry[]) => delegationWithinRequest(limit, effective, options.resolveSpace);
+    : (effective: readonly PermissionEntry[]) => {
+      outsideRequest = !delegationWithinRequest(limit, effective, options.resolveSpace);
+      return !outsideRequest;
+    };
   try {
-    return await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host: options.host, authorize });
-  } catch {
-    // An invalid, stale, wrong-session, or rejected record grants nothing and
-    // must not reveal its contents through a safe operation channel.
-    return undefined;
+    return {
+      status: "installed",
+      delegation: await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, { host: options.host, authorize }),
+    };
+  } catch (error) {
+    return skipped(outsideRequest ? "outside_request" : rejectionReason(error));
   }
+}
+
+/** The published reason node-sdk attached to a refused delegation, else `invalid`. */
+function rejectionReason(error: unknown): StoredGrantSkipReason {
+  const reason = isRecord(error) ? error.reason : undefined;
+  return typeof reason === "string" && (STORED_GRANT_SKIP_REASONS as readonly string[]).includes(reason)
+    ? reason as StoredGrantSkipReason
+    : "invalid";
 }
 
 /** An unreadable marker counts as migrated: a damaged marker never reopens migration. */

@@ -171,7 +171,7 @@ import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
-import { PortableDelegation } from "./delegation";
+import type { PortableDelegation, SessionGrantProof, VerifiedSessionGrant } from "./delegation";
 import { DelegatedAccess } from "./DelegatedAccess";
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 import {
@@ -475,6 +475,39 @@ function verifierRecapEntries<T extends { caveats?: Record<string, unknown>[] }>
   return entries.map((entry) => Array.isArray(entry.caveats)
     ? { ...entry, caveats: entry.caveats.map((caveat) => jsonFromVerifier(caveat) as Record<string, unknown>) }
     : entry);
+}
+
+/**
+ * The caveat-preserving ReCap a persisted-session verifier returned, as plain
+ * JSON. A binding without the v2 witness cannot reconstruct signed authority.
+ */
+function exactVerifiedRecap(verified: { verifiedRecap?: unknown }): WasmRecapEntry[] {
+  // Caveats are verifier output (Maps, undefined for null): convert them
+  // before the strict JSON checks below.
+  const exactRecap = Array.isArray(verified.verifiedRecap)
+    ? verifierRecapEntries(verified.verifiedRecap as WasmRecapEntry[])
+    : verified.verifiedRecap;
+  if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    typeof entry.service === "string" &&
+    typeof entry.space === "string" &&
+    typeof entry.path === "string" &&
+    Array.isArray(entry.actions) && entry.actions.every((action: unknown) => typeof action === "string") &&
+    Array.isArray(entry.caveats) && entry.caveats.every((caveat: unknown) =>
+      caveat !== null && typeof caveat === "object" && !Array.isArray(caveat)
+    )
+  )) {
+    throw new UnsupportedSessionRestoreError(
+      "it cannot reconstruct caveat-preserving persisted ReCap authority",
+    );
+  }
+  return exactRecap.map((entry: WasmRecapEntry) => ({
+    service: entry.service,
+    space: entry.space,
+    path: entry.path,
+    actions: [...entry.actions],
+    caveats: cloneRecapCaveats(entry.caveats),
+  }));
 }
 
 /** One replaceable set of services bound to a single host/session authority. */
@@ -2862,32 +2895,7 @@ export class TinyCloudNode {
           throw new InvalidRestoredSessionError(error instanceof Error ? error.message : String(error));
         }
       })();
-      // Caveats are verifier output (Maps, undefined for null): convert them
-      // before the strict JSON checks below.
-      const exactRecap = Array.isArray(verified.verifiedRecap)
-        ? verifierRecapEntries(verified.verifiedRecap)
-        : verified.verifiedRecap;
-      if (!Array.isArray(exactRecap) || !exactRecap.every((entry) =>
-        entry !== null && typeof entry === "object" &&
-        typeof entry.service === "string" &&
-        typeof entry.space === "string" &&
-        typeof entry.path === "string" &&
-        Array.isArray(entry.actions) && entry.actions.every((action) => typeof action === "string") &&
-        Array.isArray(entry.caveats) && entry.caveats.every((caveat) =>
-          caveat !== null && typeof caveat === "object" && !Array.isArray(caveat)
-        )
-      )) {
-        throw new UnsupportedSessionRestoreError(
-          "it cannot reconstruct caveat-preserving persisted ReCap authority",
-        );
-      }
-      stagedRecap = exactRecap.map((entry) => ({
-        service: entry.service,
-        space: entry.space,
-        path: entry.path,
-        actions: [...entry.actions],
-        caveats: cloneRecapCaveats(entry.caveats),
-      }));
+      stagedRecap = exactVerifiedRecap(verified);
       const signedExpiry = verified.expiresAt === undefined
         ? undefined
         : persistedExpiry(verified.expiresAt);
@@ -5103,6 +5111,45 @@ export class TinyCloudNode {
   }
 
   /**
+   * Verify a wallet-signed session grant (a CACAO built from a SIWE and its
+   * EIP-191 signature) issued to this instance's live session key. The
+   * verifier rebuilds the CACAO from `siwe` and `signature`, so the grant is
+   * accepted only when its authorization bytes and CID are exactly that CACAO,
+   * its signer is `address`, its audience is this session key, it is valid
+   * now, and its ReCap covers `spaceId` or names only raw encryption networks
+   * (a decrypt-only grant has no space). Returns the signed ReCap and expiry.
+   * Bindings without `validateSessionGrant` fall back to the session verifier,
+   * which also refuses decrypt-only grants.
+   */
+  verifySessionGrant(grant: SessionGrantProof): VerifiedSessionGrant {
+    const bindings = this.wasmBindings;
+    const validate = typeof bindings.validateSessionGrant === "function"
+      ? bindings.validateSessionGrant.bind(bindings)
+      : bindings.validatePersistedSession?.bind(bindings);
+    if (validate === undefined) {
+      throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
+    }
+    const verified = validate({
+      delegationHeader: { Authorization: grant.delegationHeader.Authorization },
+      delegationCid: grant.delegationCid,
+      spaceId: grant.spaceId,
+      jwk: this.sessionKeyJwk,
+      address: canonicalizeAddress(grant.address),
+      chainId: grant.chainId,
+      siwe: grant.siwe,
+      signature: grant.signature,
+    });
+    if (typeof verified.expiresAt !== "string") {
+      throw new Error("Session grant has no signed expiry.");
+    }
+    const expiresAt = new Date(verified.expiresAt);
+    if (!Number.isFinite(expiresAt.getTime())) {
+      throw new Error("Session grant has an invalid signed expiry.");
+    }
+    return { recap: exactVerifiedRecap(verified), expiresAt };
+  }
+
+  /**
    * Install a portable runtime permission delegation into this SDK instance so
    * matching service calls and downstream `delegateTo()` calls can use it.
    */
@@ -5254,6 +5301,7 @@ export class TinyCloudNode {
         spaceId,
         session,
         expiresAt,
+        { siwe: prepared.siwe, signature },
       );
       this.runtimePermissionGrants.push({
         session: {
@@ -6292,6 +6340,7 @@ export class TinyCloudNode {
     spaceId: string,
     session: TinyCloudSession,
     expiresAt: Date,
+    siweProof: { siwe: string; signature: string },
   ): PortableDelegation {
     const resources = this.delegatedResourcesForEntries(entries, spaceId);
     const primary = resources[0];
@@ -6308,6 +6357,7 @@ export class TinyCloudNode {
       ownerAddress: session.address,
       chainId: session.chainId,
       host: this.config.host,
+      siweProof,
     };
   }
 
