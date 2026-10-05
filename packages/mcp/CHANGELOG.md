@@ -1,5 +1,15 @@
 # @tinycloud/mcp
 
+## 0.4.0-beta.12
+
+### Patch Changes
+
+- Updated dependencies [dca972f]
+- Updated dependencies [dca972f]
+  - @tinycloud/node-sdk@3.1.0-beta.8
+  - @tinycloud/operations@0.4.0-beta.12
+  - @tinycloud/node-sdk-wasm@1.7.7-beta.0
+
 ## 0.4.0-beta.11
 
 ### Minor Changes

@@ -74,8 +74,14 @@ var init_theme = __esm({
 
 // src/output/formatter.ts
 import ora from "ora";
-function outputError(code3, message, hint, meta) {
-  if (isInteractive()) {
+function warningLine(warnings) {
+  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; the old grant expires on its own.`;
+}
+function outputError(code3, message, hint, details = {}) {
+  const { meta, warnings = [] } = details;
+  if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
 `
@@ -86,22 +92,47 @@ function outputError(code3, message, hint, meta) {
 `);
       }
     }
+    if (warnings.length > 0) process.stderr.write(`  ${theme.warn(warningLine(warnings))}
+`);
   } else {
     const payload = {
       error: { code: code3, message }
     };
     if (hint) payload.error.hint = hint;
     if (meta) payload.error.meta = meta;
+    if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+}
+function operationWarnings(value) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((warning) => {
+    if (warning === null || typeof warning !== "object") return [];
+    const { code: code3, reason, grantCid } = warning;
+    if (typeof code3 !== "string" || !WARNING_CODE.test(code3) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
+      return [];
+    }
+    return [{ code: code3, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
+  });
 }
 function isInteractive() {
   return Boolean(process.stdout.isTTY);
 }
+function setJsonOutputRequested(requested) {
+  globalThis[JSON_REQUESTED] = requested;
+}
+function shouldOutputJson() {
+  return !isInteractive() || (globalThis[JSON_REQUESTED] ?? process.argv.includes("--json"));
+}
+var WARNING_CODE, WARNING_REASON, DELEGATION_CID, JSON_REQUESTED;
 var init_formatter = __esm({
   "src/output/formatter.ts"() {
     "use strict";
     init_theme();
+    WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;
+    WARNING_REASON = /^[a-z][a-z_]{0,63}$/;
+    DELEGATION_CID = /^bafkr4i[a-z2-7]{52}$/;
+    JSON_REQUESTED = /* @__PURE__ */ Symbol.for("tinycloud.cli.jsonOutputRequested");
   }
 });
 
@@ -261,7 +292,10 @@ function handleError(error) {
     meta.resource = capability.resource;
     meta.requiredAction = capability.requiredAction;
   }
-  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : void 0);
+  outputError(cliError.code, cliError.message, hint, {
+    ...Object.keys(meta).length ? { meta } : {},
+    warnings: operationWarnings(cliError.metadata?.warnings)
+  });
   process.exit(cliError.exitCode);
 }
 function buildAuthHint(error) {
@@ -5738,6 +5772,37 @@ var init_zod = __esm({
   }
 });
 
+// src/auth/session-expired.ts
+function signInAgainHint(profileName, posture) {
+  if (posture === "local-owner-key") {
+    return `Sign in again with: tc --profile ${profileName} auth login --method local`;
+  }
+  if (posture === "delegate-session") {
+    return `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+  }
+  return `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
+}
+function sessionExpiredError(profileName, posture) {
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `The session for profile "${profileName}" has expired or is no longer valid.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint: signInAgainHint(profileName, posture), reason: SESSION_EXPIRED_REASON }
+  );
+}
+function isSessionExpiredError(error) {
+  return error instanceof CLIError && error.metadata?.reason === SESSION_EXPIRED_REASON;
+}
+var SESSION_EXPIRED_REASON;
+var init_session_expired = __esm({
+  "src/auth/session-expired.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    SESSION_EXPIRED_REASON = "session_expired";
+  }
+});
+
 // src/lib/raw-encryption.ts
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
@@ -5800,13 +5865,14 @@ async function replayAdditionalDelegations(node, profile, options) {
   for (const stored of entries) {
     const kind = storedDelegationKind(stored);
     if (kind === "compact" || kind === "signed-login") {
-      const installed = await replayStoredDelegation(activator, stored, {
+      const replay = await replayStoredDelegation(activator, stored, {
         host: options.host,
         migrated,
         resolveSpace
       });
-      if (installed === void 0 && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write("[replay] skipping a stored delegation refused by validation or its request binding\n");
+      if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}
+`);
       }
       continue;
     }
@@ -5884,6 +5950,16 @@ function signerJwkForProfile(profileName, sessionJwk, key) {
     }
   );
 }
+async function restoreProfileSession(node, profileName, profile, sessionData) {
+  try {
+    await node.restoreSession(sessionData);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+      throw sessionExpiredError(profileName, profile === null ? void 0 : resolveProfilePosture(profile));
+    }
+    throw error;
+  }
+}
 async function createSDKInstance(ctx, options) {
   const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
@@ -5903,7 +5979,7 @@ async function createSDKInstance(ctx, options) {
     });
     let restoredOwnSession2 = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-      await node2.restoreSession({
+      await restoreProfileSession(node2, ctx.profile, profile, {
         delegationHeader: session.delegationHeader,
         delegationCid: session.delegationCid,
         spaceId: session.spaceId,
@@ -5933,7 +6009,7 @@ async function createSDKInstance(ctx, options) {
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await node.restoreSession({
+    await restoreProfileSession(node, ctx.profile, profile, {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
       spaceId: session.spaceId,
@@ -6077,6 +6153,7 @@ var init_sdk = __esm({
     init_errors();
     init_constants();
     init_permissions();
+    init_session_expired();
     BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
   }
 });
@@ -6175,7 +6252,7 @@ function formatBannerLine(version2) {
 }
 function emitBanner(version2) {
   if (bannerEmitted) return;
-  if (!isInteractive()) return;
+  if (shouldOutputJson()) return;
   if (process.env.TC_HIDE_BANNER === "1") return;
   bannerEmitted = true;
   process.stderr.write(formatBannerLine(version2) + "\n\n");
@@ -17370,6 +17447,7 @@ function registerShareCommand(program2) {
 init_storage();
 init_profiles();
 init_constants();
+init_session_expired();
 import { readFile as readFile4 } from "fs/promises";
 import { join as join6 } from "path";
 import { createHash } from "crypto";
@@ -17682,7 +17760,7 @@ function createShareAuthorityAdapters(input = {}) {
     } catch (error) {
       const profileConfig = await ProfileManager.getProfile(profile).catch(() => void 0);
       const code3 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-      if (error instanceof InvalidRestoredSessionError || code3 === "AUTH_EXPIRED") {
+      if (error instanceof InvalidRestoredSessionError || code3 === "AUTH_EXPIRED" || isSessionExpiredError(error)) {
         throw new SharePublishAuthorityError({
           kind: "owner-space-unresolved",
           localKey: profileConfig?.authMethod === "local",
@@ -18044,6 +18122,7 @@ function selectedShareProfile() {
 program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
+  setJsonOutputRequested(opts.json === true);
   const parentName = thisCommand.parent?.name();
   const isShareCommand = parentName === "share" || thisCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
@@ -18052,7 +18131,7 @@ program.hook("preAction", async (thisCommand) => {
   const commandName = thisCommand.name();
   const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
   const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
-  if (!skipGuard && !opts.quiet && isInteractive()) {
+  if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();
       const profileName = opts.profile || config.defaultProfile;

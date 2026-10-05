@@ -165,8 +165,14 @@ import ora from "ora";
 function outputJson(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
-function outputError(code3, message, hint, meta) {
-  if (isInteractive()) {
+function warningLine(warnings) {
+  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; the old grant expires on its own.`;
+}
+function outputError(code3, message, hint, details = {}) {
+  const { meta, warnings = [] } = details;
+  if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
 `
@@ -177,20 +183,40 @@ function outputError(code3, message, hint, meta) {
 `);
       }
     }
+    if (warnings.length > 0) process.stderr.write(`  ${theme.warn(warningLine(warnings))}
+`);
   } else {
     const payload = {
       error: { code: code3, message }
     };
     if (hint) payload.error.hint = hint;
     if (meta) payload.error.meta = meta;
+    if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+}
+function outputWarnings(warnings) {
+  if (warnings.length === 0) return;
+  process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings })}
+` : `${theme.warn("!")} ${warningLine(warnings)}
+`);
+}
+function operationWarnings(value) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((warning) => {
+    if (warning === null || typeof warning !== "object") return [];
+    const { code: code3, reason, grantCid } = warning;
+    if (typeof code3 !== "string" || !WARNING_CODE.test(code3) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
+      return [];
+    }
+    return [{ code: code3, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
+  });
 }
 function isInteractive() {
   return Boolean(process.stdout.isTTY);
 }
 async function withSpinner(label, fn) {
-  if (!isInteractive()) {
+  if (shouldOutputJson()) {
     return fn();
   }
   const spinner = ora(label).start();
@@ -204,7 +230,7 @@ async function withSpinner(label, fn) {
   }
 }
 function shouldOutputJson() {
-  return !isInteractive() || process.argv.includes("--json");
+  return !isInteractive() || (globalThis[JSON_REQUESTED] ?? process.argv.includes("--json"));
 }
 function formatField(label, value) {
   if (value === null || value === void 0) return `  ${theme.label(label + ":")} ${theme.muted("\u2014")}`;
@@ -253,10 +279,15 @@ function formatTimeAgo(date) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
+var WARNING_CODE, WARNING_REASON, DELEGATION_CID, JSON_REQUESTED;
 var init_formatter = __esm({
   "src/output/formatter.ts"() {
     "use strict";
     init_theme();
+    WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;
+    WARNING_REASON = /^[a-z][a-z_]{0,63}$/;
+    DELEGATION_CID = /^bafkr4i[a-z2-7]{52}$/;
+    JSON_REQUESTED = /* @__PURE__ */ Symbol.for("tinycloud.cli.jsonOutputRequested");
   }
 });
 
@@ -361,11 +392,12 @@ function cliErrorFromService(error, message = error.message) {
     return missingPrivateKeyError();
   }
   const missingCapability = validatedCapabilityOf({ ...error, meta }) !== void 0;
-  const denied = verdict === "forbidden" || verdict === "unauthenticated" && missingCapability;
+  const denied = verdict === "forbidden" || verdict === "unauthenticated" && missingCapability || verdict === void 0 && error.code === "PERMISSION_DENIED";
+  const unauthenticated = !denied && (verdict === "unauthenticated" || verdict === void 0 && error.code === "AUTH_REQUIRED");
   return new CLIError(
-    denied ? "PERMISSION_DENIED" : verdict === "unauthenticated" ? "AUTH_REQUIRED" : error.code,
+    denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,
     message,
-    denied ? ExitCode.PERMISSION_DENIED : verdict === "unauthenticated" ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
+    denied ? ExitCode.PERMISSION_DENIED : unauthenticated ? ExitCode.AUTH_REQUIRED : ExitCode.ERROR,
     meta
   );
 }
@@ -437,7 +469,10 @@ function handleError(error) {
     meta.resource = capability.resource;
     meta.requiredAction = capability.requiredAction;
   }
-  outputError(cliError.code, cliError.message, hint, Object.keys(meta).length ? meta : void 0);
+  outputError(cliError.code, cliError.message, hint, {
+    ...Object.keys(meta).length ? { meta } : {},
+    warnings: operationWarnings(cliError.metadata?.warnings)
+  });
   process.exit(cliError.exitCode);
 }
 function buildAuthHint(error) {
@@ -7061,11 +7096,31 @@ function authRequiredError(service) {
     service
   };
 }
-function timeoutError(service) {
+var RequestTimeoutError = class extends Error {
+  constructor(timeoutMs) {
+    super(`Request timed out after ${timeoutMs}ms.`);
+    this.name = "TimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+};
+function isRequestTimeoutError(error) {
+  return error instanceof RequestTimeoutError || error instanceof Error && error.name === "TimeoutError" && typeof error.timeoutMs === "number";
+}
+function timeoutError(service, timeoutMs, cause) {
+  if (timeoutMs === void 0) {
+    return {
+      code: ErrorCodes.TIMEOUT,
+      message: "Request timed out.",
+      service,
+      ...cause === void 0 ? {} : { cause }
+    };
+  }
   return {
     code: ErrorCodes.TIMEOUT,
-    message: "Request timed out.",
-    service
+    message: `Request timed out after ${timeoutMs}ms.`,
+    service,
+    ...cause === void 0 ? {} : { cause },
+    meta: { timeoutMs }
   };
 }
 function abortedError(service) {
@@ -7212,6 +7267,9 @@ function storageRejectionError(service, status, meta, responseText) {
 }
 function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
   if (error instanceof Error) {
+    if (isRequestTimeoutError(error)) {
+      return timeoutError(service, error.timeoutMs, error);
+    }
     if (error.name === "AbortError") {
       return abortedError(service);
     }
@@ -7231,6 +7289,7 @@ function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
     service
   };
 }
+var MAX_TIMER_DELAY_MS = 2147483647;
 var BaseService = class {
   constructor() {
     this.abortController = new AbortController();
@@ -7403,6 +7462,64 @@ var BaseService = class {
       });
     }
     return controller.signal;
+  }
+  /**
+   * Create the abort signal for one request, bounded by the request timeout.
+   *
+   * The signal aborts when the service signs out, the context aborts, the
+   * caller's `signal` aborts, or the timeout elapses, whichever comes first.
+   * A timeout aborts with a {@link RequestTimeoutError} (`TimeoutError`), which
+   * `wrapError` maps to `ErrorCodes.TIMEOUT`; the other sources keep their own
+   * reason (normally `AbortError`, mapped to `ErrorCodes.ABORTED`).
+   *
+   * The timeout is `timeoutMs` when given, otherwise `config.timeout`. Only a
+   * positive, finite value (at most 2^31-1 ms) applies; `undefined`, `0`, and
+   * `Infinity` mean no timeout, so a per-call `0` opts out of a configured one.
+   *
+   * Callers must call `dispose()` once the response body has been consumed,
+   * which clears the timer and removes the listeners this adds to the
+   * long-lived service and context signals.
+   *
+   * @param signal - The caller's abort signal for this request
+   * @param timeoutMs - Per-request timeout override in milliseconds
+   */
+  createRequestSignal(signal, timeoutMs) {
+    const controller = new AbortController();
+    const detachers = [];
+    let timer;
+    const dispose = () => {
+      if (timer !== void 0) {
+        clearTimeout(timer);
+        timer = void 0;
+      }
+      for (const detach of detachers.splice(0)) {
+        detach();
+      }
+    };
+    const abort = (reason) => {
+      dispose();
+      controller.abort(reason);
+    };
+    const requestSignal = { signal: controller.signal, dispose };
+    const parents = [
+      this.abortController.signal,
+      this.context?.abortSignal,
+      signal
+    ].filter((parent) => parent !== void 0);
+    for (const parent of parents) {
+      if (parent.aborted) {
+        abort(parent.reason);
+        return requestSignal;
+      }
+      const onAbort = () => abort(parent.reason);
+      parent.addEventListener("abort", onAbort, { once: true });
+      detachers.push(() => parent.removeEventListener("abort", onAbort));
+    }
+    const timeout = timeoutMs ?? this._config.timeout;
+    if (typeof timeout === "number" && timeout > 0 && timeout <= MAX_TIMER_DELAY_MS) {
+      timer = setTimeout(() => abort(new RequestTimeoutError(timeout)), timeout);
+    }
+    return requestSignal;
   }
   /**
    * Wrap an operation with error handling and telemetry.
@@ -7658,7 +7775,7 @@ var KVService = class extends BaseService {
    * @param path - Resource path
    * @param action - KV action
    * @param body - Optional request body
-   * @param signal - Optional abort signal
+   * @param signal - Request signal from createRequestSignal()
    * @returns Fetch response
    */
   async invokeOperation(path, action, body, signal, extraHeaders) {
@@ -7674,7 +7791,7 @@ var KVService = class extends BaseService {
       method: "POST",
       headers: requestHeaders,
       body,
-      signal: this.combineSignals(signal)
+      signal
     });
   }
   /**
@@ -7851,6 +7968,7 @@ var KVService = class extends BaseService {
         "kv"
       ));
     }
+    const request = this.createRequestSignal(options?.signal, options?.timeout);
     try {
       const session = this.context.session;
       const invocationHeaders = this.context.invokeAny(
@@ -7872,7 +7990,7 @@ var KVService = class extends BaseService {
       const response = await this.context.fetch(`${this.host}/invoke`, {
         method: "POST",
         headers,
-        signal: this.combineSignals(options?.signal)
+        signal: request.signal
       });
       if (!response.ok) {
         const errorText = response.status === 401 || response.status === 403 ? await this.readAuthorizationText(response) : await response.text();
@@ -7937,6 +8055,8 @@ var KVService = class extends BaseService {
       return ok({ results, count: results.length });
     } catch (error) {
       return err(wrapError2("kv", error));
+    } finally {
+      request.dispose();
     }
   }
   /**
@@ -8069,12 +8189,13 @@ var KVService = class extends BaseService {
         ));
       }
       const path = this.getFullPath(key, options?.prefix);
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.GET,
           void 0,
-          options?.signal,
+          request.signal,
           options?.maxResponseBytes === void 0 ? void 0 : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
         );
         if (!response.ok) {
@@ -8131,6 +8252,8 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8158,12 +8281,13 @@ var KVService = class extends BaseService {
       }
       const path = this.getFullPath(key, options?.prefix);
       const body = this.serializePutValue(value, options?.contentType);
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.PUT,
           body,
-          options?.signal,
+          request.signal,
           {
             ...options?.ifMatch === void 0 ? {} : { "if-match": options.ifMatch },
             ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
@@ -8219,6 +8343,8 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8258,6 +8384,7 @@ var KVService = class extends BaseService {
         seen.add(path);
       }
       let requestMayHaveDispatched = false;
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const body = new FormData();
         for (let index = 0; index < items.length; index++) {
@@ -8280,7 +8407,7 @@ var KVService = class extends BaseService {
           method: "POST",
           headers,
           body,
-          signal: this.combineSignals(options?.signal)
+          signal: request.signal
         };
         const fetchFn = this.context.fetch;
         requestMayHaveDispatched = true;
@@ -8331,14 +8458,16 @@ var KVService = class extends BaseService {
           rawBody = await response.json();
         } catch (jsonError) {
           const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+          const timedOut = isRequestTimeoutError(cause);
           return err(
             serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `KV batchPut response was not valid JSON: ${cause.message}`,
+              timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
+              timedOut ? `KV batchPut response body did not arrive in time: ${cause.message}` : `KV batchPut response was not valid JSON: ${cause.message}`,
               "kv",
               {
                 cause,
                 meta: {
+                  ...timedOut ? { timeoutMs: cause.timeoutMs } : {},
                   requestMayHaveDispatched: true,
                   responseReceived: true,
                   status: response.status,
@@ -8393,6 +8522,8 @@ var KVService = class extends BaseService {
           ...wrapped,
           meta: { ...wrapped.meta, requestMayHaveDispatched }
         });
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8415,12 +8546,13 @@ var KVService = class extends BaseService {
       if (options?.path) {
         listPath = listPath ? `${listPath}/${options.path}` : options.path;
       }
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           listPath,
           KVAction.LIST,
           void 0,
-          options?.signal,
+          request.signal,
           options?.limit === void 0 && options?.cursor === void 0 ? void 0 : {
             ...options?.limit === void 0 ? {} : { "x-tinycloud-limit": String(options.limit) },
             ...options?.cursor === void 0 ? {} : { "x-tinycloud-cursor": options.cursor }
@@ -8461,6 +8593,8 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8473,12 +8607,13 @@ var KVService = class extends BaseService {
         return err(authRequiredError("kv"));
       }
       const path = this.getFullPath(key, options?.prefix);
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.DELETE,
           void 0,
-          options?.signal,
+          request.signal,
           options?.ifMatch === void 0 ? void 0 : { "if-match": options.ifMatch }
         );
         if (!response.ok) {
@@ -8526,6 +8661,8 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8538,12 +8675,13 @@ var KVService = class extends BaseService {
         return err(authRequiredError("kv"));
       }
       const path = this.getFullPath(key, options?.prefix);
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
           path,
           KVAction.HEAD,
           void 0,
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
@@ -8574,6 +8712,8 @@ var KVService = class extends BaseService {
         });
       } catch (error) {
         return err(wrapError2("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8611,12 +8751,13 @@ var KVService = class extends BaseService {
       if (options?.etag !== void 0) {
         body.etag = options.etag;
       }
+      const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.context.fetch(`${this.host}/signed/kv`, {
           method: "POST",
           headers: this.withJsonContentType(headers),
           body: JSON.stringify(body),
-          signal: this.combineSignals(options?.signal)
+          signal: request.signal
         });
         if (!response.ok) {
           return this.createSignedReadUrlError(response, key, path);
@@ -8636,6 +8777,8 @@ var KVService = class extends BaseService {
         return ok(signedUrl);
       } catch (error) {
         return err(wrapError2("kv", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8835,6 +8978,7 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "query",
@@ -8848,7 +8992,7 @@ var SQLService = class extends BaseService {
           dbName,
           action,
           body,
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "query", dbName, [action]);
@@ -8857,6 +9001,8 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8865,6 +9011,7 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "execute",
@@ -8885,7 +9032,7 @@ var SQLService = class extends BaseService {
           dbName,
           requestedActions2,
           body,
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "execute", dbName, requestedActions2);
@@ -8894,6 +9041,8 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8902,13 +9051,14 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const requestedActions2 = this.actionsForSqlBatch(statements);
         const response = await this.invokeSQL(
           dbName,
           requestedActions2,
           { action: "batch", statements },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "batch", dbName, requestedActions2);
@@ -8917,6 +9067,8 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8925,12 +9077,13 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeSQL(
           dbName,
           SQLAction.WRITE,
           { action: "execute_statement", name, params: params ?? [] },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
@@ -8939,6 +9092,8 @@ var SQLService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -8947,12 +9102,13 @@ var SQLService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("sql"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeSQL(
           dbName,
           SQLAction.READ,
           { action: "export" },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
@@ -8966,6 +9122,8 @@ var SQLService = class extends BaseService {
         return ok(text);
       } catch (error) {
         return err(wrapError2("sql", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9056,7 +9214,7 @@ var SQLService = class extends BaseService {
         "Content-Type": "application/json"
       },
       body: JSON.stringify(body),
-      signal: this.combineSignals(signal)
+      signal
     });
   }
   actionForSql(sql, fallback) {
@@ -9313,12 +9471,13 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "query", sql, params: params ?? [] },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "query");
@@ -9327,6 +9486,8 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9335,12 +9496,13 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "query", sql, params: params ?? [] },
-          options?.signal,
+          request.signal,
           { Accept: "application/vnd.apache.arrow.stream" }
         );
         if (!response.ok) {
@@ -9350,6 +9512,8 @@ var DuckDbService = class extends BaseService {
         return ok(buffer);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9358,6 +9522,7 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "execute",
@@ -9371,7 +9536,7 @@ var DuckDbService = class extends BaseService {
           dbName,
           DuckDbAction.WRITE,
           body,
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "execute");
@@ -9380,6 +9545,8 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9388,6 +9555,7 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const body = {
           action: "batch",
@@ -9400,7 +9568,7 @@ var DuckDbService = class extends BaseService {
           dbName,
           DuckDbAction.WRITE,
           body,
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "batch");
@@ -9409,6 +9577,8 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9417,12 +9587,13 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.WRITE,
           { action: "executeStatement", name, params: params ?? [] },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "executeStatement");
@@ -9431,6 +9602,8 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9439,12 +9612,13 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.READ,
           { action: "describe" },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "describe");
@@ -9453,6 +9627,8 @@ var DuckDbService = class extends BaseService {
         return ok(data);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9461,12 +9637,13 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeDuckDb(
           dbName,
           DuckDbAction.EXPORT,
           { action: "export" },
-          options?.signal
+          request.signal
         );
         if (!response.ok) {
           return this.handleErrorResponse(response, "export");
@@ -9475,6 +9652,8 @@ var DuckDbService = class extends BaseService {
         return ok(blob);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9483,6 +9662,7 @@ var DuckDbService = class extends BaseService {
       if (!this.requireAuth()) {
         return err(authRequiredError("duckdb"));
       }
+      const request = this.createRequestSignal(options?.signal);
       try {
         const session = this.context.session;
         const headers = this.context.invoke(
@@ -9498,7 +9678,7 @@ var DuckDbService = class extends BaseService {
             "Content-Type": "application/x-duckdb"
           },
           body: new Blob([data]),
-          signal: this.combineSignals(options?.signal)
+          signal: request.signal
         });
         if (!response.ok) {
           return this.handleErrorResponse(response, "import");
@@ -9506,6 +9686,8 @@ var DuckDbService = class extends BaseService {
         return ok(void 0);
       } catch (error) {
         return err(wrapError2("duckdb", error));
+      } finally {
+        request.dispose();
       }
     });
   }
@@ -9521,7 +9703,7 @@ var DuckDbService = class extends BaseService {
         ...extraHeaders
       },
       body: JSON.stringify(body),
-      signal: this.combineSignals(signal)
+      signal
     });
   }
   async handleErrorResponse(response, operation) {
@@ -13324,6 +13506,10 @@ function canonicalOwnerDid(did, label = "--owner") {
   }
   return `did:pkh:eip155:${match[1]}:${ensureEip55(match[2])}`;
 }
+function canonicalNetworkUrn(path) {
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([^:]*)$/.exec(path);
+  return match ? `urn:tinycloud:encryption:${canonicalOwnerDid(match[1])}:${match[2]}` : path;
+}
 function rawEncryptionOwnerMatches(path, ownerDid) {
   const match = /^urn:tinycloud:encryption:(did:pkh:eip155:.+):([a-z0-9][a-z0-9-]*)$/.exec(path);
   if (!match) return false;
@@ -13466,13 +13652,14 @@ async function replayAdditionalDelegations(node, profile, options) {
   for (const stored of entries) {
     const kind = storedDelegationKind(stored);
     if (kind === "compact" || kind === "signed-login") {
-      const installed = await replayStoredDelegation(activator, stored, {
+      const replay = await replayStoredDelegation(activator, stored, {
         host: options.host,
         migrated,
         resolveSpace
       });
-      if (installed === void 0 && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write("[replay] skipping a stored delegation refused by validation or its request binding\n");
+      if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
+        process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}
+`);
       }
       continue;
     }
@@ -13501,6 +13688,14 @@ async function replayAdditionalDelegations(node, profile, options) {
 }
 function storedAdditionalDelegation(delegation, permissions) {
   return { delegation, permissions };
+}
+async function cliGrantRecord(node, delegation, permissions, host) {
+  const { bindCliGrant } = await import("@tinycloud/operations/delegation-binding");
+  return bindCliGrant(
+    node,
+    storedAdditionalDelegation(delegation, permissions),
+    host
+  );
 }
 async function appendGrantHistory(profile, entry) {
   await ProfileManager.ensureProfileDir(profile);
@@ -13656,7 +13851,8 @@ function permissionsFromDelegation(delegation) {
 }
 function compactPermission(permission) {
   const service = permission.service;
-  const space = permission.space.startsWith("tinycloud:") ? permission.space.slice(permission.space.lastIndexOf(":") + 1) : permission.space;
+  const fullSpace = permission.space ?? (isRawEncryptionPermission(permission) ? ENCRYPTION_MANIFEST_SPACE2 : "");
+  const space = fullSpace.startsWith("tinycloud:") ? fullSpace.slice(fullSpace.lastIndexOf(":") + 1) : fullSpace;
   const actions = permission.actions.map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action).join(",");
   return `${service}:${space}:${permission.path}:${actions}`;
 }
@@ -13752,6 +13948,35 @@ function serviceFromActions(actions) {
   return first.includes("/") ? first.slice(0, first.indexOf("/")) : "tinycloud.unknown";
 }
 
+// src/auth/session-expired.ts
+init_constants();
+init_errors();
+var SESSION_EXPIRED_REASON = "session_expired";
+function signInAgainHint(profileName, posture) {
+  if (posture === "local-owner-key") {
+    return `Sign in again with: tc --profile ${profileName} auth login --method local`;
+  }
+  if (posture === "delegate-session") {
+    return `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+  }
+  return `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
+}
+function sessionExpiredError(profileName, posture) {
+  return new CLIError(
+    "AUTH_REQUIRED",
+    `The session for profile "${profileName}" has expired or is no longer valid.`,
+    ExitCode.AUTH_REQUIRED,
+    { hint: signInAgainHint(profileName, posture), reason: SESSION_EXPIRED_REASON }
+  );
+}
+function withSignInHint(error, profileName, posture) {
+  if (error.code !== "AUTH_REQUIRED") return error;
+  return new CLIError(error.code, error.message, error.exitCode, {
+    ...error.metadata,
+    hint: signInAgainHint(profileName, posture)
+  });
+}
+
 // src/lib/sdk.ts
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
@@ -13778,6 +14003,16 @@ function signerJwkForProfile(profileName, sessionJwk, key) {
     }
   );
 }
+async function restoreProfileSession(node, profileName, profile, sessionData) {
+  try {
+    await node.restoreSession(sessionData);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
+      throw sessionExpiredError(profileName, profile === null ? void 0 : resolveProfilePosture(profile));
+    }
+    throw error;
+  }
+}
 async function createSDKInstance(ctx, options) {
   const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
@@ -13797,7 +14032,7 @@ async function createSDKInstance(ctx, options) {
     });
     let restoredOwnSession2 = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-      await node2.restoreSession({
+      await restoreProfileSession(node2, ctx.profile, profile, {
         delegationHeader: session.delegationHeader,
         delegationCid: session.delegationCid,
         spaceId: session.spaceId,
@@ -13827,7 +14062,7 @@ async function createSDKInstance(ctx, options) {
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await node.restoreSession({
+    await restoreProfileSession(node, ctx.profile, profile, {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
       spaceId: session.spaceId,
@@ -14876,7 +15111,13 @@ function validateLoginPermissions(permissions) {
   }
 }
 function scopedLoginPermissions(permissions) {
-  const space = permissions.find((p) => !isRawEncryptionPermission(p)).space ?? "";
+  return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p)).space ?? "");
+}
+function grantRequestPermissions(group, anchorSpace) {
+  const request = group.map((p) => isRawEncryptionPermission(p) ? { ...p, space: ENCRYPTION_MANIFEST_SPACE2, path: canonicalNetworkUrn(p.path) } : p);
+  return withCapabilitiesRead(request, request.find((p) => !isRawEncryptionPermission(p))?.space ?? anchorSpace);
+}
+function withCapabilitiesRead(permissions, space) {
   const hasRead = permissions.some((p) => p.service === "tinycloud.capabilities" && p.path === "" && p.actions.includes(CAPABILITIES_READ) && normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(space));
   return hasRead ? permissions : [{ service: "tinycloud.capabilities", space, path: "", actions: [CAPABILITIES_READ] }, ...permissions];
 }
@@ -15763,6 +16004,7 @@ function registerAuthCommand(program) {
             "Grant requested TinyCloud permissions from `tc auth request --grant`.",
             group
           );
+          const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
           let delegationData;
           if (options.device) {
             const approval = await acquireDeviceDelegation({
@@ -15770,7 +16012,7 @@ function registerAuthCommand(program) {
               jwk: key,
               nodeOrigin: ctx.host,
               shareOrigin: DEFAULT_SHARE_ORIGIN,
-              permissions: group,
+              permissions: request,
               expiry: parseRequestedExpiry(expiryOption ?? "7d"),
               reason,
               expectedOwner: pinnedOwner(profile),
@@ -15782,17 +16024,17 @@ function registerAuthCommand(program) {
             delegationData = await startAuthFlow(profile.did, {
               jwk: key,
               host: ctx.host,
-              permissions: group,
+              permissions: request,
               reason,
               openkeyHost,
               expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
               noPopup: options.popup === false
             });
           }
-          const delegation = portableFromOpenKeyDelegation(delegationData, group, ctx.host, proof);
+          const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
           grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
         }
-        await activateAndStoreOpenKeyGrants(ctx.profile, node, grants, options.manifest ? "manifest" : "cli");
+        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options.manifest ? "manifest" : "cli");
         const delegationCids2 = grants.map(({ delegation }) => delegation.cid);
         const expiry2 = grants.at(-1)?.delegation.expiry.toISOString();
         reportDeclined(declined);
@@ -15828,8 +16070,7 @@ function registerAuthCommand(program) {
       for (const delegation of delegations) {
         const covering = permissionsFromDelegation(delegation);
         localEffective.push(...covering);
-        const stored = storedAdditionalDelegation(delegation, covering);
-        await appendAdditionalDelegation(ctx.profile, stored);
+        await appendAdditionalDelegation(ctx.profile, await cliGrantRecord(node, delegation, covering, ctx.host));
         delegationCids.push(delegation.cid);
         expiry = delegation.expiry.toISOString();
         await appendGrantHistory(ctx.profile, {
@@ -16251,6 +16492,8 @@ async function importRequestBoundDelegation(ctx, artifact) {
     { profile: ctx.profile, host: ctx.host, allowOwnerProfile: true },
     artifact
   );
+  const warnings = operationWarnings(result.warnings);
+  const metadata = warnings.length === 0 ? void 0 : { warnings };
   switch (result.status) {
     case "ok": {
       const output2 = result.output;
@@ -16263,22 +16506,25 @@ async function importRequestBoundDelegation(ctx, artifact) {
         permissions: output2.effectivePermissions,
         expiry: output2.expiry
       });
+      outputWarnings(warnings);
       return;
     }
     case "authority_required":
       throw new CLIError(
         "AUTHORITY_REQUIRED",
         "The active session requires additional authority before importing this delegation.",
-        ExitCode.PERMISSION_DENIED
+        ExitCode.PERMISSION_DENIED,
+        metadata
       );
     case "setup_required":
       throw new CLIError(
         "SETUP_REQUIRED",
         "The active profile requires setup before importing this delegation.",
-        ExitCode.ERROR
+        ExitCode.ERROR,
+        metadata
       );
     case "error":
-      throw cliErrorFromService(result.error);
+      throw withSignInHint(cliErrorFromService({ ...result.error, meta: metadata }), ctx.profile, result.context.posture);
   }
 }
 function isStoredDelegationLike(value) {
@@ -16303,9 +16549,10 @@ function normalizePortableDelegation(delegation) {
   }
   return { ...delegation, expiry };
 }
-async function activateAndStoreOpenKeyGrants(profileName, node, grants, source) {
-  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
+async function activateAndStoreOpenKeyGrants(profileName, host, node, grants, source) {
   if (grants.length === 0) return;
+  const records = await Promise.all(grants.map(({ delegation, effective }) => cliGrantRecord(node, delegation, effective, host)));
+  for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
   await ProfileManager.withLock(profileName, async () => {
     for (const { delegation, effective } of grants) {
       await appendGrantHistory(profileName, {
@@ -16315,10 +16562,7 @@ async function activateAndStoreOpenKeyGrants(profileName, node, grants, source) 
         expiry: delegation.expiry.toISOString()
       });
     }
-    await appendAdditionalDelegations(
-      profileName,
-      grants.map(({ delegation, effective }) => storedAdditionalDelegation(delegation, effective))
-    );
+    await appendAdditionalDelegations(profileName, records);
   });
 }
 async function ensureDelegationAuthority(params) {
@@ -16341,20 +16585,22 @@ async function ensureDelegationAuthority(params) {
       expectedOwner: pinnedOwner(params.profile),
       expiry: expiryCap
     };
+    const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     const grants = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
+      const request = grantRequestPermissions(group, anchorSpace);
       const delegationData = await acquireOpenKey(params.profile.did, {
         jwk: key,
         host: params.ctx.host,
-        permissions: group,
+        permissions: request,
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap)
       });
-      const delegation = portableFromOpenKeyDelegation(delegationData, group, params.ctx.host, proof);
+      const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
-    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.node, grants, "cli");
+    await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
     return;
   }
   if (isInteractive()) {
@@ -16376,7 +16622,7 @@ async function ensureDelegationAuthority(params) {
     const covering = permissionsFromDelegation(delegation);
     await appendAdditionalDelegation(
       params.ctx.profile,
-      storedAdditionalDelegation(delegation, covering)
+      await cliGrantRecord(params.node, delegation, covering, params.ctx.host)
     );
     await appendGrantHistory(params.ctx.profile, {
       addedCaps: covering,
@@ -16508,7 +16754,8 @@ function portableFromOpenKeyDelegation(data, requested, host, proof) {
   }
   const returnedSpace = data.spaceId;
   const effective = session.permissions;
-  const primary = effective.find((permission) => !isRawEncryptionPermission(permission)) ?? effective[0];
+  const spaced = effective.filter((permission) => !isRawEncryptionPermission(permission));
+  const primary = spaced.find((permission) => permission.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0];
   const resources = effective.map((permission) => ({
     service: permission.service.slice("tinycloud.".length),
     space: isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
@@ -16528,7 +16775,9 @@ function portableFromOpenKeyDelegation(data, requested, host, proof) {
     delegateDID: data.verificationMethod,
     ownerAddress: ownerParts[4],
     chainId: Number(ownerParts[3]),
-    host
+    host,
+    // Verified above; replay rebuilds the CACAO from it before trusting the grant.
+    siweProof: { siwe: data.siwe, signature: data.signature }
   };
 }
 async function rotateAuthKey(profileName, host, options = {}) {
@@ -18253,6 +18502,7 @@ async function runSecretOperation(params) {
       reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true,
+      anchorSpace: params.space ?? SECRETS_SPACE3,
       openKeyAcquisition: params.openKeyAcquisition
     })
   );
@@ -18337,7 +18587,26 @@ async function runSecretOperationAttempt(label, operation) {
     throw error;
   }
 }
+function withOperationWarnings(error, warnings) {
+  if (warnings === void 0 || warnings.length === 0) return error;
+  const cliError = wrapError(error);
+  cliError.metadata = { ...cliError.metadata, warnings };
+  return cliError;
+}
 async function invokeCanonicalSecretGet(params) {
+  const warnings = /* @__PURE__ */ new Map();
+  const collect = (result) => {
+    for (const warning of result.warnings ?? []) warnings.set(JSON.stringify(warning), warning);
+    return result;
+  };
+  try {
+    const result = await canonicalSecretGet(params, collect);
+    return warnings.size === 0 ? result : { ...result, warnings: [...warnings.values()] };
+  } catch (error) {
+    throw withOperationWarnings(error, [...warnings.values()]);
+  }
+}
+async function canonicalSecretGet(params, collect) {
   const auth = authOptions(params.options);
   let ownerNode;
   if (!auth?.privateKey) {
@@ -18360,10 +18629,10 @@ async function invokeCanonicalSecretGet(params) {
     ...params.scope === void 0 ? {} : { scope: params.scope },
     ...params.space === void 0 ? {} : { space: params.space }
   };
-  const invoke = () => withSpinner(
+  const invoke = async () => collect(await withSpinner(
     params.label,
     () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
-  );
+  ));
   let first = await invoke();
   if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
     const profile2 = await ProfileManager.getProfile(params.ctx.profile);
@@ -18401,6 +18670,7 @@ async function invokeCanonicalSecretGet(params) {
       reason: secretPermissionReason("get", params.name),
       yes: true,
       force: true,
+      anchorSpace: params.space ?? SECRETS_SPACE3,
       openKeyAcquisition: params.openKeyAcquisition
     })
   );
@@ -18412,7 +18682,7 @@ function throwCanonicalSecretGetError(result, name) {
       throw new CLIError(
         "PERMISSION_DENIED",
         "Permission denied while reading secret",
-        ExitCode.ERROR
+        ExitCode.PERMISSION_DENIED
       );
     case "setup_required":
       throw new CLIError(
@@ -18434,11 +18704,10 @@ ${result.setup.message}`, setup: result.setup }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
       }
-      throw new CLIError(
-        result.error.code,
-        result.error.message,
-        result.error.code === "PERMISSION_HINT_INVALID" ? ExitCode.PERMISSION_DENIED : ExitCode.ERROR
-      );
+      if (result.error.code === "PERMISSION_HINT_INVALID") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
+      }
+      throw withSignInHint(cliErrorFromService(result.error), result.context.profile, result.context.posture);
     case "ok":
       throw new Error("Expected a failed canonical secret result.");
   }
@@ -19054,19 +19323,26 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         openKeyAcquisition
       });
       if (result.status !== "ok") {
-        throwCanonicalSecretGetError(result, name);
+        try {
+          throwCanonicalSecretGetError(result, name);
+        } catch (error) {
+          throw withOperationWarnings(error, result.warnings);
+        }
       }
       const value = result.output.value;
-      if (options.output) {
-        await writeSecretFile(options.output, value);
-        outputJson({ name, written: options.output });
-        return;
+      try {
+        if (options.output) {
+          await writeSecretFile(options.output, value);
+          outputJson({ name, written: options.output });
+        } else if (options.raw || options.valueOnly) {
+          process.stdout.write(value);
+        } else {
+          outputJson({ name, value });
+        }
+      } catch (error) {
+        throw withOperationWarnings(error, result.warnings);
       }
-      if (options.raw || options.valueOnly) {
-        process.stdout.write(value);
-        return;
-      }
-      outputJson({ name, value });
+      outputWarnings(operationWarnings(result.warnings));
     } catch (error) {
       handleError(error);
     }
