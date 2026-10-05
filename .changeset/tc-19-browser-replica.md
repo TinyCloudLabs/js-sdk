@@ -1,0 +1,9 @@
+---
+"@tinycloud/replica": minor
+---
+
+Browser local replica (TC-19): `@tinycloud/replica/browser` ships `openReplica(options)`, a main-thread client that runs the replica engine in a dedicated module worker (`dist/replica.worker.js`, a self-contained ESM bundle with the KV service and the WASM session manager inlined — no `@tinycloud/web-sdk` or `@tinycloud/node-sdk` imports). The `IndexedDbReplicaStore` keeps `meta`, `entries` and `blobs` in one `tinycloud-replica/<id>` database: one `readwrite` transaction per feed page and cursor, content-addressed blobs under `strict` durability, an in-transaction authority re-check on every commit, a `writerEpoch` fence, CID-bound grant promotion, and a fencing `markRevoked` that purges entries and blobs atomically.
+
+A Web Lock (`navigator.locks`, `tinycloud-replica:<replicaId>`) makes one tab the sync writer — `sync()` returns `{status:"busy"}` to other tabs — while `BroadcastChannel` relays `committed` serials to sibling workers; the lock dies with its tab. The client asks for durable storage (`navigator.storage.persist()`) and `status()` reports the result. `openReplica({host, space, prefix, grantSubject?, allowSecrets?, worker?})` computes the replica's database partition as `sha256(host, space, prefix, deviceDid, grantSubject)[:26]` (spec §8); a grant issued by another principal is refused at `installGrant`. The `worker` option accepts a `Worker`, `URL` or string for bundler layouts where `new URL("./replica.worker.js", import.meta.url)` is not visible (Vite `optimizeDeps.exclude` in dev; `?url` imports work in both modes).
+
+Local `get`/`list`/`status` never touch the network — Chromium e2e verifies sync, blake3-identical reads, offline reload behind a fixture service worker with zero node requests, re-convergence after owner updates and deletes, out-of-scope exclusion from IndexedDB, cross-tab busy/commit/lock-release, grant expiry and revocation purge.
