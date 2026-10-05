@@ -14,7 +14,6 @@
  * @packageDocumentation
  */
 
-import { KV } from "@tinycloud/bootstrap";
 import {
   DEFAULT_MANIFEST_SPACE,
   type PermissionEntry,
@@ -262,9 +261,12 @@ export function canonicalizeRecapCaveats(
   return `[${branches.join(",")}]`;
 }
 
+// Literal strings, not `KV.SYNC`/`KV.RETAIN`: those are derived from the
+// vendored registry at runtime, so an older bootstrap would turn them into
+// `undefined` and silently disable this guard.
 const EXPLICIT_ONLY_ACTIONS: Readonly<Record<string, true>> = {
-  [KV.SYNC]: true,
-  [KV.RETAIN]: true,
+  "tinycloud.kv/sync": true,
+  "tinycloud.kv/retain": true,
 };
 
 /**

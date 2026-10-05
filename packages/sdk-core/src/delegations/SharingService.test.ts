@@ -855,5 +855,25 @@ describe("SharingService.generate root-delegation signing failures", () => {
       ]));
       expect(covering.preflightGenerate({ ...request, expiry: new Date(PARENT_EXPIRY.getTime() + 1000) })).toBe("not-covered");
     });
+
+    test.each(["tinycloud.kv/sync", "tinycloud.kv/retain"])("a * or tinycloud.kv/* entry never covers %s, so generate asks for a root delegation", async (action) => {
+      const explicitRequest = { ...request, actions: [action] };
+      for (const wildcard of ["*", "tinycloud.kv/*"]) {
+        const onRoot = mock(async () => undefined);
+        const service = makeGeneratingService(onRoot, undefined, registryWith([
+          { path: "", actions: [wildcard] },
+        ]));
+        expect(service.preflightGenerate(request)).toBe("ok");
+        expect(service.preflightGenerate(explicitRequest)).toBe("not-covered");
+        const generated = await service.generate(explicitRequest);
+        expect(generated.ok).toBe(false);
+        expect(onRoot).toHaveBeenCalledTimes(1);
+      }
+
+      const named = makeGeneratingService(mock(async () => undefined), undefined, registryWith([
+        { path: "", actions: [action] },
+      ]));
+      expect(named.preflightGenerate(explicitRequest)).toBe("ok");
+    });
   });
 });

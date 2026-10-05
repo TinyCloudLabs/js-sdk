@@ -885,7 +885,9 @@ export class SharingService implements ISharingService {
         if (delegation.allowSubDelegation === false) continue;
         if (!this.pathMatches(delegation.path || '', path)) continue;
         const delegationActions = delegation.actions || [];
-        if (!actions.every((action) => delegationActions.includes(action) || delegationActions.includes('*'))) {
+        if (!actions.every((action) =>
+          delegationActions.some((granted) => actionContains(granted, action))
+        )) {
           continue;
         }
         // SharingService cannot reproduce arbitrary signed ReCap caveats when
