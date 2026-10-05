@@ -12,7 +12,7 @@ import type {
   RuntimeOperationContext,
   TinyCloudPosture,
 } from "../contract.js";
-import { OperationInvocationError, operationError } from "../errors.js";
+import { OperationInvocationError, operationError, storageFullOperationError } from "../errors.js";
 import { operationSpaceResolver } from "../secrets.js";
 
 type EmptyInput = Record<never, never>;
@@ -955,6 +955,8 @@ function kvFailure(
   if (error.code === "KV_RESPONSE_TOO_LARGE") {
     return { status: "error", error: operationError("KV_RESPONSE_TOO_LARGE", `The TinyCloud KV value exceeds ${MAX_KV_VALUE_BYTES} bytes.`) };
   }
+  const storageFull = storageFullOperationError(error);
+  if (storageFull) return { status: "error", error: storageFull };
   return nodeFailure(action);
 }
 

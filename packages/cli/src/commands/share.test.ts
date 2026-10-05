@@ -96,19 +96,21 @@ describe("tc share command contract", () => {
     expect(caveated.message).toContain("tc init --name publisher --key-only && tc --profile publisher enable share");
     expect(caveated.message).not.toContain("--profile wallet");
     const quota = shareCliError(new SharePublishAuthorityError({
-      kind: "storage-quota-exceeded",
-      usedBytes: 387_382_794,
-      limitBytes: 8_119_195,
+      kind: "storage-full",
+      code: "STORAGE_QUOTA_EXCEEDED",
+      account: { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" },
     }));
     expect(quota).toMatchObject({
       code: "STORAGE_QUOTA_EXCEEDED",
-      exitCode: 4,
+      exitCode: 10,
+      message: "TinyCloud storage is full; nothing was written.",
     });
-    expect(quota.message).toContain("369.4 MB used of 7.7 MB limit");
-    expect(quota.message).toContain("nothing was shared");
-    const quotaWithoutSizes = shareCliError(new SharePublishAuthorityError({ kind: "storage-quota-exceeded" }));
-    expect(quotaWithoutSizes).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 4 });
-    expect(quotaWithoutSizes.message).toBe("storage quota exceeded; nothing was shared");
+    expect(quota.metadata?.hint).toBe("371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/billing");
+    const tooLarge = shareCliError(new SharePublishAuthorityError({ kind: "storage-full", code: "STORAGE_LIMIT_REACHED" }));
+    expect(tooLarge).toMatchObject({ code: "STORAGE_LIMIT_REACHED", exitCode: 10 });
+    expect(tooLarge.metadata?.hint).toBe("Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/billing");
+    // A storage rejection from another share write (history, delegation) is the same error.
+    expect(shareCliError({ code: "STORAGE_QUOTA_EXCEEDED", message: "raw node text", meta: { status: 402 } })).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 10 });
 
     const upload = shareCliError(new SharePublishAuthorityError({ kind: "upload-failed" }));
     expect(upload).toMatchObject({ code: "UPLOAD_FAILED", exitCode: 4 });

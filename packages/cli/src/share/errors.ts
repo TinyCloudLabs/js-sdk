@@ -1,3 +1,5 @@
+import type { StorageRejection } from "../output/storage.js";
+
 export type SharePublishFailure =
   | { readonly kind: "owner-space-unresolved"; readonly localKey?: boolean; readonly profileName?: string }
   | { readonly kind: "scope-denied"; readonly capability: "KV upload" | "sharing delegation"; readonly requiredAction?: "tinycloud.kv/put" | "tinycloud.kv/get"; readonly localKey?: boolean; readonly profileName?: string }
@@ -12,8 +14,8 @@ export type SharePublishFailure =
   | { readonly kind: "node-info-unavailable" }
   /** The registry refused the record (other 4xx, or an invalid record): a retry cannot succeed. */
   | { readonly kind: "registry-rejected" }
-  /** Sizes are present only when the Node reported them. */
-  | { readonly kind: "storage-quota-exceeded"; readonly usedBytes?: number; readonly limitBytes?: number }
+  /** Storage is full or too small for the upload; account totals only when the SDK reported them. */
+  | ({ readonly kind: "storage-full" } & StorageRejection)
   | { readonly kind: "upload-failed" };
 
 export class SharePublishAuthorityError extends Error {

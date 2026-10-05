@@ -4,6 +4,7 @@ import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { outputError } from "./formatter.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { describeStorageRejection, storageRejection } from "./storage.js";
 
 let activeProfileName: string | undefined;
 
@@ -34,6 +35,8 @@ export function cliErrorFromService(
   message = error.message,
 ): CLIError {
   if (error instanceof CLIError) return error;
+  const storageFull = storageFullError(error);
+  if (storageFull) return storageFull;
   const meta = { ...error.meta };
   // Service metadata is not allowed to supply an arbitrary displayed command hint.
   delete meta.hint;
@@ -54,6 +57,11 @@ export function cliErrorFromService(
 }
 
 export function wrapError(error: unknown): CLIError {
+  // A write refused for storage reads the same for every command: one exit
+  // code, the account totals when known, and the manage link. It is never a
+  // network problem, so it never gets the switch-hosts hint.
+  const storageFull = storageFullError(error);
+  if (storageFull) return storageFull;
   if (error instanceof CLIError) return error;
   const message = error instanceof Error ? error.message : String(error);
 
@@ -115,6 +123,19 @@ function missingPrivateKeyError(): CLIError {
     ExitCode.AUTH_REQUIRED,
     { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` },
   );
+}
+
+/**
+ * The CLI error for a write refused because the owner's TinyCloud storage is
+ * full. `progress` replaces "nothing was written" when earlier writes in the
+ * same command already landed (e.g. `Insert into "t" failed after 3 row(s): `).
+ */
+export function storageFullError(error: unknown, progress?: string): CLIError | undefined {
+  if (error instanceof CLIError && error.exitCode === ExitCode.STORAGE_FULL) return error;
+  const rejection = storageRejection(error);
+  if (!rejection) return undefined;
+  const { message, hint } = describeStorageRejection(rejection, progress);
+  return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
 
 export function handleError(error: unknown): never {

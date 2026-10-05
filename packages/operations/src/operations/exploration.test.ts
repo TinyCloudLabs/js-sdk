@@ -489,6 +489,40 @@ describe("generic KV exploration operations", () => {
     }
   });
 
+  test("reports a full account as a non-retryable storage error with account totals", async () => {
+    const operation = definition("tinycloud.kv.put");
+    const input = operation.input.parse({
+      space: "applications",
+      key: "documents/one",
+      mode: "create",
+      content: { encoding: "utf8", value: "hello" },
+    });
+    const account = { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" };
+    for (const [code, status, sentence] of [
+      ["STORAGE_QUOTA_EXCEEDED", 402, "TinyCloud storage is full, so nothing was written."],
+      ["STORAGE_LIMIT_REACHED", 413, "This write is larger than the TinyCloud storage left, so nothing was written."],
+    ] as const) {
+      const result = await operation.execute(context({
+        kvForSpace() {
+          return {
+            async put() {
+              return { ok: false, error: { code, message: "node text", meta: { status, usedBytes: 155_744, limitBytes: 0, account } } };
+            },
+          };
+        },
+      }), input);
+      expect(result).toEqual({
+        status: "error",
+        error: {
+          code: "STORAGE_QUOTA_EXCEEDED",
+          message: `${sentence} Reading still works. Do not retry: the owner must free up space or upgrade at https://account.tinycloud.xyz/billing.`,
+          retryable: false,
+          details: { account },
+        },
+      });
+    }
+  });
+
   test("rejects every generic KV operation for account and secrets spaces", async () => {
     let handles = 0;
     const runtime = context({

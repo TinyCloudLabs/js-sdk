@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { CLIError, cliErrorFromService, handleError, setActiveProfileName, wrapError } from "./errors.js";
+import { CLIError, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
 
 afterEach(() => {
   delete process.env.TC_PROFILE;
@@ -264,5 +264,114 @@ describe("handleError authorization output", () => {
       expect(result.rendered).not.toContain(resource);
       expect(result.rendered).not.toContain(requiredAction);
     }
+  });
+});
+
+describe("storage full", () => {
+  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/billing";
+  // Node 402 as the SDK reports it: per-space numbers (limit 0) plus the account's.
+  const fullSpace = {
+    code: "STORAGE_QUOTA_EXCEEDED",
+    message: "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again.",
+    service: "kv",
+    meta: { status: 402, usedBytes: 155_744, limitBytes: 0, account: { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" } },
+  };
+
+  function render(error: unknown): { exitCode: number | undefined; output: string } {
+    const stderr = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+    const originalWrite = stderr.write;
+    const originalExit = process.exit;
+    let output = "";
+    let exitCode: number | undefined;
+    stderr.write = (chunk: unknown) => {
+      output += String(chunk);
+      return true;
+    };
+    process.exit = ((code?: number): never => {
+      exitCode = code;
+      throw new Error("expected process exit");
+    }) as typeof process.exit;
+    try {
+      expect(() => handleError(error)).toThrow("expected process exit");
+    } finally {
+      stderr.write = originalWrite;
+      process.exit = originalExit;
+    }
+    return { exitCode, output };
+  }
+
+  test("prints one account-level message with the manage link and exits 10", () => {
+    const { exitCode, output } = render(fullSpace);
+
+    expect(exitCode).toBe(10);
+    expect(JSON.parse(output)).toEqual({
+      error: {
+        code: "STORAGE_QUOTA_EXCEEDED",
+        message: "TinyCloud storage is full; nothing was written.",
+        hint: `371.7 MiB used of 100 MiB (free plan). Reading still works.\n${manage}`,
+      },
+    });
+    expect(output).not.toContain("152.1 KiB");
+    expect(output).not.toContain("profile switch");
+  });
+
+  test("a write larger than what is left gets its own sentence and the same exit code", () => {
+    const { exitCode, output } = render({ code: "STORAGE_LIMIT_REACHED", message: "raw", meta: { status: 413 } });
+
+    expect(exitCode).toBe(10);
+    expect(JSON.parse(output).error).toEqual({
+      code: "STORAGE_LIMIT_REACHED",
+      message: "This write is larger than the TinyCloud storage you have left; nothing was written.",
+      hint: `Reading still works.\n${manage}`,
+    });
+  });
+
+  test("maps every command's shape: CLIError with SDK meta, service result, and wrapped cause", () => {
+    // tc sql forwards the SDK meta as CLIError metadata.
+    expect(wrapError(new CLIError("STORAGE_QUOTA_EXCEEDED", "SQL write failed", 1, fullSpace.meta))).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 10,
+      metadata: { hint: `371.7 MiB used of 100 MiB (free plan). Reading still works.\n${manage}` },
+    });
+    // Commands that convert a service result (kv, duckdb, vars, vault, secrets, account).
+    expect(cliErrorFromService(fullSpace)).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 10,
+      metadata: { hint: `371.7 MiB used of 100 MiB (free plan). Reading still works.\n${manage}` },
+    });
+    expect(wrapError(new CLIError("STORAGE_LIMIT_REACHED", "raw", 1))).toMatchObject({ code: "STORAGE_LIMIT_REACHED", exitCode: 10 });
+    expect(wrapError(new Error("vault write failed", { cause: fullSpace }))).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 10 });
+  });
+
+  test("reads storage text only from an uncoded TinyCloud 402/413 response", () => {
+    const nodeText = "SQL batch failed: 402 - Storage quota exceeded. Used: 155744 bytes, Limit: 0 bytes";
+    expect(wrapError(Object.assign(new Error(nodeText), { status: 402 }))).toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 10 });
+    expect(wrapError(new Error("upload failed", { cause: { message: nodeText, meta: { status: 402 } } })))
+      .toMatchObject({ code: "STORAGE_QUOTA_EXCEEDED", exitCode: 10 });
+
+    // A local file whose name contains the phrase keeps its own mapping.
+    const missingFile = Object.assign(new Error("ENOENT: no such file or directory, open 'Storage quota exceeded.md'"), { code: "ENOENT" });
+    expect(wrapError(missingFile)).toMatchObject({ code: "ERROR", exitCode: 1 });
+    expect(wrapError(new CLIError("NOT_FOUND", 'Key "TinyCloud storage is full" not found', 4))).toMatchObject({ code: "NOT_FOUND", exitCode: 4 });
+    expect(wrapError(new CLIError("NETWORK_ERROR", nodeText, 6))).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
+    // Without a storage status the text is not a TinyCloud storage rejection.
+    expect(wrapError(new Error("Storage quota exceeded in /tmp"))).toMatchObject({ code: "ERROR", exitCode: 1 });
+  });
+
+  test("keeps a partial command's progress instead of claiming nothing was written", () => {
+    expect(storageFullError(fullSpace, 'Insert into "notes" failed after 3 row(s): ')).toMatchObject({
+      code: "STORAGE_QUOTA_EXCEEDED",
+      exitCode: 10,
+      message: 'Insert into "notes" failed after 3 row(s): TinyCloud storage is full.',
+      metadata: { hint: `371.7 MiB used of 100 MiB (free plan). Reading still works.\n${manage}` },
+    });
+  });
+
+  test("never prints a zero or malformed account budget", () => {
+    for (const account of [{ usedBytes: 155_744, limitBytes: 0 }, { usedBytes: -1, limitBytes: 100 }, { usedBytes: 1, limitBytes: "100 MB" }]) {
+      expect(wrapError({ code: "STORAGE_QUOTA_EXCEEDED", meta: { account } }).metadata?.hint).toBe(`Reading still works.\n${manage}`);
+    }
+    expect(wrapError({ code: "STORAGE_QUOTA_EXCEEDED", meta: { account: { usedBytes: 2_048, limitBytes: 1_073_741_824, plan: "\u001b[31mpaid" } } }).metadata?.hint)
+      .toBe(`2 KiB used of 1 GiB. Reading still works.\n${manage}`);
   });
 });

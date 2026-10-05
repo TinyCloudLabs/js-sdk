@@ -91,6 +91,25 @@ test("error details use an explicit safe-field policy", () => {
   expect(JSON.stringify(error)).not.toContain("canary");
 });
 
+test("storage error details keep only well-formed account totals", () => {
+  const storageError = (account: unknown) => redactOperationError(
+    { sensitivity },
+    {
+      code: "STORAGE_QUOTA_EXCEEDED",
+      message: "TinyCloud storage is full, so nothing was written.",
+      retryable: false,
+      details: { account, space: { usedBytes: 155_744, limitBytes: 0 } },
+    },
+  );
+
+  expect(storageError({ usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free", owner: "did-canary" }).details)
+    .toEqual({ account: { usedBytes: 389_777_359, limitBytes: 104_857_600, plan: "free" } });
+  expect(storageError({ usedBytes: 1, limitBytes: 2, plan: "\u001b[31mcanary" }).details).toEqual({ account: { usedBytes: 1, limitBytes: 2 } });
+  for (const account of [{ usedBytes: 155_744, limitBytes: 0 }, { usedBytes: -1, limitBytes: 2 }, { usedBytes: "1", limitBytes: 2 }, "canary"]) {
+    expect(storageError(account).details).toBeUndefined();
+  }
+});
+
 test("error details reject attacker values in safe mismatch fields", () => {
   const canaries = [
     "raw-jwk-private-key-canary",

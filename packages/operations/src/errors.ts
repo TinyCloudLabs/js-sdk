@@ -17,6 +17,7 @@ export const OPERATION_ERROR_CODES = [
   "ENCRYPTION_NETWORK_UNRESOLVED",
   "NODE_UNREACHABLE",
   "NODE_ERROR",
+  "STORAGE_QUOTA_EXCEEDED",
   "KV_NOT_FOUND",
   "KV_PRECONDITION_FAILED",
   "KV_CONFLICT",
@@ -54,6 +55,29 @@ export function operationError(
     retryable: options.retryable ?? false,
     ...(options.details === undefined ? {} : { details: options.details }),
   };
+}
+
+const MANAGE_STORAGE = "Do not retry: the owner must free up space or upgrade at https://account.tinycloud.xyz/billing.";
+
+/**
+ * A write the node refused because the owner's TinyCloud storage is full
+ * (SDK `STORAGE_QUOTA_EXCEEDED`, HTTP 402) or too small for this write
+ * (`STORAGE_LIMIT_REACHED`, HTTP 413). Nothing was written, so the outcome is
+ * known, and it stays refused until the owner acts, so it is never retryable.
+ * The SDK's account totals travel as details; per-space numbers never do.
+ */
+export function storageFullOperationError(error: unknown): OperationError | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const { code, meta } = error as { code?: unknown; meta?: unknown };
+  if (code !== "STORAGE_QUOTA_EXCEEDED" && code !== "STORAGE_LIMIT_REACHED") return undefined;
+  const account = typeof meta === "object" && meta !== null ? (meta as { account?: unknown }).account : undefined;
+  return operationError(
+    "STORAGE_QUOTA_EXCEEDED",
+    code === "STORAGE_LIMIT_REACHED"
+      ? `This write is larger than the TinyCloud storage left, so nothing was written. Reading still works. ${MANAGE_STORAGE}`
+      : `TinyCloud storage is full, so nothing was written. Reading still works. ${MANAGE_STORAGE}`,
+    { retryable: false, ...(account === undefined ? {} : { details: { account } }) },
+  );
 }
 
 /**
