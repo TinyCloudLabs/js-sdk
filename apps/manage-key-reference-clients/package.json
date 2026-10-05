@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/manage-key-reference-clients",
-  "version": "0.0.2-beta.6",
+  "version": "0.0.2-beta.7",
   "private": true,
   "type": "module",
   "main": "src/run.ts",
