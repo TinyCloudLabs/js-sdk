@@ -49,6 +49,12 @@ export interface ProfileConfig {
   did: string;
   sessionDid?: string;
   ownerDid?: string;
+  /**
+   * Whether `ownerDid` is the OpenKey account's primary key, as OpenKey last
+   * reported at login. Absent when OpenKey did not say (older deployments,
+   * local keys). Unsigned metadata: never authority.
+   */
+  ownerKeyPrimary?: boolean;
   spaceId?: string;
   /**
    * Default space NAME (e.g. "applications") applied when a kv/sql command

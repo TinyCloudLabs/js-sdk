@@ -25,6 +25,7 @@ import {
   type SignedSession,
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
+import { openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -108,6 +109,8 @@ export interface DeviceAuthorizationResult {
   approved: PermissionEntry[];
   /** Requested capabilities the owner unchecked. */
   declined: PermissionEntry[];
+  /** OpenKey's unsigned report that the approving key is the account's primary key; absent when it did not say. */
+  primary?: boolean;
 }
 
 function digest(value: string): string {
@@ -402,6 +405,7 @@ async function verifyApproval(input: {
     expiresAt: session.expiresAt,
     approved: permissionsFromTuples(signed),
     declined: declinedPermissions(input.requested, session.permissions, ownerDid),
+    ...(openKeyPrimaryFlag(delegation) === undefined ? {} : { primary: openKeyPrimaryFlag(delegation) }),
   };
 }
 
@@ -604,7 +608,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
     expectedOwner,
   });
-  const profile: ProfileConfig = {
+  const profile: ProfileConfig = withOwnerKeyPrimary({
     ...existing,
     name: input.profileName,
     host: input.persistHost === true || !existing?.host ? input.nodeOrigin : existing.host,
@@ -618,7 +622,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     posture: "owner-openkey",
     operatorType: existing?.operatorType ?? "human",
     authMethod: "openkey",
-  };
+  }, result.primary);
   await commitLogin(input.profileName, snapshot, {
     key,
     session: result.session,
@@ -626,5 +630,6 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     // The signed permissions, with their caveats; `approved` is the action summary.
     approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
   });
+  warnIfNotPrimaryKey(result.ownerDid, result.primary);
   return { profile, result };
 }

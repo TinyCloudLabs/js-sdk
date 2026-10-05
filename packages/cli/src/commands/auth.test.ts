@@ -37,6 +37,7 @@ type ProfileLike = {
   did: string;
   sessionDid?: string;
   ownerDid?: string;
+  ownerKeyPrimary?: boolean;
   spaceId?: string;
   createdAt: string;
   posture?: "owner-openkey" | "delegate-session" | "local-owner-key";
@@ -1668,5 +1669,138 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
 
     const persisted = sessions.get("default") as { jwk: { d?: string } };
     expect(persisted.jwk.d).toBe("openkey-returned-private");
+  });
+});
+
+describe("OpenKey primary key (TC-705)", () => {
+  const sessionDid = "did:key:openkey-session";
+  const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+  const primaryOwner = "did:pkh:eip155:1:0x00000000000000000000000000000000000000aa";
+  const otherOwner = "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb";
+  let stderr: string[];
+  let restoreStderr: () => void;
+
+  function signedBy(owner: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      ...openKeyDelegation,
+      verificationMethod: sessionDid,
+      address: owner.split(":")[4],
+      chainId: 1,
+      ...extra,
+    };
+  }
+
+  beforeEach(() => {
+    resetState();
+    profiles.set("default", makeProfile({ did: sessionDid, sessionDid, authMethod: "openkey", posture: "owner-openkey" }));
+    keys.set("default", key);
+    stderr = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    restoreStderr = () => { process.stderr.write = original; };
+  });
+
+  afterEach(() => restoreStderr());
+
+  test("a login approved by the primary key records it and warns about nothing", async () => {
+    openKeyDelegation = signedBy(primaryOwner, { primary: true });
+
+    const { profile } = await refreshOpenKeySession("default", activeHost);
+
+    expect(profile.ownerDid).toBe(primaryOwner);
+    expect(profile.ownerKeyPrimary).toBe(true);
+    expect(profiles.get("default")?.ownerKeyPrimary).toBe(true);
+    expect(stderr.join("")).toBe("");
+  });
+
+  test("a login approved by another key succeeds, records it and warns on stderr only", async () => {
+    openKeyDelegation = signedBy(otherOwner, { primary: false });
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(profiles.get("default")?.ownerKeyPrimary).toBe(false);
+    expect(sessions.has("default")).toBe(true);
+    const warning = stderr.join("");
+    expect(warning).toContain("0x00000000000000000000000000000000000000bb");
+    expect(warning).toContain("not your account's primary OpenKey key");
+    expect(warning).toContain("separate owner with its own spaces and data");
+    // Machine output carries no warning text.
+    expect(JSON.stringify(recorded.outputs)).not.toContain("primary OpenKey key");
+  });
+
+  test("an OpenKey that does not report the flag records nothing, clears an earlier answer and stays quiet", async () => {
+    profiles.set("default", makeProfile({ did: sessionDid, sessionDid, authMethod: "openkey", posture: "owner-openkey", ownerKeyPrimary: false }));
+    openKeyDelegation = signedBy(primaryOwner);
+
+    const { profile } = await refreshOpenKeySession("default", activeHost);
+
+    expect("ownerKeyPrimary" in profile).toBe(false);
+    expect(profiles.get("default")?.ownerKeyPrimary).toBeUndefined();
+    expect(stderr.join("")).toBe("");
+  });
+
+  test("the flag is never recorded without a verified owner", async () => {
+    const { siwe: _siwe, signature: _signature, ...unsigned } = signedBy(otherOwner, { primary: false });
+    openKeyDelegation = unsigned;
+
+    const { profile } = await refreshOpenKeySession("default", activeHost);
+
+    expect(profile.ownerKeyPrimary).toBeUndefined();
+    expect(stderr.join("")).toBe("");
+  });
+
+  test("--owner on a plain login names that owner's space so OpenKey preselects its key", async () => {
+    openKeyDelegation = signedBy(otherOwner, { primary: false });
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup", "--owner", otherOwner]);
+
+    expect(recorded.errors).toEqual([]);
+    const requested = recorded.startAuthFlows[0]?.options.permissions as Array<{ service: string; space: string; actions: string[] }>;
+    const space = `tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000bb:default`;
+    expect(requested.map((entry) => [entry.service, entry.space])).toEqual([
+      ["tinycloud.kv", space],
+      ["tinycloud.sql", space],
+      ["tinycloud.capabilities", space],
+    ]);
+    expect(profiles.get("default")?.ownerDid).toBe(otherOwner);
+    expect(profiles.get("default")?.ownerKeyPrimary).toBe(false);
+  });
+
+  test("--owner refuses an approval by any other key and saves nothing", async () => {
+    openKeyDelegation = signedBy(primaryOwner, { primary: true });
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup", "--owner", otherOwner]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_OWNER_MISMATCH" })]);
+    expect(sessions.has("default")).toBe(false);
+    expect(profiles.get("default")?.ownerDid).toBeUndefined();
+  });
+
+  test("a plain login without --owner sends no request scope", async () => {
+    openKeyDelegation = signedBy(primaryOwner, { primary: true });
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
+
+    expect(recorded.startAuthFlows[0]?.options.permissions).toBeUndefined();
+  });
+
+  test("auth status reports whether the owner key is primary", async () => {
+    profiles.set("default", makeProfile({ did: sessionDid, sessionDid, ownerDid: otherOwner, ownerKeyPrimary: false }));
+
+    await runAuthCommand(["auth", "status"]);
+
+    expect(recorded.outputs).toEqual([expect.objectContaining({ ownerDid: otherOwner, ownerKeyPrimary: false })]);
+  });
+
+  test("auth status reports null when OpenKey never said", async () => {
+    profiles.set("default", makeProfile({ did: sessionDid, sessionDid, ownerDid: primaryOwner }));
+
+    await runAuthCommand(["auth", "status"]);
+
+    expect(recorded.outputs).toEqual([expect.objectContaining({ ownerKeyPrimary: null })]);
   });
 });
