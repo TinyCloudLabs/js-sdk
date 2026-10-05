@@ -19,6 +19,7 @@ var ERRNO = {
   EISDIR: -21,
   EINVAL: -22,
   ENOTEMPTY: -39,
+  ENOSPC: -28,
   EROFS: -30
 };
 function createNodeError(code, message, syscall, path) {

@@ -15,6 +15,7 @@ var ERRNO = {
   EISDIR: -21,
   EINVAL: -22,
   ENOTEMPTY: -39,
+  ENOSPC: -28,
   EROFS: -30
 };
 function createNodeError(code, message, syscall, path) {
@@ -47,6 +48,9 @@ function createEACCES(syscall, path, message = "permission denied") {
 }
 function createEIO(syscall, path, message) {
   return createNodeError("EIO", `${message}, ${syscall} '${path}'`, syscall, path);
+}
+function createENOSPC(syscall, path) {
+  return createNodeError("ENOSPC", `TinyCloud storage is full; nothing was written, ${syscall} '${path}'`, syscall, path);
 }
 function createEBUSY(syscall, path, message = "resource busy or locked") {
   return createNodeError("EBUSY", `${message}, ${syscall} '${path}'`, syscall, path);
@@ -272,6 +276,9 @@ async function kvPut(key, value) {
   if (!result.ok) {
     if (result.error?.code === "AUTH_UNAUTHORIZED") {
       throw createEACCES("put", key, result.error.message);
+    }
+    if (result.error?.code === "STORAGE_QUOTA_EXCEEDED" || result.error?.code === "STORAGE_LIMIT_REACHED") {
+      throw createENOSPC("put", key);
     }
     throw createEIO("put", key, result.error?.message ?? "kv put failed");
   }

@@ -32,7 +32,9 @@ var init_constants = __esm({
       NOT_FOUND: 4,
       PERMISSION_DENIED: 5,
       NETWORK_ERROR: 6,
-      NODE_ERROR: 7
+      NODE_ERROR: 7,
+      /** A write was refused because the owner's TinyCloud storage is full. */
+      STORAGE_FULL: 10
     };
   }
 });
@@ -96,15 +98,90 @@ function outputError(code3, message, hint, meta) {
 function isInteractive() {
   return Boolean(process.stdout.isTTY);
 }
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 var init_formatter = __esm({
   "src/output/formatter.ts"() {
     "use strict";
     init_theme();
+  }
+});
+
+// src/output/storage.ts
+function storageRejection(error) {
+  let node = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null; depth += 1) {
+    const record = node;
+    let code3;
+    if (record.code === "STORAGE_QUOTA_EXCEEDED" || record.code === "STORAGE_LIMIT_REACHED") {
+      code3 = record.code;
+    } else if (record.code !== void 0) {
+      return void 0;
+    } else if (isStorageStatus(record)) {
+      code3 = storageCodeFromText(record.message);
+    }
+    if (code3) {
+      const account = accountTotals(record) ?? accountTotals(record.meta) ?? accountTotals(record.metadata);
+      return account ? { code: code3, account } : { code: code3 };
+    }
+    node = record.cause;
+  }
+  return void 0;
+}
+function describeStorageRejection(rejection, progress) {
+  const reason = rejection.code === "STORAGE_LIMIT_REACHED" ? "This write is larger than the TinyCloud storage you have left" : "TinyCloud storage is full";
+  const message = progress ? `${progress}${reason}.` : `${reason}; nothing was written.`;
+  const { account } = rejection;
+  const totals = account ? `${formatStorageBytes(account.usedBytes)} used of ${formatStorageBytes(account.limitBytes)}${account.plan ? ` (${account.plan} plan)` : ""}. ` : "";
+  return {
+    message,
+    hint: `${totals}Reading still works.
+Free up space or upgrade: ${MANAGE_STORAGE_URL}`
+  };
+}
+function formatStorageBytes(bytes) {
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  if (bytes < 1024) return `${bytes} B`;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1).replace(/\.0$/, "")} ${units[unit]}`;
+}
+function storageCodeFromText(message) {
+  if (typeof message !== "string") return void 0;
+  if (message.includes("larger than the TinyCloud storage you have left")) return "STORAGE_LIMIT_REACHED";
+  if (message.includes("TinyCloud storage is full") || /storage quota exceeded/i.test(message)) {
+    return "STORAGE_QUOTA_EXCEEDED";
+  }
+  return void 0;
+}
+function isStorageStatus(record) {
+  const meta = "meta" in record && typeof record.meta === "object" && record.meta !== null ? record.meta : {};
+  const statuses = [
+    "status" in record ? record.status : void 0,
+    "statusCode" in record ? record.statusCode : void 0,
+    "status" in meta ? meta.status : void 0
+  ];
+  return statuses.some((value) => value === 402 || value === 413);
+}
+function accountTotals(meta) {
+  if (typeof meta !== "object" || meta === null) return void 0;
+  const account = meta.account;
+  if (typeof account !== "object" || account === null) return void 0;
+  const { usedBytes, limitBytes, plan } = account;
+  if (!isByteCount(usedBytes) || !isByteCount(limitBytes) || limitBytes === 0) return void 0;
+  return typeof plan === "string" && /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$/.test(plan) ? { usedBytes, limitBytes, plan } : { usedBytes, limitBytes };
+}
+function isByteCount(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+var MANAGE_STORAGE_URL, MAX_CAUSE_DEPTH;
+var init_storage = __esm({
+  "src/output/storage.ts"() {
+    "use strict";
+    MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/billing";
+    MAX_CAUSE_DEPTH = 4;
   }
 });
 
@@ -117,6 +194,8 @@ function setActiveProfileName(name) {
   activeProfileName = name;
 }
 function wrapError(error) {
+  const storageFull = storageFullError(error);
+  if (storageFull) return storageFull;
   if (error instanceof CLIError) return error;
   const message = error instanceof Error ? error.message : String(error);
   const verdict = authorizationVerdictOf(error);
@@ -162,6 +241,13 @@ function missingPrivateKeyError() {
     ExitCode.AUTH_REQUIRED,
     { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` }
   );
+}
+function storageFullError(error, progress) {
+  if (error instanceof CLIError && error.exitCode === ExitCode.STORAGE_FULL) return error;
+  const rejection = storageRejection(error);
+  if (!rejection) return void 0;
+  const { message, hint } = describeStorageRejection(rejection, progress);
+  return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
 function handleError(error) {
   const cliError = wrapError(error);
@@ -245,6 +331,7 @@ var init_errors = __esm({
     "use strict";
     init_constants();
     init_formatter();
+    init_storage();
     CLIError = class extends Error {
       constructor(code3, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -312,7 +399,7 @@ async function listDirs(dirPath) {
   }
 }
 var PRIVATE_FILE_MODE, PRIVATE_DIR_MODE;
-var init_storage = __esm({
+var init_storage2 = __esm({
   "src/config/storage.ts"() {
     "use strict";
     PRIVATE_FILE_MODE = 384;
@@ -570,7 +657,7 @@ var init_profiles = __esm({
   "src/config/profiles.ts"() {
     "use strict";
     init_constants();
-    init_storage();
+    init_storage2();
     init_errors();
     ProfileManager = class _ProfileManager {
       // ── Initialization ──────────────────────────────────────────────────
@@ -5750,7 +5837,7 @@ var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
     init_constants();
-    init_storage();
+    init_storage2();
     init_profiles();
     init_errors();
     init_constants();
@@ -16699,7 +16786,6 @@ function parseDuration(input) {
 }
 
 // src/commands/share.ts
-init_formatter();
 init_errors();
 
 // src/share/output.ts
@@ -16965,9 +17051,8 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "registry-rejected") {
       return new CLIError("REGISTRY_REJECTED", "the TinyCloud location registry rejected this session's location record, so nothing was shared; retrying will not help. Log in again, and report the problem if it persists", 6);
     }
-    if (failure.kind === "storage-quota-exceeded") {
-      const sizes = failure.usedBytes === void 0 || failure.limitBytes === void 0 ? "" : ` (${formatBytes(failure.usedBytes)} used of ${formatBytes(failure.limitBytes)} limit)`;
-      return new CLIError("STORAGE_QUOTA_EXCEEDED", `storage quota exceeded${sizes}; nothing was shared`, 4);
+    if (failure.kind === "storage-full") {
+      return storageFullError(failure);
     }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
@@ -16987,6 +17072,8 @@ function shareCliError(error, operation = "publish") {
     const code3 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
     return new CLIError(code3, error.message, exit);
   }
+  const storageFull = storageFullError(error);
+  if (storageFull) return storageFull;
   const message = error instanceof Error ? error.message : String(error);
   const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
   const known = {
@@ -17280,6 +17367,7 @@ function registerShareCommand(program2) {
 }
 
 // src/share/adapters.ts
+init_storage();
 init_profiles();
 init_constants();
 import { readFile as readFile4 } from "fs/promises";
@@ -17293,15 +17381,9 @@ function requiredKvAction(meta) {
   const action = meta.requiredAction;
   return action === "tinycloud.kv/put" || action === "tinycloud.kv/get" ? action : void 0;
 }
-function isByteCount(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 function throwKvUploadFailure(error) {
-  if (typeof error === "object" && error !== null && "code" in error && error.code === "STORAGE_QUOTA_EXCEEDED") {
-    const meta = "meta" in error && typeof error.meta === "object" && error.meta !== null ? error.meta : {};
-    const { usedBytes, limitBytes } = meta;
-    throw new SharePublishAuthorityError(isByteCount(usedBytes) && isByteCount(limitBytes) ? { kind: "storage-quota-exceeded", usedBytes, limitBytes } : { kind: "storage-quota-exceeded" });
-  }
+  const rejection = storageRejection(error);
+  if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
