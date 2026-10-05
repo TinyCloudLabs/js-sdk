@@ -116,11 +116,13 @@ function fakeOpenKey(approve: (start: Record<string, unknown>, transactionId: st
   return { fetchFn, startBodies, urls, get polls() { return polls; } };
 }
 
-async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown> }) {
+async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown>; primary?: boolean }) {
   const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat);
+  // OpenKey's unsigned report that the approving key is the account's primary key.
+  const relayed = input.primary === undefined ? delegation : { ...delegation, primary: input.primary };
   return response({
     status: "approved",
-    relay: await encryptRelay(start.relayPublicJwk as object, transactionId, delegation),
+    relay: await encryptRelay(start.relayPublicJwk as object, transactionId, relayed),
     binding: {
       transactionId,
       sessionDid,
@@ -422,6 +424,28 @@ describe("device login persistence", () => {
       expect((await stat(join(PROFILES_DIR, "agent", file))).mode & 0o777).toBe(0o600);
     }
     expect((await stat(join(PROFILES_DIR, "agent"))).mode & 0o777).toBe(0o700);
+  });
+
+  test("records whether the approving key is the account's primary key and warns on stderr when it is not (TC-705)", async () => {
+    const stderr: string[] = [];
+    const write = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => { stderr.push(String(chunk)); return true; }) as typeof process.stderr.write;
+    try {
+      for (const primary of [true, false, undefined]) {
+        stderr.length = 0;
+        await ProfileManager.setKey("agent", key);
+        await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
+        const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested, primary }));
+
+        const { result } = await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: requested, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined, replaceSession: true });
+
+        expect(result.primary).toBe(primary);
+        expect((await ProfileManager.getProfile("agent")).ownerKeyPrimary).toBe(primary);
+        expect(stderr.join("").includes("not your account's primary OpenKey key")).toBe(primary === false);
+      }
+    } finally {
+      process.stderr.write = write;
+    }
   });
 
   test("a rejected approval leaves the profile and its session untouched", async () => {
