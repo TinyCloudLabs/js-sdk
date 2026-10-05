@@ -179,3 +179,7 @@ export async function newStore(dir?: string, overrides: Partial<ReplicaConfig> =
   await store.installGrant(deviceGrant({ prefix: overrides.prefix ?? "notes/" }));
   return store;
 }
+
+/** Six keys, synced two per page, so a crash can land inside page 2 of 3. */
+export const CRASH_DATASET: Array<[string, string]> = [1, 2, 3, 4, 5, 6].map((n) => [`notes/k${n}`, `value ${n}`]);
+export const CRASH_PAGE_LIMIT = 2;

@@ -25,9 +25,26 @@ env:
 
 jobs:
   replica-e2e:
-    name: Replica (Node 22, Bun 1.3.14, SQLite node)
+    name: Replica (Node 22, Bun 1.3.14, ${{ matrix.database }} node)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: replica_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -72,9 +89,11 @@ jobs:
           chmod +x "$RUNNER_TEMP/tinycloud"
 
       - name: Replica engine and store conformance
+        if: matrix.database == 'sqlite'
         run: bun run --cwd packages/replica test
 
       - name: tc replica against the node
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts

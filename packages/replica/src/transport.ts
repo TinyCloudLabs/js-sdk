@@ -74,6 +74,18 @@ export function replicaErrorFromService(error: ServiceError, context: string): R
   return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context}: ${error.message}`, detail);
 }
 
+const encoder = new TextEncoder();
+
+/** Byte order of UTF-8 keys: how the node orders batch results. */
+function compareKeyBytes(a: string, b: string): number {
+  const x = encoder.encode(a);
+  const y = encoder.encode(b);
+  for (let index = 0; index < Math.min(x.length, y.length); index += 1) {
+    if (x[index] !== y[index]) return x[index]! - y[index]!;
+  }
+  return x.length - y.length;
+}
+
 function isNotFound(error: ServiceError): boolean {
   return error.code === "KV_NOT_FOUND" || error.code === "NOT_FOUND";
 }
@@ -147,7 +159,10 @@ export function kvSyncTransport(kv: KVSyncClient): ReplicaTransport {
       const contents = new Map<string, FetchedContent>();
       if (keys.length === 0) return contents;
       const signal = options?.signal;
-      const batch = await kv.batchGet(keys, { binary: true, ...(signal === undefined ? {} : { signal }) });
+      // The node answers a batch in key byte order and the SDK matches results
+      // to requests by position, so ask in that order.
+      const ordered = [...keys].sort(compareKeyBytes);
+      const batch = await kv.batchGet(ordered, { binary: true, ...(signal === undefined ? {} : { signal }) });
       if (batch.ok) {
         for (const item of batch.data.results) {
           const result = item.result;

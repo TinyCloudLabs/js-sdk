@@ -168,6 +168,16 @@ function storageError(error: unknown, action: string): ReplicaError {
 
 const isHash = (name: string) => /^[0-9a-f]{64}$/.test(name);
 
+/** Crash-test seam: called at the durability boundaries of `applyPage`. */
+export type StoreFaults = {
+  /** Blobs are durable; no row references them yet. */
+  afterBlobs?(): void;
+  /** Rows and cursor are written inside the open transaction, not committed. */
+  beforeCommit?(): void;
+  /** The page is committed. */
+  afterCommit?(): void;
+};
+
 /**
  * The CLI replica store: SQLite (WAL, synchronous=FULL) for entries, cursor
  * and authority, committed in one transaction per page; content-addressed
@@ -178,11 +188,13 @@ export class SqliteReplicaStore implements ReplicaStore {
   readonly #db: SqliteDatabase;
   readonly #holder = `${process.pid}-${randomBytes(6).toString("hex")}`;
   readonly #now: () => number;
+  readonly #faults: StoreFaults;
 
-  private constructor(dir: string, db: SqliteDatabase, now: () => number) {
+  private constructor(dir: string, db: SqliteDatabase, now: () => number, faults: StoreFaults) {
     this.dir = dir;
     this.#db = db;
     this.#now = now;
+    this.#faults = faults;
   }
 
   /**
@@ -191,7 +203,7 @@ export class SqliteReplicaStore implements ReplicaStore {
    */
   static async open(
     dir: string,
-    options: { create: boolean; sqlite?: SqliteOpener; now?: () => number },
+    options: { create: boolean; sqlite?: SqliteOpener; now?: () => number; faults?: StoreFaults },
   ): Promise<SqliteReplicaStore> {
     const dbPath = join(dir, "replica.db");
     if (!options.create) {
@@ -229,7 +241,7 @@ export class SqliteReplicaStore implements ReplicaStore {
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       }
-      return new SqliteReplicaStore(dir, db, options.now ?? Date.now);
+      return new SqliteReplicaStore(dir, db, options.now ?? Date.now, options.faults ?? {});
     } catch (error) {
       throw storageError(error, `Opening the replica at ${dir}`);
     }
@@ -466,6 +478,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     } catch (error) {
       throw storageError(error, "Writing replica content");
     }
+    this.#faults.afterBlobs?.();
     this.#write("Committing a sync page", () => {
       this.#checkLease(t);
       for (const change of p.changes) {
@@ -530,7 +543,9 @@ export class SqliteReplicaStore implements ReplicaStore {
         );
       }
       this.#db.run(`UPDATE replica SET ${sets.join(", ")} WHERE id = 1`, ...params);
+      this.#faults.beforeCommit?.();
     });
+    this.#faults.afterCommit?.();
   }
 
   async #unlinkBlobs(keep: Set<string>): Promise<number> {

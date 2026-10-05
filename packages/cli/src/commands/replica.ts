@@ -414,8 +414,14 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           if (requiresSecretsOptIn(space, prefix) && !state.config.allowSecrets && options.allowSecrets !== true) {
             throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
           }
-          const grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
-          await store.installGrant(grant);
+          let grant: ParsedUcanGrant | undefined;
+          try {
+            grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
+          } catch (error) {
+            // An expired stored grant is the engine's call (GRANT_EXPIRED), not a missing one.
+            if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state.grant ?? state.pendingGrant) === null) throw error;
+          }
+          if (grant !== undefined) await store.installGrant(grant);
           if (options.retentionGrant !== undefined && options.retentionGrant !== state.config.retentionGrantCid) {
             await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
           }

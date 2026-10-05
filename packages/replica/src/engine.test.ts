@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { FakeNode, NODE_DID, etagOf, newStore, tempDir } from "../test/fixtures.js";
+import { FakeNode, NODE_DID, deviceGrant, etagOf, newStore, tempDir } from "../test/fixtures.js";
 import { Replica } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { SqliteReplicaStore } from "./sqlite/store.js";
@@ -275,6 +275,31 @@ describe("authority", () => {
     const store = await newStore();
     await rejectsWith(new Replica({ store, transport: node }).sync(), ReplicaErrorCode.GRANT_EXPIRED);
     expect(await store.get("notes/a")).toBeUndefined();
+  });
+
+  test("a replacement grant stays pending until a sync under it succeeds, and keeps the cursor", async () => {
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    const store = await newStore();
+    const replica = new Replica({ store, transport: node });
+    await replica.sync();
+    const first = (await store.open())!;
+    const renewal = deviceGrant({ exp: Math.floor(Date.now() / 1000) + 7200 });
+    await store.installGrant(renewal);
+    expect((await replica.status()).device).toMatchObject({ delegationCid: first.grant!.cid, pendingDelegationCid: renewal.cid });
+
+    // The node refuses the sync: the old grant stays active, the renewal pending.
+    node.online = false;
+    await rejectsWith(replica.sync(), ReplicaErrorCode.NETWORK_ERROR);
+    expect((await store.open())!.grant!.cid).toBe(first.grant!.cid);
+
+    node.online = true;
+    node.put("notes/b", "two");
+    const report = await replica.sync();
+    expect(report).toMatchObject({ promotedGrant: true, changes: 1 });
+    const after = (await store.open())!;
+    expect(after.grant!.cid).toBe(renewal.cid);
+    expect(after.pendingGrant).toBeNull();
   });
 });
 

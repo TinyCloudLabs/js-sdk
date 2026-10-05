@@ -4,7 +4,9 @@
  * TC_HOME, and a node binary on SQLite in a temp data directory.
  *
  * Needs TC_REPLICA_E2E_NODE_BIN: a tinycloud node binary serving
- * `kv-sync-v1` (tinycloud-node ≥ d7f511f). Build the CLI first.
+ * `kv-sync-v1` (tinycloud-node ≥ d7f511f). Build the CLI first. Set
+ * TC_REPLICA_E2E_DATABASE_URL (a fresh, empty database) to run the node on
+ * Postgres instead of SQLite.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { contentHash as hash } from "@tinycloud/replica";
@@ -16,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
+const DATABASE_URL = process.env.TC_REPLICA_E2E_DATABASE_URL || undefined;
 const CLI = resolve(import.meta.dir, "../dist/index.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");
@@ -38,7 +41,7 @@ const { TC_HOST: _host, TC_PROFILE: _profile, ...ambient } = process.env;
 
 type SyncOutput = { sync: Record<string, unknown>; status: { counts: unknown; source: unknown } };
 
-describe.skipIf(!NODE_BIN)("tc replica against a real node (SQLite)", () => {
+describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === undefined ? "SQLite" : "Postgres"})`, () => {
   let home: string;
   let dataDir: string;
   let host: string;
@@ -60,6 +63,8 @@ describe.skipIf(!NODE_BIN)("tc replica against a real node (SQLite)", () => {
         // One static host key across restarts: the feed cursor is sealed under it.
         TINYCLOUD_KEYS__TYPE: "Static",
         TINYCLOUD_KEYS__SECRET: nodeSecret,
+        // Optional: run the node on Postgres (a fresh database per run) instead of SQLite.
+        ...(DATABASE_URL === undefined ? {} : { TINYCLOUD_STORAGE__DATABASE: DATABASE_URL }),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -119,10 +124,11 @@ describe.skipIf(!NODE_BIN)("tc replica against a real node (SQLite)", () => {
     return tc(args, { profile: "device", preload: NO_NETWORK });
   }
 
+  // Written out of key order: the feed then lists changes out of key order too.
   const fixtures = {
-    "notes/a.txt": Buffer.from("alpha note"),
-    "notes/bin": Buffer.from([0, 1, 2, 255, 254, 10, 13]),
     "notes/deep/c.json": Buffer.from(JSON.stringify({ c: 3 })),
+    "notes/bin": Buffer.from([0, 1, 2, 255, 254, 10, 13]),
+    "notes/a.txt": Buffer.from("alpha note"),
   } as const;
   const outOfScope = {
     "notes-secret/x": Buffer.from("OUT-OF-SCOPE-SECRET-BYTES"),
@@ -204,11 +210,11 @@ describe.skipIf(!NODE_BIN)("tc replica against a real node (SQLite)", () => {
 
     // 4. Restart the node; the owner updates, deletes and adds while the device is away.
     await startNode();
+    const added = Buffer.from("gamma");
+    await put("notes/deep/new", added);
     const updated = Buffer.from("alpha note, second version");
     await put("notes/a.txt", updated);
     await ok(["--host", host, "kv", "delete", "notes/bin"], "owner");
-    const added = Buffer.from("gamma");
-    await put("notes/deep/new", added);
     await put("notes-secret/x", Buffer.from("OUT-OF-SCOPE-SECRET-BYTES-2"));
 
     // 5. Sync; the replica converges.
@@ -245,6 +251,56 @@ describe.skipIf(!NODE_BIN)("tc replica against a real node (SQLite)", () => {
     expect(await readFile(join(home, "network-attempts.log"), "utf8").catch(() => "")).toBe("");
     await startNode();
   }, 180_000);
+
+  test("an expired grant blocks offline reads; a retain grant keeps them, marked expired, until retainUntil", async () => {
+    // Real waits: grant windows are signed absolute times that the node attests
+    // and the spawned CLI enforces with its own clock, which a test cannot
+    // move. node-sdk refuses to issue a grant expiring within 60 s, so these
+    // are about the shortest windows the public CLI can produce.
+    const waitUntil = async (iso: string) => {
+      const remaining = Date.parse(iso) + 1500 - Date.now();
+      if (remaining > 0) await Bun.sleep(remaining);
+    };
+    await ok(["profile", "create", "dev2", "--posture", "delegate-session", "--host", host], "dev2");
+    const grant = async (actions: string, expiry: string, file: string): Promise<string> => {
+      await ok(["auth", "request", "--cap", `tinycloud.kv:${space}:notes/:${actions}`, "--expiry", expiry, "--emit", `${file}.req.json`], "dev2");
+      const granted = await tc(["auth", "grant", `${file}.req.json`, "--yes"], { profile: "owner" });
+      if (granted.code !== 0) throw new Error(`tc auth grant exited ${granted.code}\n${granted.stderr}`);
+      await writeFile(join(home, `${file}.json`), granted.stdout);
+      return (await ok<{ delegationCid: string }>(["auth", "import", `${file}.json`], "dev2")).delegationCid;
+    };
+    await grant("get,list,metadata,sync", "75s", "short-sync");
+    const retain = await grant("retain", "150s", "retain");
+
+    type Authority = { expiresAt: string; retainUntil: string | null; retentionGrantCid: string | null };
+    const plain = await ok<{ status: { authority: Authority } }>(["replica", "sync", "--prefix", "notes/", "--replica", "plain"], "dev2");
+    expect(plain.status.authority.retainUntil).toBeNull();
+    const kept = await ok<{ status: { authority: Authority } }>(
+      ["replica", "sync", "--prefix", "notes/", "--replica", "keep", "--retention-grant", retain],
+      "dev2",
+    );
+    expect(kept.status.authority).toMatchObject({ retentionGrantCid: retain });
+    const retainUntil = kept.status.authority.retainUntil!;
+    expect(Date.parse(retainUntil)).toBeGreaterThan(Date.parse(kept.status.authority.expiresAt));
+
+    const read = (replica: string) => tc(["replica", "get", "notes/a.txt", "--replica", replica], { profile: "dev2", preload: NO_NETWORK });
+    expect((await read("plain")).code).toBe(0);
+    await waitUntil(plain.status.authority.expiresAt);
+
+    const expired = await read("plain");
+    expect({ code: expired.code, stderr: expired.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_EXPIRED") });
+    const retained = await read("keep");
+    expect(retained.code).toBe(0);
+    expect(JSON.parse(retained.stdout.toString()).meta.authority).toBe("expired");
+    // No new sync after expiry, decided before any network attempt.
+    const refused = await tc(["replica", "sync", "--replica", "keep"], { profile: "dev2", preload: NO_NETWORK });
+    expect({ code: refused.code, stderr: refused.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_EXPIRED") });
+    expect(await readFile(join(home, "network-attempts.log"), "utf8").catch(() => "")).toBe("");
+
+    await waitUntil(retainUntil);
+    const ended = await read("keep");
+    expect({ code: ended.code, stderr: ended.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_EXPIRED") });
+  }, 240_000);
 
   test("on Node.js 20, tc replica fails with RUNTIME_UNSUPPORTED and other commands still run", async () => {
     const replica = await tc(["replica", "status"], { profile: "device", preload: NODE20 });
