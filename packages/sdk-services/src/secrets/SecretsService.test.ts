@@ -259,6 +259,24 @@ describe("SecretsService", () => {
     });
   });
 
+  it("fails instead of looping when a node repeats a continuation cursor", async () => {
+    const vault = new MockVault();
+    // An older node ignores the request cursor and serves page one again.
+    vault.listPage = mock(async () => ({
+      ok: true as const,
+      data: { keys: ["MODEL_API_KEY"], truncated: true, nextCursor: "page-2" },
+    }));
+    const secrets = new SecretsService(vault);
+
+    const result = await secrets.listAll();
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error.code).toBe("INVALID_INPUT");
+    expect(result.error.message).toContain("repeated a continuation cursor");
+    expect(vault.listPage).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects reserved explicit scopes", async () => {
     const vault = new MockVault();
     const secrets = new SecretsService(vault);

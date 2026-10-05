@@ -261,9 +261,29 @@ export function canonicalizeRecapCaveats(
   return `[${branches.join(",")}]`;
 }
 
+// Literal strings, not `KV.SYNC`/`KV.RETAIN`: those are derived from the
+// vendored registry at runtime, so an older bootstrap would turn them into
+// `undefined` and silently disable this guard.
+const EXPLICIT_ONLY_ACTIONS: Readonly<Record<string, true>> = {
+  "tinycloud.kv/sync": true,
+  "tinycloud.kv/retain": true,
+};
+
+/**
+ * Whether `action` is one no wildcard covers: `*` and `tinycloud.kv/*` do not
+ * grant it, so a grant must name it (TC-732). `tinycloud.kv/sync` discloses a
+ * prefix's change feed and `tinycloud.kv/retain` is an owner-approved
+ * retention attestation; the node refuses both unless granted by name.
+ */
+export function isExplicitOnlyAction(action: string): boolean {
+  return Object.prototype.hasOwnProperty.call(EXPLICIT_ONLY_ACTIONS, action);
+}
+
 /** Return whether a granted action pattern covers one requested action. */
 export function actionContains(grantedAction: string, requestedAction: string): boolean {
-  if (grantedAction === "*" || grantedAction === requestedAction) return true;
+  if (grantedAction === requestedAction) return true;
+  if (isExplicitOnlyAction(requestedAction)) return false;
+  if (grantedAction === "*") return true;
   if (!grantedAction.endsWith("/*")) return false;
   const service = grantedAction.slice(0, -2);
   return requestedAction === service || requestedAction.startsWith(`${service}/`);

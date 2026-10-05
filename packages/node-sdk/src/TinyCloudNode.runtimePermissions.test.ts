@@ -1032,6 +1032,25 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect((node as any).runtimePermissionGrants).toHaveLength(1);
   });
 
+  test("a tinycloud.kv/* runtime grant never covers kv/sync or kv/retain", () => {
+    const node = makeNode(mock(() => ({})));
+    const spaceId = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:default";
+    Reflect.set(node, "runtimePermissionGrants", [{
+      session: {},
+      delegation: {},
+      operations: [{ spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/*" }],
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "runtime",
+    }]);
+    const request = (action: string) => [{
+      service: "tinycloud.kv", space: spaceId, path: "notes/", actions: [action],
+    }];
+
+    expect(node.hasRuntimePermissions(request("tinycloud.kv/get"))).toBe(true);
+    expect(node.hasRuntimePermissions(request("tinycloud.kv/sync"))).toBe(false);
+    expect(node.hasRuntimePermissions(request("tinycloud.kv/retain"))).toBe(false);
+  });
+
   test("can reinstall a runtime delegation targeted at fragmentless session DID", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,

@@ -718,3 +718,46 @@ test("ensureSpaceExists preserves a failed host result instead of collapsing it 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("NodeUserAuthorization default session abilities never include kv/sync or kv/retain", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(
+        JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+  });
+
+  try {
+    await auth.signIn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const actions = Object.values(
+    captured[0]?.abilities as Record<string, Record<string, string[]>>,
+  ).flatMap((byPath) => Object.values(byPath).flat());
+  expect(actions).toContain("tinycloud.kv/get");
+  expect(actions).not.toContain("tinycloud.kv/sync");
+  expect(actions).not.toContain("tinycloud.kv/retain");
+});

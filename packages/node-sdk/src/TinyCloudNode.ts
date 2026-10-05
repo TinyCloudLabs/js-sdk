@@ -117,6 +117,7 @@ import {
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
+  isExplicitOnlyAction,
   parseRecapCapabilities,
   // Manifest-driven sign-in
   type Manifest,
@@ -6640,6 +6641,11 @@ export class TinyCloudNode {
   private actionContains(grantedAction: string, requestedAction: string): boolean {
     if (grantedAction === requestedAction) {
       return true;
+    }
+    // `tinycloud.kv/sync` and `tinycloud.kv/retain` must be granted by name;
+    // a `tinycloud.kv/*` runtime grant does not cover them (TC-732).
+    if (isExplicitOnlyAction(requestedAction)) {
+      return false;
     }
     if (grantedAction.endsWith("/*")) {
       const prefix = grantedAction.slice(0, -2);

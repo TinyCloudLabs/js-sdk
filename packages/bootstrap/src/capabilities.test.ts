@@ -129,7 +129,7 @@ test("registry URNs are unique", () => {
 // key). Lock the exact key set per group and assert every value resolves.
 test("every constant-group key is present and resolves to a URN", () => {
   const groups: Record<string, [Record<string, string>, string[]]> = {
-    KV: [KV, ["GET", "LIST", "METADATA", "PUT", "DEL", "DELETE"]],
+    KV: [KV, ["GET", "LIST", "METADATA", "PUT", "DEL", "DELETE", "SYNC", "RETAIN"]],
     SQL: [SQL, ["READ", "SELECT", "WRITE", "SCHEMA", "ADMIN", "ALL", "EXECUTE", "EXPORT"]],
     DUCKDB: [DUCKDB, ["READ", "WRITE", "ADMIN", "IMPORT", "EXPORT", "SELECT", "ALL", "DESCRIBE", "EXECUTE"]],
     CAPABILITIES: [CAPABILITIES, ["READ"]],

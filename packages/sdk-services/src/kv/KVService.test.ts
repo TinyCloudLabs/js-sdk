@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import type {
   FetchRequestInit,
   FetchResponse,
   IServiceContext,
   InvokeAnyEntry,
+  Result,
   ServiceHeaders,
 } from "../types";
 import { ErrorCodes } from "../types";
@@ -12,6 +13,8 @@ import { KVService } from "./KVService";
 import {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVAction,
+  type KVChangesOptions,
+  type KVChangesResponse,
 } from "./types";
 
 function response(
@@ -1385,5 +1388,266 @@ describe("KVService authorization responses", () => {
     expect(result.error.meta?.resource).toBeUndefined();
     expect(result.error.meta?.requiredAction).toBeUndefined();
     expect(validatedCapabilityOf(result.error)).toBeUndefined();
+  });
+});
+
+describe("KVService.changes (tinycloud.kv/sync)", () => {
+  const page: KVChangesResponse = {
+    changes: [
+      { key: "notes/a", deleted: false, etag: '"blake3-aa"', metadata: { "content-type": "text/plain" } },
+      { key: "notes/b", deleted: true },
+    ],
+    more: true,
+    cursor: "cursor-2",
+    source: { nodeDid: "did:key:node", space: "tinycloud:pkh:eip155:1:0xabc:default", prefix: "notes/" },
+    authority: { notBefore: null, expiresAt: "2026-10-05T11:12:08Z", retainUntil: null },
+  };
+
+  test("invokes kv/sync on the prefix with limit, cursor and retention headers", async () => {
+    const requests: FetchRequestInit[] = [];
+    const invocations: Array<{ service: string; path: string; action: string }> = [];
+    const service = new KVService({ prefix: "ignored-config-prefix" });
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      return response(true, 200, page);
+    }, invocations));
+
+    const result = await service.changes({
+      prefix: "notes/",
+      cursor: "cursor-1",
+      limit: 25,
+      retentionGrant: "bafyretain",
+    });
+
+    expect(result).toEqual({ ok: true, data: page });
+    expect(invocations).toEqual([{ service: "kv", path: "notes/", action: KVAction.SYNC }]);
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-limit")).toBe("25");
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-cursor")).toBe("cursor-1");
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-retention-grant")).toBe("bafyretain");
+  });
+
+  test("a bootstrap request sends no cursor, limit or retention header", async () => {
+    const requests: FetchRequestInit[] = [];
+    const service = new KVService({});
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      return response(true, 200, page);
+    }));
+
+    expect((await service.changes({ prefix: "notes/" })).ok).toBe(true);
+    for (const name of ["x-tinycloud-limit", "x-tinycloud-cursor", "x-tinycloud-retention-grant"]) {
+      expect(headerValue(requests[0]?.headers, name)).toBeUndefined();
+    }
+  });
+
+  test.each([
+    ["an empty prefix", { prefix: "" }],
+    ["a zero limit", { prefix: "notes/", limit: 0 }],
+    ["a limit above 1000", { prefix: "notes/", limit: 1001 }],
+    ["a fractional limit", { prefix: "notes/", limit: 1.5 }],
+  ])("rejects %s before any request", async (_label, options) => {
+    let fetched = false;
+    const service = new KVService({});
+    service.initialize(createContext(async () => {
+      fetched = true;
+      return response(true, 200, page);
+    }));
+
+    const result = await service.changes(options);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+    expect(fetched).toBe(false);
+  });
+
+  test.each(["cursor-invalid", "position-unknown"])("maps 410 %s to KV_SYNC_RESET_REQUIRED with its reason", async (reason) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 410, { error: { code: "RESET_REQUIRED", reason } })
+    ));
+
+    const result = await service.changes({ prefix: "notes/", cursor: "stale" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_SYNC_RESET_REQUIRED);
+    expect(result.error.meta?.reason).toBe(reason);
+    expect(result.error.meta?.status).toBe(410);
+  });
+
+  test.each([
+    ["delegation-revoked: bafyleaf", ErrorCodes.AUTH_DELEGATION_REVOKED],
+    ["Invalid invocation: delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf", ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED],
+  ])("maps 401 %s to a typed revocation code", async (body, code) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 401, body)));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(code);
+    expect(result.error.meta?.status).toBe(401);
+    expect(authorizationVerdictOf(result.error)).toBe("unauthenticated");
+  });
+
+  test("a missing sync grant stays AUTH_UNAUTHORIZED", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 401, "Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:default/kv/notes / tinycloud.kv/sync")
+    ));
+
+    const result = await service.changes({ prefix: "notes" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(validatedCapabilityOf(result.error)).toEqual({
+      resource: "tinycloud:pkh:eip155:1:0xabc:default/kv/notes",
+      requiredAction: KVAction.SYNC,
+    });
+  });
+
+  test("maps a refused retention grant to KV_RETENTION_GRANT_REFUSED", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () =>
+      response(false, 403, { error: { code: "RETENTION_GRANT_REFUSED", reason: "retention-grant-expired" } })
+    ));
+
+    const result = await service.changes({ prefix: "notes/", retentionGrant: "bafyretain" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_RETENTION_GRANT_REFUSED);
+    expect(result.error.meta?.reason).toBe("retention-grant-expired");
+  });
+
+  test.each([
+    ["a list body", ["notes/a"]],
+    ["a live change without an etag", { ...page, changes: [{ key: "notes/a", deleted: false, metadata: {} }] }],
+    ["a missing authority", { ...page, authority: undefined }],
+  ])("rejects %s as a malformed page", async (_label, body) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, body)));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+  });
+
+  test("a prefixed view follows everything under its prefix and returns relative keys", async () => {
+    const invocations: Array<{ service: string; path: string; action: string }> = [];
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, page), invocations));
+
+    const result = await service.withPrefix("notes").changes({ limit: 10 });
+
+    expect(invocations).toEqual([{ service: "kv", path: "notes/", action: KVAction.SYNC }]);
+    expect(result.ok && result.data.changes.map((change) => change.key)).toEqual(["a", "b"]);
+    expect(result.ok && result.data.source.prefix).toBe("notes/");
+  });
+
+  test.each(["", "/"])("a prefixed view with prefix %j is refused before any request", async (prefix) => {
+    let fetched = false;
+    const service = new KVService({});
+    service.initialize(createContext(async () => {
+      fetched = true;
+      return response(true, 200, page);
+    }));
+
+    const result = await service.withPrefix(prefix).changes();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+    expect(fetched).toBe(false);
+  });
+
+  test("missing options is an INVALID_INPUT result, not a thrown TypeError", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, page)));
+    // The call shape of a plain-JS caller; TypeScript rejects the missing argument.
+    const changesFromJs = service.changes.bind(service) as (
+      options?: KVChangesOptions
+    ) => Promise<Result<KVChangesResponse>>;
+
+    const result = await changesFromJs();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+  });
+
+  test("accepts a page larger than limit and an empty page with more: true", async () => {
+    const many = Array.from({ length: 3 }, (_, index) => ({ key: `notes/batch-${index}`, deleted: true as const }));
+    const bodies = [
+      { ...page, changes: many, more: false },
+      { ...page, changes: [], more: true },
+    ];
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, bodies.shift())));
+
+    const oversized = await service.changes({ prefix: "notes/", limit: 1 });
+    expect(oversized.ok && oversized.data.changes).toEqual(many);
+    const empty = await service.changes({ prefix: "notes/", limit: 1 });
+    expect(empty.ok && empty.data).toMatchObject({ changes: [], more: true, cursor: page.cursor });
+  });
+
+  test("a 404 for an unhosted space keeps the KV not-found classification", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 404, "Space not found")));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_NOT_FOUND);
+    expect(result.error.meta?.status).toBe(404);
+  });
+
+  describe("an error body that never completes", () => {
+    /**
+     * Error headers arrive, then the body stalls until the request is
+     * cancelled. `cancel` runs in a microtask after the body read starts, so
+     * it lands after `changes()` would already have disposed its signal had
+     * it stopped waiting for the error mapping. If the cancellation no longer
+     * reaches the request signal, the read fails with a plain error instead of
+     * hanging, so the test fails on the error code.
+     */
+    function stalledError(status: number, cancel: () => void): IServiceContext["fetch"] {
+      return async (_url, init) => {
+        const stalled = response(false, status, "");
+        stalled.text = () => new Promise<string>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) return reject(signal.reason);
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          queueMicrotask(() => {
+            cancel();
+            if (!signal?.aborted) reject(new Error("cancellation no longer reaches the body read"));
+          });
+        });
+        return stalled;
+      };
+    }
+
+    test.each([401, 410, 500])("%i ends with TIMEOUT when the timeout elapses", async (status) => {
+      jest.useFakeTimers();
+      try {
+        const service = new KVService({});
+        service.initialize(createContext(stalledError(status, () => jest.advanceTimersByTime(20))));
+
+        const result = await service.changes({ prefix: "notes/", timeout: 20 });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test.each([401, 410, 500])("%i ends with ABORTED when the caller aborts", async (status) => {
+      const controller = new AbortController();
+      const service = new KVService({});
+      service.initialize(createContext(stalledError(status, () => controller.abort())));
+
+      const result = await service.changes({ prefix: "notes/", signal: controller.signal });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe(ErrorCodes.ABORTED);
+    });
   });
 });

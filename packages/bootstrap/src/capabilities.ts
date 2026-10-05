@@ -82,6 +82,8 @@ export const KV = deriveServiceConstants("kv") as {
   PUT: "tinycloud.kv/put";
   DEL: "tinycloud.kv/del";
   DELETE: "tinycloud.kv/delete";
+  SYNC: "tinycloud.kv/sync";
+  RETAIN: "tinycloud.kv/retain";
 };
 
 // `execute`/`export` are request-kind artifacts, not registry capabilities —

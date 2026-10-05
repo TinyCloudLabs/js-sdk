@@ -201,6 +201,10 @@ export type {
   KVResponse,
   KVListResponse,
   KVSignedReadUrlResponse,
+  KVChange,
+  KVChangesAuthority,
+  KVChangesOptions,
+  KVChangesResponse,
   KVResponseHeaders,
   KVActionType,
 } from "./kv";

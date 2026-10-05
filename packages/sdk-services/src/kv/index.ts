@@ -34,3 +34,9 @@ export {
   KVAction,
   KVActionType,
 } from "./types";
+export type {
+  KVChange,
+  KVChangesAuthority,
+  KVChangesOptions,
+  KVChangesResponse,
+} from "./types";

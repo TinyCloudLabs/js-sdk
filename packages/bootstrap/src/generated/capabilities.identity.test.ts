@@ -20,9 +20,9 @@ import {
 // parent rather than the commit the file lives at (see the workflow comments).
 const EXPECTED_VERSION = 1;
 const EXPECTED_SOURCE_SHA256 =
-  "daecd38d908d05d622684b580501dc38c5945b0499ce7eb3a18d77663b93c73a";
-// tinycloud-node v1.4.10 release-tag commit containing TC-178.
-const EXPECTED_NODE_REV = "b7a4b0b42606cefe144a19b6d2ebbbb4d2060c85";
+  "78866ee7b73c964a9698e71d1411f049d1655d5c832fb168191ef63943efe26a";
+// tinycloud-node `main` merge commit of PR #247 (TC-732: kv/sync, kv/retain).
+const EXPECTED_NODE_REV = "d7f511f52256a076999ab22e0ad9fdcb69699326";
 
 const WORKFLOW = join(
   import.meta.dir,
