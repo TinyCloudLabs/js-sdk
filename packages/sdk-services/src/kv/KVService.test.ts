@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import type {
   FetchRequestInit,
   FetchResponse,
   IServiceContext,
   InvokeAnyEntry,
+  Result,
   ServiceHeaders,
 } from "../types";
 import { ErrorCodes } from "../types";
@@ -12,6 +13,7 @@ import { KVService } from "./KVService";
 import {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVAction,
+  type KVChangesOptions,
   type KVChangesResponse,
 } from "./types";
 
@@ -1540,5 +1542,112 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
     expect(invocations).toEqual([{ service: "kv", path: "notes/", action: KVAction.SYNC }]);
     expect(result.ok && result.data.changes.map((change) => change.key)).toEqual(["a", "b"]);
     expect(result.ok && result.data.source.prefix).toBe("notes/");
+  });
+
+  test.each(["", "/"])("a prefixed view with prefix %j is refused before any request", async (prefix) => {
+    let fetched = false;
+    const service = new KVService({});
+    service.initialize(createContext(async () => {
+      fetched = true;
+      return response(true, 200, page);
+    }));
+
+    const result = await service.withPrefix(prefix).changes();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+    expect(fetched).toBe(false);
+  });
+
+  test("missing options is an INVALID_INPUT result, not a thrown TypeError", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, page)));
+    // The call shape of a plain-JS caller; TypeScript rejects the missing argument.
+    const changesFromJs = service.changes.bind(service) as (
+      options?: KVChangesOptions
+    ) => Promise<Result<KVChangesResponse>>;
+
+    const result = await changesFromJs();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+  });
+
+  test("accepts a page larger than limit and an empty page with more: true", async () => {
+    const many = Array.from({ length: 3 }, (_, index) => ({ key: `notes/batch-${index}`, deleted: true as const }));
+    const bodies = [
+      { ...page, changes: many, more: false },
+      { ...page, changes: [], more: true },
+    ];
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, bodies.shift())));
+
+    const oversized = await service.changes({ prefix: "notes/", limit: 1 });
+    expect(oversized.ok && oversized.data.changes).toEqual(many);
+    const empty = await service.changes({ prefix: "notes/", limit: 1 });
+    expect(empty.ok && empty.data).toMatchObject({ changes: [], more: true, cursor: page.cursor });
+  });
+
+  test("a 404 for an unhosted space keeps the KV not-found classification", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 404, "Space not found")));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.KV_NOT_FOUND);
+    expect(result.error.meta?.status).toBe(404);
+  });
+
+  describe("an error body that never completes", () => {
+    /**
+     * Error headers arrive, then the body stalls until the request is
+     * cancelled. `cancel` runs in a microtask after the body read starts, so
+     * it lands after `changes()` would already have disposed its signal had
+     * it stopped waiting for the error mapping. If the cancellation no longer
+     * reaches the request signal, the read fails with a plain error instead of
+     * hanging, so the test fails on the error code.
+     */
+    function stalledError(status: number, cancel: () => void): IServiceContext["fetch"] {
+      return async (_url, init) => {
+        const stalled = response(false, status, "");
+        stalled.text = () => new Promise<string>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) return reject(signal.reason);
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          queueMicrotask(() => {
+            cancel();
+            if (!signal?.aborted) reject(new Error("cancellation no longer reaches the body read"));
+          });
+        });
+        return stalled;
+      };
+    }
+
+    test.each([401, 410, 500])("%i ends with TIMEOUT when the timeout elapses", async (status) => {
+      jest.useFakeTimers();
+      try {
+        const service = new KVService({});
+        service.initialize(createContext(stalledError(status, () => jest.advanceTimersByTime(20))));
+
+        const result = await service.changes({ prefix: "notes/", timeout: 20 });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test.each([401, 410, 500])("%i ends with ABORTED when the caller aborts", async (status) => {
+      const controller = new AbortController();
+      const service = new KVService({});
+      service.initialize(createContext(stalledError(status, () => controller.abort())));
+
+      const result = await service.changes({ prefix: "notes/", signal: controller.signal });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe(ErrorCodes.ABORTED);
+    });
   });
 });

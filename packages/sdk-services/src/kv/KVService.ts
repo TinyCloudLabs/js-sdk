@@ -1338,15 +1338,16 @@ export class KVService extends BaseService implements IKVService {
    * Read one page of the `tinycloud.kv/sync` change feed for a prefix.
    */
   async changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>> {
-    return this.withTelemetry("changes", options.prefix, async () => {
+    return this.withTelemetry("changes", options?.prefix, async () => {
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
 
-      if (options.prefix.length === 0) {
+      // Plain-JS callers can omit the options; TypeScript requires them.
+      if (typeof options?.prefix !== "string" || options.prefix.length === 0) {
         return err(serviceError(
           ErrorCodes.INVALID_INPUT,
-          "KV changes prefix must not be empty",
+          "KV changes prefix must be a non-empty string",
           "kv"
         ));
       }
@@ -1379,7 +1380,9 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (!response.ok) {
-          return this.changesFailure(response, options.prefix);
+          // Awaited so the timeout and abort listeners stay live while the
+          // error body is read; `finally` disposes them only afterwards.
+          return await this.changesFailure(response, options.prefix, request.signal);
         }
 
         const text = await response.text();
@@ -1410,13 +1413,25 @@ export class KVService extends BaseService implements IKVService {
   /**
    * Map a failed `kv/sync` response. 410 and the retention 403 carry
    * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose text names
-   * `delegation-revoked` or `delegation-ancestor-revoked`.
+   * `delegation-revoked` or `delegation-ancestor-revoked`. A body read that
+   * fails because the request was cancelled or timed out rethrows, so the
+   * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
    */
   private async changesFailure(
     response: FetchResponse,
-    prefix: string
+    prefix: string,
+    signal: AbortSignal
   ): Promise<Result<never>> {
-    const errorText = await this.readAuthorizationText(response);
+    if (response.status === 404) {
+      return this.classifyNotFound(response, prefix);
+    }
+    let errorText: string;
+    try {
+      errorText = await response.text();
+    } catch (error) {
+      if (signal.aborted) throw error;
+      errorText = "";
+    }
     const meta = { status: response.status, statusText: response.statusText };
     let reason: string | undefined;
     let bodyCode: string | undefined;

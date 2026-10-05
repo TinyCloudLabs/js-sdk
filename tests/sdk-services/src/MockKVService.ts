@@ -324,11 +324,11 @@ export class MockKVService implements IKVService {
       return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
     }
 
+    // One invocation, one feed position for every key it writes.
+    const position = ++this._changeSeq;
     for (const { item, fullKey } of entries) {
-      this.setStored(
-        fullKey,
-        this.createStoredValue(item.value, item.contentType)
-      );
+      this._store.set(fullKey, this.createStoredValue(item.value, item.contentType));
+      this._changePositions.set(fullKey, position);
     }
 
     const written = entries.map(({ fullKey }) => fullKey);
@@ -337,8 +337,10 @@ export class MockKVService implements IKVService {
 
   /**
    * In-memory `tinycloud.kv/sync`: each key's latest state under the prefix,
-   * in change order. The cursor is the last delivered position; a bootstrap
-   * (no cursor) skips keys already deleted.
+   * in change order. Like the node, the prefix matches whole path segments
+   * (`notes` covers `notes` and `notes/a`, not `notes-secret`), a batch shares
+   * one position and a page never splits it. The cursor is the last delivered
+   * position; a bootstrap (no cursor) skips keys already deleted.
    */
   async changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>> {
     this.recordOperation("changes", options.prefix, undefined, options);
@@ -354,15 +356,22 @@ export class MockKVService implements IKVService {
       return err(serviceError(ErrorCodes.ABORTED, "Request aborted", "kv"));
     }
 
+    const prefix = options.prefix;
+    const covers = (key: string): boolean =>
+      prefix.endsWith("/")
+        ? key.startsWith(prefix)
+        : key === prefix || key.startsWith(`${prefix}/`);
     const after = options.cursor === undefined ? 0 : Number(options.cursor);
     const pending = [...this._changePositions]
       .filter(([key, position]) =>
-        key.startsWith(options.prefix) &&
+        covers(key) &&
         position > after &&
         (options.cursor !== undefined || this._store.has(key))
       )
-      .sort((a, b) => a[1] - b[1]);
-    const page = pending.slice(0, options.limit ?? 500);
+      .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    let end = Math.min(options.limit ?? 500, pending.length);
+    while (end > 0 && end < pending.length && pending[end]![1] === pending[end - 1]![1]) end++;
+    const page = pending.slice(0, end);
     const last = page[page.length - 1]?.[1];
 
     return ok({

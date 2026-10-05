@@ -29,7 +29,7 @@
  * ```
  */
 
-import { Result, ok } from "../types";
+import { Result, ok, err, ErrorCodes, serviceError } from "../types";
 import {
   KVGetOptions,
   KVPutOptions,
@@ -421,11 +421,20 @@ export class PrefixedKVService implements IPrefixedKVService {
   }
 
   /**
-   * Read the change feed for everything under this prefix.
+   * Read the change feed for everything under this prefix. A view with an
+   * empty prefix (`""` or `"/"`) is refused: the node does not serve a
+   * whole-space feed.
    */
   async changes(
     options?: Omit<KVChangesOptions, 'prefix'>
   ): Promise<Result<KVChangesResponse>> {
+    if (this._prefix.replace(/\/+$/, '') === '') {
+      return err(serviceError(
+        ErrorCodes.INVALID_INPUT,
+        'KV changes needs a non-empty prefix; this view has none',
+        'kv'
+      ));
+    }
     const syncPrefix = `${this._prefix}/`;
     const response = await this._kv.changes({ ...options, prefix: syncPrefix });
     if (!response.ok) return response;

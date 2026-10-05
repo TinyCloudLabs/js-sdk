@@ -399,6 +399,12 @@ export interface KVChangesOptions {
    * Prefixes match whole path segments: `notes` covers `notes` and
    * `notes/a`, while `notes/` covers everything under `notes/` but not
    * `notes` itself. The session must hold `tinycloud.kv/sync` on it by name.
+   *
+   * Returned `changes[].key` values are full paths in the space, like this
+   * prefix. On a service with a configured prefix (for example
+   * `DelegatedAccess.kv`, whose prefix is the delegation path), `get` joins
+   * that prefix again, so strip it from the key first, or follow the feed
+   * with `kv.withPrefix(...).changes()`, which returns relative keys.
    */
   prefix: string;
 

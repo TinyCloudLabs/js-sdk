@@ -177,6 +177,12 @@ export interface IKVService extends IService {
    * (`tinycloud.kv/sync`). Each change is a key's latest state; read content
    * with `get`/`batchGet` and check it against the change's `etag`.
    *
+   * `options.prefix` and every returned `key` are full paths in the space;
+   * the service's configured prefix is not applied to either. On a prefixed
+   * service (for example `DelegatedAccess.kv`), `get(change.key)` would join
+   * that prefix twice: strip the prefix from the key, or use
+   * `withPrefix(...).changes()`, which returns keys relative to the view.
+   *
    * The session must hold `tinycloud.kv/sync` on `options.prefix` by name: no
    * wildcard grants it. Page with the returned `cursor` while `more` is true;
    * a page can exceed `limit`, or be empty with `more: true`.

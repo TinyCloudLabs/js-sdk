@@ -30,11 +30,13 @@ export {
   KVResponse,
   KVListResponse,
   KVSignedReadUrlResponse,
+  KVResponseHeaders,
+  KVAction,
+  KVActionType,
+} from "./types";
+export type {
   KVChange,
   KVChangesAuthority,
   KVChangesOptions,
   KVChangesResponse,
-  KVResponseHeaders,
-  KVAction,
-  KVActionType,
 } from "./types";
