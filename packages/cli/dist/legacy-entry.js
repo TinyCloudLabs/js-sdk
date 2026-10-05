@@ -762,7 +762,7 @@ var init_profiles = __esm({
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Run \`tc init\` or \`tc profile create ${name}\` first.`
+            `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`
           );
         }
         return profile;
@@ -13692,7 +13692,7 @@ async function createSDKInstance(ctx, options) {
   if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
+      `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -15504,6 +15504,7 @@ function registerAuthCommand(program) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
+      await ProfileManager.getProfile(ctx.profile);
       await ProfileManager.clearSession(ctx.profile);
       outputJson({ profile: ctx.profile, authenticated: false });
     } catch (error) {
@@ -15616,7 +15617,7 @@ function registerAuthCommand(program) {
       if (profile.authMethod === "openkey" || options.device) {
         const key = await ProfileManager.getKey(ctx.profile);
         if (!key) {
-          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc init\` first.`, ExitCode.AUTH_REQUIRED);
+          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
         }
         const openkeyHost = resolveOpenKeyHost(profile);
         const grants = [];
@@ -16198,7 +16199,7 @@ async function ensureDelegationAuthority(params) {
     if (!key) {
       throw new CLIError(
         "NO_KEY",
-        `No key found for profile "${params.ctx.profile}". Run \`tc init\` first.`,
+        `No key found for profile "${params.ctx.profile}". Run \`tc --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -16607,15 +16608,15 @@ ${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}
 }
 async function refreshOpenKeySession(profileName, host, options = {}) {
   const snapshot = await readProfileSnapshot(profileName);
+  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
   const key = snapshot.key;
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${profileName}". Run \`tc init\` first.`,
+      `No key found for profile "${profileName}". Run \`tc --profile ${profileName} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
-  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
   if (options.permissions !== void 0) validateLoginPermissions(options.permissions);
   const permissions = options.permissions === void 0 ? void 0 : scopedLoginPermissions(options.permissions);
   if (permissions !== void 0) {

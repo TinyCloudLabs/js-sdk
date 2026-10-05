@@ -640,7 +640,7 @@ var init_profiles = __esm({
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Run \`tc init\` or \`tc profile create ${name}\` first.`
+            `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`
           );
         }
         return profile;
@@ -5805,7 +5805,7 @@ async function createSDKInstance(ctx, options) {
   if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`tc init\` first.`,
+      `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }

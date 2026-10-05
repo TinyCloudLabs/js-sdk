@@ -46,6 +46,7 @@
     "tc-634-share-refusals",
     "tc-634-web-share-cache",
     "tc-635-share-notify-followups",
-    "tc-649-secret-setup-link"
+    "tc-649-secret-setup-link",
+    "tc-682-cli-missing-profile"
   ]
 }
