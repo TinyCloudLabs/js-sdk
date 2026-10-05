@@ -59,6 +59,17 @@ export interface PermissionHint {
 }
 
 /**
+ * Storage quota information returned with quota-related errors.
+ * @deprecated Read `usedBytes`, `limitBytes` and `account` from the error's
+ * `meta`, or use `StorageFullEvent` from `tc.on("storage.full", handler)`.
+ */
+export interface StorageQuotaInfo {
+  usedBytes: number;
+  limitBytes: number;
+  service: string;
+}
+
+/**
  * Standard error codes used across services.
  */
 export const ErrorCodes = {

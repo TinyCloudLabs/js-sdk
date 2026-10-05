@@ -239,6 +239,25 @@ describe("SpaceServiceConfigSchema", () => {
       const result = SpaceServiceConfigSchema.safeParse(data);
       expect(result.success).toBe(true);
     });
+
+    it("keeps the storage-full gate and registration hook through validation", () => {
+      let full = true;
+      const registered: unknown[] = [];
+      const result = SpaceServiceConfigSchema.safeParse({
+        ...validSpaceServiceConfig,
+        onSpaceRegistered: (space: unknown) => {
+          registered.push(space);
+        },
+        isStorageFull: () => full,
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.isStorageFull?.()).toBe(true);
+      full = false;
+      expect(result.data.isStorageFull?.()).toBe(false);
+      result.data.onSpaceRegistered?.({ id: "space" });
+      expect(registered).toEqual([{ id: "space" }]);
+    });
   });
 
   describe("invalid inputs", () => {
@@ -289,6 +308,11 @@ describe("SpaceServiceConfigSchema", () => {
     it("rejects non-function fetch when provided", () => {
       const data = { ...validSpaceServiceConfig, fetch: "not a function" };
       const result = SpaceServiceConfigSchema.safeParse(data);
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a non-function storage-full gate", () => {
+      const result = SpaceServiceConfigSchema.safeParse({ ...validSpaceServiceConfig, isStorageFull: true });
       expect(result.success).toBe(false);
     });
 
