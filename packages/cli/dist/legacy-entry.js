@@ -15117,6 +15117,34 @@ async function commitLogin(profileName, snapshot, commit) {
   });
 }
 
+// src/auth/owner-key.ts
+init_theme();
+function openKeyPrimaryFlag(delegation) {
+  return typeof delegation.primary === "boolean" ? delegation.primary : void 0;
+}
+function withOwnerKeyPrimary(profile, primary) {
+  const { ownerKeyPrimary: _previous, ...rest } = profile;
+  return primary === void 0 ? rest : { ...rest, ownerKeyPrimary: primary };
+}
+function nonPrimaryKeyWarning(ownerDid) {
+  const address = ownerDid.split(":")[4] ?? ownerDid;
+  return `${theme.warn("Warning:")} you signed in with OpenKey key ${address} (${ownerDid}), which is not your account's primary OpenKey key. This key is a separate owner with its own spaces and data, so this profile does not see the data stored under your primary key.
+To use your primary key, log in again and choose the primary key in OpenKey, for example into a new profile: tc init --name <profile>
+`;
+}
+function warnIfNotPrimaryKey(ownerDid, primary) {
+  if (primary !== false || ownerDid === void 0) return;
+  process.stderr.write(nonPrimaryKeyWarning(ownerDid));
+}
+function ownerLoginPermissions(owner) {
+  const space = ownerSpaceId("default", owner);
+  return [
+    { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/metadata"] },
+    { service: "tinycloud.sql", space, path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"] },
+    { service: "tinycloud.capabilities", space, path: "", actions: ["tinycloud.capabilities/read"] }
+  ];
+}
+
 // src/auth/device-auth.ts
 var DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
 var DEVICE_APPROVAL_WINDOW_MAX_SECONDS = 60 * 60;
@@ -15321,7 +15349,8 @@ async function verifyApproval(input) {
     spaceId: delegation.spaceId,
     expiresAt: session.expiresAt,
     approved: permissionsFromTuples(signed),
-    declined: declinedPermissions(input.requested, session.permissions, ownerDid)
+    declined: declinedPermissions(input.requested, session.permissions, ownerDid),
+    ...openKeyPrimaryFlag(delegation) === void 0 ? {} : { primary: openKeyPrimaryFlag(delegation) }
   };
 }
 function writeApprovalPrompt(prompt) {
@@ -15498,7 +15527,7 @@ async function loginWithDeviceAuthorization(input) {
     openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
     expectedOwner
   });
-  const profile = {
+  const profile = withOwnerKeyPrimary({
     ...existing,
     name: input.profileName,
     host: input.persistHost === true || !existing?.host ? input.nodeOrigin : existing.host,
@@ -15512,7 +15541,7 @@ async function loginWithDeviceAuthorization(input) {
     posture: "owner-openkey",
     operatorType: existing?.operatorType ?? "human",
     authMethod: "openkey"
-  };
+  }, result.primary);
   await commitLogin(input.profileName, snapshot, {
     key,
     session: result.session,
@@ -15520,6 +15549,7 @@ async function loginWithDeviceAuthorization(input) {
     // The signed permissions, with their caveats; `approved` is the action summary.
     approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true }
   });
+  warnIfNotPrimaryKey(result.ownerDid, result.primary);
   return { profile, result };
 }
 
@@ -15557,7 +15587,7 @@ async function promptAuthMethod() {
 }
 function registerAuthCommand(program) {
   const auth = program.command("auth").description("Authentication management");
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``).option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)").option("--owner <did>", "Require this existing primary DID (did:pkh:eip155:CHAIN:ADDRESS) for scoped login; names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``).option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)").option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, cmd) => {
     try {
       if (options.device && options.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
@@ -15565,9 +15595,6 @@ function registerAuthCommand(program) {
       const scoped = options.device || options.manifest || options.expiry || options.owner;
       if (scoped && options.method === "local") {
         throw new CLIError("INVALID_ARGUMENT", "--device, --manifest, --expiry and --owner require OpenKey login.", ExitCode.USAGE_ERROR);
-      }
-      if (options.owner && !options.manifest) {
-        throw new CLIError("INVALID_ARGUMENT", "--owner requires --manifest so the signed identity is verified.", ExitCode.USAGE_ERROR);
       }
       if (options.device && !options.manifest) {
         throw new CLIError(
@@ -15691,6 +15718,7 @@ function registerAuthCommand(program) {
           did: profile?.did ?? null,
           sessionDid: profile?.sessionDid ?? null,
           ownerDid: profile?.ownerDid ?? null,
+          ownerKeyPrimary: profile?.ownerKeyPrimary ?? null,
           spaceId: profile?.spaceId ?? null,
           host: ctx.host,
           profile: ctx.profile,
@@ -15711,6 +15739,7 @@ function registerAuthCommand(program) {
         process.stdout.write(formatField("DID", profile?.did ?? null) + "\n");
         process.stdout.write(formatField("Session DID", profile?.sessionDid ?? null) + "\n");
         process.stdout.write(formatField("Owner DID", profile?.ownerDid ?? null) + "\n");
+        process.stdout.write(formatField("Primary Key", profile?.ownerKeyPrimary ?? "unknown") + "\n");
         process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
         process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
@@ -16783,7 +16812,9 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     jwk: key,
     host,
     openkeyHost: resolveOpenKeyHost(profile),
-    permissions,
+    // A plain login with --owner names that owner's space, so OpenKey
+    // preselects its key; the signed owner is verified below.
+    permissions: permissions ?? (options.expectedOwner === void 0 ? void 0 : ownerLoginPermissions(expectedOwner)),
     expiry: openKeyExpiry,
     ...permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
   });
@@ -16809,7 +16840,8 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
       sanitizedSession = Object.fromEntries(Object.entries(withoutTrustFields(merged)).filter(([name]) => name !== "siwe" && name !== "signature"));
     }
   }
-  const updatedProfile = {
+  const ownerKeyPrimary = verifiedOwner === void 0 ? void 0 : openKeyPrimaryFlag(delegationData);
+  const updatedProfile = withOwnerKeyPrimary({
     ...profile,
     host: options.persistHost === true || !profile.host ? host : profile.host,
     sessionDid: profile.sessionDid ?? profile.did,
@@ -16818,13 +16850,14 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     authMethod: "openkey",
     ...typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {},
     ...verifiedOwner === void 0 ? {} : { ownerDid: verifiedOwner }
-  };
+  }, ownerKeyPrimary);
   await commitLogin(profileName, snapshot, {
     key,
     session: sanitizedSession,
     profile: updatedProfile,
     ...permissions && verifiedOwner ? { approved: { scope: sanitizedSession.permissions, ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } } : {}
   });
+  warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
   return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }
 
