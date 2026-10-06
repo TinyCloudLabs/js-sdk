@@ -15,6 +15,66 @@ const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
 const cliEnvBase = ambient;
 
 type Profile = { privateKey: string; did: string; spaceId: string };
+type Run = { code: number; stdout: Buffer; stderr: string };
+
+const childProcesses = new Set<ChildProcess>();
+const childClose = new WeakMap<ChildProcess, Promise<void>>();
+
+function trackChild(child: ChildProcess): ChildProcess {
+  let markClosed!: () => void;
+  const closed = new Promise<void>((resolveClosed) => { markClosed = resolveClosed; });
+  childClose.set(child, closed);
+  childProcesses.add(child);
+  child.on("error", () => {});
+  child.once("close", () => {
+    childProcesses.delete(child);
+    markClosed();
+  });
+  return child;
+}
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  const closed = childClose.get(child);
+  if (!closed) return;
+  if (child.exitCode === null && child.signalCode === null) {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Cleanup continues to SIGKILL after the grace period.
+    }
+  }
+  let timer!: ReturnType<typeof setTimeout>;
+  const exited = await Promise.race([
+    closed.then(() => true),
+    new Promise<boolean>((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout(false), 2_000);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (!exited) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Await the close event even if the process already exited.
+    }
+    await closed;
+  }
+}
+
+async function stopAllChildren(): Promise<void> {
+  const results = await Promise.allSettled([...childProcesses].map(stopChild));
+  if (results.some((result) => result.status === "rejected")) {
+    throw new Error("test child process cleanup failed");
+  }
+}
+
+function parseJson<T>(source: string, diagnostic: string): T {
+  try {
+    return JSON.parse(source) as T;
+  } catch {
+    throw new Error(diagnostic);
+  }
+}
 
 
 async function freePort(): Promise<number> {
@@ -54,25 +114,31 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   const catalogMarker = secretValue();
 
   async function startNode(): Promise<void> {
-    const child = spawn(NODE_BIN!, [], {
-      cwd: nodeData,
-      env: {
-        ...ambient,
-        TMPDIR: temp,
-        TINYCLOUD_STORAGE__DATADIR: join(nodeData, "data"),
-        TINYCLOUD_PORT: String(port),
-        TINYCLOUD_ADDRESS: "127.0.0.1",
-        ROCKET_PORT: String(port),
-        ROCKET_ADDRESS: "127.0.0.1",
-        TINYCLOUD_KEYS__TYPE: "Static",
-        TINYCLOUD_KEYS__SECRET: nodeSecret,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child: ChildProcess;
+    try {
+      child = trackChild(spawn(NODE_BIN!, [], {
+        cwd: nodeData,
+        env: {
+          ...ambient,
+          TMPDIR: temp,
+          TINYCLOUD_STORAGE__DATADIR: join(nodeData, "data"),
+          TINYCLOUD_PORT: String(port),
+          TINYCLOUD_ADDRESS: "127.0.0.1",
+          ROCKET_PORT: String(port),
+          ROCKET_ADDRESS: "127.0.0.1",
+          TINYCLOUD_KEYS__TYPE: "Static",
+          TINYCLOUD_KEYS__SECRET: nodeSecret,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      }));
+    } catch {
+      throw new Error("local node process could not start");
+    }
     node = child;
     const launched = Promise.withResolvers<void>();
     let sawLaunch = false;
     let launchWindow = "";
+    const fail = (message: string) => launched.reject(new Error(message));
     const onData = (chunk: Buffer) => {
       if (!sawLaunch) {
         launchWindow = (launchWindow + chunk.toString()).slice(-64);
@@ -82,10 +148,13 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
         }
       }
     };
-    child.stdout!.on("data", onData);
-    child.stderr!.on("data", onData);
-    child.once("exit", (code) => {
-      if (!sawLaunch) launched.reject(new Error(`local node exited before launch (${code})`));
+    child.once("error", () => fail("local node process failed to start"));
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.stdout?.on("error", () => fail("local node output stream failed"));
+    child.stderr?.on("error", () => fail("local node output stream failed"));
+    child.once("close", (code) => {
+      if (!sawLaunch) fail(`local node exited before launch (${code ?? -1})`);
     });
     await launched.promise;
   }
@@ -93,43 +162,78 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   async function stopNode(): Promise<void> {
     const child = node;
     node = undefined;
-    if (!child || child.exitCode !== null) return;
-    await new Promise<void>((resolveExit) => {
-      child.once("exit", () => resolveExit());
-      child.kill("SIGTERM");
-    });
+    if (child) await stopChild(child);
   }
 
   async function tc(args: string[], profile: string, offline = false, stdin?: string): Promise<Run> {
-    const child = spawn("node", [
-      ...(offline ? ["--require", NO_NETWORK] : []), CLI, "-q", "--json", "--profile", profile, ...args,
-    ], {
-      cwd: home,
-      env: { ...cliEnvBase, TMPDIR: temp, TC_HOME: home, HOME: home, TC_NO_NETWORK_LOG: join(home, "network.log") },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    let child: ChildProcess;
+    try {
+      child = trackChild(spawn("node", [
+        ...(offline ? ["--require", NO_NETWORK] : []), CLI, "-q", "--json", "--profile", profile, ...args,
+      ], {
+        cwd: home,
+        env: { ...cliEnvBase, TMPDIR: temp, TC_HOME: home, HOME: home, TC_NO_NETWORK_LOG: join(home, "network.log") },
+        stdio: ["pipe", "pipe", "pipe"],
+      }));
+    } catch {
+      throw new Error("local tc process could not start");
+    }
     const stdout: Buffer[] = [];
-    let stderr = "";
-    child.stdout!.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr!.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.stdin!.end(stdin ?? "");
-    const code = await new Promise<number>((resolveExit) => child.once("exit", (value) => resolveExit(value ?? -1)));
-    return { code, stdout: Buffer.concat(stdout), stderr };
+    const stderr: Buffer[] = [];
+    let failure: string | undefined;
+    let closed = false;
+    const fail = (message: string) => {
+      if (failure !== undefined || closed) return;
+      failure = message;
+      void stopChild(child).catch(() => {});
+    };
+    child.once("error", () => fail("local tc process failed to start"));
+    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdin?.on("error", () => fail("local tc input stream failed"));
+    child.stdout?.on("error", () => fail("local tc output stream failed"));
+    child.stderr?.on("error", () => fail("local tc output stream failed"));
+    const result = new Promise<Run>((resolveRun, rejectRun) => {
+      child.once("close", (code) => {
+        closed = true;
+        if (failure !== undefined) {
+          rejectRun(new Error(failure));
+          return;
+        }
+        resolveRun({
+          code: code ?? -1,
+          stdout: Buffer.concat(stdout),
+          stderr: Buffer.concat(stderr).toString(),
+        });
+      });
+    });
+    try {
+      child.stdin?.end(stdin ?? "");
+    } catch {
+      fail("local tc input stream failed");
+    }
+    return result;
   }
 
   async function ok<T = unknown>(args: string[], profile: string, stdin?: string): Promise<T> {
     const result = await tc(args, profile, false, stdin);
     if (result.code !== 0) throw new Error(`local tc command failed with exit ${result.code}`);
+    return parseJson<T>(result.stdout.toString(), "local tc output unreadable");
+  }
+
+  async function readProfile(profile: string): Promise<Profile> {
+    let source: string;
     try {
-      return JSON.parse(result.stdout.toString()) as T;
+      source = await readFile(join(home, ".tinycloud", "profiles", profile, "profile.json"), "utf8");
     } catch {
-      throw new Error("local tc command returned invalid JSON");
+      throw new Error("profile JSON unreadable: profile.json");
     }
+    return parseJson<Profile>(source, "profile JSON unreadable: profile.json");
   }
 
   function expectedEnvelope(bytes: Buffer): boolean {
     try {
-      const value = JSON.parse(bytes.toString()) as Record<string, unknown>;
+      const value = parseJson<Record<string, unknown>>(bytes.toString(), "replica envelope JSON unreadable");
       const metadata = value.metadata as Record<string, unknown> | undefined;
       return value.v === 1 &&
         value.alg === "x25519-aes256gcm/v1" &&
@@ -148,7 +252,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
 
   function secretReadMatches(bytes: Buffer, expected: string): boolean {
     try {
-      const value = JSON.parse(bytes.toString()) as { value?: unknown };
+      const value = parseJson<{ value?: unknown }>(bytes.toString(), "Secrets result JSON unreadable");
       return value.value === expected;
     } catch {
       return false;
@@ -157,7 +261,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
 
   function scopedSecretCountIsOne(bytes: Buffer): boolean {
     try {
-      const value = JSON.parse(bytes.toString()) as { keys?: { key?: unknown }[] };
+      const value = parseJson<{ keys?: { key?: unknown }[] }>(bytes.toString(), "replica list JSON unreadable");
       return value.keys?.filter(({ key }) =>
         typeof key === "string" && key.startsWith("vault/secrets/scoped/"),
       ).length === 1;
@@ -169,7 +273,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   function expiredGrantClassification(result: Run): boolean {
     if (result.code !== 5) return false;
     try {
-      const value = JSON.parse(result.stderr) as { error?: { code?: unknown } };
+      const value = parseJson<{ error?: { code?: unknown } }>(result.stderr, "expiry response JSON unreadable");
       return value.error?.code === "GRANT_EXPIRED";
     } catch {
       return false;
@@ -179,10 +283,10 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   function replicaStatusIsRevoked(result: Run): boolean {
     if (result.code !== 0) return false;
     try {
-      const value = JSON.parse(result.stdout.toString()) as {
+      const value = parseJson<{
         authority?: { state?: unknown };
         counts?: { keys?: unknown; contentMissing?: unknown; tombstones?: unknown };
-      };
+      }>(result.stdout.toString(), "replica status JSON unreadable");
       return value.authority?.state === "revoked" &&
         value.counts?.keys === 0 &&
         value.counts.contentMissing === 0 &&
@@ -229,7 +333,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     outOfScope = `vault/private/${ownerName}`;
     // A random secret name and random bytes are test fixtures only.
     await ok(["--host", host, "secrets", "put", ownerName, "--scope", "TC733", "--stdin"], "owner", scopedMarker);
-    const ownerProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as Profile;
+    const ownerProfile = await readProfile("owner");
     const ownerSigner = new PrivateKeySigner(ownerProfile.privateKey);
     const wasm = new NodeWasmBindings();
     const ownerAddress = await ownerSigner.getAddress();
@@ -278,7 +382,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     expect(sourceCatalog.ok && sourceCatalog.data.rows.length === 1 &&
       sourceCatalog.data.rows[0]?.[0] === catalogMarker).toBe(true);
     await ok(["profile", "create", "device", "--posture", "delegate-session", "--host", host], "device");
-    const deviceProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "device", "profile.json"), "utf8")) as Profile;
+    const deviceProfile = await readProfile("device");
     deviceDid = deviceProfile.did.split("#", 1)[0]!;
     await ok(["auth", "request", "--cap", `tinycloud.kv:${secretsSpace}:vault/secrets/:get,list,metadata,sync`, "--expiry", "30d", "--emit", "req.json"], "device");
     const grant = await tc(["auth", "grant", "req.json", "--yes"], "owner");
@@ -290,6 +394,13 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     encrypted = `vault/secrets/${ownerName}`;
     secretsDir = join(home, ".tinycloud", "profiles", "device", "replicas", shortName);
   }, 180_000);
+  afterAll(async () => {
+    try {
+      await stopAllChildren();
+    } finally {
+      if (home) await rm(home, { recursive: true, force: true });
+    }
+  });
 
   test("replicates_wrapped_keys_and_ciphertext_not_plaintext", async () => {
     const files = await replicaBytes();
@@ -314,7 +425,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   test("decrypt_grant_is_independent", async () => {
     const denied = await secretRead("device");
     expect(denied.code !== 0).toBe(true);
-    const ownerProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as Profile;
+    const ownerProfile = await readProfile("owner");
     const grantor = new TinyCloudNode({
       host,
       privateKey: ownerProfile.privateKey,
@@ -395,9 +506,9 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   test("expiry_and_learned_revocation_survive_restart", async () => {
     if (node === undefined || node.exitCode !== null) await startNode();
     await ok(["profile", "create", "expiry-device", "--posture", "delegate-session", "--host", host], "expiry-device");
-    const expiryDevice = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "expiry-device", "profile.json"), "utf8")) as Profile;
+    const expiryDevice = await readProfile("expiry-device");
     const expiryDid = expiryDevice.did.split("#", 1)[0]!;
-    const ownerProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as Profile;
+    const ownerProfile = await readProfile("owner");
     const grantor = new TinyCloudNode({
       host,
       privateKey: ownerProfile.privateKey,
