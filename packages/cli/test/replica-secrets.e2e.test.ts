@@ -44,7 +44,6 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   let encrypted: string;
   let encryptionNetworkId: string;
   let outOfScope: string;
-  let scopedSecret: string;
   let secretsDir: string;
   const nodeSecret = randomBytes(48).toString("base64url");
   const ownerName = `TC733_${randomBytes(8).toString("hex").toUpperCase()}`;
@@ -125,12 +124,32 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     const result = await tc(args, profile);
     if (result.code !== 0) {
       let code = "unknown";
-      try {
-        code = String((JSON.parse(result.stderr) as { error?: { code?: unknown } }).error?.code ?? code);
-      } catch {
-        // Keep failure output limited to a classification, never command data.
+      const outputs = [result.stderr, result.stdout.toString()];
+      for (const output of outputs) {
+        try {
+          const parsed = JSON.parse(output) as { code?: unknown; error?: { code?: unknown }; errorCode?: unknown };
+          code = String(parsed.error?.code ?? parsed.code ?? parsed.errorCode ?? code);
+          if (code !== "unknown") break;
+        } catch {
+          // Keep failure output limited to a classification, never command data.
+        }
       }
-      throw new Error(`local tc command failed with exit ${result.code} (${code})`);
+      if (code === "unknown") {
+        const output = outputs.join("\n");
+        code = /network|fetch|connect/i.test(output) ? "NETWORK_FAILURE"
+          : /sqlite|database|storage/i.test(output) ? "STORAGE_FAILURE"
+            : /grant|authority|delegation/i.test(output) ? "AUTHORITY_FAILURE"
+              : "UNCLASSIFIED";
+      }
+      const safeDetail = outputs.join("\n")
+        .replaceAll(nodeSecret, "[redacted]")
+        .replaceAll(secretMarker, "[redacted]")
+        .replaceAll(scopedMarker, "[redacted]")
+        .replaceAll(outsideMarker, "[redacted]")
+        .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted]")
+        .replace(/https?:\/\/[^\s"'`]+/g, "[url]")
+        .slice(0, 240);
+      throw new Error(`local tc command failed with exit ${result.code} (${code}): ${safeDetail}`);
     }
     return JSON.parse(result.stdout.toString()) as T;
   }
@@ -169,7 +188,6 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     const network = await ok<{ networkId: string }>(["--host", host, "secrets", "network", "init"], "owner");
     encryptionNetworkId = network.networkId;
     await ok(["--host", host, "secrets", "put", ownerName, secretMarker], "owner");
-    scopedSecret = `vault/secrets/scoped/TC733/${ownerName}`;
     outOfScope = `vault/private/${ownerName}`;
     // A random secret name and random bytes are test fixtures only.
     await ok(["--host", host, "secrets", "put", ownerName, scopedMarker, "--scope", "TC733"], "owner");
@@ -229,7 +247,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     expect(typeof envelope.encryptedSymmetricKey).toBe("string");
     expect(typeof envelope.encryptedSymmetricKeyHash).toBe("string");
     expect(typeof envelope.ciphertext).toBe("string");
-    expect(envelope.metadata).toMatchObject({ contentType: "application/json" });
+    expect(envelope.metadata).toMatchObject({ "x-vault-content-type": "application/json" });
   });
 
   test("store_files_are_owner_only", async () => {
@@ -308,37 +326,86 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
     db.close();
     expect(tables.some(({ name }) => name === "secret_records")).toBe(false);
-    expect(scopedSecret.startsWith("vault/secrets/scoped/")).toBe(true);
-    expect(files.some((bytes) => bytes.includes(Buffer.from(scopedSecret)))).toBe(true);
+    const listed = await tc(["replica", "list", "--replica", shortName], "device");
+    expect(listed.code).toBe(0);
+    const keys = (JSON.parse(listed.stdout.toString()) as { keys: { key: string }[] }).keys.map(({ key }) => key);
+    expect(keys.filter((key) => key.startsWith("vault/secrets/scoped/")).length).toBe(1);
   });
 
   test("secrets_sync_requires_opt_in", async () => {
-    for (const selector of [
-      ["--space", secretsSpace],
+    for (const [index, selector] of [
+      ["--space", secretsSpace, "--prefix", "unrelated/"],
       ["--space", secretsSpace, "--prefix", "vault/secrets/"],
       ["--prefix", "vault"],
       ["--prefix", "vault/"],
-    ]) {
-      const denied = await tc(["replica", "sync", ...selector], "device");
+    ].entries()) {
+      const denied = await tc(["replica", "sync", "--replica", `denied-${index}`, ...selector], "device", true);
       expect(denied.code).toBe(2);
       expect(denied.stderr.includes("SECRETS_OPT_IN_REQUIRED")).toBe(true);
     }
   });
 
   test("expiry_and_learned_revocation_survive_restart", async () => {
+    if (node === undefined || node.exitCode !== null) await startNode();
     await ok(["profile", "create", "expiry-device", "--posture", "delegate-session", "--host", host], "expiry-device");
-    await ok(["auth", "request", "--cap", `tinycloud.kv:${secretsSpace}:vault/secrets/:get,list,metadata,sync`, "--expiry", "75s", "--emit", "expiry-req.json"], "expiry-device");
-    const shortGrant = await tc(["auth", "grant", "expiry-req.json", "--yes"], "owner");
-    if (shortGrant.code !== 0) throw new Error("local owner could not issue short-lived replica grant");
-    await writeFile(join(home, "expiry-grant.json"), shortGrant.stdout);
+    const expiryDevice = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "expiry-device", "profile.json"), "utf8")) as Profile;
+    const expiryDid = expiryDevice.did.split("#", 1)[0]!;
+    const ownerProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as Profile;
+    const grantor = new TinyCloudNode({
+      host,
+      privateKey: ownerProfile.privateKey,
+      autoBootstrapAccount: false,
+      autoCreateSpace: true,
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "tc733-expiry-grant",
+        name: "TC-733 expiring replica grant",
+        defaults: false,
+        includePublicSpace: false,
+        prefix: "",
+        space: "default",
+        permissions: [{
+          service: "tinycloud.kv",
+          space: "secrets",
+          path: "vault/secrets/",
+          actions: ["get", "list", "metadata", "sync"],
+        }],
+      },
+    });
+    await grantor.signIn();
+    const issued = await grantor.delegateTo(expiryDid, [{
+      service: "tinycloud.kv",
+      space: secretsSpace,
+      path: "vault/secrets/",
+      actions: ["get", "list", "metadata", "sync"],
+    }], { expiry: "75s" });
+    await writeFile(join(home, "expiry-grant.json"), JSON.stringify(issued.delegation));
     await ok(["auth", "import", "expiry-grant.json"], "expiry-device");
     await ok(["replica", "sync", "--replica", "expiry", "--space", secretsSpace, "--prefix", "vault/secrets/", "--allow-secrets"], "expiry-device");
+    const expiryDir = join(home, ".tinycloud", "profiles", "expiry-device", "replicas", "expiry");
+    const snapshotExpiryBlobs = async (): Promise<readonly (readonly [string, Buffer])[]> => {
+      const blobRoot = `${join(expiryDir, "blobs")}/`;
+      const paths = (await walk(expiryDir)).filter((path) => path.startsWith(blobRoot)).sort();
+      return Promise.all(paths.map(async (path) => [path, await readFile(path)] as const));
+    };
+    const beforeExpiry = await snapshotExpiryBlobs();
+    expect(beforeExpiry.length).toBeGreaterThan(0);
     // The signed expiry is enforced by the node and CLI wall clocks; fake timers cannot advance either authority check.
     await Bun.sleep(77_000);
     const expired = await tc(["replica", "get", encrypted, "--replica", "expiry"], "expiry-device", true);
-    expect(expired.code).toBe(5);
+    let expiryErrorCode = "unknown";
+    try {
+      expiryErrorCode = String((JSON.parse(expired.stderr) as { error?: { code?: unknown } }).error?.code ?? expiryErrorCode);
+    } catch {
+      // Keep failure output limited to a classification.
+    }
+    expect({ code: expired.code, errorCode: expiryErrorCode }).toEqual({ code: 5, errorCode: "GRANT_EXPIRED" });
+    const afterExpiry = await snapshotExpiryBlobs();
+    expect(afterExpiry.length).toBe(beforeExpiry.length);
+    expect(afterExpiry.every(([path, bytes], index) =>
+      path === beforeExpiry[index]![0] && bytes.equals(beforeExpiry[index]![1])
+    )).toBe(true);
 
-    const ownerProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as Profile;
     const owner = new TinyCloudNode({
       host,
       privateKey: ownerProfile.privateKey,
