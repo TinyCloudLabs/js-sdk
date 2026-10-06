@@ -75,7 +75,9 @@ jobs:
         run: bun run --cwd packages/operations build
 
       - name: Build the packed CLI artifact
-        run: bun run --cwd packages/cli build
+        run: |
+          bun run --cwd packages/replica build
+          bun run --cwd packages/cli build
 
       - name: Run focused I0 gate suites offline
         env:

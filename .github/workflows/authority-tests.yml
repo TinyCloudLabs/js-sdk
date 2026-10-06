@@ -39,11 +39,14 @@ jobs:
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
           bun run --cwd packages/node-sdk build
+          bun run --cwd packages/replica build
 
       - name: Test SDK authority surfaces (excluding harness-dependent e2e)
         run: |
           bun run --cwd packages/sdk-core test
           bun run --cwd packages/sdk-services test
+          # The replica verifies signed device grants and enforces their window offline.
+          bun run --cwd packages/replica test
           # Run the node-sdk suite EXCEPT the two harness-dependent e2e files.
           # Those live in the dedicated cross-repo jobs below where OpenKey is
           # actually checked out.

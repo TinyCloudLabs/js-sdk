@@ -75,6 +75,25 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The node's whole 401 body for a revoked chain: tinycloud-core's
+ * `InvocationError::DelegationRevoked` (`delegation-revoked: <cid>`) or
+ * `DelegationAncestorRevoked` (`delegation-ancestor-revoked: ancestor=<cid>
+ * invoked=<cid>`), rendered as-is (older nodes prefixed `Invalid invocation: `).
+ * Anchored: only CIDs follow the error kind, so a key, prefix or path in any
+ * other 401 (e.g. `Unauthorized Action: <space>/kv/<prefix> / ...`) never matches.
+ */
+const REVOKED_BODY =
+  /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
+
+function revocationCodeOf(
+  body: string
+): typeof ErrorCodes.AUTH_DELEGATION_REVOKED | typeof ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED | undefined {
+  const match = REVOKED_BODY.exec(body.trim());
+  if (match === null) return undefined;
+  return match[1] !== undefined ? ErrorCodes.AUTH_DELEGATION_REVOKED : ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED;
+}
+
 function encodeKvBatchPartName(path: string): string {
   return encodeURIComponent(path).replace(/[!'()*]/g, (char) =>
     `%${char.charCodeAt(0).toString(16).toUpperCase()}`
@@ -1412,8 +1431,8 @@ export class KVService extends BaseService implements IKVService {
 
   /**
    * Map a failed `kv/sync` response. 410 and the retention 403 carry
-   * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose text names
-   * `delegation-revoked` or `delegation-ancestor-revoked`. A body read that
+   * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose whole body
+   * is the node's revocation error (see REVOKED_BODY). A body read that
    * fails because the request was cancelled or timed out rethrows, so the
    * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
    */
@@ -1464,11 +1483,7 @@ export class KVService extends BaseService implements IKVService {
       ));
     }
     if (response.status === 401) {
-      const revoked = /\bdelegation-ancestor-revoked\b/.test(errorText)
-        ? ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED
-        : /\bdelegation-revoked\b/.test(errorText)
-          ? ErrorCodes.AUTH_DELEGATION_REVOKED
-          : undefined;
+      const revoked = revocationCodeOf(errorText);
       if (revoked !== undefined) {
         return err(serviceError(revoked, `${context}: 401 - ${errorText}`, "kv", { meta }));
       }

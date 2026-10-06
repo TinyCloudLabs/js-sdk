@@ -214,6 +214,7 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
+        "@tinycloud/replica": "0.0.0",
         "@types/node": "^20",
         "tsup": "^8.0.0",
         "typescript": "^5.9.3",
@@ -266,6 +267,19 @@
         "node-sql-parser": "5.4.0",
         "zod": "^3.22.0",
         "zod-to-json-schema": "^3.22.0",
+      },
+      "devDependencies": {
+        "@types/node": "^20",
+        "tsup": "^8.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/replica": {
+      "name": "@tinycloud/replica",
+      "version": "0.0.0",
+      "dependencies": {
+        "@noble/curves": "^1.9.2",
+        "@noble/hashes": "^1.8.0",
       },
       "devDependencies": {
         "@types/node": "^20",
@@ -1900,6 +1914,8 @@
     "@tinycloud/operations": ["@tinycloud/operations@workspace:packages/operations"],
 
     "@tinycloud/operations-mcp-conformance": ["@tinycloud/operations-mcp-conformance@workspace:tests/operations-mcp-conformance"],
+
+    "@tinycloud/replica": ["@tinycloud/replica@workspace:packages/replica"],
 
     "@tinycloud/sdk-core": ["@tinycloud/sdk-core@workspace:packages/sdk-core"],
 

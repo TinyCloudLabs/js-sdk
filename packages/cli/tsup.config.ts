@@ -11,5 +11,7 @@ export default defineConfig({
   // Share/help without evaluating optional auth/WASM dependencies.
   splitting: false,
   external: ["siwe"],
-  noExternal: ["@tinycloud/share-sdk", "@tinycloud/share-envelope"],
+  // The replica engine and store ship inside the CLI; SQLite itself is the
+  // runtime's built-in module, loaded on demand by `tc replica`.
+  noExternal: ["@tinycloud/share-sdk", "@tinycloud/share-envelope", "@tinycloud/replica"],
 });
