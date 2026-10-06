@@ -28,7 +28,6 @@ import { kvSyncTransport } from "./transport.js";
 import type { GrantRecord, ListOpts, ReplicaConfig, ReplicaState } from "./types.js";
 import {
   IndexedDbReplicaStore,
-  deleteReplicaDatabase,
   deviceIdentity,
   replicaDatabaseName,
   type DeviceIdentity,
@@ -332,31 +331,35 @@ async function handleStatus(): Promise<StatusResult> {
 
 async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
   const s = needSession();
-  if (locks === undefined) {
-    if (purge) {
-      await s.store.close();
-      s.channel?.close();
-      session = null;
-      await deleteReplicaDatabase(s.replicaId);
-      return { reset: true, purged: true };
+  if (purge) {
+    // The store's fenced destroy checks the lease against the replica row
+    // before deleting the database — a stale or foreign lease refuses.
+    const lease = await s.store.acquireSyncLease(60_000);
+    if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
+    if (locks !== undefined) {
+      const outcome = await withWriterLock(s, async () => {
+        await s.store.destroy(lease);
+        return true;
+      });
+      if (outcome !== true) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
+    } else {
+      await s.store.destroy(lease);
     }
+    s.channel?.close();
+    session = null;
+    return { reset: true, purged: true };
+  }
+  if (locks === undefined) {
     await new Replica({ store: s.store }).reset("manual");
     return { reset: true, purged: false };
   }
   const outcome = await withWriterLock(s, async () => {
-    if (purge) {
-      await s.store.close();
-      s.channel?.close();
-      session = null;
-      await deleteReplicaDatabase(s.replicaId);
-    } else {
-      await new Replica({ store: s.store }).reset("manual");
-    }
+    await new Replica({ store: s.store }).reset("manual");
     return true;
   });
   if (outcome !== true) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
-  if (!purge) postEvent("reset", { reason: "manual" });
-  return { reset: true, purged: purge };
+  postEvent("reset", { reason: "manual" });
+  return { reset: true, purged: false };
 }
 
 async function handleSetRetention(grantCid: string | null): Promise<{ retentionGrantCid: string | null }> {

@@ -21,7 +21,7 @@
  * holder's state.
  */
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
-import { effectiveAuthority } from "../scope.js";
+import { effectiveAuthority, isInstant } from "../scope.js";
 import type {
   GrantRecord,
   LeaseToken,
@@ -146,12 +146,14 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   readonly #db: IDBDatabase;
   readonly #holder: string;
   readonly #now: () => number;
+  readonly #replicaId: string;
   #closed = false;
 
-  private constructor(db: IDBDatabase, holder: string, now: () => number) {
+  private constructor(db: IDBDatabase, holder: string, now: () => number, replicaId: string) {
     this.#db = db;
     this.#holder = holder;
     this.#now = now;
+    this.#replicaId = replicaId;
   }
 
   static async open(replicaId: string, options: { holder: string; now?: () => number }): Promise<IndexedDbReplicaStore> {
@@ -162,7 +164,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       if (isReplicaError(error)) throw error;
       throw idbError(error, "Opening the replica");
     }
-    const store = new IndexedDbReplicaStore(db, options.holder, options.now ?? Date.now);
+    const store = new IndexedDbReplicaStore(db, options.holder, options.now ?? Date.now, replicaId);
     // A revocation purge interrupted before commit finishes on the next open.
     await store.finishPurgeIfPending().catch(() => undefined);
     return store;
@@ -347,8 +349,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * Revocation is checked first so fenced writes, GC and resets surface
    * GRANT_REVOKED rather than a stale BUSY.
    */
-  #checkFence(state: MetaState, t: LeaseToken): void {
-    if (state.revoked !== null) {
+  #checkFence(state: MetaState, t: LeaseToken, options: { allowRevoked?: boolean } = {}): void {
+    if (state.revoked !== null && options.allowRevoked !== true) {
       throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${state.revoked}`);
     }
     if (state.leaseToken !== t.token || state.leaseHolder !== t.holder) {
@@ -419,15 +421,19 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       const state = this.#requireMeta(await this.#meta(tx));
       this.#checkFence(state, t);
       // Malformed node-attested timestamps are a protocol violation: refuse
-      // without touching state.
-      const nbf = p.window.notBefore === null ? null : Date.parse(p.window.notBefore);
-      const exp = p.window.expiresAt === null ? null : Date.parse(p.window.expiresAt);
-      if ((p.window.notBefore !== null && Number.isNaN(nbf)) || (p.window.expiresAt !== null && Number.isNaN(exp))) {
+      // without touching state. RFC 3339 only — the transport enforces this
+      // too; the store re-checks it inside the commit transaction.
+      if (
+        (p.window.notBefore !== null && !isInstant(p.window.notBefore)) ||
+        (p.window.expiresAt !== null && !isInstant(p.window.expiresAt))
+      ) {
         throw new ReplicaError(
           ReplicaErrorCode.PROTOCOL_ERROR,
-          `The node's authority window is not ISO-8601: ${JSON.stringify(p.window)}.`,
+          `The node's authority window is not an RFC 3339 instant: ${JSON.stringify(p.window)}.`,
         );
       }
+      const nbf = p.window.notBefore === null ? null : Date.parse(p.window.notBefore);
+      const exp = p.window.expiresAt === null ? null : Date.parse(p.window.expiresAt);
       // Re-check the window inside the commit transaction, on the injected
       // clock: a page fetched across the expiry instant never commits.
       const now = this.#now();
@@ -551,11 +557,37 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       state.lastError = null;
       state.lastReset = { at: new Date(this.#now()).toISOString(), reason };
       state.generation += 1;
+
       this.#putMeta(tx, state);
     });
   }
 
-
+  /**
+   * Delete this replica's database for good (the worker's `reset --purge`).
+   * Fenced like a commit: `t` must still be a live lease — the fence is
+   * checked while the replica row still exists, so a paused tab can never
+   * delete the database a rival store took over. Allowed on a revoked
+   * replica. The store is unusable afterwards; `close()` is a no-op.
+   */
+  async destroy(t: LeaseToken): Promise<void> {
+    await this.#writeTx([STORE_META], "Removing the replica", async (tx) => {
+      const state = await this.#meta(tx);
+      if (state === undefined) {
+        // The database we opened is already gone or was replaced.
+        throw new ReplicaError(ReplicaErrorCode.BUSY, "This replica was already removed or replaced.");
+      }
+      this.#checkFence(state, t, { allowRevoked: true });
+    });
+    // The lease is still ours: `deleteDatabase` fires versionchange and our
+    // own connection must close for the delete to proceed.
+    this.#closed = true;
+    this.#db.close();
+    try {
+      await deleteReplicaDatabase(this.#replicaId);
+    } catch (error) {
+      throw idbError(error, "Removing the replica");
+    }
+  }
 
   async markRevoked(detail: string): Promise<void> {
     await this.#writeTx(ALL_STORES, "Recording the revocation", async (tx) => {
@@ -611,17 +643,20 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   /**
-   * The node revoked the retention grant: drop it and its retainUntil so
-   * post-expiry reads raise GRANT_REVOKED. Bound to the configured retain CID
-   * — the only CID the sync invocation could have used.
+   * The node revoked the retention grant `cid`: drop it and its retainUntil,
+   * so post-expiry reads raise GRANT_REVOKED. Bound to the configured retain
+   * CID — the only CID the sync invocation could have used; a different one
+   * installed meanwhile is kept.
    */
-  async markRetentionRevoked(detail: string): Promise<void> {
+  async markRetentionRevoked(cid: string, detail: string): Promise<void> {
     await this.#writeTx([STORE_META], "Recording the retention grant's revocation", async (tx) => {
       const state = await this.#meta(tx);
-      if (state === undefined || state.config.retentionGrantCid === null) return;
-      state.config = { ...state.config, retentionGrantCid: null, localReadPolicy: "whileGrantValid" };
-      if (state.authority !== null) state.authority = { ...state.authority, retainUntil: null };
-      state.retentionRevoked = detail;
+      if (state === undefined) return;
+      if (state.config.retentionGrantCid === cid) {
+        state.config = { ...state.config, retentionGrantCid: null, localReadPolicy: "whileGrantValid" };
+        if (state.authority !== null) state.authority = { ...state.authority, retainUntil: null };
+        state.retentionRevoked = detail;
+      }
       state.lastError = {
         at: new Date(this.#now()).toISOString(),
         code: ReplicaErrorCode.RETENTION_GRANT_REFUSED,
@@ -760,6 +795,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       },
       consistency: "observed",
       coverage: state.coverage,
+      purgePending: state.purgePending,
       lastSyncAt: state.lastSyncAt,
       lastCompleteAt: state.lastCompleteAt,
       counts: { keys, contentMissing: missing, tombstones },

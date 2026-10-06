@@ -7,9 +7,10 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake-indexeddb";
 
-import { FakeNode, NODE_DID, config, deviceGrant, etagOf } from "../../test/fixtures.js";
-import { Replica } from "../engine.js";
+import { FakeNode, NODE_DID, SPACE, config, deviceGrant, etagOf } from "../../test/fixtures.js";
+import { Replica, contentHash } from "../engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
+import { kvSyncTransport, type KVSyncClient } from "../transport.js";
 import type { GrantRecord } from "../types.js";
 import { openDatabase, requestAsPromise } from "./idb.js";
 import { IndexedDbReplicaStore, replicaDatabaseName } from "./store.js";
@@ -276,8 +277,8 @@ describe("authority at the commit boundary (indexeddb)", () => {
       authority: null,
       coverage: "complete" as const,
       at: new Date().toISOString(),
-      now: Date.now(),
       window: { notBefore: "not-a-date", expiresAt: null },
+
       complete: true,
       promoteGrant: null,
     };
@@ -303,7 +304,6 @@ describe("revocation purge fencing (indexeddb)", () => {
       authority: null,
       coverage: "complete" as const,
       at: new Date().toISOString(),
-      now: Date.now(),
       window: { notBefore: null, expiresAt: null },
       complete: true,
       promoteGrant: null,
@@ -315,6 +315,7 @@ describe("revocation purge fencing (indexeddb)", () => {
     expect(await blobCount(replicaId)).toBe(0);
   });
 });
+
 
 describe("lease and reader timing (indexeddb)", () => {
   test("the lease is renewed with the configured TTL while content is fetched", async () => {
@@ -341,6 +342,25 @@ describe("lease and reader timing (indexeddb)", () => {
     now += 2000;
     expect(await codeOf(store.renewLease(lease, 1000))).toBe(ReplicaErrorCode.BUSY);
     expect(await codeOf(store.collectGarbage(lease))).toBe(ReplicaErrorCode.BUSY);
+    const late = new TextEncoder().encode("late");
+    expect(
+      await codeOf(
+        store.applyPage(lease, {
+          changes: [{ key: "notes/z", deleted: false, etag: etagOf(late), hash: contentHash(late), metadata: {}, content: true }],
+          blobs: new Map([[contentHash(late), late]]),
+          cursor: "9:9",
+          source: { nodeDid: NODE_DID, space: "s", prefix: "notes/" },
+          authority: null,
+          coverage: "complete",
+          at: new Date().toISOString(),
+          window: { notBefore: null, expiresAt: null },
+          complete: true,
+          promoteGrant: null,
+        }),
+      ),
+    ).toBe(ReplicaErrorCode.BUSY);
+    expect(await codeOf(store.reset(lease, "x"))).toBe(ReplicaErrorCode.BUSY);
+    expect(await codeOf(store.destroy(lease))).toBe(ReplicaErrorCode.BUSY);
     // A new holder can take over once the old lease expired.
     const rival = await IndexedDbReplicaStore.open(replicaId, { holder: "rival", now: () => now });
     expect(await rival.acquireSyncLease(60_000)).not.toBeNull();
@@ -351,6 +371,8 @@ describe("lease and reader timing (indexeddb)", () => {
     node.put("notes/a", "one");
     const store = await newIdbStore();
     await new Replica({ store, transport: node }).sync();
+
+
     let first = true;
     const readContent = async (hash: string) => {
       if (first) {
@@ -368,5 +390,165 @@ describe("lease and reader timing (indexeddb)", () => {
     });
     const a = await new Replica({ store: racing }).get("notes/a");
     expect(a.status === "present" && text(a.value)).toBe("one");
+  });
+});
+
+describe("retention grant CID binding (indexeddb)", () => {
+  test("a refusal of the retain grant a request presented leaves a grant installed meanwhile", async () => {
+    let now = Date.now();
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    node.authority = {
+      notBefore: null,
+      expiresAt: new Date(now + 60_000).toISOString(),
+      retainUntil: new Date(now + 600_000).toISOString(),
+    };
+    const store = await newIdbStore(
+      undefined,
+      { localReadPolicy: "retainAfterExpiry", retentionGrantCid: "bafyretain" },
+      { now: () => now },
+    );
+    const replica = new Replica({ store, transport: node, now: () => now });
+    await replica.sync();
+    node.onSyncPage = async () => {
+      node.onSyncPage = undefined;
+      await store.setRetentionGrant("bafynewretain");
+    };
+    node.failNextSync = new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, "refused", { reason: "retention-grant-revoked" });
+    expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.RETENTION_GRANT_REFUSED);
+    const state = (await store.open())!;
+    // The refused CID was `bafyretain`; the replacement stays installed.
+    expect([state.config.retentionGrantCid, state.config.localReadPolicy, state.retentionRevoked]).toEqual([
+      "bafynewretain",
+      "retainAfterExpiry",
+      null,
+    ]);
+    now += 120_000;
+    expect((await replica.get("notes/a")).meta.authority).toBe("expired");
+  });
+});
+
+describe("malformed authority bounds (indexeddb)", () => {
+  test("a page with an unparseable bound is a protocol error that changes nothing", async () => {
+    let now = Date.now();
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    const attested = { notBefore: null, expiresAt: new Date(now + 60_000).toISOString(), retainUntil: null };
+    node.authority = attested;
+    const store = await newIdbStore(undefined, {}, { now: () => now });
+    const replica = new Replica({ store, transport: node, now: () => now });
+    await replica.sync();
+    const before = (await store.open())!;
+    node.put("notes/b", "two");
+    for (const bad of [
+      { ...attested, expiresAt: "not-a-date" },
+      { ...attested, notBefore: "yesterday" },
+      { ...attested, retainUntil: "2030" },
+    ]) {
+      node.authority = bad;
+      expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.PROTOCOL_ERROR);
+      const after = (await store.open())!;
+      expect([after.cursor, after.authority, await store.get("notes/b")]).toEqual([before.cursor, before.authority, undefined]);
+    }
+    now += 61_000;
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
+});
+
+describe("false revocation (indexeddb)", () => {
+  test("a node error fetching a key named like a revocation fails the sync and keeps the replica", async () => {
+    const key = "notes/delegation-revoked: bafyx";
+    const value = new TextEncoder().encode("kept");
+    const kept = new TextEncoder().encode("one");
+    let feed = [{ key: "notes/a", deleted: false as const, etag: etagOf(kept), metadata: {} }];
+    const sdk: KVSyncClient = {
+      changes: async () => ({
+        ok: true,
+        data: {
+          changes: feed,
+          more: false,
+          cursor: `c${feed.length}`,
+          source: { nodeDid: NODE_DID, space: SPACE, prefix: "notes/" },
+          authority: { notBefore: null, expiresAt: new Date(Date.now() + 3600_000).toISOString(), retainUntil: null },
+        },
+      }),
+      batchGet: async (keys) =>
+        keys.includes(key)
+          ? { ok: false, error: { code: "NETWORK_ERROR", message: `Failed to batch read 1 key(s): 500 - storage error reading ${key}`, meta: { status: 500 } } }
+          : { ok: true, data: { results: keys.map((k) => ({ key: k, result: { ok: true as const, data: { data: kept, headers: { etag: etagOf(kept) } } } })) } },
+      get: async () => ({ ok: false, error: { code: "NETWORK_ERROR", message: `Failed to get key ${JSON.stringify(key)}: 500 - boom`, meta: { status: 500 } } }),
+    };
+    const store = await newIdbStore();
+    const replica = new Replica({ store, transport: kvSyncTransport(sdk) });
+    await replica.sync();
+    feed = [...feed, { key, deleted: false, etag: etagOf(value), metadata: {} }];
+    expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.NODE_ERROR);
+    expect((await store.open())!.revoked).toBeNull();
+    const a = await replica.get("notes/a");
+    expect(a.status === "present" && text(a.value)).toBe("one");
+  });
+});
+
+describe("replica removal — fenced destroy (indexeddb)", () => {
+  test("a stale lease cannot remove a replica another tab took over", async () => {
+    const replicaId = nextId();
+    const a = await newIdbStore(replicaId);
+    const b = await IndexedDbReplicaStore.open(replicaId, { holder: "rival" });
+    const stale = (await a.acquireSyncLease(60_000))!;
+    await a.releaseLease(stale);
+    const live = await b.acquireSyncLease(60_000);
+    expect(live).not.toBeNull();
+    expect(await codeOf(a.destroy(stale))).toBe(ReplicaErrorCode.BUSY);
+    await b.close();
+  });
+
+  test("a live lease removes the replica, also a revoked one", async () => {
+    const replicaId = nextId();
+    const store = await newIdbStore(replicaId);
+    const lease = (await store.acquireSyncLease(60_000))!;
+    await store.destroy(lease);
+    const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "h2" });
+    expect(await reopened.open()).toBeNull();
+    await reopened.close();
+
+    const revokedId = nextId();
+    const dead = await newIdbStore(revokedId);
+    await dead.markRevoked("delegation-revoked: bafy");
+    // markRevoked invalidated the old lease; a fresh one destroys it.
+    const fresh = (await dead.acquireSyncLease(60_000))!;
+    await dead.destroy(fresh);
+    const reRevoked = await IndexedDbReplicaStore.open(revokedId, { holder: "h3" });
+    expect(await reRevoked.open()).toBeNull();
+    await reRevoked.close();
+  });
+
+  test("a writer resuming after the purge writes no content, also after a reopen", async () => {
+    const replicaId = nextId();
+    const store = await newIdbStore(replicaId);
+    const writer = (await store.acquireSyncLease(60_000))!;
+    await store.markRevoked("delegation-revoked: bafy");
+    const secret = new TextEncoder().encode("secret");
+    expect(
+      await codeOf(
+        store.applyPage(writer, {
+          changes: [{ key: "notes/z", deleted: false, etag: etagOf(secret), hash: contentHash(secret), metadata: {}, content: true }],
+          blobs: new Map([[contentHash(secret), secret]]),
+          cursor: "9:9",
+          source: { nodeDid: NODE_DID, space: "s", prefix: "notes/" },
+          authority: null,
+          coverage: "complete",
+          at: new Date().toISOString(),
+          window: { notBefore: null, expiresAt: null },
+          complete: true,
+          promoteGrant: null,
+        }),
+      ),
+    ).toBe(ReplicaErrorCode.GRANT_REVOKED);
+    expect(await blobCount(replicaId)).toBe(0);
+    await store.close();
+    const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "h2" });
+    expect((await reopened.status()).purgePending).toBe(false);
+    await reopened.close();
+    expect(await blobCount(replicaId)).toBe(0);
   });
 });

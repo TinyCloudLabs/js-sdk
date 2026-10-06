@@ -153,8 +153,8 @@ describe("fencing and revocation (indexeddb)", () => {
         authority: null,
         coverage: "empty",
         at: new Date().toISOString(),
-        now: Date.now(),
         window: { notBefore: null, expiresAt: null },
+
         complete: false,
         promoteGrant: null,
       }),
