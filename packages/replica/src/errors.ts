@@ -52,6 +52,8 @@ export const ReplicaErrorCode = {
   CONTENT_MISMATCH: "CONTENT_MISMATCH",
   /** A stored blob no longer hashes to its name. */
   INTEGRITY_ERROR: "INTEGRITY_ERROR",
+  /** The replica handle was closed; in-flight calls settle with this code. */
+  CLOSED: "REPLICA_CLOSED",
 } as const;
 
 export type ReplicaErrorCode = (typeof ReplicaErrorCode)[keyof typeof ReplicaErrorCode];

@@ -446,10 +446,14 @@ export class SqliteReplicaStore implements ReplicaStore {
   /** Update the retention opt-in; it takes effect at the next sync. */
   async setRetentionGrant(cid: string | null): Promise<void> {
     await this.#guardedWrite("Updating the retention grant", () => {
+      // Changing the CID invalidates the attested retainUntil: it was earned
+      // under the previous retain grant, so only a fresh sync under the new
+      // CID may re-establish it.
       this.#db.run(
-        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ? WHERE id = 1",
+        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ?, retain_until = NULL WHERE id = 1 AND retention_grant_cid IS NOT ?",
         cid,
         cid === null ? "whileGrantValid" : "retainAfterExpiry",
+        cid,
       );
     });
   }

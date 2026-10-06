@@ -131,6 +131,13 @@ type Session = {
   replicaId: string;
   /** Declared at open; the first installed grant's issuer must match it. */
   grantSubject: string;
+  /**
+   * The issuer this session proved by installing a grant. A database already
+   * bound to an issuer never answers local reads to a session that has not
+   * installed that issuer's grant — an empty-`grantSubject` open must not
+   * read another principal's data.
+   */
+  verified: string | null;
   device: DeviceIdentity;
   store: IndexedDbReplicaStore;
   channel: BroadcastChannel | null;
@@ -199,6 +206,29 @@ async function closeSession(): Promise<void> {
   }
 }
 
+/**
+ * Refuse local reads and replica mutation to a session whose installed grant
+ * does not match the issuer the database is bound to. `status` stays open for
+ * diagnostics; everything touching entries, blobs or grants goes through this.
+ */
+async function assertVerified(s: Session): Promise<void> {
+  const bound = await s.store.grantSubject();
+  if (bound !== null && s.verified !== bound) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_UNAUTHORIZED,
+      `This replica belongs to ${bound}; install that principal's grant before reading or syncing.`,
+    );
+  }
+}
+
+/** Latest commit serial → the sibling-worker BroadcastChannel. */
+function broadcastCommitted(s: Session): void {
+  void s.store
+    .commitSerial()
+    .then((serial) => s.channel?.postMessage({ type: "committed", serial }))
+    .catch(() => undefined);
+}
+
 async function handleOpen(request: OpenRequest): Promise<OpenResult> {
   await closeSession();
   if (requiresSecretsOptIn(request.space, request.prefix) && request.allowSecrets !== true) {
@@ -220,42 +250,62 @@ async function handleOpen(request: OpenRequest): Promise<OpenResult> {
   const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(lockName(replicaId));
   if (channel !== null) {
     channel.onmessage = (message) => {
-      const data = message.data as { type?: unknown; serial?: unknown };
+      const data = message.data as { type?: unknown; serial?: unknown; reason?: unknown };
       if (data !== null && typeof data === "object" && data.type === "committed" && typeof data.serial === "number") {
         postEvent("committed", { serial: data.serial });
+      } else if (data !== null && typeof data === "object" && data.type === "reset") {
+        // A sibling reset or purged this replica. Our store surfaces
+        // RESET_REQUIRED (purge) or fresh state on the next call; the client
+        // hears the reason now and can reopen.
+        postEvent("reset", { reason: typeof data.reason === "string" ? data.reason : "sibling" });
       }
     };
   }
-
-  session = { host, space: request.space, replicaId, grantSubject: request.grantSubject ?? "", device, store, channel };
-
-  const existed = (await store.open()) !== null;
-  if (!existed) {
-    const config: ReplicaConfig = {
-      name: request.name ?? (request.prefix.replace(/\/+$/, "") || "replica"),
-      replicaId,
-      host,
-      space: request.space,
-      prefix: request.prefix,
-      deviceDid: device.did,
-      allowSecrets: request.allowSecrets === true,
-      localReadPolicy: "whileGrantValid",
-      retentionGrantCid: null,
-    };
-    await store.init(config);
-  } else {
-    const config = (await store.open())!.config;
-    if (config.host !== host || config.space !== request.space || config.prefix !== request.prefix) {
+  // Any failure after this point must release the IDB connection and the
+  // channel or they leak (and a purge later reports BUSY from a dead open).
+  let created = false;
+  try {
+    const existed = (await store.open()) !== null;
+    created = !existed;
+    if (!existed) {
+      const config: ReplicaConfig = {
+        name: request.name ?? (request.prefix.replace(/\/+$/, "") || "replica"),
+        replicaId,
+        host,
+        space: request.space,
+        prefix: request.prefix,
+        deviceDid: device.did,
+        allowSecrets: request.allowSecrets === true,
+        localReadPolicy: "whileGrantValid",
+        retentionGrantCid: null,
+      };
+      await store.init(config);
+    } else {
+      const config = (await store.open())!.config;
+      if (config.host !== host || config.space !== request.space || config.prefix !== request.prefix) {
+        throw new ReplicaError(
+          ReplicaErrorCode.CONFIG_MISMATCH,
+          `This replica follows ${config.host} ${config.space}/kv/${config.prefix}, not ${host} ${request.space}/kv/${request.prefix}.`,
+        );
+      }
+      if (principalOf(config.deviceDid) !== principalOf(device.did)) {
+        throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, "The stored replica belongs to a different device key; reset it to rekey.");
+      }
+    }
+    await store.finishPurgeIfPending();
+    const bound = await store.grantSubject();
+    if (bound !== null && request.grantSubject !== undefined && request.grantSubject !== "" && request.grantSubject !== bound) {
       throw new ReplicaError(
         ReplicaErrorCode.CONFIG_MISMATCH,
-        `This replica follows ${config.host} ${config.space}/kv/${config.prefix}, not ${host} ${request.space}/kv/${request.prefix}.`,
+        `This replica belongs to ${bound}, not ${request.grantSubject}.`,
       );
     }
-    if (principalOf(config.deviceDid) !== principalOf(device.did)) {
-      throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, "The stored replica belongs to a different device key; reset it to rekey.");
-    }
+    session = { host, space: request.space, replicaId, grantSubject: request.grantSubject ?? "", verified: null, device, store, channel };
+  } catch (error) {
+    channel?.close();
+    await store.close().catch(() => undefined);
+    throw error;
   }
-  await store.finishPurgeIfPending();
   const state = await store.open();
 
   return {
@@ -263,7 +313,7 @@ async function handleOpen(request: OpenRequest): Promise<OpenResult> {
     deviceDid: principalOf(device.did),
     verificationMethod: device.did,
     status: state === null ? null : await store.status(),
-    created: !existed,
+    created,
   };
 }
 
@@ -280,6 +330,11 @@ async function handleInstallGrant(delegation: string): Promise<{ cid: string; au
       `The grant was issued by ${grant.issuer}; this replica is partitioned for ${s.grantSubject}.`,
     );
   }
+  // Presenting a validly-signed UCAN addressed to this device proves the
+  // session acts for its issuer — even an expired or not-yet-valid grant —
+  // so mark the session verified before validity is checked; a refused
+  // install still throws below.
+  if (principalOf(grant.audience) === principalOf(state.config.deviceDid)) s.verified = principalOf(grant.issuer);
   assertGrantInstallable(grant, {
     deviceDid: principalOf(state.config.deviceDid),
     space: state.config.space,
@@ -292,18 +347,24 @@ async function handleInstallGrant(delegation: string): Promise<{ cid: string; au
 
 async function handleSync(request: SyncRequest): Promise<SyncResult> {
   const s = needSession();
+  await assertVerified(s);
   const state = await s.store.open();
   if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
-  const engine = new Replica({ store: s.store, transportFor: (grant) => kvSyncTransport(boundKv(grant, s)) });
+  const engine = new Replica({
+    store: s.store,
+    transportFor: (grant) => kvSyncTransport(boundKv(grant, s)),
+    // Siblings hear every committed page and repair batch, not only whole
+    // syncs: a sync that fails on page 2 still reports page 1.
+    onCommit: () => broadcastCommitted(s),
+  });
   const outcome = await withWriterLock(s, () => engine.sync(request.limit === undefined ? {} : { limit: request.limit }));
   if (typeof outcome === "object" && "busy" in outcome) return { status: "busy" };
-  const serial = await s.store.commitSerial();
-  s.channel?.postMessage({ type: "committed", serial });
   return { status: "synced", ...outcome };
 }
 
 async function handleGet(request: GetRequest): Promise<GetResult> {
   const s = needSession();
+  await assertVerified(s);
   const result = await new Replica({ store: s.store }).get(request.key);
   if (result.status === "content_missing") {
     return { status: "content_missing", key: result.key, etag: result.etag, metadata: result.metadata };
@@ -314,6 +375,7 @@ async function handleGet(request: GetRequest): Promise<GetResult> {
 
 async function handleList(request: ListRequest): Promise<ListResult> {
   const s = needSession();
+  await assertVerified(s);
   const options: ListOpts = {};
   if (request.prefix !== undefined) options.prefix = request.prefix;
   if (request.after !== undefined) options.after = request.after;
@@ -331,6 +393,7 @@ async function handleStatus(): Promise<StatusResult> {
 
 async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
   const s = needSession();
+  await assertVerified(s);
   if (purge) {
     // The store's fenced destroy checks the lease against the replica row
     // before deleting the database — a stale or foreign lease refuses.
@@ -345,25 +408,31 @@ async function handleReset(purge: boolean): Promise<{ reset: true; purged: boole
     } else {
       await s.store.destroy(lease);
     }
+    // Siblings' connections die on `versionchange`; tell them the reset is
+    // permanent before closing the channel.
+    s.channel?.postMessage({ type: "reset", reason: "purge" });
     s.channel?.close();
     session = null;
     return { reset: true, purged: true };
   }
-  if (locks === undefined) {
-    await new Replica({ store: s.store }).reset("manual");
-    return { reset: true, purged: false };
-  }
-  const outcome = await withWriterLock(s, async () => {
+  const run = async () => {
     await new Replica({ store: s.store }).reset("manual");
     return true;
-  });
-  if (outcome !== true) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
+  };
+  if (locks === undefined) {
+    await run();
+  } else {
+    const outcome = await withWriterLock(s, run);
+    if (outcome !== true) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
+  }
+  s.channel?.postMessage({ type: "reset", reason: "manual" });
   postEvent("reset", { reason: "manual" });
   return { reset: true, purged: false };
 }
 
 async function handleSetRetention(grantCid: string | null): Promise<{ retentionGrantCid: string | null }> {
   const s = needSession();
+  await assertVerified(s);
   await s.store.setRetentionGrant(grantCid);
   return { retentionGrantCid: grantCid };
 }

@@ -66,6 +66,11 @@ export type ReplicaOptions = {
   transportFor?: (grant: GrantRecord) => ReplicaTransport;
   now?: () => number;
   leaseTtlMs?: number;
+  /**
+   * Called after every committed page and repair batch — also those of a sync
+   * that later fails. Lets the caller report partial progress immediately.
+   */
+  onCommit?: () => void;
 };
 
 const DEFAULT_PAGE_LIMIT = 500;
@@ -117,6 +122,7 @@ export class Replica {
   readonly #transportFor: ((grant: GrantRecord) => ReplicaTransport) | undefined;
   readonly #now: () => number;
   readonly #leaseTtlMs: number;
+  readonly #onCommit: (() => void) | undefined;
 
   constructor(options: ReplicaOptions) {
     this.#store = options.store;
@@ -124,6 +130,7 @@ export class Replica {
     this.#transportFor = options.transportFor ?? (transport === undefined ? undefined : () => transport);
     this.#now = options.now ?? Date.now;
     this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+    this.#onCommit = options.onCommit;
   }
 
   async #state(): Promise<ReplicaState> {
@@ -391,6 +398,7 @@ export class Replica {
         attempt.promote = null;
       }
       report.pages += 1;
+      this.#onCommit?.();
       report.changes += page.changes.length;
       report.deleted += page.changes.filter((change) => change.deleted).length;
       report.fetched += verified.fetched;
@@ -527,6 +535,7 @@ export class Replica {
         promoteGrant: null,
       });
       repaired += changes.length;
+      this.#onCommit?.();
     }
     return repaired;
   }

@@ -179,6 +179,7 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 Bun.serve({
+  hostname: "127.0.0.1",
   port: FIXTURE_PORT,
   async fetch(request) {
     const url = new URL(request.url);
@@ -200,7 +201,7 @@ Bun.serve({
     }
     if (path === "/admin/grant/revoke") {
       const body = await readJson(request);
-      if (typeof body.cid !== "string") return json({ error: "missing cid" }, 400);
+      if (typeof body.cid !== "string" || body.cid === "") return json({ error: "missing cid" }, 400);
       await revokeGrant(body.cid);
       return json({ revoked: body.cid });
     }
@@ -212,17 +213,21 @@ Bun.serve({
     }
 
     // manual.html lives next to this script (test-only); the Vite bundle and
-    // the service worker come from fixture/dist.
+    // the service worker come from fixture/dist. The type is keyed on the
+    // resolved file, not the request path — `/` is HTML, not octet-stream
+    // (Chromium would otherwise download it and break the page).
     const local = path === "/" || path === "/manual.html" ? "manual.html" : undefined;
     const file = Bun.file(local === undefined ? join(FIXTURE_DIST, path) : join(import.meta.dir, local));
     if (!(await file.exists())) return new Response("not found", { status: 404 });
-    const type = CONTENT_TYPES[path.slice(path.lastIndexOf("."))] ?? "application/octet-stream";
+    const name = local ?? path;
+    const type = CONTENT_TYPES[name.slice(name.lastIndexOf("."))] ?? "application/octet-stream";
     return new Response(file, { headers: { "content-type": type } });
   },
 });
 
 // CORS proxy: the node origin as the page sees it, with ACAO:* added.
 Bun.serve({
+  hostname: "127.0.0.1",
   port: PROXY_PORT,
   async fetch(request) {
     const cors = {

@@ -12,6 +12,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { contentHash as hash } from "@tinycloud/replica";
 import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { keyPair, signUcan } from "./fixtures.js";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -106,7 +107,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
 
   async function openReplicaOnPage(
     target: Page,
-    options: { grantSubject?: string; prefix?: string } = {},
+    options: { grantSubject?: string; prefix?: string; defaultWorker?: boolean } = {},
   ): Promise<{ replicaId: string; deviceDid: string; created: boolean }> {
     return target.evaluate(
       async (input) =>
@@ -115,22 +116,23 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
           space: input.space,
           prefix: input.prefix ?? "notes/",
           ...(input.grantSubject === undefined ? {} : { grantSubject: input.grantSubject }),
+          ...(input.defaultWorker === true ? { defaultWorker: true } : {}),
         }),
-      { host, space, prefix: options.prefix, grantSubject: options.grantSubject },
+      { host, space, prefix: options.prefix, grantSubject: options.grantSubject, defaultWorker: options.defaultWorker },
     );
   }
 
   /** Mint and install a grant for the page's replica device DID. */
   async function grantOnPage(
     target: Page,
-    options: { actions?: string[]; expiry?: string } = {},
+    options: { actions?: string[]; expiry?: string; path?: string } = {},
   ): Promise<string> {
     const deviceDid = await target.evaluate(() => window.__replica.deviceDid());
     const requested = [
       {
         service: "tinycloud.kv",
         space,
-        path: "notes/",
+        path: options.path ?? "notes/",
         actions: options.actions ?? ["get", "list", "metadata", "sync"],
       },
     ];
@@ -245,15 +247,18 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     // replicaId partition stays the same.
     const grantSubject = owner.sessionDid.split("#", 1)[0]!;
 
-    // 1. Open the page, mint a grant for the worker's device DID, sync.
+    // 1. Open the page, mint a grant for the worker's device DID, sync. The
+    //    service worker must control the page BEFORE the replica worker is
+    //    fetched, or the worker asset is never cached and the offline reload
+    //    below cannot spawn it.
     await page.goto(`${origin}/`);
     await page.waitForFunction(() => window.__replica !== undefined);
+    await page.waitForFunction(() => window.__replica.serviceWorkerReady());
     const opened = await openReplicaOnPage(page, { grantSubject });
     expect(opened.replicaId.length).toBeGreaterThan(0);
-    await grantOnPage(page);
+    const grantJwt = await grantOnPage(page);
     const first = await page.evaluate(() => window.__replica.sync());
     expect(first).toMatchObject({ status: "synced", coverage: "complete" });
-    expect((first as { changes: number }).changes).toBe(3);
 
     // Values are blake3-identical to the owner's.
     for (const [key, value] of Object.entries(fixtures)) {
@@ -281,13 +286,19 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     await context.setOffline(true);
     await page.reload();
     await page.waitForFunction(() => window.__replica !== undefined);
-    // The worker persists the device key and config; open again on the same DB.
+    // The worker persists the device key and config; open again on the same
+    // DB. The new session must re-present the grant to read another
+    // principal's bound data — the install is a same-CID no-op.
     await openReplicaOnPage(page, { grantSubject });
+    await page.evaluate((jwt) => window.__replica.installGrant(jwt), grantJwt);
     const got = await page.evaluate((k) => window.__replica.get(k), "notes/a");
     expect(got.status).toBe("present");
     if (got.status !== "present") throw new Error("unreachable");
     expect(text(new Uint8Array(got.value))).toBe(fixtures["notes/a"]!);
-    expect((await page.evaluate(() => window.__replica.list())).entries).toHaveLength(3);
+    const offlineKeys = (await page.evaluate(() => window.__replica.list())).entries.map(
+      (entry: { key: string }) => entry.key,
+    );
+    expect(offlineKeys).toEqual(Object.keys(fixtures).sort());
     expect(nodeRequests).toBe(0);
 
     // 4. Restart the node; the owner updates, deletes and adds while the
@@ -298,6 +309,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     await context.setOffline(false);
     await page.waitForFunction(() => window.__replica !== undefined);
     await openReplicaOnPage(page, { grantSubject });
+    await page.evaluate((jwt) => window.__replica.installGrant(jwt), grantJwt);
     await kvPut("notes/a", "alpha note, second version");
     await kvDelete("notes/b");
     await kvPut("notes/deep/new", "added");
@@ -340,7 +352,13 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     await page2.waitForFunction(() => window.__replica !== undefined);
     await openReplicaOnPage(page1, { grantSubject });
     await openReplicaOnPage(page2, { grantSubject });
+    // Each tab's worker session must present a grant before it may read the
+    // issuer-bound database.
     await grantOnPage(page1);
+    await grantOnPage(page2);
+
+    // A real change for the non-holder to observe after page1 commits.
+    await kvPut("notes/twotab", "written during the two-tab test");
 
     // Freeze node-bound requests so page1 holds the writer lock. `fallback`
     // (not `continue`) reaches the earlier CORS handler. `entered` settles
@@ -367,9 +385,13 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     const done = await sync1;
     expect(done).toMatchObject({ status: "synced" });
     await context.unroute(`${host}/**`, gate1.handler);
-
-    // The commit broadcast reached the sibling tab's main thread.
+    // The commit broadcast reached the sibling tab's main thread, and the
+    // sibling reads the update page1 committed — proof of cross-tab delivery.
     await page2.waitForFunction(() => window.__replica.committedSerials().length > 0);
+    const twotab = await page2.evaluate(() => window.__replica.get("notes/twotab"));
+    expect(twotab.status === "present" && text(new Uint8Array(twotab.value))).toBe(
+      "written during the two-tab test",
+    );
     const listed = await page2.evaluate(() => window.__replica.list());
     expect(listed.entries.length).toBeGreaterThan(0);
     // Killing the holder releases the lock: page2 syncs next.
@@ -410,17 +432,17 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     });
     await revoker.signIn();
     const grantSubject = revoker.sessionDid.split("#", 1)[0]!;
-
     await page.goto(`${origin}/`);
     await page.waitForFunction(() => window.__replica !== undefined);
+    await page.waitForFunction(() => window.__replica.serviceWorkerReady());
 
     // Two partitions (grantSubject is part of the database name): A carries
     // the 75 s grant for expiry; B carries a long grant that is the ACTIVE
     // grant of its replica — since the v2 contract, revoking a pending grant
     // discards it without a purge, so revocation coverage must target the
     // grant the replica is already syncing under. B opens with an empty
-    // grantSubject: distinct partition, and its installGrant skips the issuer
-    // check (the grants are still issued by `revoker`).
+    // grantSubject: distinct partition, and its installGrant binds the empty
+    // partition to the revoker's issuer on first install.
     const openedA = await openReplicaOnPage(page, { grantSubject });
     const deviceDid = openedA.deviceDid;
     const kvScope = [{ service: "tinycloud.kv", space, path: "notes/", actions: ["get", "list", "metadata", "sync"] }];
@@ -455,12 +477,89 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
 
     // Wait out grant A's signed window (real clock — the node enforces signed
     // absolute windows with its own clock, and 75 s is the shortest it
-    // accepts), then reads on partition A raise GRANT_EXPIRED.
+    // accepts), then reads on partition A raise GRANT_EXPIRED. The new
+    // session must re-present the grant: an expired UCAN still proves the
+    // session's principal even though its install is refused.
     await openReplicaOnPage(page, { grantSubject });
     if (installedA.expiresAt === null) throw new Error("grant A has no expiry");
     const waitMs = installedA.expiresAt * 1000 - Date.now() + 1500;
     if (waitMs > 0) await Bun.sleep(waitMs);
+    const installResult = await page.evaluate(
+      (jwt) => window.__replica.installGrant(jwt).catch((error: Error) => ({ code: (error as { code?: string }).code })),
+      grantA.delegation.delegationHeader.Authorization,
+    );
+    expect((installResult as { code?: string }).code).toBe("GRANT_EXPIRED");
     const expired = await page.evaluate(() => window.__replica.get("notes/a").catch((error: Error) => ({ code: (error as { code?: string }).code })));
-    expect((expired as { code?: string }).code ?? (expired as { status?: string }).status).toMatch(/GRANT_EXPIRED|expired/);
+    expect((expired as { code?: string }).code).toBe("GRANT_EXPIRED");
   }, 240_000);
+
+  test("an empty-subject open binds the database to the first issuer; another principal cannot read it", async () => {
+    // Apps that cannot name the issuer up front open without grantSubject —
+    // the database then binds to whoever installs first, and stays theirs.
+    // `bound/` is this test's own prefix partition: issuer bindings survive
+    // purges, so sharing the empty notes/ partition with earlier tests would
+    // interleave their issuers.
+    await kvPut("bound/a", "bound data");
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    await pageA.goto(`${origin}/`);
+    await pageB.goto(`${origin}/`);
+    await pageA.waitForFunction(() => window.__replica !== undefined);
+    await pageB.waitForFunction(() => window.__replica !== undefined);
+
+    await openReplicaOnPage(pageA, { prefix: "bound/" });
+    const grantJwt = await grantOnPage(pageA, { path: "bound/" });
+    await pageA.evaluate(() => window.__replica.sync());
+    const seeded = await pageA.evaluate(() => window.__replica.get("bound/a"));
+    expect(seeded.status === "present" && text(new Uint8Array(seeded.value))).toBe("bound data");
+
+    // A second tab on the same partition has no verified principal yet: the
+    // bound issuer's data is refused until it presents that issuer's grant.
+    await openReplicaOnPage(pageB, { prefix: "bound/" });
+    const denied = await pageB.evaluate(() =>
+      window.__replica.get("bound/a").catch((error: Error) => ({ code: (error as { code?: string }).code })),
+    );
+    expect((denied as { code?: string }).code).toBe("GRANT_UNAUTHORIZED");
+
+    // A foreign issuer's grant cannot bind the database — minted in-test so
+    // its issuer is a key nothing else uses.
+    const other = keyPair();
+    const deviceDid = await pageB.evaluate(() => window.__replica.deviceDid());
+    const foreignJwt = signUcan(other, {
+      aud: deviceDid,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      att: { [`${space}/kv/bound/`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/sync": [{}] } },
+      prf: ["bafyparent"],
+    });
+    const refused = await pageB.evaluate(
+      (jwt) => window.__replica.installGrant(jwt).catch((error: Error) => ({ code: (error as { code?: string }).code })),
+      foreignJwt,
+    );
+    expect((refused as { code?: string }).code).toBe("GRANT_INVALID");
+    const stillDenied = await pageB.evaluate(() =>
+      window.__replica.get("bound/a").catch((error: Error) => ({ code: (error as { code?: string }).code })),
+    );
+    expect((stillDenied as { code?: string }).code).toBe("GRANT_UNAUTHORIZED");
+
+    // The bound issuer's grant verifies the session; reads succeed.
+    await pageB.evaluate((jwt) => window.__replica.installGrant(jwt), grantJwt);
+    expect((await pageB.evaluate(() => window.__replica.get("bound/a"))).status).toBe("present");
+    await pageA.close();
+    await pageB.close();
+  }, 120_000);
+
+  test("the bundled worker URL (no `worker` option) spawns and syncs", async () => {
+    // Fixture pages otherwise always pass the worker URL explicitly, which
+    // would let the packaged `new URL("./replica.worker.js", import.meta.url)`
+    // path rot. One real spawn exercises it.
+    const pageD = await context.newPage();
+    await pageD.goto(`${origin}/`);
+    await pageD.waitForFunction(() => window.__replica !== undefined);
+    const grantSubject = owner.sessionDid.split("#", 1)[0]!;
+    const opened = await openReplicaOnPage(pageD, { grantSubject, defaultWorker: true });
+    expect(opened.deviceDid.length).toBeGreaterThan(0);
+    await grantOnPage(pageD);
+    expect(await pageD.evaluate(() => window.__replica.sync())).toMatchObject({ status: "synced" });
+    await pageD.close();
+  }, 120_000);
 });

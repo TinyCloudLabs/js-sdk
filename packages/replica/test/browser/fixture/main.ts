@@ -17,6 +17,8 @@ type OpenOptions = {
   prefix: string;
   grantSubject?: string;
   allowSecrets?: boolean;
+  /** Omit the `worker` escape hatch so the client resolves its bundled URL. */
+  defaultWorker?: boolean;
 };
 
 const state: {
@@ -32,8 +34,9 @@ const setStatus = (text: string) => {
 async function open(options: OpenOptions): Promise<{ replicaId: string; deviceDid: string; created: boolean }> {
   if (state.replica !== null) await state.replica.close().catch(() => undefined);
   state.committedSerials = [];
+  const { defaultWorker, ...openOptions } = options;
   const replica = await openReplica(
-    { ...options, worker: new URL(workerUrl, import.meta.url) },
+    { ...openOptions, ...(defaultWorker === true ? {} : { worker: new URL(workerUrl, import.meta.url) }) },
     { onCommitted: (serial) => state.committedSerials.push(serial) },
   );
   state.replica = replica;

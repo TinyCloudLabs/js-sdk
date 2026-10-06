@@ -1,0 +1,6 @@
+---
+"@tinycloud/replica": patch
+"@tinycloud/cli": patch
+---
+
+Review fixes (TC-19): a replica created under an empty `grantSubject` now binds its database to the issuer of the first installed grant (atomically, in `installGrant`); local `get`/`list`/`sync`/`reset`/`setRetentionGrant` are refused to a session that has not presented the bound issuer's grant (`GRANT_UNAUTHORIZED`). Concurrent first opens can no longer race to write two device keys — `deviceIdentity` re-reads inside the write transaction and returns the stored identity. `setRetentionGrant` clears the attested `retainUntil` when the retain grant CID changes (or is cleared): retention was previously inherited across CIDs, letting data stay readable after expiry under a grant that never earned it — this affects both the SQLite store bundled into `tc replica` and the IndexedDB store. `BrowserReplica.close()` rejects in-flight and later calls with `REPLICA_CLOSED` instead of hanging. Commits broadcast `committed` per page and per repair batch (not only per sync); `reset --purge` and manual `reset` broadcast to sibling tabs, whose stores surface `RESET_REQUIRED` after a sibling purge. **Breaking-ish:** a new browser session must call `installGrant` (same JWT is fine) before local reads on an issuer-bound replica; `REPLICA_CLOSED` replaces `STORAGE_ERROR` for post-close calls.

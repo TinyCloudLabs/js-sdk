@@ -111,6 +111,9 @@ export class BrowserReplica {
     this.#events = events;
     const ready = Promise.withResolvers<void>();
     this.ready = ready.promise;
+    // A close() before the worker reports ready rejects `ready`; not every
+    // consumer awaits it, so mark that rejection handled up front.
+    ready.promise.catch(() => undefined);
     this.#readyResolve = ready.resolve;
     this.#readyReject = ready.reject;
     worker.onmessage = (message: MessageEvent) => this.#onMessage(message.data);
@@ -168,7 +171,7 @@ export class BrowserReplica {
   }
 
   async #call<T>(request: Record<string, unknown>): Promise<T> {
-    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica is closed.");
+    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica is closed.");
     const id = this.#nextId++;
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
     this.#pending.set(id, { resolve, reject });
@@ -236,14 +239,20 @@ export class BrowserReplica {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    try {
-      const id = this.#nextId++;
-      const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-      this.#pending.set(id, { resolve, reject });
-      this.#worker.postMessage({ id, op: "close" });
-      await promise.catch(() => undefined);
-    } finally {
-      this.#worker.terminate();
-    }
+    this.#readyReject(new ReplicaError(ReplicaErrorCode.CLOSED, "The replica is closed."));
+    // Give the worker a moment to close its store handles, then terminate
+    // either way: a close that never replies must not hang, and every
+    // in-flight call rejects with a typed error.
+    const id = this.#nextId++;
+    const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+    this.#pending.set(id, { resolve, reject });
+    this.#worker.postMessage({ id, op: "close" });
+    const timeout = setTimeout(() => {
+      this.#pending.delete(id);
+      resolve(undefined);
+    }, 2_000);
+    await promise.catch(() => undefined).finally(() => clearTimeout(timeout));
+    this.#worker.terminate();
+    this.#failAll(new ReplicaError(ReplicaErrorCode.CLOSED, "The replica is closed."));
   }
 }

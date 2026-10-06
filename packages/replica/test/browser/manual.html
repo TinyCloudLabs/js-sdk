@@ -59,6 +59,9 @@
       const prefix = params.get("prefix") ?? "notes/";
       const grantSubject = params.get("grantSubject") ?? undefined;
 
+      // The offline service worker must control the page before the replica
+      // worker's fetch, or the worker asset is never cached for offline use.
+      await window.__replica.serviceWorkerReady();
       const opened = await window.__replica.open({
         host,
         space,

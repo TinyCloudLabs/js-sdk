@@ -57,6 +57,12 @@ type MetaState = ReplicaState & {
   writerHolder: string | null;
   /** Monotonic commit counter; broadcast as `committed{serial}`. */
   serial: number;
+  /**
+   * The issuer principal of the first installed grant, set atomically with
+   * it. Bound forever after: a replica's data belongs to one principal, so
+   * no session may ever read it under another issuer's authority.
+   */
+  grantSubject: string | null;
   /** True while a revocation purge is recorded but unfinished. */
   purgePending: boolean;
 };
@@ -99,20 +105,30 @@ export async function deviceIdentity(getKey: () => Promise<DeviceIdentity> | Dev
     throw idbError(error, "Opening the device store");
   }
   try {
-    const existing = await requestAsPromise<DeviceIdentity | undefined>(
+    const stored = await requestAsPromise<DeviceIdentity | undefined>(
       db.transaction(STORE_META).objectStore(STORE_META).get("device"),
     );
-    if (existing !== undefined) return existing;
-    const identity = await getKey();
+    if (stored !== undefined) return stored;
+    // Generate the candidate outside the transaction, then make the
+    // read-write transaction the sole arbiter of a concurrent first open:
+    // re-read, insert only when still absent, return the winner.
+    const candidate = await getKey();
     const tx = db.transaction(STORE_META, "readwrite", { durability: "strict" });
-    tx.objectStore(STORE_META).put(identity, "device");
-    await transactionDone(tx);
-    return identity;
+    const done = transactionDone(tx);
+    const existing = await requestAsPromise<DeviceIdentity | undefined>(tx.objectStore(STORE_META).get("device"));
+    if (existing === undefined) tx.objectStore(STORE_META).put(candidate, "device");
+    await done;
+    return existing ?? candidate;
   } catch (error) {
     throw idbError(error, "Storing the device key");
   } finally {
     db.close();
   }
+}
+
+/** `did:key` verification method fragment → the principal DID. */
+function principalOf(did: string): string {
+  return did.split("#", 1)[0]!;
 }
 
 /** Delete the replica's database (purge). */
@@ -148,6 +164,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   readonly #now: () => number;
   readonly #replicaId: string;
   #closed = false;
+  /** Set when another connection deletes the database (a sibling's purge). */
+  #purged = false;
 
   private constructor(db: IDBDatabase, holder: string, now: () => number, replicaId: string) {
     this.#db = db;
@@ -165,6 +183,12 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       throw idbError(error, "Opening the replica");
     }
     const store = new IndexedDbReplicaStore(db, options.holder, options.now ?? Date.now, replicaId);
+    // A sibling tab's purge fires `versionchange`; surface a typed reset to
+    // the client instead of an opaque storage error.
+    db.onversionchange = () => {
+      store.#purged = true;
+      db.close();
+    };
     // A revocation purge interrupted before commit finishes on the next open.
     await store.finishPurgeIfPending().catch(() => undefined);
     return store;
@@ -172,6 +196,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   /** A read transaction over `meta` (and optionally `entries`/`blobs`). */
   #readTx(stores: readonly string[]): IDBTransaction {
+    if (this.#purged) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged in another tab; open it again to continue.");
+    }
     if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
     return this.#db.transaction([...stores], "readonly");
   }
@@ -182,6 +209,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * and `transactionDone` settles after the commit.
    */
   async #writeTx<T>(stores: readonly string[], action: string, body: (tx: IDBTransaction) => Promise<T>): Promise<T> {
+    if (this.#purged) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged in another tab; open it again to continue.");
+    }
     if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
     let tx: IDBTransaction;
     try {
@@ -275,6 +305,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         writerEpoch: 0,
         writerHolder: null,
         serial: 0,
+        grantSubject: null,
         purgePending: false,
       });
     });
@@ -284,11 +315,15 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async setRetentionGrant(cid: string | null): Promise<void> {
     await this.#writeTx([STORE_META], "Updating the retention grant", async (tx) => {
       const state = this.#requireMeta(await this.#meta(tx));
+      if (state.config.retentionGrantCid === cid) return;
       state.config = {
         ...state.config,
         retentionGrantCid: cid,
         localReadPolicy: cid === null ? "whileGrantValid" : "retainAfterExpiry",
       };
+      // The attested retainUntil belongs to the previous retain grant: only a
+      // fresh sync under the new CID may re-establish it.
+      if (state.authority !== null) state.authority = { ...state.authority, retainUntil: null };
       this.#putMeta(tx, state);
     });
   }
@@ -296,11 +331,28 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async installGrant(g: GrantRecord): Promise<void> {
     await this.#writeTx([STORE_META], "Installing the grant", async (tx) => {
       const state = this.#requireMeta(await this.#meta(tx));
+      // The first installed grant binds the replica to its issuer forever —
+      // the binding lands atomically with the install, so no interleaving
+      // across tabs can bind the replica to two issuers.
+      const issuer = principalOf(g.issuer);
+      if (state.grantSubject !== null && state.grantSubject !== issuer) {
+        throw new ReplicaError(
+          ReplicaErrorCode.GRANT_INVALID,
+          `The grant was issued by ${issuer}; this replica is bound to ${state.grantSubject}.`,
+        );
+      }
       if (state.grant?.cid === g.cid || state.pendingGrant?.cid === g.cid) return;
+      state.grantSubject = issuer;
       state.pendingGrant = g;
       state.pendingGrantError = null;
       this.#putMeta(tx, state);
     });
+  }
+
+  /** The issuer principal this replica is bound to, or null before the first grant. Worker-facing. */
+  async grantSubject(): Promise<string | null> {
+    const state = await this.#meta(this.#readTx([STORE_META]));
+    return state?.grantSubject ?? null;
   }
 
   /**

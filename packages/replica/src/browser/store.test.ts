@@ -8,12 +8,18 @@ import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake
 import { FakeNode, NODE_DID, config, deviceGrant, etagOf } from "../../test/fixtures.js";
 import { Replica } from "../engine.js";
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
+import { BrowserReplica } from "./index.js";
 import {
+  DEVICE_DATABASE,
   IndexedDbReplicaStore,
   deleteReplicaDatabase,
+  deviceIdentity,
   replicaDatabaseName,
+  type DeviceIdentity,
 } from "./store.js";
-
+import { SPACE, device, keyPair, owner, signUcan } from "../../test/fixtures.js";
+import { parseUcanGrant } from "../grant.js";
+import { requestAsPromise } from "./idb.js";
 beforeAll(() => {
   (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
   (globalThis as { IDBKeyRange?: unknown }).IDBKeyRange = fakeIDBKeyRange;
@@ -208,5 +214,120 @@ describe("store mechanics (indexeddb)", () => {
     expect(a.hash === b.hash).toBe(true);
     expect(text((await store.readContent(a.hash))!)).toBe("same-bytes");
     await store.close();
+  });
+});
+
+describe("issuer binding and device identity (indexeddb)", () => {
+  /** A grant signed by a second owner, for the same device and prefix. */
+  function foreignGrant() {
+    const other = keyPair();
+    return parseUcanGrant(
+      signUcan(other, {
+        aud: device.did,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        att: { [`${SPACE}/kv/notes/`]: { "tinycloud.kv/sync": [{}] } },
+        prf: ["bafyparent"],
+      }),
+    );
+  }
+
+  test("the first installed grant binds the replica to its issuer forever", async () => {
+    const store = await newIdbStore();
+    expect(await store.grantSubject()).toBe(owner.did);
+    // A grant from another principal is refused, and the binding stays.
+    await rejectsWith(store.installGrant(foreignGrant()), ReplicaErrorCode.GRANT_INVALID);
+    expect(await store.grantSubject()).toBe(owner.did);
+    // The bound issuer's grant (same CID is a no-op, a new one installs).
+    await store.installGrant(deviceGrant({ prefix: "notes/", exp: Math.floor(Date.now() / 1000) + 7200 }));
+    expect(await store.grantSubject()).toBe(owner.did);
+    await store.close();
+  });
+
+  test("a replica that never saw a grant accepts its first issuer", async () => {
+    const replicaId = nextId();
+    const store = await IndexedDbReplicaStore.open(replicaId, { holder: "h" });
+    await store.init(config({ replicaId }));
+    expect(await store.grantSubject()).toBeNull();
+    const foreign = foreignGrant();
+    await store.installGrant(foreign);
+    expect(await store.grantSubject()).toBe(foreign.issuer);
+    // Now the original owner's grant is the foreign one.
+    await rejectsWith(store.installGrant(deviceGrant({ prefix: "notes/" })), ReplicaErrorCode.GRANT_INVALID);
+    await store.close();
+  });
+
+  test("concurrent first opens write one device key", async () => {
+    await requestAsPromise(fakeIndexedDB.deleteDatabase(DEVICE_DATABASE));
+    const a: DeviceIdentity = { did: "did:key:zA", jwk: { kty: "OKP" } };
+    const b: DeviceIdentity = { did: "did:key:zB", jwk: { kty: "OKP" } };
+    const [one, two] = await Promise.all([deviceIdentity(() => a), deviceIdentity(() => b)]);
+    expect(one.did).toBe(two.did);
+    expect([a.did, b.did]).toContain(one.did);
+    // The stored identity wins; the generator is not consulted again.
+    const c = await deviceIdentity(() => {
+      throw new Error("must not generate");
+    });
+    expect(c.did).toBe(one.did);
+  });
+});
+
+describe("engine commit notifications (indexeddb)", () => {
+  test("onCommit fires per committed page, including a failed sync's partial commits", async () => {
+    const replicaId = nextId();
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    node.put("notes/b", "two");
+    node.put("notes/c", "three");
+    const store = await newIdbStore(replicaId);
+    let commits = 0;
+    const replica = new Replica({ store, transport: node, onCommit: () => commits++ });
+
+    // The first page commits, then page two's transport call fails.
+    let calls = 0;
+    const syncPage = node.syncPage.bind(node);
+    node.syncPage = async (a) => {
+      calls += 1;
+      if (calls === 2) node.failNextSync = new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, "down");
+      return syncPage(a);
+    };
+    await rejectsWith(replica.sync({ limit: 2 }), ReplicaErrorCode.NETWORK_ERROR);
+    expect(commits).toBe(1);
+    // The partial commit is readable offline.
+    expect((await replica.list()).entries.length).toBe(2);
+
+    node.failNextSync = undefined;
+    await replica.sync({ limit: 2 });
+    expect(commits).toBeGreaterThan(1);
+    expect((await replica.list()).entries.length).toBe(3);
+    await store.close();
+  });
+});
+
+describe("client lifecycle", () => {
+  test("close() terminates the worker and rejects pending and later calls", async () => {
+    type Handler = ((message: MessageEvent) => void) | null;
+    let onmessage: Handler = null;
+    let terminated = false;
+    const worker = {
+      postMessage(message: { id: number; op?: string }) {
+        if (message.op === "close" && onmessage !== null) {
+          onmessage({ data: { id: message.id, ok: true, result: { closed: true } } } as MessageEvent);
+        }
+      },
+      terminate() {
+        terminated = true;
+      },
+      set onmessage(handler: Handler) {
+        onmessage = handler;
+      },
+      set onerror(_handler: unknown) {},
+    } as unknown as Worker;
+    const client = new BrowserReplica(worker);
+    const pending = client.get("notes/a");
+    await client.close();
+    expect(terminated).toBe(true);
+    await rejectsWith(pending, ReplicaErrorCode.CLOSED);
+    await rejectsWith(client.status(), ReplicaErrorCode.CLOSED);
+    // The ready promise is left pending by the stub; nothing here awaits it.
   });
 });
