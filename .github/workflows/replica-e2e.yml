@@ -15,6 +15,7 @@ on:
       - "packages/replica/**"
       - "packages/cli/**"
       - "packages/sdk-services/src/kv/**"
+      - "packages/operations/src/state.ts"
       - ".github/workflows/replica-e2e.yml"
   push:
     branches: [master]
@@ -97,9 +98,11 @@ jobs:
           docker logs replica-e2e-pg
           exit 1
 
-      - name: Replica engine and store conformance
+      - name: Replica engine and store conformance, and CLI profile-deletion safety
         if: matrix.database == 'sqlite'
-        run: bun run --cwd packages/replica test
+        run: |
+          bun run --cwd packages/replica test
+          bun test packages/cli/src/commands/replica.test.ts
 
       - name: tc replica against the node
         env:
