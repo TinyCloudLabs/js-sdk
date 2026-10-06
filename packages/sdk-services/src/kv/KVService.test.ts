@@ -1477,6 +1477,7 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
   test.each([
     ["delegation-revoked: bafyleaf", ErrorCodes.AUTH_DELEGATION_REVOKED],
     ["Invalid invocation: delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf", ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED],
+    ["delegation-ancestor-revoked: ancestor=bafyreiroot invoked=bafyreileaf", ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED],
   ])("maps 401 %s to a typed revocation code", async (body, code) => {
     const service = new KVService({});
     service.initialize(createContext(async () => response(false, 401, body)));
@@ -1487,6 +1488,21 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
     expect(result.error.code).toBe(code);
     expect(result.error.meta?.status).toBe(401);
     expect(authorizationVerdictOf(result.error)).toBe("unauthenticated");
+  });
+
+  test.each([
+    ["Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:default/kv/notes/delegation-revoked/ / tinycloud.kv/sync", "notes/delegation-revoked/"],
+    ["Unauthorized Action: tinycloud:pkh:eip155:1:0xabc:default/kv/x/delegation-ancestor-revoked: ancestor=a invoked=b / tinycloud.kv/sync", "x/delegation-ancestor-revoked: ancestor=a invoked=b"],
+    ["delegation-revoked: bafyleaf (while reading notes/x)", "notes/"],
+  ])("maps a 401 that only mentions a revocation (%s) to AUTH_UNAUTHORIZED", async (body, prefix) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 401, body)));
+
+    const result = await service.changes({ prefix });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.meta?.status).toBe(401);
   });
 
   test("a missing sync grant stays AUTH_UNAUTHORIZED", async () => {

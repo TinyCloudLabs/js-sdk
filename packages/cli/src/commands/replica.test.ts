@@ -7,7 +7,17 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ReplicaErrorCode, contentHash, isReplicaError, type ReplicaConfig, type VerifiedPage } from "@tinycloud/replica";
+import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
+import {
+  Replica,
+  ReplicaErrorCode,
+  contentHash,
+  isReplicaError,
+  kvSyncTransport,
+  type ReplicaConfig,
+  type VerifiedPage,
+} from "@tinycloud/replica";
+import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 
 // The profile store reads TC_HOME when it loads (and replica.js loads it), so import them afterwards.
 const home = await mkdtemp(join(tmpdir(), "tc-replica-guard-"));
@@ -145,5 +155,73 @@ describe("replica writes and profile deletion", () => {
     expect((await store.open())?.config.replicaId).toBe("r-test");
     await store.close();
     expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+  });
+});
+
+describe("a replica over the SDK's kv/sync", () => {
+  test("an ordinary 401 for a prefix named like a revocation fails the sync and keeps the replica", async () => {
+    const prefix = "notes/delegation-revoked/";
+    const key = `${prefix}a`;
+    const bytes = new TextEncoder().encode("kept");
+    const etag = `"blake3-${contentHash(bytes)}"`;
+    const page = {
+      changes: [{ key, deleted: false, etag, metadata: {} }],
+      more: false,
+      cursor: "c1",
+      source: { nodeDid: "did:key:zNode", space: config.space, prefix },
+      authority: { notBefore: null, expiresAt: new Date(Date.now() + 3600_000).toISOString(), retainUntil: null },
+    };
+    // What the node sends a caller its grant does not cover: the prefix is in the text.
+    const unauthorized = `Unauthorized Action: ${config.space}/kv/${prefix} / tinycloud.kv/sync`;
+    const answers = [
+      { status: 200, body: JSON.stringify(page) },
+      { status: 401, body: unauthorized },
+    ];
+    const context: IServiceContext = {
+      session: { delegationHeader: { Authorization: "Bearer test" }, delegationCid: "bafygrant", spaceId: config.space, verificationMethod: "did:key:zDevice", jwk: {} },
+      isAuthenticated: true,
+      invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+      fetch: async () => {
+        const { status, body } = answers.shift()!;
+        return {
+          ok: status === 200,
+          status,
+          statusText: status === 200 ? "OK" : "Unauthorized",
+          headers: { get: () => null },
+          json: async () => JSON.parse(body) as unknown,
+          text: async () => body,
+          arrayBuffer: async () => new TextEncoder().encode(body).buffer as ArrayBuffer,
+          blob: async () => new Blob([body]),
+        };
+      },
+      hosts: [config.host],
+      getService: () => undefined,
+      emit: () => undefined,
+      on: () => () => undefined,
+      abortSignal: new AbortController().signal,
+      retryPolicy: { maxAttempts: 1, backoff: "exponential", baseDelayMs: 1, maxDelayMs: 1, retryableErrors: [] },
+    };
+    const kv = new KVService({});
+    kv.initialize(context);
+    const transport = kvSyncTransport({
+      changes: (options) => kv.changes(options),
+      get: async () => ({ ok: true, data: { data: bytes, headers: { etag } } }),
+      batchGet: async (keys) => ({ ok: true, data: { results: keys.map((k) => ({ key: k, result: { ok: true as const, data: { data: bytes, headers: { etag } } } })) } }),
+    });
+    const store = await SqliteReplicaStore.open(await mkdtemp(join(home, "replica-")), { create: true });
+    await store.init({ ...config, prefix });
+    await store.installGrant({ cid: "bafygrant", bytes: new Uint8Array([1]), audience: config.deviceDid, issuer: "did:key:zOwner", notBefore: null, expiresAt: null });
+    const replica = new Replica({ store, transport });
+    await replica.sync();
+
+    const failed = await replica.sync().then(
+      () => undefined,
+      (error: unknown) => (isReplicaError(error) ? error.code : String(error)),
+    );
+    expect(failed).toBe(ReplicaErrorCode.GRANT_UNAUTHORIZED);
+    expect((await store.open())?.revoked).toBeNull();
+    const read = await replica.get(key);
+    expect(read.status === "present" && new TextDecoder().decode(read.value)).toBe("kept");
+    await store.close();
   });
 });
