@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import { open, readdir, rename, rm, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
+  profileConfigPath,
   profilePath,
   readAdditionalDelegations,
   readSession,
@@ -20,12 +21,14 @@ import {
   parseUcanGrant,
   requiresSecretsOptIn,
   syncGrantSpaces,
+  type GrantRecord,
   type KVSyncClient,
   type ParsedUcanGrant,
+  type ReplicaTransport,
   type ReplicaReadResult,
   type ReplicaStatus,
 } from "@tinycloud/replica";
-import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
+import { SqliteReplicaStore, loadSqlite, type MutationGuard } from "@tinycloud/replica/sqlite";
 
 import { ProfileManager } from "../config/profiles.js";
 import { DEFAULT_PROFILE, ExitCode } from "../config/constants.js";
@@ -138,8 +141,28 @@ async function existingReplicaName(profile: string, option: string | undefined):
   throw new CLIError("USAGE_ERROR", `Profile "${profile}" has several replicas (${names.join(", ")}); pass --replica <name>.`, ExitCode.USAGE_ERROR);
 }
 
+/**
+ * Every filesystem mutation of a replica runs briefly under the profile lock
+ * and refuses once the profile is deleted, so a sync never recreates a
+ * deleted profile's directories. Never held across network calls.
+ */
+function profileGuard(profile: string): MutationGuard {
+  return (section) =>
+    withProfileLock(profile, async () => {
+      await refuseWriteToDeletedProfile(profile);
+      const present = await stat(profileConfigPath(profile)).then(
+        () => true,
+        () => false,
+      );
+      if (!present) {
+        throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted while this command ran; its replicas are gone.`);
+      }
+      return section();
+    });
+}
+
 async function openReplica(profile: string, name: string): Promise<SqliteReplicaStore> {
-  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false });
+  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
 }
 
 /** The compact JWTs this profile holds: its session and every imported delegation. */
@@ -229,27 +252,33 @@ function chooseGrant(grants: ParsedUcanGrant[], deviceDid: string, space: string
   return best;
 }
 
-/** A KV service that invokes with exactly this grant and the device key, against the pinned host. */
-async function grantBoundKv(input: { host: string; space: string; grant: { cid: string; bytes: Uint8Array }; deviceDid: string; jwk: object }) {
+/**
+ * Transports that each invoke with exactly one grant and the device key,
+ * against the pinned host: the engine tries a pending grant and can fall
+ * back to the active one.
+ */
+async function grantTransports(input: { host: string; space: string; deviceDid: string; jwk: object }) {
   const [{ KVService, ServiceContext }, wasm] = await Promise.all([import("@tinycloud/sdk-core"), import("@tinycloud/node-sdk-wasm")]);
-  const context = new ServiceContext({
-    invoke: wasm.invoke,
-    invokeAny: wasm.invokeAny,
-    fetch: globalThis.fetch.bind(globalThis),
-    hosts: [input.host],
-  });
-  const kv = new KVService({});
-  kv.initialize(context);
-  context.registerService("kv", kv);
-  context.setSession({
-    delegationHeader: { Authorization: new TextDecoder().decode(input.grant.bytes) },
-    delegationCid: input.grant.cid,
-    spaceId: input.space,
-    verificationMethod: input.deviceDid,
-    jwk: input.jwk,
-  });
-  const client: KVSyncClient = kv;
-  return client;
+  return (grant: GrantRecord): ReplicaTransport => {
+    const context = new ServiceContext({
+      invoke: wasm.invoke,
+      invokeAny: wasm.invokeAny,
+      fetch: globalThis.fetch.bind(globalThis),
+      hosts: [input.host],
+    });
+    const kv = new KVService({});
+    kv.initialize(context);
+    context.registerService("kv", kv);
+    context.setSession({
+      delegationHeader: { Authorization: new TextDecoder().decode(grant.bytes) },
+      delegationCid: grant.cid,
+      spaceId: input.space,
+      verificationMethod: input.deviceDid,
+      jwk: input.jwk,
+    });
+    const client: KVSyncClient = kv;
+    return kvSyncTransport(client);
+  };
 }
 
 function syncOptionsDiffer(
@@ -390,7 +419,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           const dir = join(replicasRoot(profile), name);
           store = await withProfileLock(profile, async () => {
             await refuseWriteToDeletedProfile(profile);
-            const created = await SqliteReplicaStore.open(dir, { create: true });
+            const created = await SqliteReplicaStore.open(dir, { create: true, guard: profileGuard(profile) });
             if ((await created.open()) === null) {
               await created.init({
                 name,
@@ -426,11 +455,8 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
             await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
           }
           const current = (await store.open())!;
-          const active = current.pendingGrant ?? current.grant!;
-          const kv = await grantBoundKv({ host, space, grant: active, deviceDid: current.config.deviceDid, jwk });
-          const report = await new Replica({ store, transport: kvSyncTransport(kv) }).sync(
-            options.limit === undefined ? {} : { limit: options.limit },
-          );
+          const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+          const report = await new Replica({ store, transportFor }).sync(options.limit === undefined ? {} : { limit: options.limit });
           const status = await store.status();
           if (shouldOutputJson()) {
             outputJson({ replica: current.config.name, sync: report, status });
@@ -560,17 +586,17 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const store = await openReplica(profile, name);
         try {
           if (options.purge) {
-            // Hold the lease so no sync writes while the directory goes away.
+            // Take (and keep) the lease so no sync writes while the directory goes
+            // away. This also removes a revoked replica, which refuses a reset.
             const lease = await store.acquireSyncLease(60_000);
             if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
-            await store.reset(lease, "purge");
+            await profileGuard(profile)(() => rm(join(replicasRoot(profile), name), { recursive: true, force: true }));
           } else {
             await new Replica({ store }).reset("manual");
           }
         } finally {
           await store.close();
         }
-        if (options.purge) await rm(join(replicasRoot(profile), name), { recursive: true, force: true });
         outputJson({ replica: name, reset: true, purged: options.purge === true });
       }),
     );

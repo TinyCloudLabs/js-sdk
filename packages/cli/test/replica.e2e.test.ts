@@ -9,6 +9,7 @@
  * Postgres instead of SQLite.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { contentHash as hash } from "@tinycloud/replica";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -48,6 +49,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
   let port: number;
   let node: ChildProcess | undefined;
   let space: string;
+  let deviceGrantCid: string;
   const nodeSecret = randomBytes(48).toString("base64url");
 
   async function startNode(): Promise<void> {
@@ -171,7 +173,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     const grant = await tc(["auth", "grant", "req.json", "--yes"], { profile: "owner" });
     expect(grant.code).toBe(0);
     await writeFile(join(home, "grant.json"), grant.stdout);
-    await ok(["auth", "import", "grant.json"], "device");
+    deviceGrantCid = (await ok<{ delegationCid: string }>(["auth", "import", "grant.json"], "device")).delegationCid;
 
     // 2. tc replica sync.
     const first = await ok<SyncOutput>(["replica", "sync", "--prefix", "notes/"], "device");
@@ -301,6 +303,58 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     const ended = await read("keep");
     expect({ code: ended.code, stderr: ended.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_EXPIRED") });
   }, 240_000);
+
+  test("the owner revokes the device grant: sync learns it, purges the replica, and reads stay blocked after restart", async () => {
+    // `tc delegation revoke` cannot do this today: a local-key owner session
+    // holds no tinycloud.delegation/revoke, so the node refuses the session it
+    // cites as proof ("Unauthorized Revoker"). The owner revokes through the
+    // SDK with a session that carries the ability, as an owner app would.
+    const ownerProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as {
+      privateKey: string;
+    };
+    const owner = new TinyCloudNode({
+      host,
+      privateKey: ownerProfile.privateKey,
+      autoBootstrapAccount: false,
+      autoCreateSpace: true,
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "tc-replica-e2e",
+        name: "tc replica e2e owner",
+        defaults: false,
+        includePublicSpace: false,
+        prefix: "",
+        space: "default",
+        permissions: [{ service: "tinycloud.delegation", space: "default", path: "", actions: ["revoke"] }],
+      },
+    });
+    await owner.signIn();
+    const revoked = await owner.revokeDelegation(deviceGrantCid);
+    if (!revoked.ok) throw new Error(`owner revoke failed: ${JSON.stringify(revoked.error)}`);
+
+    const sync = await tc(["replica", "sync"], { profile: "device" });
+    expect({ code: sync.code, stderr: sync.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_REVOKED") });
+
+    const dir = join(home, ".tinycloud", "profiles", "device", "replicas", "notes");
+    const leftovers: string[] = [];
+    for (const shard of await readdir(join(dir, "blobs"))) {
+      for (const name of await readdir(join(dir, "blobs", shard))) leftovers.push(`${shard}/${name}`);
+    }
+    expect(leftovers).toEqual([]);
+    for (const needle of ["alpha note", "gamma"]) {
+      expect({ needle, found: (await readFile(join(dir, "replica.db"))).includes(needle) }).toEqual({ needle, found: false });
+    }
+
+    // A new process, network disabled: reads stay blocked.
+    for (const args of [["replica", "get", "notes/a.txt"], ["replica", "list"]]) {
+      const read = await offline(args);
+      expect({ code: read.code, stderr: read.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_REVOKED") });
+    }
+    const status = await offline(["replica", "status", "--replica", "notes"]);
+    const parsed = JSON.parse(status.stdout.toString()) as { authority: { state: string }; counts: unknown };
+    expect([parsed.authority.state, parsed.counts]).toEqual(["revoked", { keys: 0, contentMissing: 0, tombstones: 0 }]);
+    expect(await readFile(join(home, "network-attempts.log"), "utf8").catch(() => "")).toBe("");
+  }, 60_000);
 
   test("on Node.js 20, tc replica fails with RUNTIME_UNSUPPORTED and other commands still run", async () => {
     const replica = await tc(["replica", "status"], { profile: "device", preload: NODE20 });
