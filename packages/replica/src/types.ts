@@ -81,6 +81,10 @@ export type ReplicaState = {
   /** The node-attested window from the last successful sync. */
   authority: AuthorityWindow | null;
   revoked: string | null;
+  /** Set when the node reported the retention grant revoked: post-expiry reads raise GRANT_REVOKED. */
+  retentionRevoked: string | null;
+  /** Why the node refused the pending grant at its last attempt, if it did. */
+  pendingGrantError: ReplicaLastError | null;
   cursor: string | null;
   coverage: Coverage;
   generation: number;
@@ -111,10 +115,17 @@ export type VerifiedPage = {
   coverage: Coverage;
   /** Commit time (ISO-8601). */
   at: string;
+  /** Commit time (ms since epoch), checked against `window` inside the commit transaction. */
+  now: number;
+  /** The effective authority window this page commits under; outside it nothing commits. */
+  window: { notBefore: string | null; expiresAt: string | null };
   /** True when this page closes a sync run (`more: false`). */
   complete: boolean;
-  /** Promote the pending grant: the node accepted a sync under it. */
-  promoteGrant: boolean;
+  /**
+   * The pending grant the node just validated for this page: it becomes the
+   * active grant. A different grant installed as pending meanwhile stays pending.
+   */
+  promoteGrant: GrantRecord | null;
 };
 
 export type LocalEntry =
@@ -127,7 +138,12 @@ export type ReplicaStatus = {
   name: string;
   replicaId: string;
   source: { host: string; nodeDid: string | null; space: string; prefix: string };
-  device: { did: string; delegationCid: string | null; pendingDelegationCid: string | null };
+  device: {
+    did: string;
+    delegationCid: string | null;
+    pendingDelegationCid: string | null;
+    pendingDelegationError: ReplicaLastError | null;
+  };
   authority: {
     state: AuthorityState;
     notBefore: string | null;
@@ -136,6 +152,7 @@ export type ReplicaStatus = {
     localReadPolicy: LocalReadPolicy;
     retentionGrantCid: string | null;
     revokedDetail: string | null;
+    retentionRevokedDetail: string | null;
   };
   consistency: "observed";
   coverage: Coverage;
@@ -155,16 +172,28 @@ export interface ReplicaStore {
   /** Stored as pending until a successful sync under it. */
   installGrant(g: GrantRecord): Promise<void>;
   acquireSyncLease(ttlMs: number): Promise<LeaseToken | null>;
-  renewLease(t: LeaseToken): Promise<void>;
+  renewLease(t: LeaseToken, ttlMs: number): Promise<void>;
   releaseLease(t: LeaseToken): Promise<void>;
   /** Hashes whose blobs are referenced by a committed entry. */
   hasContent(hashes: string[]): Promise<Set<string>>;
   /** ONE transaction: blob refs + entries + tombstones + cursor + coverage; fenced by the lease token. */
   applyPage(t: LeaseToken, p: VerifiedPage): Promise<void>;
-  /** Clear entries, blobs, cursor and the nodeDid pin; keep config and grants. */
-  reset(t: LeaseToken, reason: string): Promise<void>;
-  /** Purge entries and blobs, keep a minimal blocked status. */
+  /**
+   * Clear entries, blobs and cursor; keep config and grants. The nodeDid pin
+   * is cleared too unless `keepSource` (an automatic 410 reset keeps it).
+   */
+  reset(t: LeaseToken, reason: string, options?: { keepSource?: boolean }): Promise<void>;
+  /**
+   * Purge entries and blobs, keep a minimal blocked status. Invalidates every
+   * outstanding lease; later commits, GC and resets refuse.
+   */
   markRevoked(detail: string): Promise<void>;
+  /** The retention grant was revoked: drop it and its retainUntil; post-expiry reads raise GRANT_REVOKED. */
+  markRetentionRevoked(detail: string): Promise<void>;
+  /** The node revoked the pending grant: discard it (the active grant keeps serving). */
+  discardPendingGrant(cid: string, detail: string): Promise<void>;
+  /** The node refused the pending grant (not a revocation): keep it pending, with the reason. */
+  recordPendingGrantError(cid: string, e: ReplicaLastError): Promise<void>;
   recordError(e: ReplicaLastError): Promise<void>;
   get(key: string): Promise<LocalEntry | undefined>;
   list(o: ListOpts): Promise<LocalEntry[]>;

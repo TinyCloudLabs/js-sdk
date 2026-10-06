@@ -1,13 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { Replica, contentHash } from "../src/engine.js";
 import { SqliteReplicaStore } from "../src/sqlite/store.js";
-import { CRASH_DATASET, CRASH_PAGE_LIMIT, FakeNode, tempDir } from "./fixtures.js";
+import { CRASH_DATASET, CRASH_PAGE_LIMIT, FakeNode, removeTempDirs, tempDir } from "./fixtures.js";
 
 const CHILD = resolve(import.meta.dir, "crash-child.ts");
+
+afterAll(removeTempDirs);
 
 async function blobs(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -68,4 +70,17 @@ describe("crash safety", () => {
       }
     }, 30_000);
   }
+
+  test("a kill after a revocation purge commits leaves blobs that the next open removes", async () => {
+    const dir = await tempDir();
+    const child = spawnSync(process.execPath, [CHILD, dir, "afterPurgeMark"], { encoding: "utf8" });
+    expect({ signal: child.signal, stderr: child.stderr }).toEqual({ signal: "SIGKILL", stderr: "" });
+    // The purge committed (entries gone, revoked) but its blobs are still on disk.
+    expect((await blobs(dir)).length).toBe(CRASH_DATASET.length);
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    expect(await blobs(dir)).toEqual([]);
+    const state = (await store.open())!;
+    expect(state.revoked).not.toBeNull();
+    expect(await store.list({})).toEqual([]);
+  });
 });

@@ -34,6 +34,8 @@ export type EffectiveAuthority = {
   notBefore: string | null;
   expiresAt: string | null;
   retainUntil: string | null;
+  /** The retention grant was revoked: after expiry, reads are revoked rather than expired. */
+  retentionRevoked: boolean;
 };
 
 function minIso(a: string | null, bSeconds: number | null): string | null {
@@ -60,6 +62,7 @@ export function effectiveAuthority(input: {
   window: AuthorityWindow | null;
   grant: GrantRecord | null;
   revoked: string | null;
+  retentionRevoked?: string | null;
   policy: LocalReadPolicy;
   now: number;
 }): EffectiveAuthority {
@@ -70,7 +73,7 @@ export function effectiveAuthority(input: {
   if (input.revoked !== null) state = "revoked";
   else if (notBefore !== null && input.now < Date.parse(notBefore)) state = "not-yet-valid";
   else if (expiresAt !== null && input.now >= Date.parse(expiresAt)) state = "expired";
-  return { state, notBefore, expiresAt, retainUntil };
+  return { state, notBefore, expiresAt, retainUntil, retentionRevoked: (input.retentionRevoked ?? null) !== null };
 }
 
 /**
@@ -89,6 +92,12 @@ export function assertReadable(authority: EffectiveAuthority, now: number): Auth
         `The replica's grant is not valid before ${authority.notBefore}.`,
       );
     case "expired":
+      if (authority.retentionRevoked) {
+        throw new ReplicaError(
+          ReplicaErrorCode.GRANT_REVOKED,
+          `The replica's grant expired at ${authority.expiresAt} and its retention grant was revoked; local reads are blocked.`,
+        );
+      }
       if (authority.retainUntil !== null && now < Date.parse(authority.retainUntil)) return "expired";
       throw new ReplicaError(
         ReplicaErrorCode.GRANT_EXPIRED,

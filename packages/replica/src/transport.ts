@@ -57,7 +57,11 @@ export function replicaErrorFromService(error: ServiceError, context: string): R
     return new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `${context}: ${error.message}`, detail);
   }
   if (/RETENTION_GRANT_REFUSED/.test(text)) {
-    return new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, `${context}: ${error.message}`, detail);
+    const reason = typeof meta.reason === "string" ? meta.reason : /retention-grant-[a-z-]+/.exec(text)?.[0];
+    return new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, `${context}: ${error.message}`, {
+      ...detail,
+      ...(reason === undefined ? {} : { reason }),
+    });
   }
   if (status === 401 || status === 403 || /^AUTH_/.test(error.code)) {
     if (/expired/i.test(error.message)) {

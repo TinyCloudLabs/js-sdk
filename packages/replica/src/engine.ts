@@ -5,11 +5,14 @@ import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
 import { assertReadable, effectiveAuthority, hashFromEtag, kvPrefixCovers } from "./scope.js";
 import type {
   AuthorityState,
+  AuthorityWindow,
   Coverage,
   FetchedContent,
+  GrantRecord,
   LeaseToken,
   ListOpts,
   LocalEntry,
+  ReplicaLastError,
   ReplicaState,
   ReplicaStatus,
   ReplicaStore,
@@ -54,7 +57,13 @@ export type SyncReport = {
 
 export type ReplicaOptions = {
   store: ReplicaStore;
+  /** One transport for whichever grant the replica syncs under (tests, single-grant hosts). */
   transport?: ReplicaTransport;
+  /**
+   * A transport that invokes with exactly `grant`. Lets the engine try a
+   * pending grant and fall back to the active one if the node refuses it.
+   */
+  transportFor?: (grant: GrantRecord) => ReplicaTransport;
   now?: () => number;
   leaseTtlMs?: number;
 };
@@ -63,6 +72,13 @@ const DEFAULT_PAGE_LIMIT = 500;
 const DEFAULT_LEASE_TTL_MS = 120_000;
 const FETCH_CHUNK = 100;
 const REPAIR_BATCH = 100;
+const RETENTION_REVOKED = new Set(["retention-grant-revoked", "retention-grant-ancestor-revoked"]);
+/** Refusals of a pending grant that leave the active grant to serve. */
+const PENDING_REFUSALS = new Set<string>([
+  ReplicaErrorCode.GRANT_UNAUTHORIZED,
+  ReplicaErrorCode.GRANT_EXPIRED,
+  ReplicaErrorCode.GRANT_NOT_YET_VALID,
+]);
 
 /** `"blake3-" + hex(blake3(bytes))`, the strong ETag the node attests for content. */
 export function contentHash(bytes: Uint8Array): string {
@@ -73,6 +89,24 @@ function sameEtag(a: string, b: string): boolean {
   return a.replace(/^"|"$/g, "") === b.replace(/^"|"$/g, "");
 }
 
+function lastErrorOf(error: unknown, at: number): ReplicaLastError {
+  return {
+    at: new Date(at).toISOString(),
+    code: isReplicaError(error) ? error.code : "ERROR",
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+/** One sync attempt under one grant. */
+type Attempt = {
+  lease: LeaseToken;
+  grant: GrantRecord;
+  transport: ReplicaTransport;
+  /** The pending grant until the first page under it commits (and promotes it). */
+  promote: GrantRecord | null;
+  signal: AbortSignal | undefined;
+};
+
 /**
  * A durable, read-only local replica of one KV prefix. Reads never touch the
  * network; `sync` pulls `tinycloud.kv/sync` pages, verifies every byte
@@ -80,13 +114,14 @@ function sameEtag(a: string, b: string): boolean {
  */
 export class Replica {
   readonly #store: ReplicaStore;
-  readonly #transport: ReplicaTransport | undefined;
+  readonly #transportFor: ((grant: GrantRecord) => ReplicaTransport) | undefined;
   readonly #now: () => number;
   readonly #leaseTtlMs: number;
 
   constructor(options: ReplicaOptions) {
     this.#store = options.store;
-    this.#transport = options.transport;
+    const transport = options.transport;
+    this.#transportFor = options.transportFor ?? (transport === undefined ? undefined : () => transport);
     this.#now = options.now ?? Date.now;
     this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   }
@@ -105,6 +140,7 @@ export class Replica {
         window: state.authority,
         grant: state.grant,
         revoked: state.revoked,
+        retentionRevoked: state.retentionRevoked,
         policy: state.config.localReadPolicy,
         now,
       }),
@@ -123,22 +159,29 @@ export class Replica {
     const state = await this.#state();
     const meta = this.#readMeta(state);
     if (!kvPrefixCovers(state.config.prefix, key)) return { status: "not_covered", key, meta };
-    const entry = await this.#store.get(key);
-    if (entry === undefined) {
-      return { status: state.coverage === "complete" ? "absent" : "coverage_incomplete", key, meta };
+    // Readers take no lock: a sync may replace this entry and collect its old
+    // blob between the two reads below. One re-read sees the new entry.
+    for (let attempt = 0; ; attempt += 1) {
+      const entry = await this.#store.get(key);
+      if (entry === undefined) {
+        return { status: state.coverage === "complete" ? "absent" : "coverage_incomplete", key, meta };
+      }
+      if (entry.deleted) return { status: "deleted", key, meta };
+      if (!entry.content) {
+        return { status: "content_missing", key, etag: entry.etag, metadata: entry.metadata, meta };
+      }
+      const value = await this.#store.readContent(entry.hash);
+      const intact = value !== undefined && (options.verify === false || contentHash(value) === entry.hash);
+      if (intact) return { status: "present", key, value, etag: entry.etag, metadata: entry.metadata, meta };
+      if (attempt === 0) continue;
+      throw new ReplicaError(
+        ReplicaErrorCode.INTEGRITY_ERROR,
+        value === undefined
+          ? `The stored content for ${JSON.stringify(key)} is missing.`
+          : `The stored content for ${JSON.stringify(key)} does not match its hash.`,
+        { key },
+      );
     }
-    if (entry.deleted) return { status: "deleted", key, meta };
-    if (!entry.content) {
-      return { status: "content_missing", key, etag: entry.etag, metadata: entry.metadata, meta };
-    }
-    const value = await this.#store.readContent(entry.hash);
-    if (value === undefined) {
-      throw new ReplicaError(ReplicaErrorCode.INTEGRITY_ERROR, `The stored content for ${JSON.stringify(key)} is missing.`, { key });
-    }
-    if (options.verify !== false && contentHash(value) !== entry.hash) {
-      throw new ReplicaError(ReplicaErrorCode.INTEGRITY_ERROR, `The stored content for ${JSON.stringify(key)} does not match its hash.`, { key });
-    }
-    return { status: "present", key, value, etag: entry.etag, metadata: entry.metadata, meta };
   }
 
   /** Live keys under `prefix` (a plain string prefix within the replica's scope). */
@@ -179,62 +222,92 @@ export class Replica {
     }
   }
 
+  /**
+   * Sync under the pending grant if there is one, else the active grant. If
+   * the node refuses a pending grant before anything committed under it, the
+   * active grant serves: a revoked pending grant is discarded, any other
+   * refusal is recorded on it. A revocation of the grant serving the replica,
+   * learned anywhere in the sync, purges the replica before this returns.
+   */
   async sync(options: { limit?: number; signal?: AbortSignal } = {}): Promise<SyncReport> {
-    const transport = this.#transport;
-    if (transport === undefined) throw new Error("Replica.sync needs a transport");
-    const state = await this.#state();
-    if (state.revoked !== null) {
-      throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${state.revoked}`);
+    const transportFor = this.#transportFor;
+    if (transportFor === undefined) throw new Error("Replica.sync needs a transport");
+    const initial = await this.#state();
+    if (initial.revoked !== null) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${initial.revoked}`);
     }
-    const grant = state.pendingGrant ?? state.grant;
-    if (grant === null) throw new ReplicaError(ReplicaErrorCode.GRANT_MISSING, "No grant is installed for this replica.");
-    // A replacement grant is judged on its own leaf window until the node attests it.
-    this.#assertSyncWindow(state.pendingGrant === null ? state.authority : null, grant, state);
+    const candidates = [initial.pendingGrant, initial.grant].filter((grant): grant is GrantRecord => grant !== null);
+    if (candidates.length === 0) throw new ReplicaError(ReplicaErrorCode.GRANT_MISSING, "No grant is installed for this replica.");
 
     const lease = await this.#store.acquireSyncLease(this.#leaseTtlMs);
     if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
     try {
-      const report = await this.#syncUnderLease(lease, state, grant, transport, options);
-      return report;
-    } catch (error) {
-      if (!isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
-        await this.#store
-          .recordError({
-            at: new Date(this.#now()).toISOString(),
-            code: isReplicaError(error) ? error.code : "ERROR",
-            message: error instanceof Error ? error.message : String(error),
-          })
-          .catch(() => undefined);
+      for (const [index, grant] of candidates.entries()) {
+        const pending = grant.cid === initial.pendingGrant?.cid;
+        const attempt: Attempt = {
+          lease,
+          grant,
+          transport: transportFor(grant),
+          promote: pending ? grant : null,
+          signal: options.signal,
+        };
+        try {
+          return await this.#syncUnder(attempt, options.limit ?? DEFAULT_PAGE_LIMIT);
+        } catch (error) {
+          const canFallBack = pending && attempt.promote !== null && index < candidates.length - 1;
+          if (canFallBack && isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
+            await this.#store.discardPendingGrant(grant.cid, error.message);
+            continue;
+          }
+          if (canFallBack && isReplicaError(error) && PENDING_REFUSALS.has(error.code)) {
+            await this.#store.recordPendingGrantError(grant.cid, lastErrorOf(error, this.#now()));
+            continue;
+          }
+          throw error;
+        }
       }
+      throw new Error("unreachable: the last candidate either returns or throws");
+    } catch (error) {
+      await this.#learn(error);
       throw error;
     } finally {
       await this.#store.releaseLease(lease).catch(() => undefined);
     }
   }
 
-  #assertSyncWindow(window: ReplicaState["authority"], grant: ReplicaState["grant"], state: ReplicaState): void {
-    const authority = effectiveAuthority({
-      window,
-      grant,
-      revoked: null,
-      policy: "whileGrantValid",
-      now: this.#now(),
-    });
-    if (authority.state === "valid") return;
-    // No new sync happens after expiry, even under retention.
-    assertReadable({ ...authority, retainUntil: null }, this.#now());
-    void state;
+  /** Persist what a failed sync taught us before the error reaches the caller. */
+  async #learn(error: unknown): Promise<void> {
+    if (isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
+      // Already revoked (the store refused a commit): nothing more to learn.
+      if ((await this.#store.open())?.revoked != null) return;
+      // Persisted before the error returns: later reads raise GRANT_REVOKED, also after restart.
+      await this.#store.markRevoked(error.message);
+      return;
+    }
+    if (
+      isReplicaError(error, ReplicaErrorCode.RETENTION_GRANT_REFUSED) &&
+      typeof error.detail?.reason === "string" &&
+      RETENTION_REVOKED.has(error.detail.reason)
+    ) {
+      await this.#store.markRetentionRevoked(error.message);
+      return;
+    }
+    await this.#store.recordError(lastErrorOf(error, this.#now())).catch(() => undefined);
   }
 
-  async #syncUnderLease(
-    lease: LeaseToken,
-    state: ReplicaState,
-    grant: NonNullable<ReplicaState["grant"]>,
-    transport: ReplicaTransport,
-    options: { limit?: number; signal?: AbortSignal },
-  ): Promise<SyncReport> {
+  /** The effective window for `grant` under `window`; throws unless it holds now (no retention for syncing). */
+  #syncWindow(window: AuthorityWindow | null, grant: GrantRecord): { notBefore: string | null; expiresAt: string | null } {
+    const now = this.#now();
+    const authority = effectiveAuthority({ window, grant, revoked: null, policy: "whileGrantValid", now });
+    if (authority.state !== "valid") assertReadable({ ...authority, retainUntil: null }, now);
+    return { notBefore: authority.notBefore, expiresAt: authority.expiresAt };
+  }
+
+  async #syncUnder(attempt: Attempt, limit: number): Promise<SyncReport> {
+    const state = await this.#state();
     const { config } = state;
-    const limit = options.limit ?? DEFAULT_PAGE_LIMIT;
+    // A replacement grant is judged on its own leaf window until the node attests it.
+    this.#syncWindow(attempt.promote === null ? state.authority : null, attempt.grant);
     const report: SyncReport = {
       pages: 0,
       changes: 0,
@@ -249,69 +322,68 @@ export class Replica {
       blobsCollected: 0,
     };
     let cursor = state.cursor;
-    let nodeDid = state.nodeDid;
+    // The source pin survives an automatic reset; only an explicit reset clears it.
+    let pinned = state.nodeDid;
     let coverage = state.coverage;
-    let promote = state.pendingGrant !== null;
 
     for (;;) {
       let page: SyncPage;
       try {
-        page = await transport.syncPage({
+        page = await attempt.transport.syncPage({
           prefix: config.prefix,
           ...(cursor === null ? {} : { cursor }),
           limit,
           ...(config.retentionGrantCid === null ? {} : { retentionGrant: config.retentionGrantCid }),
-          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          ...(attempt.signal === undefined ? {} : { signal: attempt.signal }),
         });
       } catch (error) {
         if (isReplicaError(error, ReplicaErrorCode.RESET_REQUIRED) && report.resets === 0) {
           const reason = typeof error.detail?.reason === "string" ? error.detail.reason : "reset-required";
-          await this.#store.reset(lease, `node: ${reason}`);
+          await this.#store.reset(attempt.lease, `node: ${reason}`, { keepSource: true });
           report.resets += 1;
           cursor = null;
-          nodeDid = null;
           coverage = "empty";
           continue;
-        }
-        if (isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
-          // Persisted before the error returns: later reads raise GRANT_REVOKED, also after restart.
-          await this.#store.markRevoked(error.message);
         }
         throw error;
       }
 
-      this.#checkPage(page, config.space, config.prefix, nodeDid);
-      // Every page commit checks the window the node just attested.
-      this.#assertSyncWindow(page.authority, grant, state);
-
-      const verified = await this.#verify(page, transport, options.signal);
+      this.#checkPage(page, config.space, config.prefix, pinned);
+      // Fetch only while the attested window holds; the store re-checks it at commit.
+      const window = this.#syncWindow(page.authority, attempt.grant);
+      const verified = await this.#verify(page, attempt);
       coverage = page.more ? (coverage === "complete" ? "complete" : "bootstrapping") : "complete";
-      await this.#store.applyPage(lease, {
+      const now = this.#now();
+      await this.#store.applyPage(attempt.lease, {
         changes: verified.changes,
         blobs: verified.blobs,
         cursor: page.cursor,
         source: page.source,
         authority: page.authority,
         coverage,
-        at: new Date(this.#now()).toISOString(),
+        at: new Date(now).toISOString(),
+        now,
+        window,
         complete: !page.more,
-        promoteGrant: promote,
+        promoteGrant: attempt.promote,
       });
-      report.promotedGrant ||= promote;
-      promote = false;
+      if (attempt.promote !== null) {
+        report.promotedGrant = true;
+        attempt.promote = null;
+      }
       report.pages += 1;
       report.changes += page.changes.length;
       report.deleted += page.changes.filter((change) => change.deleted).length;
       report.fetched += verified.fetched;
       if (page.cursor !== cursor) report.cursorAdvanced = true;
       cursor = page.cursor;
-      nodeDid = page.source.nodeDid;
-      await this.#store.renewLease(lease);
+      pinned = page.source.nodeDid;
+      await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
       if (!page.more) break;
     }
 
-    report.repaired = await this.#repair(lease, transport, cursor, nodeDid, coverage, state, options.signal);
-    report.blobsCollected = await this.#store.collectGarbage(lease);
+    report.repaired = await this.#repair(attempt, cursor, pinned, coverage);
+    report.blobsCollected = await this.#store.collectGarbage(attempt.lease);
     report.coverage = coverage;
     report.contentMissing = (await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER)).length;
     return report;
@@ -344,8 +416,7 @@ export class Replica {
 
   async #verify(
     page: SyncPage,
-    transport: ReplicaTransport,
-    signal: AbortSignal | undefined,
+    attempt: Attempt,
   ): Promise<{ changes: VerifiedChange[]; blobs: Map<string, Uint8Array>; fetched: number }> {
     const blobs = new Map<string, Uint8Array>();
     const changes: VerifiedChange[] = [];
@@ -379,9 +450,9 @@ export class Replica {
     let fetched = 0;
     for (let start = 0; start < needed.length; start += FETCH_CHUNK) {
       const chunk = needed.slice(start, start + FETCH_CHUNK);
-      const contents = await transport.fetchContent(
+      const contents = await attempt.transport.fetchContent(
         chunk.map((candidate) => candidate.key),
-        signal === undefined ? undefined : { signal },
+        attempt.signal === undefined ? undefined : { signal: attempt.signal },
       );
       for (const candidate of chunk) {
         const ok = acceptContent(candidate, contents.get(candidate.key));
@@ -390,26 +461,19 @@ export class Replica {
         (changes[candidate.index] as Extract<VerifiedChange, { deleted: false }>).content = true;
         fetched += 1;
       }
+      await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
     }
     return { changes, blobs, fetched };
   }
 
-  async #repair(
-    lease: LeaseToken,
-    transport: ReplicaTransport,
-    cursor: string | null,
-    nodeDid: string | null,
-    coverage: Coverage,
-    state: ReplicaState,
-    signal: AbortSignal | undefined,
-  ): Promise<number> {
+  async #repair(attempt: Attempt, cursor: string | null, nodeDid: string | null, coverage: Coverage): Promise<number> {
     const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
     let repaired = 0;
     for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
       const chunk = pending.slice(start, start + REPAIR_BATCH);
-      const contents = await transport.fetchContent(
+      const contents = await attempt.transport.fetchContent(
         chunk.map((entry) => entry.key),
-        signal === undefined ? undefined : { signal },
+        attempt.signal === undefined ? undefined : { signal: attempt.signal },
       );
       const blobs = new Map<string, Uint8Array>();
       const changes: VerifiedChange[] = [];
@@ -419,17 +483,22 @@ export class Replica {
         blobs.set(entry.hash, bytes);
         changes.push({ ...entry, content: true });
       }
+      await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
       if (changes.length === 0) continue;
-      await this.#store.applyPage(lease, {
+      const state = await this.#state();
+      const now = this.#now();
+      await this.#store.applyPage(attempt.lease, {
         changes,
         blobs,
         cursor,
         source: { nodeDid: nodeDid ?? "", space: state.config.space, prefix: state.config.prefix },
         authority: null,
         coverage,
-        at: new Date(this.#now()).toISOString(),
+        at: new Date(now).toISOString(),
+        now,
+        window: this.#syncWindow(state.authority, attempt.grant),
         complete: false,
-        promoteGrant: false,
+        promoteGrant: null,
       });
       repaired += changes.length;
     }

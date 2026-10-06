@@ -1,5 +1,5 @@
 import { ed25519 } from "@noble/curves/ed25519";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,6 +84,11 @@ export class FakeNode implements ReplicaTransport {
   /** Override what the next fetch returns for a key. */
   tamper = new Map<string, FetchedContent>();
   failNextSync: ReplicaError | undefined;
+  failNextFetch: ReplicaError | undefined;
+  /** Runs while a sync page request is in flight. */
+  onSyncPage: (() => void | Promise<void>) | undefined;
+  /** Runs while a content fetch is in flight. */
+  onFetch: (() => void | Promise<void>) | undefined;
   extraChanges: Change[] = [];
 
   constructor(readonly prefix = "notes/") {}
@@ -108,6 +113,7 @@ export class FakeNode implements ReplicaTransport {
   async syncPage(a: { prefix: string; cursor?: string; limit: number }): Promise<SyncPage> {
     this.syncCalls += 1;
     if (!this.online) throw new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, "offline");
+    await this.onSyncPage?.();
     if (this.failNextSync) {
       const error = this.failNextSync;
       this.failNextSync = undefined;
@@ -139,6 +145,12 @@ export class FakeNode implements ReplicaTransport {
   async fetchContent(keys: string[]): Promise<Map<string, FetchedContent>> {
     this.fetchCalls += 1;
     if (!this.online) throw new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, "offline");
+    await this.onFetch?.();
+    if (this.failNextFetch) {
+      const error = this.failNextFetch;
+      this.failNextFetch = undefined;
+      throw error;
+    }
     const out = new Map<string, FetchedContent>();
     for (const key of keys) {
       const tampered = this.tamper.get(key);
@@ -153,8 +165,17 @@ export class FakeNode implements ReplicaTransport {
   }
 }
 
+const created: string[] = [];
+
 export async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "tc-replica-"));
+  const dir = await mkdtemp(join(tmpdir(), "tc-replica-"));
+  created.push(dir);
+  return dir;
+}
+
+/** Remove every directory `tempDir` made in this process (call from `afterAll`). */
+export async function removeTempDirs(): Promise<void> {
+  await Promise.all(created.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 }
 
 export function config(overrides: Partial<ReplicaConfig> = {}): ReplicaConfig {

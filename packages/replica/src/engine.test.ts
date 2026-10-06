@@ -1,13 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { FakeNode, NODE_DID, deviceGrant, etagOf, newStore, tempDir } from "../test/fixtures.js";
+import { FakeNode, NODE_DID, deviceGrant, etagOf, newStore, removeTempDirs, tempDir } from "../test/fixtures.js";
 import { Replica } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { SqliteReplicaStore } from "./sqlite/store.js";
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+afterAll(removeTempDirs);
 
 async function blobFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -328,7 +330,9 @@ describe("writer fencing", () => {
         coverage: "bootstrapping",
         at: new Date().toISOString(),
         complete: false,
-        promoteGrant: false,
+        now: Date.now(),
+        window: { notBefore: null, expiresAt: null },
+        promoteGrant: null,
       }),
       ReplicaErrorCode.BUSY,
     );
