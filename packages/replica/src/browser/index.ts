@@ -10,6 +10,13 @@
  * option accepts a `Worker` or `URL` escape hatch. In Vite dev mode, list
  * `@tinycloud/replica` in `optimizeDeps.exclude` so the worker URL resolves
  * inside the package (vitejs/vite#20859).
+ *
+ * Trust boundary: the browser origin, exactly as the OS user is the CLI's.
+ * Run one app per origin — any same-origin script can open the IndexedDB
+ * databases directly. `principal` (required) is the signed-in user's
+ * identity DID; it partitions replicas per user on that origin, it is not
+ * an authorization check — the node authorizes at sync time, and local
+ * reads are gated by the stored grant's node-attested window, like the CLI.
  */
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import type {
@@ -33,13 +40,14 @@ export type BrowserReplicaOpenOptions = {
   /** A display name; defaults to the prefix. */
   name?: string;
   /**
-   * The principal the sync grant is issued by, when the app knows it (for
-   * example the owner's did:pkh under `createOwnerDelegation`, or the owner
-   * session's did:key under `delegateTo`). Partitions the local database
-   * (spec §8): a grant issued by another principal is refused at
-   * `installGrant`. Leave empty when the app cannot know the issuer.
+   * The signed-in user's identity DID (for example `did:pkh:eip155:1:0x…`),
+   * as the app knows it. Replicas for different principals get different
+   * databases on the same origin; signing in again and installing the new
+   * session's grant continues the same replica from its cursor. This is an
+   * app-asserted partition label, not an authorization check — the trust
+   * boundary is the browser origin, and the node authorizes at sync time.
    */
-  grantSubject?: string;
+  principal: string;
   /** Replicating the `secrets` space or a `vault/` prefix needs this opt-in. */
   allowSecrets?: boolean;
   /** Spawn this worker instead of the bundled one (custom bundler layouts). */
@@ -82,8 +90,21 @@ function workerFrom(source: Worker | URL | string | undefined): Worker {
  * In environments without IndexedDB the returned promise rejects with
  * `RUNTIME_UNSUPPORTED` — there is no in-memory fallback, reads would lose
  * their durability guarantee.
+ *
+ * `principal` partitions the replica per signed-in user and is required: the
+ * same host/space/prefix under two principals yields two databases. A device
+ * grant chained to a web session (about one hour under an OpenKey session)
+ * gives about that session's length of offline reads; after sign-in rotates
+ * the session key, install the new grant and the replica continues from its
+ * cursor.
  */
 export async function openReplica(options: BrowserReplicaOpenOptions, events: BrowserReplicaEvents = {}): Promise<BrowserReplica> {
+  if (typeof options.principal !== "string" || !/^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/u.test(options.principal)) {
+    throw new ReplicaError(
+      ReplicaErrorCode.INVALID_ARGUMENT,
+      `openReplica() requires \`principal\`, the signed-in user's identity DID (got ${JSON.stringify(options.principal)}).`,
+    );
+  }
   const replica = new BrowserReplica(workerFrom(options.worker), events);
   await replica.ready;
   const persisted =
@@ -186,8 +207,8 @@ export class BrowserReplica {
       host: options.host,
       space: options.space,
       prefix: options.prefix,
+      principal: options.principal,
       ...(options.name === undefined ? {} : { name: options.name }),
-      ...(options.grantSubject === undefined ? {} : { grantSubject: options.grantSubject }),
       ...(options.allowSecrets === undefined ? {} : { allowSecrets: options.allowSecrets }),
       ...(options.persisted === undefined ? {} : { persisted: options.persisted }),
     });

@@ -2,8 +2,8 @@
 <!--
   TC-19 manual fixture page. Served by serve-fixture.ts next to the Vite-built
   bundle (/assets/index.js installs window.__replica and the offline service
-  worker). Bootstrap: the hash carries `host`/`space` (and optionally
-  `prefix`, `grantSubject`, `grant`). Without a grant the page asks
+  worker). Bootstrap: the hash carries `host`/`space`/`principal` (and
+  optionally `prefix`, `grant`). Without a grant the page asks
   /admin/grant for one (minted for this origin's device DID), puts it in the
   hash and reloads — the printed URL is self-completing.
 -->
@@ -52,12 +52,12 @@
       const params = new URLSearchParams(location.hash.slice(1));
       const host = params.get("host");
       const space = params.get("space");
-      if (host === null || space === null) {
-        setStatus("missing host/space hash params — start from the URL serve-fixture.ts printed");
-        throw new Error("missing host/space");
+      if (host === null || space === null || params.get("principal") === null) {
+        setStatus("missing host/space/principal hash params — start from the URL serve-fixture.ts printed");
+        throw new Error("missing host/space/principal");
       }
       const prefix = params.get("prefix") ?? "notes/";
-      const grantSubject = params.get("grantSubject") ?? undefined;
+      const principal = params.get("principal")!;
 
       // The offline service worker must control the page before the replica
       // worker's fetch, or the worker asset is never cached for offline use.
@@ -66,7 +66,7 @@
         host,
         space,
         prefix,
-        ...(grantSubject === undefined ? {} : { grantSubject }),
+        principal,
       });
       document.getElementById("device").textContent = opened.deviceDid;
 

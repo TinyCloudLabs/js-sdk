@@ -15,7 +15,8 @@ type OpenOptions = {
   host: string;
   space: string;
   prefix: string;
-  grantSubject?: string;
+  /** The signed-in user's identity DID; partitions the replica database. */
+  principal: string;
   allowSecrets?: boolean;
   /** Omit the `worker` escape hatch so the client resolves its bundled URL. */
   defaultWorker?: boolean;
@@ -33,7 +34,7 @@ const setStatus = (text: string) => {
 
 async function open(
   options: OpenOptions,
-): Promise<{ replicaId: string; deviceDid: string; created: boolean; authorized: boolean; status: unknown }> {
+): Promise<{ replicaId: string; deviceDid: string; created: boolean; status: unknown }> {
   if (state.replica !== null) await state.replica.close().catch(() => undefined);
   state.committedSerials = [];
   const { defaultWorker, ...openOptions } = options;
@@ -47,7 +48,6 @@ async function open(
     replicaId: opened.replicaId,
     deviceDid: opened.deviceDid,
     created: opened.created,
-    authorized: opened.authorized,
     status: opened.status,
   };
 }

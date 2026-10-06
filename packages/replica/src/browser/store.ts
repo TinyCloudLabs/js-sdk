@@ -57,12 +57,6 @@ type MetaState = ReplicaState & {
   writerHolder: string | null;
   /** Monotonic commit counter; broadcast as `committed{serial}`. */
   serial: number;
-  /**
-   * The issuer principal of the first installed grant, set atomically with
-   * it. Bound forever after: a replica's data belongs to one principal, so
-   * no session may ever read it under another issuer's authority.
-   */
-  grantSubject: string | null;
   /** True while a revocation purge is recorded but unfinished. */
   purgePending: boolean;
 };
@@ -321,7 +315,6 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         writerEpoch: 0,
         writerHolder: null,
         serial: 0,
-        grantSubject: null,
         purgePending: false,
       });
     });
@@ -347,28 +340,14 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async installGrant(g: GrantRecord): Promise<void> {
     await this.#writeTx([STORE_META], "Installing the grant", async (tx) => {
       const state = this.#requireMeta(await this.#meta(tx));
-      // The first installed grant binds the replica to its issuer forever —
-      // the binding lands atomically with the install, so no interleaving
-      // across tabs can bind the replica to two issuers.
-      const issuer = principalOf(g.issuer);
-      if (state.grantSubject !== null && state.grantSubject !== issuer) {
-        throw new ReplicaError(
-          ReplicaErrorCode.GRANT_INVALID,
-          `The grant was issued by ${issuer}; this replica is bound to ${state.grantSubject}.`,
-        );
-      }
+      // The grant installs as pending regardless of issuer: `principal`
+      // already partitions this database, and the node judges a pending
+      // grant when it first signs a page under it (promotion is CID-bound).
       if (state.grant?.cid === g.cid || state.pendingGrant?.cid === g.cid) return;
-      state.grantSubject = issuer;
       state.pendingGrant = g;
       state.pendingGrantError = null;
       this.#putMeta(tx, state);
     });
-  }
-
-  /** The issuer principal this replica is bound to, or null before the first grant. Worker-facing. */
-  async grantSubject(): Promise<string | null> {
-    const state = await this.#meta(this.#readTx([STORE_META]));
-    return state?.grantSubject ?? null;
   }
 
   /**

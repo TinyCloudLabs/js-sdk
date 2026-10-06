@@ -12,13 +12,17 @@ export type OpenRequest = {
   space: string;
   prefix: string;
   name?: string;
-  /** The principal the grant is issued for; partitions the database (spec §8). */
-  grantSubject?: string;
+  /**
+   * The signed-in user's identity DID (for example `did:pkh:eip155:1:0x…`).
+   * An app-asserted partition label — replicas for different principals get
+   * different databases on the same origin. Not an authorization check; the
+   * node authorizes at sync time.
+   */
+  principal: string;
   allowSecrets?: boolean;
   /** `navigator.storage.persist()` result from the main thread. */
   persisted?: boolean;
 };
-
 export type InstallGrantRequest = { op: "installGrant"; delegation: string };
 export type SyncRequest = { op: "sync"; limit?: number };
 export type GetRequest = { op: "get"; key: string };
@@ -44,10 +48,7 @@ export type OpenResult = {
   deviceDid: string;
   /** The verification method (DID fragment form) the app delegates to. */
   verificationMethod: string;
-  /** Full replica state; null until this session presents the bound issuer's grant. */
   status: ReplicaStatus | null;
-  /** Whether this session may read: an issuer-bound replica hides its state until then. */
-  authorized: boolean;
   created: boolean;
 };
 
@@ -61,10 +62,8 @@ export type GetResult =
 export type ListResult = { entries: Array<{ key: string; etag: string; metadata: Record<string, string>; content: boolean }> };
 
 export type StatusResult = {
-  /** Full replica state; null until this session presents the bound issuer's grant. */
-  status: ReplicaStatus | null;
+  status: ReplicaStatus;
   persistence: { persisted: boolean | null; locksSupported: boolean };
-  authorized: boolean;
 };
 
 export type ReplicaEvent =

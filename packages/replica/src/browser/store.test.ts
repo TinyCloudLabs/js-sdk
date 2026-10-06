@@ -8,7 +8,7 @@ import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake
 import { FakeNode, NODE_DID, config, deviceGrant, etagOf } from "../../test/fixtures.js";
 import { Replica } from "../engine.js";
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
-import { BrowserReplica } from "./index.js";
+import { BrowserReplica, openReplica } from "./index.js";
 import {
   DEVICE_DATABASE,
   IndexedDbReplicaStore,
@@ -218,7 +218,7 @@ describe("store mechanics (indexeddb)", () => {
   });
 });
 
-describe("issuer binding and device identity (indexeddb)", () => {
+describe("grants and device identity (indexeddb)", () => {
   /** A grant signed by a second owner, for the same device and prefix. */
   function foreignGrant() {
     const other = keyPair();
@@ -232,28 +232,18 @@ describe("issuer binding and device identity (indexeddb)", () => {
     );
   }
 
-  test("the first installed grant binds the replica to its issuer forever", async () => {
+  test("a grant installs as pending regardless of issuer; the node promotes it on the next attested page", async () => {
+    // `principal` partitions the database — installGrant never compares
+    // issuers. A session-key rotation therefore lands as the pending grant,
+    // and promotion stays CID-bound to the page the node signed.
     const store = await newIdbStore();
-    expect(await store.grantSubject()).toBe(owner.did);
-    // A grant from another principal is refused, and the binding stays.
-    await rejectsWith(store.installGrant(foreignGrant()), ReplicaErrorCode.GRANT_INVALID);
-    expect(await store.grantSubject()).toBe(owner.did);
-    // The bound issuer's grant (same CID is a no-op, a new one installs).
-    await store.installGrant(deviceGrant({ prefix: "notes/", exp: Math.floor(Date.now() / 1000) + 7200 }));
-    expect(await store.grantSubject()).toBe(owner.did);
-    await store.close();
-  });
-
-  test("a replica that never saw a grant accepts its first issuer", async () => {
-    const replicaId = nextId();
-    const store = await IndexedDbReplicaStore.open(replicaId, { holder: "h" });
-    await store.init(config({ replicaId }));
-    expect(await store.grantSubject()).toBeNull();
     const foreign = foreignGrant();
     await store.installGrant(foreign);
-    expect(await store.grantSubject()).toBe(foreign.issuer);
-    // Now the original owner's grant is the foreign one.
-    await rejectsWith(store.installGrant(deviceGrant({ prefix: "notes/" })), ReplicaErrorCode.GRANT_INVALID);
+    const state = (await store.open())!;
+    expect(state.pendingGrant?.cid).toBe(foreign.cid);
+    expect(state.pendingGrant?.issuer).toBe(foreign.issuer);
+    // The active grant is untouched until a sync proves the new one.
+    expect(state.grant?.cid).not.toBe(foreign.cid);
     await store.close();
   });
 
@@ -407,5 +397,22 @@ describe("client lifecycle", () => {
     } finally {
       await Promise.all([a.close(), b.close()]);
     }
+  });
+
+  test("open() rejects a missing or malformed principal before spawning a worker", async () => {
+    const base = { host: "http://127.0.0.1:1", space: SPACE, prefix: "notes/" };
+    // Validation precedes workerFrom(): a bad principal never spawns.
+    await rejectsWith(
+      openReplica(base as unknown as Parameters<typeof openReplica>[0]),
+      ReplicaErrorCode.INVALID_ARGUMENT,
+    );
+    await rejectsWith(
+      openReplica({ ...base, principal: "not-a-did" }),
+      ReplicaErrorCode.INVALID_ARGUMENT,
+    );
+    await rejectsWith(
+      openReplica({ ...base, principal: "did:pkh:" }),
+      ReplicaErrorCode.INVALID_ARGUMENT,
+    );
   });
 });

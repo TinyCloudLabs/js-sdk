@@ -250,10 +250,10 @@ Bun.serve({
   },
 });
 
-const page = `http://127.0.0.1:${FIXTURE_PORT}/#${new URLSearchParams({ host: proxyHost, space }).toString()}`;
+const page = `http://127.0.0.1:${FIXTURE_PORT}/#${new URLSearchParams({ host: proxyHost, space, principal: owner.did }).toString()}`;
 console.log(`node:      ${nodeHost} (data: ${dataDir})`);
 console.log(`proxy:     ${proxyHost} (CORS-enabled view of the node)`);
-console.log(`owner DID: ${owner.sessionDid}`);
+console.log(`owner DID: ${owner.did}`);
 console.log(`space:     ${space}`);
 console.log(`fixture:   http://127.0.0.1:${FIXTURE_PORT}`);
 console.log(`\nOpen in Chromium:\n  ${page}\n`);

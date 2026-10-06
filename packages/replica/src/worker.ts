@@ -22,7 +22,7 @@ import { initialized, tinycloud, tcwSession } from "@tinycloud/web-sdk-wasm";
 
 import { Replica } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
-import { assertGrantInstallable, grantCovers, parseUcanGrant } from "./grant.js";
+import { assertGrantInstallable, parseUcanGrant } from "./grant.js";
 import { requiresSecretsOptIn } from "./scope.js";
 import { kvSyncTransport } from "./transport.js";
 import type { GrantRecord, ListOpts, ReplicaConfig, ReplicaState } from "./types.js";
@@ -54,6 +54,14 @@ function principalOf(did: string): string {
   return did.split("#", 1)[0]!;
 }
 
+/**
+ * A well-formed DID: `did:<method>:<method-specific-id>`. `principal` is an
+ * app-asserted partition label, not a credential — this checks shape only.
+ */
+function isDid(value: string): boolean {
+  return /^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/u.test(value);
+}
+
 /** The worker global, narrowed to the two members this module uses. */
 const workerScope = self as unknown as {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -80,16 +88,17 @@ const textEncoder = new TextEncoder();
 
 /**
  * Database-name id (spec §8 principal partitioning): host, scope, device and
- * grant subject. `grantSubject` stays empty until installGrant proves it.
+ * the signed-in user's principal DID. The principal is an app-asserted label
+ * — it partitions, it does not authorize.
  */
 export function replicaIdOf(input: {
   host: string;
   space: string;
   prefix: string;
   deviceDid: string;
-  grantSubject: string;
+  principal: string;
 }): string {
-  const material = textEncoder.encode(`${input.host} ${input.space} ${input.prefix} ${input.deviceDid} ${input.grantSubject}`);
+  const material = textEncoder.encode(`${input.host} ${input.space} ${input.prefix} ${input.deviceDid} ${input.principal}`);
   return base32(sha256(material)).slice(0, 26);
 }
 
@@ -129,15 +138,6 @@ type Session = {
   host: string;
   space: string;
   replicaId: string;
-  /** Declared at open; the first installed grant's issuer must match it. */
-  grantSubject: string;
-  /**
-   * The issuer this session proved by installing a grant. A database already
-   * bound to an issuer never answers local reads to a session that has not
-   * installed that issuer's grant — an empty-`grantSubject` open must not
-   * read another principal's data.
-   */
-  verified: string | null;
   device: DeviceIdentity;
   store: IndexedDbReplicaStore;
   channel: BroadcastChannel | null;
@@ -206,30 +206,6 @@ async function closeSession(): Promise<void> {
   }
 }
 
-/**
- * Refuse local reads and replica mutation to a session whose installed grant
- * does not match the issuer the database is bound to. `status` stays open for
- * diagnostics; everything touching entries, blobs or grants goes through this.
- */
-async function assertVerified(s: Session): Promise<void> {
-  if (!(await isAuthorized(s))) {
-    const bound = await s.store.grantSubject();
-    throw new ReplicaError(
-      ReplicaErrorCode.GRANT_UNAUTHORIZED,
-      `This replica belongs to ${bound}; install that principal's grant before reading or syncing.`,
-    );
-  }
-}
-
-/**
- * Whether this session may see replica state: unbound databases are open to
- * anyone; once a first grant binds an issuer, only a session verified by that
- * principal's grant is authorized.
- */
-async function isAuthorized(s: Session): Promise<boolean> {
-  const bound = await s.store.grantSubject();
-  return bound === null || s.verified === bound;
-}
 
 /** Latest commit serial → the sibling-worker BroadcastChannel. */
 function broadcastCommitted(s: Session): void {
@@ -241,6 +217,12 @@ function broadcastCommitted(s: Session): void {
 
 async function handleOpen(request: OpenRequest): Promise<OpenResult> {
   await closeSession();
+  if (typeof request.principal !== "string" || !isDid(request.principal)) {
+    throw new ReplicaError(
+      ReplicaErrorCode.INVALID_ARGUMENT,
+      `open() requires \`principal\`, the signed-in user's identity DID (got ${JSON.stringify(request.principal)}).`,
+    );
+  }
   if (requiresSecretsOptIn(request.space, request.prefix) && request.allowSecrets !== true) {
     throw new ReplicaError(
       ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
@@ -254,7 +236,7 @@ async function handleOpen(request: OpenRequest): Promise<OpenResult> {
     space: request.space,
     prefix: request.prefix,
     deviceDid: principalOf(device.did),
-    grantSubject: request.grantSubject ?? "",
+    principal: request.principal,
   });
   const store = await IndexedDbReplicaStore.open(replicaId, { holder: holderId });
   const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(lockName(replicaId));
@@ -303,30 +285,19 @@ async function handleOpen(request: OpenRequest): Promise<OpenResult> {
       }
     }
     await store.finishPurgeIfPending();
-    const bound = await store.grantSubject();
-    if (bound !== null && request.grantSubject !== undefined && request.grantSubject !== "" && request.grantSubject !== bound) {
-      throw new ReplicaError(
-        ReplicaErrorCode.CONFIG_MISMATCH,
-        `This replica belongs to ${bound}, not ${request.grantSubject}.`,
-      );
-    }
-    session = { host, space: request.space, replicaId, grantSubject: request.grantSubject ?? "", verified: null, device, store, channel };
+    session = { host, space: request.space, replicaId, device, store, channel };
   } catch (error) {
     channel?.close();
     await store.close().catch(() => undefined);
     throw error;
   }
   const state = await store.open();
-  const authorized = session === null ? false : await isAuthorized(session);
 
   return {
     replicaId,
     deviceDid: principalOf(device.did),
     verificationMethod: device.did,
-    // Before the session proves it acts for the bound issuer, the open result
-    // carries no key names, etags, counts, grant CIDs or error text.
-    status: state === null || !authorized ? null : await store.status(),
-    authorized,
+    status: state === null ? null : await store.status(),
     created,
   };
 }
@@ -336,34 +307,11 @@ async function handleInstallGrant(delegation: string): Promise<{ cid: string; au
   const grant = parseUcanGrant(delegation);
   const state = await s.store.open();
   if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
-  // The grant's issuer must be the subject this replica was opened for: a
-  // grant from another principal belongs to a different replicaId partition.
-  if (s.grantSubject !== "" && principalOf(grant.issuer) !== s.grantSubject) {
-    throw new ReplicaError(
-      ReplicaErrorCode.GRANT_INVALID,
-      `The grant was issued by ${grant.issuer}; this replica is partitioned for ${s.grantSubject}.`,
-    );
-  }
-  const bound = await s.store.grantSubject();
-  // A session is authorized only by a grant that would itself install — right
-  // audience, covering this replica's scope, issued by the bound principal
-  // and inside its validity window — or by re-presenting the grant the
-  // database already holds (same CID), so reads on an expired active grant
-  // report GRANT_EXPIRED instead of the gate. A refused install never
-  // authorizes: not on scope, not on issuer, not on time.
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const issuer = principalOf(grant.issuer);
-  const installable =
-    ["tinycloud.kv/sync", "tinycloud.kv/get"].every((ability) =>
-      grantCovers(grant, state.config.space, state.config.prefix, ability),
-    ) &&
-    (bound === null || bound === issuer) &&
-    (grant.notBefore === null || nowSeconds >= grant.notBefore) &&
-    (grant.expiresAt === null || nowSeconds < grant.expiresAt);
-  const held = grant.cid === state.grant?.cid || grant.cid === state.pendingGrant?.cid;
-  if (principalOf(grant.audience) === principalOf(state.config.deviceDid) && (held || installable)) {
-    s.verified = issuer;
-  }
+  // Only what assertGrantInstallable checks: the grant is addressed to this
+  // device, covers this replica's scope and is inside its validity window.
+  // The issuer is not checked — `principal` partitions the database, it does
+  // not authorize: the node does that at sync time, and a session-key
+  // rotation installs through pending-grant promotion.
   assertGrantInstallable(grant, {
     deviceDid: principalOf(state.config.deviceDid),
     space: state.config.space,
@@ -376,7 +324,6 @@ async function handleInstallGrant(delegation: string): Promise<{ cid: string; au
 
 async function handleSync(request: SyncRequest): Promise<SyncResult> {
   const s = needSession();
-  await assertVerified(s);
   const state = await s.store.open();
   if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
   const engine = new Replica({
@@ -393,7 +340,6 @@ async function handleSync(request: SyncRequest): Promise<SyncResult> {
 
 async function handleGet(request: GetRequest): Promise<GetResult> {
   const s = needSession();
-  await assertVerified(s);
   const result = await new Replica({ store: s.store }).get(request.key);
   if (result.status === "content_missing") {
     return { status: "content_missing", key: result.key, etag: result.etag, metadata: result.metadata };
@@ -404,7 +350,6 @@ async function handleGet(request: GetRequest): Promise<GetResult> {
 
 async function handleList(request: ListRequest): Promise<ListResult> {
   const s = needSession();
-  await assertVerified(s);
   const options: ListOpts = {};
   if (request.prefix !== undefined) options.prefix = request.prefix;
   if (request.after !== undefined) options.after = request.after;
@@ -417,19 +362,14 @@ async function handleStatus(): Promise<StatusResult> {
   const s = needSession();
   const persisted =
     typeof navigator.storage?.persisted === "function" ? await navigator.storage.persisted().catch(() => null) : null;
-  const authorized = await isAuthorized(s);
-  // A restricted status for unauthorized sessions: persistence diagnostics
-  // only — no key names, etags, counts, grant CIDs or lastError text.
   return {
-    status: authorized ? await s.store.status() : null,
+    status: await s.store.status(),
     persistence: { persisted, locksSupported: locks !== undefined },
-    authorized,
   };
 }
 
 async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
   const s = needSession();
-  await assertVerified(s);
   if (purge) {
     // The store's fenced destroy checks the lease against the replica row
     // before deleting the database — a stale or foreign lease refuses.
@@ -468,7 +408,6 @@ async function handleReset(purge: boolean): Promise<{ reset: true; purged: boole
 
 async function handleSetRetention(grantCid: string | null): Promise<{ retentionGrantCid: string | null }> {
   const s = needSession();
-  await assertVerified(s);
   await s.store.setRetentionGrant(grantCid);
   return { retentionGrantCid: grantCid };
 }
