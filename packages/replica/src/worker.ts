@@ -31,6 +31,7 @@ import {
   IndexedDbReplicaStore,
   deviceIdentity,
   replicaDatabaseName,
+  type DeletionOutcome,
   type DeviceIdentity,
 } from "./browser/store.js";
 import { purgeReplicaStore } from "./browser/purge.js";
@@ -355,31 +356,32 @@ async function handleStatus(): Promise<StatusResult> {
   };
 }
 
-async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
+async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean; deletion?: DeletionOutcome }> {
   const s = needSession();
   if (purge) {
     // Lock first, then the durable lease: taking the lease before the lock
-    // leaked it when the Web Lock was busy — blocking the current writer's
-    // next sync and every later purge. The store's fenced destroy checks
-    // the lease against the replica row before deleting the database — a
-    // stale or foreign lease refuses.
+    // leaked it when the Web Lock was busy. The store's fenced destroy makes
+    // the erase atomic — one commit clears the data, releases the lease and
+    // stamps the purged marker — then the file deletion runs bounded.
     const tell = () => {
       s.channel?.postMessage({ type: "reset", reason: "purge" });
       // BroadcastChannel does not echo: the purging tab's own client only
       // sees the reset via postEvent.
       postEvent("reset", { reason: "purge" });
     };
-    await purgeReplicaStore(s.store, {
+    const result = await purgeReplicaStore(s.store, {
       locks,
       replicaId: s.replicaId,
-      // Siblings close on `versionchange`; tell them the reset is permanent
-      // so nothing holds the delete open.
+      // The purge is committed: tell siblings and our own client now so their
+      // connections close before the file delete has to wait on them.
+      onPurged: tell,
+      // A still-queued delete also deserves the nudge: a non-cooperative
+      // connection is what `onBlocked` reports.
       onDeleteBlocked: tell,
     });
-    tell();
     s.channel?.close();
     session = null;
-    return { reset: true, purged: true };
+    return { reset: true, purged: true, deletion: result.deletion };
   }
   const run = async () => {
     await new Replica({ store: s.store }).reset("manual");

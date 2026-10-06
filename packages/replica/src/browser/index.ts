@@ -20,6 +20,7 @@
  */
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { isPrincipalDid } from "../did.js";
+import type { DeletionOutcome } from "./store.js";
 import type {
   GetResult,
   ListResult,
@@ -30,6 +31,17 @@ import type {
 } from "./protocol.js";
 
 export { ReplicaError, ReplicaErrorCode };
+export type { DeletionOutcome } from "./store.js";
+
+/**
+ * `reset({purge:true})` result: the erase commit ran (data and lease gone),
+ * and `deletion` reports the bounded file delete — "complete" when the
+ * database file is gone, "pending" while a same-origin connection still
+ * queues it (it completes when the blocker closes), "failed" when the
+ * delete request errored (the marker keeps the tombstone; a later open
+ * retries the deletion).
+ */
+export type ResetResult = { reset: true; purged: false } | { reset: true; purged: true; deletion: DeletionOutcome };
 
 export type BrowserReplicaOpenOptions = {
   /** The TinyCloud host to sync from; pinned for the replica's life. */
@@ -269,8 +281,12 @@ export class BrowserReplica {
     return this.#call({ op: "setRetention", grantCid: cid });
   }
 
-  /** Clear entries and cursor (keeps config and grant); `purge` deletes the database. */
-  reset(options: { purge?: boolean } = {}): Promise<{ reset: true; purged: boolean }> {
+  /**
+   * Clear entries and cursor (keeps config and grant); `purge` erases the
+   * replica permanently — the returned `deletion` reports how the database
+   * file itself ended up (see {@link ResetResult}).
+   */
+  reset(options: { purge?: boolean } = {}): Promise<ResetResult> {
     return this.#call({ op: "reset", purge: options.purge === true });
   }
 

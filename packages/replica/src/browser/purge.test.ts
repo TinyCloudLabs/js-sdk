@@ -1,8 +1,10 @@
 /**
- * Purge ordering (TC-19 review): the Web Lock is taken before the durable
- * lease, everything acquired is released on failure, and a delete queued on
- * a non-cooperative connection is waited on — never reported as failed while
- * it is still queued.
+ * Purge lifecycle (TC-19 review): the Web Lock is taken before the durable
+ * lease; the erase commit (clear + `purged` marker + lease release) is the
+ * point of no return; the file deletion is bounded — a queued delete that
+ * outlives the bound resolves "pending", an errored one "failed", and the
+ * marker makes the tombstone read as RESET_REQUIRED until the next open
+ * finishes the deletion.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake-indexeddb";
@@ -10,7 +12,7 @@ import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake
 import { config, deviceGrant } from "../../test/fixtures.js";
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { purgeReplicaStore } from "./purge.js";
-import { IndexedDbReplicaStore, replicaDatabaseName } from "./store.js";
+import { IndexedDbReplicaStore, deleteReplicaDatabase, replicaDatabaseName } from "./store.js";
 
 beforeAll(() => {
   (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
@@ -105,10 +107,10 @@ describe("purge ordering (indexeddb)", () => {
     await purger.close();
   });
 
-  test("a failed destroy releases the lease it took", async () => {
-    // Release-everything-on-failure: the lease lands inside the lock; when
-    // destroy throws, the purge must give the lease back instead of fencing
-    // out every later writer for the TTL.
+  test("a failed erase releases the lease it took", async () => {
+    // The lease lands inside the lock; when the erase commit throws, the
+    // purge must hand it back on the still-open connection instead of
+    // fencing out every later writer for the TTL.
     const replicaId = nextId();
     const purger = await newStore(replicaId, "holder-purger");
     const destroy = purger.destroy.bind(purger);
@@ -126,22 +128,33 @@ describe("purge ordering (indexeddb)", () => {
     }
   });
 
-  test("an uncontended purge deletes the database", async () => {
+  test("an uncontended purge deletes the database and reports it", async () => {
     const replicaId = nextId();
     const purger = await newStore(replicaId, "holder-purger");
-    await purgeReplicaStore(purger, { locks: fakeLocks([]), replicaId });
+    expect(await purgeReplicaStore(purger, { locks: fakeLocks([]), replicaId })).toEqual({
+      purged: true,
+      deletion: "complete",
+    });
     const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "h3" });
     expect(await reopened.open()).toBeNull();
     await reopened.close();
   });
 
-  test("a purge blocked by a non-cooperative connection waits and still deletes — never BUSY for a queued delete", async () => {
-    // The `blocked` event means the delete is queued, not failed: a raw
-    // connection without a versionchange handler holds it, and the delete
-    // completes when the holder lets go.
+  test("a purge blocked past the bound resolves pending — data gone, locks released, delete completes later", async () => {
+    // The never-closing connection: `blocked` stays true forever, so the
+    // pre-bound code hung holding the Web Lock and the lease. Now the erase
+    // commit makes the purge logical before the file goes, the bounded wait
+    // resolves "pending", and the queued delete finishes when the blocker
+    // finally closes.
     const replicaId = nextId();
     const store = await newStore(replicaId, "holder-purger");
     const name = replicaDatabaseName(replicaId);
+    // Two connections the purge cannot close: `holder` ignores
+    // `versionchange` forever, `sibling` is a real store opened before the
+    // delete queues — its connection outlives the queued delete, which is
+    // the only way to observe the tombstone (an `open` issued after the
+    // delete queues sits behind it, like a real browser).
+    const sibling = await newStore(replicaId, "holder-sibling");
     const holder = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(name);
       request.onsuccess = () => resolve(request.result);
@@ -149,27 +162,109 @@ describe("purge ordering (indexeddb)", () => {
     });
     try {
       const lease = (await store.acquireSyncLease(60_000))!;
-      let blocked = 0;
-      const destruction = store.destroy(lease, { onDeleteBlocked: () => (blocked += 1) });
-      // While the holder is open the delete is queued — not reported as failed.
-      const early = await Promise.race([
-        destruction.then(
-          () => "resolved",
-          () => "rejected",
-        ),
-        new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 300)),
-      ]);
-      expect(early).toBe("pending");
+      let purgedNotified = 0;
+      const outcome = await store.destroy(lease, {
+        deleteWaitMs: 150,
+        onPurged: () => (purgedNotified += 1),
+      });
+      expect(outcome).toBe("pending");
+      // The reset broadcast fired with the erase commit, before the delete.
+      expect(purgedNotified).toBe(1);
+
+      // The lease died inside the erase commit: the sibling's still-open
+      // connection sees the tombstone — RESET_REQUIRED on every path, no
+      // live lease row, and empty entries/blobs via getAllKeys.
+      await rejectsWith(sibling.open(), ReplicaErrorCode.RESET_REQUIRED);
+      await rejectsWith(sibling.acquireSyncLease(60_000), ReplicaErrorCode.RESET_REQUIRED);
+      // Row-level reads fail closed too — the erase commit ran, the marker
+      // is set, and every surface reports the purge, not empty data.
+      await rejectsWith(sibling.list({}), ReplicaErrorCode.RESET_REQUIRED);
+
+      // The blocker lets go: the queued delete completes on its own, the
+      // file is gone, and the next raw open creates a fresh database.
       holder.close();
-      await destruction;
-      const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "h2" });
-      expect(await reopened.open()).toBeNull();
-      await reopened.close();
-      // The blocked hook fired exactly once so the caller could tell
-      // siblings (and its own client) the reset is coming.
-      expect(blocked).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const recreated = await new Promise<boolean>((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.onsuccess = () => {
+          const db = request.result;
+          db.close();
+          resolve(false);
+        };
+        request.onupgradeneeded = () => {
+          (request.result as IDBDatabase).close();
+          resolve(true);
+        };
+        request.onerror = () => reject(request.error);
+      });
+      expect(recreated).toBe(true);
+      // The raw probe created a store-less database — drop it, then a fresh
+      // replica acquires its lease immediately: nothing was stranded.
+      expect(await deleteReplicaDatabase(replicaId)).toBe("complete");
+      const fresh = await newStore(replicaId, "holder-fresh");
+      expect(await fresh.acquireSyncLease(60_000)).not.toBeNull();
     } finally {
       holder.close();
+      await sibling.close().catch(() => undefined);
     }
+  });
+
+  test("a deletion error resolves failed, strands no lease, and the next open finishes the delete", async () => {
+    const replicaId = nextId();
+    const store = await newStore(replicaId, "holder-purger");
+    const name = replicaDatabaseName(replicaId);
+    const lease = (await store.acquireSyncLease(60_000))!;
+
+    // Inject the failure at the IDB request — not by stubbing destroy — so
+    // the real close/delete path runs.
+    const realDelete = fakeIndexedDB.deleteDatabase.bind(fakeIndexedDB);
+    fakeIndexedDB.deleteDatabase = (() => {
+      const request: Record<string, unknown> = {
+        error: new DOMException("injected failure", "UnknownError"),
+        onsuccess: null,
+        onerror: null,
+        onblocked: null,
+        onupgradeneeded: null,
+      };
+      queueMicrotask(() => (request.onerror as ((event: unknown) => void) | null)?.({ target: request }));
+      return request;
+    }) as unknown as typeof indexedDB.deleteDatabase;
+    let outcome;
+    try {
+      outcome = await store.destroy(lease);
+    } finally {
+      fakeIndexedDB.deleteDatabase = realDelete;
+    }
+    expect(outcome).toBe("failed");
+
+    // The lease was released inside the erase commit — not through the
+    // closed connection — so nothing strands it for ~60 s.
+    const meta = await new Promise<{ leaseHolder: string | null; purged?: boolean }>((resolve, reject) => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => {
+        const db = request.result;
+        const get = db.transaction("meta").objectStore("meta").get("state");
+        get.onsuccess = () => {
+          db.close();
+          resolve(get.result);
+        };
+        get.onerror = () => reject(get.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    expect(meta.purged).toBe(true);
+    expect(meta.leaseHolder).toBeNull();
+
+    // The next open sees the marker, finishes the deletion, and reports
+    // RESET_REQUIRED; the open after that recreates cleanly.
+    const second = await IndexedDbReplicaStore.open(replicaId, { holder: "h-second" }).catch((error) => error);
+    expect(second).toBeInstanceOf(ReplicaError);
+    expect((second as ReplicaError).code).toBe(ReplicaErrorCode.RESET_REQUIRED);
+    const third = await IndexedDbReplicaStore.open(replicaId, { holder: "h-third" });
+    expect(await third.open()).toBeNull();
+    // And a fresh acquire on the recreated replica succeeds immediately.
+    await third.init(config({ replicaId }));
+    expect(await third.acquireSyncLease(60_000)).not.toBeNull();
+    await third.close();
   });
 });

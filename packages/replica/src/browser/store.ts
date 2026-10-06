@@ -60,6 +60,13 @@ type MetaState = ReplicaState & {
   serial: number;
   /** True while a revocation purge is recorded but unfinished. */
   purgePending: boolean;
+  /**
+   * True once a `reset --purge` commit has erased this database: entries and
+   * blobs are empty and the file deletion is either done or still queued.
+   * The marker makes the purge logical before the file is gone — every read
+   * path reports RESET_REQUIRED and the next open finishes the deletion.
+   */
+  purged: boolean;
 };
 
 type EntryRecord =
@@ -121,24 +128,52 @@ export async function deviceIdentity(getKey: () => Promise<DeviceIdentity> | Dev
   }
 }
 
+/** How long a `deleteDatabase` request may stay queued before the caller moves on. */
+export const DELETE_DATABASE_WAIT_MS = 5_000;
+
+/** Outcome of the file deletion half of a purge. */
+export type DeletionOutcome = "complete" | "pending" | "failed";
+
 /**
- * Delete the replica's database (purge). `deleteDatabase` cannot be
- * cancelled once issued: a `blocked` event means the delete is queued and
- * will complete, so this waits for its `success`/`error` — never reporting
- * failure for a deletion that is still queued. `onBlocked` fires when the
- * delete starts queueing on another connection (siblings get a
- * `versionchange` event and close theirs; the caller also broadcasts the
- * reset so every holder knows to let go).
+ * Delete the replica's database (purge), bounded: a `blocked` request is a
+ * queued delete that completes whenever the remaining connections close —
+ * it cannot be cancelled, so waiting forever would pin the caller to any
+ * tab that ignores `versionchange`. Instead the request gets
+ * `waitMs` (default {@link DELETE_DATABASE_WAIT_MS}) to settle:
+ *
+ *   "complete" — `success` (or `versionchange` from our own queued delete).
+ *   "pending"  — still queued at the deadline; the delete itself is live
+ *                and completes on its own when the blockers close.
+ *   "failed"   — `onerror`; the request settled without deleting.
+ *
+ * `onBlocked` fires once when the delete starts queueing on another
+ * connection (the caller broadcasts the reset so every holder lets go).
+ * Never rejects: a deletion that errored is reported, not thrown, because
+ * the data is already gone — the caller answers for the logical purge.
  */
-export function deleteReplicaDatabase(replicaId: string, onBlocked?: () => void): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
+export function deleteReplicaDatabase(
+  replicaId: string,
+  options: { waitMs?: number; onBlocked?: () => void } = {},
+): Promise<DeletionOutcome> {
+  const { promise, resolve } = Promise.withResolvers<DeletionOutcome>();
+  const timer = setTimeout(() => resolve("pending"), options.waitMs ?? DELETE_DATABASE_WAIT_MS);
   const request = indexedDB.deleteDatabase(replicaDatabaseName(replicaId));
-  request.onsuccess = () => resolve();
-  request.onerror = () => reject(request.error);
-  request.onblocked = () => onBlocked?.();
+  request.onsuccess = () => {
+    clearTimeout(timer);
+    resolve("complete");
+  };
+  request.onerror = () => {
+    clearTimeout(timer);
+    resolve("failed");
+  };
+  let blockedFired = false;
+  request.onblocked = () => {
+    if (blockedFired) return;
+    blockedFired = true;
+    options.onBlocked?.();
+  };
   return promise;
 }
-
 function isHash(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
@@ -171,7 +206,15 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     this.#replicaId = replicaId;
   }
 
-  static async open(replicaId: string, options: { holder: string; now?: () => number }): Promise<IndexedDbReplicaStore> {
+  static async open(
+    replicaId: string,
+    options: {
+      holder: string;
+      now?: () => number;
+      /** Bound on a tombstone's re-driven file delete (tests shorten it). */
+      deleteWaitMs?: number;
+    },
+  ): Promise<IndexedDbReplicaStore> {
     let db: IDBDatabase;
     try {
       db = await openDatabase(replicaDatabaseName(replicaId), createStores);
@@ -186,8 +229,14 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       store.#purged = true;
       db.close();
     };
-    // A revocation purge interrupted before commit finishes on the next open.
-    await store.finishPurgeIfPending().catch(() => undefined);
+    try {
+      // A revocation purge interrupted before commit, or a database whose
+      // `purged` marker outlived its file deletion, is finished here.
+      await store.finishPurgeIfPending(options.deleteWaitMs);
+    } catch (error) {
+      if (isReplicaError(error)) throw error;
+      // Anything else is retried on the next open.
+    }
     return store;
   }
 
@@ -238,6 +287,12 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   #requireMeta(state: MetaState | undefined): MetaState {
     if (state === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
+    // A `purged` marker means the logical erase already committed: only the
+    // file deletion may still be outstanding. Reads, leases and fences all
+    // surface RESET_REQUIRED — never resurrect a tombstoned database.
+    if (state.purged === true) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged; open it again to continue.");
+    }
     return state;
   }
 
@@ -253,6 +308,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       throw idbError(error, "Reading the replica");
     }
     if (state === undefined) return null;
+    if (state.purged === true) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged; open it again to continue.");
+    }
     return {
       config: state.config,
       grant: state.grant,
@@ -319,6 +377,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         writerHolder: null,
         serial: 0,
         purgePending: false,
+        purged: false,
       });
     });
   }
@@ -426,7 +485,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   async releaseLease(t: LeaseToken): Promise<void> {
     await this.#writeTx([STORE_META], "Releasing the sync lease", async (tx) => {
       const state = await this.#meta(tx);
-      if (state === undefined || state.leaseToken !== t.token || state.leaseHolder !== t.holder) return;
+      if (state === undefined || state.purged === true || state.leaseToken !== t.token || state.leaseHolder !== t.holder) return;
       state.leaseHolder = null;
       state.leaseExpiresAt = null;
       this.#putMeta(tx, state);
@@ -619,33 +678,85 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     });
   }
 
+
   /**
-   * Delete this replica's database for good (the worker's `reset --purge`).
-   * Fenced like a commit: `t` must still be a live lease — the fence is
-   * checked while the replica row still exists, so a paused tab can never
-   * delete the database a rival store took over. Allowed on a revoked
-   * replica. The store is unusable afterwards; `close()` is a no-op.
+   * Purge this replica's database for good (the worker's `reset --purge`).
+   *
+   * One commit makes the purge irreversible: under the caller's Web Lock and
+   * live lease `t` (fenced like a commit, revocation allowed) a single
+   * readwrite transaction clears `entries` and `blobs`, releases the lease,
+   * drops the authority window, and stamps the durable `purged` marker.
+   * From that point the replica is logically gone even if the file outlives
+   * us: `#requireMeta`/`open()` surface RESET_REQUIRED on the marker, and
+   * {@link finishPurgeIfPending} retries the deletion on every later open.
+   * A marker left by a previous destroy is re-driven without the fence —
+   * the lease it ran under was already released.
+   *
+   * Only then is the file deletion issued: our connection closes, then
+   * `deleteDatabase` runs bounded ({@link deleteReplicaDatabase}). The
+   * result is reported, never thrown: "pending" and "failed" still mean the
+   * purge held — the marker plus empty stores stand, and the queued or
+   * retried delete finishes on its own or on the next open. The store is
+   * unusable afterwards; `close()` is a no-op.
    */
-  async destroy(t: LeaseToken, options: { onDeleteBlocked?: () => void } = {}): Promise<void> {
-    await this.#writeTx([STORE_META], "Removing the replica", async (tx) => {
+  async destroy(
+    t: LeaseToken,
+    options: {
+      /** Fires once the erase commit lands, before the delete is issued. */
+      onPurged?: () => void;
+      /** Fires when the delete queues behind another connection. */
+      onDeleteBlocked?: () => void;
+      /** Bound on the queued delete; default {@link DELETE_DATABASE_WAIT_MS}. */
+      deleteWaitMs?: number;
+    } = {},
+  ): Promise<DeletionOutcome> {
+    await this.#writeTx(ALL_STORES, "Removing the replica", async (tx) => {
       const state = await this.#meta(tx);
       if (state === undefined) {
         // The database we opened is already gone or was replaced.
         throw new ReplicaError(ReplicaErrorCode.BUSY, "This replica was already removed or replaced.");
       }
+      if (state.purged === true) {
+        // A previous destroy committed the erase and the delete never
+        // finished — release our lease row if we somehow still hold it and
+        // drive the deletion again below.
+        if (state.leaseToken === t.token && state.leaseHolder === t.holder) {
+          state.leaseHolder = null;
+          state.leaseExpiresAt = null;
+          this.#putMeta(tx, state);
+        }
+        return;
+      }
       this.#checkFence(state, t, { allowRevoked: true });
+      tx.objectStore(STORE_ENTRIES).clear();
+      tx.objectStore(STORE_BLOBS).clear();
+      state.purged = true;
+      state.authority = null;
+      state.cursor = null;
+      state.coverage = "empty";
+      state.lastReset = { at: new Date(this.#now()).toISOString(), reason: "purge" };
+      state.generation += 1;
+      // The lease dies inside the purge commit: nothing is ever released
+      // through a closed connection, and a failed delete strands no lease.
+      state.leaseToken += 1;
+      state.leaseHolder = null;
+      state.leaseExpiresAt = null;
+      state.writerEpoch += 1;
+      state.writerHolder = null;
+      this.#putMeta(tx, state);
     });
-    // The lease is still ours: `deleteDatabase` fires versionchange and our
-    // own connection must close for the delete to proceed.
+    // The purge is committed: callers broadcast the reset now, before the
+    // file deletion, so siblings drop their connections early.
+    options.onPurged?.();
     this.#closed = true;
     this.#db.close();
-    try {
-      await deleteReplicaDatabase(this.#replicaId, options.onDeleteBlocked);
-    } catch (error) {
-      throw idbError(error, "Removing the replica");
-    }
+    return deleteReplicaDatabase(this.#replicaId, {
+      ...(options.deleteWaitMs === undefined ? {} : { waitMs: options.deleteWaitMs }),
+      ...(options.onDeleteBlocked === undefined ? {} : { onBlocked: options.onDeleteBlocked }),
+    });
   }
 
+  /** Record a learned grant revocation: purge the content and fence every writer. */
   async markRevoked(detail: string): Promise<void> {
     await this.#writeTx(ALL_STORES, "Recording the revocation", async (tx) => {
       const state = await this.#meta(tx);
@@ -724,19 +835,38 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Finish a revocation purge whose marker survived a torn open (the
-   * transaction is atomic in IndexedDB, so this only ever runs when an older
-   * or externally-written database says so).
+   * Finish leftover purge work on open. Two markers:
+   *  - `purgePending` (revocation): a torn `markRevoked` left the clears
+   *    uncommitted — run them and clear the marker.
+   *  - `purged` (reset --purge): the erase committed but the file deletion
+   *    never landed (pending past the bound, or a failed request). The
+   *    database is a tombstone: close it, re-drive the delete bounded, and
+   *    report RESET_REQUIRED either way — if the delete completed, the next
+   *    open recreates; if it is still queued or errored, the retry repeats.
    */
-  async finishPurgeIfPending(): Promise<void> {
+  async finishPurgeIfPending(deleteWaitMs?: number): Promise<void> {
+    let tombstoned = false;
     await this.#writeTx(ALL_STORES, "Finishing a revocation purge", async (tx) => {
       const state = await this.#meta(tx);
-      if (state === undefined || state.purgePending !== true) return;
+      if (state === undefined) return;
+      if (state.purged === true) {
+        tombstoned = true;
+        return;
+      }
+      if (state.purgePending !== true) return;
       tx.objectStore(STORE_ENTRIES).clear();
       tx.objectStore(STORE_BLOBS).clear();
       state.purgePending = false;
       this.#putMeta(tx, state);
     });
+    if (!tombstoned) return;
+    this.#closed = true;
+    this.#db.close();
+    await deleteReplicaDatabase(this.#replicaId, deleteWaitMs === undefined ? {} : { waitMs: deleteWaitMs });
+    throw new ReplicaError(
+      ReplicaErrorCode.RESET_REQUIRED,
+      "The replica was purged; open it again to continue.",
+    );
   }
 
   async recordError(e: ReplicaLastError): Promise<void> {
