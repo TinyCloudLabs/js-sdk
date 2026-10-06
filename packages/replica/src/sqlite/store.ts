@@ -164,7 +164,7 @@ function entryOf(row: EntryRow): LocalEntry {
 
 function storageError(error: unknown, action: string): ReplicaError {
   if (isReplicaError(error)) return error;
-  const code = (error as { code?: unknown })?.code;
+  const code = errnoOf(error);
   const message = error instanceof Error ? error.message : String(error);
   if (code === "ENOSPC" || code === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code)} ${message}`)) {
     return new ReplicaError(ReplicaErrorCode.STORAGE_FULL, `${action}: the local disk is full.`, undefined, { cause: error });
@@ -174,10 +174,24 @@ function storageError(error: unknown, action: string): ReplicaError {
 
 const isHash = (name: string) => /^[0-9a-f]{64}$/.test(name);
 
-/** Crash-test seam: called at the durability boundaries of `applyPage`. */
+function errnoOf(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+/** A directory's entries; only a directory that does not exist is empty. */
+async function entriesOf(path: string): Promise<string[]> {
+  try {
+    return await readdir(path);
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") return [];
+    throw error;
+  }
+}
+
+/** Crash- and race-test seam: called at the durability boundaries of `applyPage`. */
 export type StoreFaults = {
   /** Blobs are durable; no row references them yet. */
-  afterBlobs?(): void;
+  afterBlobs?(): void | Promise<void>;
   /** Rows and cursor are written inside the open transaction, not committed. */
   beforeCommit?(): void;
   /** The page is committed. */
@@ -187,9 +201,10 @@ export type StoreFaults = {
 };
 
 /**
- * Runs a filesystem mutation section. The CLI passes one that holds the
- * profile lock briefly and refuses when the profile was deleted, so a sync
- * never recreates a deleted profile's directories.
+ * Runs a mutation section (every database write and every filesystem
+ * change). The CLI passes one that holds the profile lock briefly and
+ * refuses when the profile was deleted, so a command never writes into or
+ * recreates a deleted profile.
  */
 export type MutationGuard = <T>(section: () => Promise<T>) => Promise<T>;
 
@@ -279,8 +294,12 @@ export class SqliteReplicaStore implements ReplicaStore {
     } catch (error) {
       throw storageError(error, `Opening the replica at ${dir}`);
     }
-    // A revocation purge interrupted by a crash finishes on the next open.
-    if (store.#row()?.purge_pending === 1) await store.#finishRevocationPurge().catch(() => undefined);
+    // A revocation purge interrupted by a crash (or by a writer that put
+    // content back after it) finishes on the next open.
+    const row = store.#row();
+    if (row?.revoked_detail != null && (row.purge_pending === 1 || (await store.#holdsContentFiles().catch(() => true)))) {
+      await store.#finishRevocationPurge().catch(() => undefined);
+    }
     return store;
   }
 
@@ -302,7 +321,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     }
   }
 
-  /** A short filesystem mutation section: guarded (profile lock) and generation-checked. */
+  /** A short mutation section: guarded (profile lock) and checked against the database this store opened. */
   #mutate<T>(section: () => Promise<T>): Promise<T> {
     return this.#guard(async () => {
       await this.#assertPresent();
@@ -310,7 +329,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     });
   }
 
-  /** Run `body` in a write transaction (BEGIN IMMEDIATE). */
+  /** Run `body` in a write transaction (BEGIN IMMEDIATE). Callers outside a mutation section use `#guardedWrite`. */
   #write<T>(action: string, body: () => T): T {
     try {
       this.#db.exec("BEGIN IMMEDIATE");
@@ -331,16 +350,28 @@ export class SqliteReplicaStore implements ReplicaStore {
     }
   }
 
-  /** Inside a write transaction: the caller still holds the lease, and the replica is not revoked. */
-  #checkLease(t: LeaseToken): void {
-    const row = this.#db.get<{ lease_token: number; lease_holder: string | null; revoked_detail: string | null }>(
-      "SELECT lease_token, lease_holder, revoked_detail FROM replica WHERE id = 1",
+  /** One write transaction as its own mutation section. */
+  #guardedWrite<T>(action: string, body: () => T): Promise<T> {
+    return this.#mutate(async () => this.#write(action, body));
+  }
+
+  /**
+   * The caller still holds a live lease (its token, not expired), and the
+   * replica is not revoked (unless `allowRevoked`). Inside a write
+   * transaction this fences the write; before one it refuses early.
+   */
+  #checkLease(t: LeaseToken, options: { allowRevoked?: boolean } = {}): void {
+    const row = this.#db.get<{ lease_token: number; lease_holder: string | null; lease_expires_at: number | null; revoked_detail: string | null }>(
+      "SELECT lease_token, lease_holder, lease_expires_at, revoked_detail FROM replica WHERE id = 1",
     );
-    if (row?.revoked_detail != null) {
+    if (row?.revoked_detail != null && options.allowRevoked !== true) {
       throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${row.revoked_detail}`);
     }
     if (row === undefined || row.lease_token !== t.token || row.lease_holder !== t.holder) {
       throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process took over this replica's sync lease.");
+    }
+    if (row.lease_expires_at === null || row.lease_expires_at <= this.#now()) {
+      throw new ReplicaError(ReplicaErrorCode.BUSY, "This process's sync lease expired; nothing was written.");
     }
   }
 
@@ -390,7 +421,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async init(c: ReplicaConfig): Promise<void> {
-    this.#write("Creating the replica", () => {
+    await this.#guardedWrite("Creating the replica", () => {
       if (this.#row() !== undefined) {
         throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, `Replica ${c.name} already exists.`);
       }
@@ -414,7 +445,7 @@ export class SqliteReplicaStore implements ReplicaStore {
 
   /** Update the retention opt-in; it takes effect at the next sync. */
   async setRetentionGrant(cid: string | null): Promise<void> {
-    this.#write("Updating the retention grant", () => {
+    await this.#guardedWrite("Updating the retention grant", () => {
       this.#db.run(
         "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ? WHERE id = 1",
         cid,
@@ -424,7 +455,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async installGrant(g: GrantRecord): Promise<void> {
-    this.#write("Installing the grant", () => {
+    await this.#guardedWrite("Installing the grant", () => {
       const row = this.#row();
       if (row === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
       if (row.grant_cid === g.cid || row.pending_grant_cid === g.cid) return;
@@ -442,7 +473,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async discardPendingGrant(cid: string, detail: string): Promise<void> {
-    this.#write("Discarding the revoked pending grant", () => {
+    await this.#guardedWrite("Discarding the revoked pending grant", () => {
       this.#db.run(
         `UPDATE replica SET pending_grant_cid = NULL, pending_grant_bytes = NULL, pending_grant_audience = NULL,
            pending_grant_issuer = NULL, pending_grant_nbf = NULL, pending_grant_exp = NULL, pending_grant_error = NULL,
@@ -458,24 +489,28 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async recordPendingGrantError(cid: string, e: ReplicaLastError): Promise<void> {
-    this.#write("Recording the pending grant's refusal", () => {
+    await this.#guardedWrite("Recording the pending grant's refusal", () => {
       this.#db.run("UPDATE replica SET pending_grant_error = ? WHERE id = 1 AND pending_grant_cid = ?", JSON.stringify(e), cid);
     });
   }
 
-  async markRetentionRevoked(detail: string): Promise<void> {
-    this.#write("Recording the retention grant's revocation", () => {
+  async markRetentionRevoked(cid: string, detail: string): Promise<void> {
+    await this.#guardedWrite("Recording the retention grant's revocation", () => {
       this.#db.run(
         `UPDATE replica SET retention_grant_cid = NULL, local_read_policy = 'whileGrantValid', retain_until = NULL,
-           retention_revoked = ?, last_error = ? WHERE id = 1`,
+           retention_revoked = ? WHERE id = 1 AND retention_grant_cid = ?`,
         detail,
+        cid,
+      );
+      this.#db.run(
+        "UPDATE replica SET last_error = ? WHERE id = 1",
         JSON.stringify({ at: new Date(this.#now()).toISOString(), code: ReplicaErrorCode.RETENTION_GRANT_REFUSED, message: detail }),
       );
     });
   }
 
   async acquireSyncLease(ttlMs: number): Promise<LeaseToken | null> {
-    return this.#write("Taking the sync lease", () => {
+    return this.#guardedWrite("Taking the sync lease", () => {
       const row = this.#row();
       if (row === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
       const now = this.#now();
@@ -492,14 +527,14 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async renewLease(t: LeaseToken, ttlMs: number): Promise<void> {
-    this.#write("Renewing the sync lease", () => {
+    await this.#guardedWrite("Renewing the sync lease", () => {
       this.#checkLease(t);
       this.#db.run("UPDATE replica SET lease_expires_at = ? WHERE id = 1", this.#now() + ttlMs);
     });
   }
 
   async releaseLease(t: LeaseToken): Promise<void> {
-    this.#write("Releasing the sync lease", () => {
+    await this.#guardedWrite("Releasing the sync lease", () => {
       this.#db.run(
         "UPDATE replica SET lease_holder = NULL, lease_expires_at = NULL WHERE id = 1 AND lease_token = ? AND lease_holder = ?",
         t.token,
@@ -541,8 +576,8 @@ export class SqliteReplicaStore implements ReplicaStore {
       );
       if (exists) continue;
       const shard = join(this.dir, "blobs", hash.slice(0, 2));
-      await mkdir(shard, { mode: 0o700 }).catch((error: { code?: unknown }) => {
-        if (error.code !== "EEXIST") throw error;
+      await mkdir(shard, { mode: 0o700 }).catch((error: unknown) => {
+        if (errnoOf(error) !== "EEXIST") throw error;
       });
       const temp = join(this.dir, "blobs", ".tmp", `${hash}.${randomBytes(6).toString("hex")}`);
       const handle = await open(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
@@ -555,7 +590,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       try {
         await link(temp, final);
       } catch (error) {
-        if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+        if (errnoOf(error) !== "EEXIST") throw error;
       } finally {
         await unlink(temp);
       }
@@ -574,6 +609,9 @@ export class SqliteReplicaStore implements ReplicaStore {
 
   async applyPage(t: LeaseToken, p: VerifiedPage): Promise<void> {
     await this.#mutate(async () => {
+      // Fence before any content reaches the disk: a writer whose lease was
+      // taken over, expired or revoked writes nothing.
+      this.#checkLease(t);
       // Resolve every reused blob's size before any row changes: an earlier
       // row of this page may drop the last entry that references it.
       const reused = new Map<string, number>();
@@ -593,87 +631,97 @@ export class SqliteReplicaStore implements ReplicaStore {
       } catch (error) {
         throw storageError(error, "Writing replica content");
       }
-      this.#faults.afterBlobs?.();
-      this.#write("Committing a sync page", () => {
-        this.#checkLease(t);
-        if (p.window.notBefore !== null && p.now < Date.parse(p.window.notBefore)) {
-          throw new ReplicaError(ReplicaErrorCode.GRANT_NOT_YET_VALID, `The grant is not valid before ${p.window.notBefore}; nothing was committed.`);
-        }
-        if (p.window.expiresAt !== null && p.now >= Date.parse(p.window.expiresAt)) {
-          throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `The grant expired at ${p.window.expiresAt}; nothing was committed.`);
-        }
-        for (const change of p.changes) {
-          if (change.deleted) {
+      await this.#faults.afterBlobs?.();
+      try {
+        this.#write("Committing a sync page", () => {
+          this.#checkLease(t);
+          // Authority is judged now, at the commit, not when the page arrived.
+          const now = this.#now();
+          if (p.window.notBefore !== null && now < Date.parse(p.window.notBefore)) {
+            throw new ReplicaError(ReplicaErrorCode.GRANT_NOT_YET_VALID, `The grant is not valid before ${p.window.notBefore}; nothing was committed.`);
+          }
+          if (p.window.expiresAt !== null && now >= Date.parse(p.window.expiresAt)) {
+            throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `The grant expired at ${p.window.expiresAt}; nothing was committed.`);
+          }
+          for (const change of p.changes) {
+            if (change.deleted) {
+              this.#db.run(
+                `INSERT INTO entry (key, deleted, etag, hash, metadata, content, size) VALUES (?, 1, NULL, NULL, '{}', 0, NULL)
+                 ON CONFLICT (key) DO UPDATE SET deleted = 1, etag = NULL, hash = NULL, metadata = '{}', content = 0, size = NULL`,
+                change.key,
+              );
+              continue;
+            }
+            const size = change.content ? (p.blobs.get(change.hash)?.length ?? reused.get(change.hash)!) : null;
             this.#db.run(
-              `INSERT INTO entry (key, deleted, etag, hash, metadata, content, size) VALUES (?, 1, NULL, NULL, '{}', 0, NULL)
-               ON CONFLICT (key) DO UPDATE SET deleted = 1, etag = NULL, hash = NULL, metadata = '{}', content = 0, size = NULL`,
+              `INSERT INTO entry (key, deleted, etag, hash, metadata, content, size) VALUES (?, 0, ?, ?, ?, ?, ?)
+               ON CONFLICT (key) DO UPDATE SET deleted = 0, etag = excluded.etag, hash = excluded.hash,
+                 metadata = excluded.metadata, content = excluded.content, size = excluded.size`,
               change.key,
-            );
-            continue;
-          }
-          const size = change.content ? (p.blobs.get(change.hash)?.length ?? reused.get(change.hash)!) : null;
-          this.#db.run(
-            `INSERT INTO entry (key, deleted, etag, hash, metadata, content, size) VALUES (?, 0, ?, ?, ?, ?, ?)
-             ON CONFLICT (key) DO UPDATE SET deleted = 0, etag = excluded.etag, hash = excluded.hash,
-               metadata = excluded.metadata, content = excluded.content, size = excluded.size`,
-            change.key,
-            change.etag,
-            change.hash,
-            JSON.stringify(change.metadata),
-            change.content ? 1 : 0,
-            size,
-          );
-        }
-        const sets: string[] = ["cursor = ?", "coverage = ?"];
-        const params: SqlValue[] = [p.cursor, p.coverage];
-        if (p.authority !== null) {
-          sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "retain_until = ?", "last_sync_at = ?");
-          params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.authority.retainUntil, p.at);
-          // A node-attested retention under a new retain grant supersedes a learned revocation of the old one.
-          if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
-        }
-        if (p.complete) {
-          sets.push("last_complete_at = ?", "last_error = NULL");
-          params.push(p.at);
-        }
-        if (p.promoteGrant !== null) {
-          const g = p.promoteGrant;
-          sets.push("grant_cid = ?", "grant_bytes = ?", "grant_audience = ?", "grant_issuer = ?", "grant_nbf = ?", "grant_exp = ?");
-          params.push(g.cid, g.bytes, g.audience, g.issuer, g.notBefore, g.expiresAt);
-          // Clear the pending slot only if it still holds the grant just validated.
-          if (this.#row()!.pending_grant_cid === g.cid) {
-            sets.push(
-              "pending_grant_cid = NULL",
-              "pending_grant_bytes = NULL",
-              "pending_grant_audience = NULL",
-              "pending_grant_issuer = NULL",
-              "pending_grant_nbf = NULL",
-              "pending_grant_exp = NULL",
-              "pending_grant_error = NULL",
+              change.etag,
+              change.hash,
+              JSON.stringify(change.metadata),
+              change.content ? 1 : 0,
+              size,
             );
           }
-        }
-        this.#db.run(`UPDATE replica SET ${sets.join(", ")} WHERE id = 1`, ...params);
-        this.#faults.beforeCommit?.();
-      });
+          const sets: string[] = ["cursor = ?", "coverage = ?"];
+          const params: SqlValue[] = [p.cursor, p.coverage];
+          if (p.authority !== null) {
+            sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "retain_until = ?", "last_sync_at = ?");
+            params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.authority.retainUntil, p.at);
+            // A node-attested retention under a new retain grant supersedes a learned revocation of the old one.
+            if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
+          }
+          if (p.complete) {
+            sets.push("last_complete_at = ?", "last_error = NULL");
+            params.push(p.at);
+          }
+          if (p.promoteGrant !== null) {
+            const g = p.promoteGrant;
+            sets.push("grant_cid = ?", "grant_bytes = ?", "grant_audience = ?", "grant_issuer = ?", "grant_nbf = ?", "grant_exp = ?");
+            params.push(g.cid, g.bytes, g.audience, g.issuer, g.notBefore, g.expiresAt);
+            // Clear the pending slot only if it still holds the grant just validated.
+            if (this.#row()!.pending_grant_cid === g.cid) {
+              sets.push(
+                "pending_grant_cid = NULL",
+                "pending_grant_bytes = NULL",
+                "pending_grant_audience = NULL",
+                "pending_grant_issuer = NULL",
+                "pending_grant_nbf = NULL",
+                "pending_grant_exp = NULL",
+                "pending_grant_error = NULL",
+              );
+            }
+          }
+          this.#db.run(`UPDATE replica SET ${sets.join(", ")} WHERE id = 1`, ...params);
+          this.#faults.beforeCommit?.();
+        });
+      } catch (error) {
+        // Revoked while this call wrote its blobs: the purge may already have
+        // run, so remove them again (a failure leaves purge_pending for open).
+        if (isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) await this.#purgeContent().catch(() => undefined);
+        throw error;
+      }
       this.#faults.afterCommit?.();
     });
   }
 
+  /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
   async #unlinkBlobs(keep: Set<string>): Promise<number> {
     let removed = 0;
     const root = join(this.dir, "blobs");
-    for (const shard of await readdir(root).catch(() => [] as string[])) {
+    for (const shard of await entriesOf(root)) {
       const shardPath = join(root, shard);
       if (shard === ".tmp") {
-        for (const name of await readdir(shardPath).catch(() => [] as string[])) {
+        for (const name of await entriesOf(shardPath)) {
           await rm(join(shardPath, name), { force: true });
           removed += 1;
         }
         continue;
       }
       let kept = 0;
-      for (const name of await readdir(shardPath).catch(() => [] as string[])) {
+      for (const name of await entriesOf(shardPath)) {
         if (isHash(name) && keep.has(name)) {
           kept += 1;
           continue;
@@ -684,6 +732,15 @@ export class SqliteReplicaStore implements ReplicaStore {
       if (kept === 0) await rmdir(shardPath).catch(() => undefined);
     }
     return removed;
+  }
+
+  /** Whether any content file (a blob or a temp file) is on disk. */
+  async #holdsContentFiles(): Promise<boolean> {
+    const root = join(this.dir, "blobs");
+    for (const shard of await entriesOf(root)) {
+      if ((await entriesOf(join(root, shard))).length > 0) return true;
+    }
+    return false;
   }
 
   async collectGarbage(t: LeaseToken): Promise<number> {
@@ -737,6 +794,37 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
+   * Remove this replica's directory for good (`tc replica reset --purge`).
+   * Fenced like a commit: `t` must still be a live lease on the database this
+   * store opened, checked under the write lock, so a paused process can
+   * never remove a replica another process took over or recreated. Allowed
+   * on a revoked replica. The store is unusable afterwards; close it.
+   */
+  async destroy(t: LeaseToken): Promise<void> {
+    await this.#mutate(async () => {
+      try {
+        this.#db.exec("BEGIN IMMEDIATE");
+      } catch (error) {
+        throw storageError(error, "Removing the replica");
+      }
+      try {
+        this.#checkLease(t, { allowRevoked: true });
+        // Holding the write lock: no one can take the lease until the directory is gone.
+        await this.#assertPresent();
+        await rm(this.dir, { recursive: true, force: true });
+      } catch (error) {
+        throw storageError(error, "Removing the replica");
+      } finally {
+        try {
+          this.#db.exec("ROLLBACK");
+        } catch {
+          // Nothing was written.
+        }
+      }
+    });
+  }
+
+  /**
    * Truncate the WAL so purged pages do not linger in it. TRUNCATE waits on
    * readers through busy_timeout; false when one still held it.
    */
@@ -749,8 +837,13 @@ export class SqliteReplicaStore implements ReplicaStore {
     }
   }
 
+  /**
+   * Record the revocation (durable before this returns: reads are blocked
+   * from here on, also after a restart), then purge. A purge that fails
+   * keeps purge_pending set: status reports it and every open retries it.
+   */
   async markRevoked(detail: string): Promise<void> {
-    this.#write("Recording the revocation", () => {
+    await this.#guardedWrite("Recording the revocation", () => {
       this.#db.run("DELETE FROM entry");
       // Bumping the lease token fences every outstanding writer.
       this.#db.run(
@@ -762,29 +855,37 @@ export class SqliteReplicaStore implements ReplicaStore {
       );
     });
     this.#faults.afterPurgeMark?.();
-    await this.#finishRevocationPurge().catch((error: unknown) => {
-      // The revocation is recorded and blocks reads; a later open finishes the purge.
-      if (!isReplicaError(error, ReplicaErrorCode.NOT_FOUND)) throw error;
-    });
+    await this.#finishRevocationPurge().catch(() => undefined);
   }
 
-  /** Unlink every blob of a revoked replica and truncate the WAL; clear purge_pending only when both are done. */
-  async #finishRevocationPurge(): Promise<void> {
-    await this.#mutate(async () => {
-      try {
-        await this.#unlinkBlobs(new Set());
-      } catch (error) {
-        throw storageError(error, "Purging revoked content");
-      }
+  #finishRevocationPurge(): Promise<void> {
+    return this.#mutate(() => this.#purgeContent());
+  }
+
+  /**
+   * Inside a mutation section of a revoked replica: unlink every content
+   * file and truncate the WAL. purge_pending is set first and cleared only
+   * when both are done.
+   */
+  async #purgeContent(): Promise<void> {
+    this.#write("Starting the revocation purge", () => {
+      this.#db.run("UPDATE replica SET purge_pending = 1 WHERE id = 1 AND revoked_detail IS NOT NULL");
     });
-    if (!this.#checkpoint()) return;
+    try {
+      await this.#unlinkBlobs(new Set());
+    } catch (error) {
+      throw storageError(error, "Purging revoked content");
+    }
+    if (!this.#checkpoint()) {
+      throw new ReplicaError(ReplicaErrorCode.BUSY, "A reader holds the replica's write-ahead log; the purge finishes on the next open.");
+    }
     this.#write("Finishing the revocation purge", () => {
       this.#db.run("UPDATE replica SET purge_pending = 0 WHERE id = 1 AND revoked_detail IS NOT NULL");
     });
   }
 
   async recordError(e: ReplicaLastError): Promise<void> {
-    this.#write("Recording the sync error", () => {
+    await this.#guardedWrite("Recording the sync error", () => {
       this.#db.run("UPDATE replica SET last_error = ? WHERE id = 1", JSON.stringify(e));
     });
   }
@@ -836,7 +937,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     try {
       return new Uint8Array(await readFile(this.#blobPath(hash)));
     } catch (error) {
-      if ((error as { code?: unknown }).code === "ENOENT") return undefined;
+      if (errnoOf(error) === "ENOENT") return undefined;
       throw storageError(error, "Reading replica content");
     }
   }
@@ -886,6 +987,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       bytes: Number(counts.bytes),
       durability: DURABILITY,
       syncing: row.lease_holder !== null && row.lease_expires_at !== null && row.lease_expires_at > now,
+      purgePending: row.purge_pending === 1,
       lastError: state.lastError,
       lastReset: state.lastReset,
     };

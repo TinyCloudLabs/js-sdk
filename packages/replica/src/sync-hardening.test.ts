@@ -3,14 +3,15 @@
  * before the fix.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { FakeNode, NODE_DID, deviceGrant, newStore, removeTempDirs, tempDir } from "../test/fixtures.js";
-import { Replica } from "./engine.js";
+import { FakeNode, NODE_DID, SPACE, config, deviceGrant, etagOf, newStore, removeTempDirs, tempDir, type TestStoreOptions } from "../test/fixtures.js";
+import { Replica, contentHash } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
-import { SqliteReplicaStore } from "./sqlite/store.js";
-import type { GrantRecord, ReplicaStore } from "./types.js";
+import { FAULTS, SqliteReplicaStore } from "./sqlite/store.js";
+import { kvSyncTransport, type KVSyncClient } from "./transport.js";
+import type { GrantRecord, ReplicaStore, VerifiedChange } from "./types.js";
 
 afterAll(removeTempDirs);
 
@@ -101,6 +102,85 @@ describe("retention grant revocation", () => {
     expect((await store.open())!.retentionRevoked).toBeNull();
     advance(120_000);
     expect((await replica.get("notes/a")).meta.authority).toBe("expired");
+  });
+
+  test("a refusal of the retain grant a request presented leaves a grant installed meanwhile", async () => {
+    const { node, store, replica, advance } = await retained();
+    node.onSyncPage = async () => {
+      node.onSyncPage = undefined;
+      await store.setRetentionGrant("bafynewretain");
+    };
+    node.failNextSync = new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, "refused", { reason: "retention-grant-revoked" });
+    expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.RETENTION_GRANT_REFUSED);
+    const state = (await store.open())!;
+    expect([state.config.retentionGrantCid, state.config.localReadPolicy, state.retentionRevoked]).toEqual([
+      "bafynewretain",
+      "retainAfterExpiry",
+      null,
+    ]);
+    advance(120_000);
+    expect((await replica.get("notes/a")).meta.authority).toBe("expired");
+  });
+});
+
+describe("malformed authority bounds", () => {
+  test("a page with an unparseable bound is a protocol error that changes nothing", async () => {
+    let now = Date.now();
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    const attested = { notBefore: null, expiresAt: new Date(now + 60_000).toISOString(), retainUntil: null };
+    node.authority = attested;
+    const store = await newStore(undefined, {}, { now: () => now });
+    const replica = new Replica({ store, transport: node, now: () => now });
+    await replica.sync();
+    const before = (await store.open())!;
+    node.put("notes/b", "two");
+    for (const bad of [
+      { ...attested, expiresAt: "not-a-date" },
+      { ...attested, notBefore: "yesterday" },
+      { ...attested, retainUntil: "2030" },
+    ]) {
+      node.authority = bad;
+      expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.PROTOCOL_ERROR);
+      const after = (await store.open())!;
+      expect([after.cursor, after.authority, await store.get("notes/b")]).toEqual([before.cursor, before.authority, undefined]);
+    }
+    now += 61_000;
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
+});
+
+describe("false revocation", () => {
+  test("a node error fetching a key named like a revocation fails the sync and keeps the replica", async () => {
+    const key = "notes/delegation-revoked: bafyx";
+    const value = new TextEncoder().encode("kept");
+    const kept = new TextEncoder().encode("one");
+    let feed = [{ key: "notes/a", deleted: false as const, etag: etagOf(kept), metadata: {} }];
+    const sdk: KVSyncClient = {
+      changes: async () => ({
+        ok: true,
+        data: {
+          changes: feed,
+          more: false,
+          cursor: `c${feed.length}`,
+          source: { nodeDid: NODE_DID, space: SPACE, prefix: "notes/" },
+          authority: { notBefore: null, expiresAt: new Date(Date.now() + 3600_000).toISOString(), retainUntil: null },
+        },
+      }),
+      batchGet: async (keys) =>
+        keys.includes(key)
+          ? { ok: false, error: { code: "NETWORK_ERROR", message: `Failed to batch read 1 key(s): 500 - storage error reading ${key}`, meta: { status: 500 } } }
+          : { ok: true, data: { results: keys.map((k) => ({ key: k, result: { ok: true as const, data: { data: kept, headers: { etag: etagOf(kept) } } } })) } },
+      get: async () => ({ ok: false, error: { code: "NETWORK_ERROR", message: `Failed to get key ${JSON.stringify(key)}: 500 - boom`, meta: { status: 500 } } }),
+    };
+    const store = await newStore();
+    const replica = new Replica({ store, transport: kvSyncTransport(sdk) });
+    await replica.sync();
+    feed = [...feed, { key, deleted: false, etag: etagOf(value), metadata: {} }];
+    expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.NODE_ERROR);
+    expect((await store.open())!.revoked).toBeNull();
+    const a = await replica.get("notes/a");
+    expect(a.status === "present" && text(a.value)).toBe("one");
   });
 });
 
@@ -220,10 +300,39 @@ describe("authority at the commit boundary", () => {
     node.onFetch = () => {
       now += 61_000;
     };
-    const store = await newStore();
+    const store = await newStore(undefined, {}, { now: () => now });
     expect(await codeOf(new Replica({ store, transport: node, now: () => now }).sync())).toBe(ReplicaErrorCode.GRANT_EXPIRED);
     const state = (await store.open())!;
     expect([state.cursor, await store.get("notes/a")]).toEqual([null, undefined]);
+  });
+
+  test("a page whose blob writes cross the expiry instant does not commit", async () => {
+    let now = Date.now();
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    node.authority = { notBefore: null, expiresAt: new Date(now + 60_000).toISOString(), retainUntil: null };
+    const store = await newStore(undefined, {}, { now: () => now, [FAULTS]: { afterBlobs: () => void (now += 61_000) } });
+    expect(await codeOf(new Replica({ store, transport: node, now: () => now }).sync())).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+    const state = (await store.open())!;
+    expect([state.cursor, state.grant, await store.get("notes/a")]).toEqual([null, null, undefined]);
+  });
+
+  test("a repair whose blob writes cross the expiry instant does not commit", async () => {
+    let now = Date.now();
+    const node = new FakeNode();
+    node.put("notes/a", "v1");
+    node.authority = { notBefore: null, expiresAt: new Date(now + 60_000).toISOString(), retainUntil: null };
+    // afterBlobs runs once per commit: the first sync's page, then the second
+    // sync's (empty) feed page, then its repair. Expire during the repair's.
+    let commits = 0;
+    const store = await newStore(undefined, {}, { now: () => now, [FAULTS]: { afterBlobs: () => void (++commits === 3 && (now += 61_000)) } });
+    const replica = new Replica({ store, transport: node, now: () => now });
+    node.tamper.set("notes/a", { bytes: new TextEncoder().encode("v2"), etag: `"x"` });
+    await replica.sync();
+    node.tamper.clear();
+    expect(await codeOf(replica.sync())).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+    expect(commits).toBe(3);
+    expect((await store.get("notes/a")) as { content?: boolean }).toMatchObject({ content: false });
   });
 
   test("a repair whose fetch crosses the expiry instant does not commit", async () => {
@@ -231,7 +340,7 @@ describe("authority at the commit boundary", () => {
     const node = new FakeNode();
     node.put("notes/a", "v1");
     node.authority = { notBefore: null, expiresAt: new Date(now + 60_000).toISOString(), retainUntil: null };
-    const store = await newStore();
+    const store = await newStore(undefined, {}, { now: () => now });
     const replica = new Replica({ store, transport: node, now: () => now });
     node.tamper.set("notes/a", { bytes: new TextEncoder().encode("v2"), etag: `"x"` });
     await replica.sync();
@@ -244,6 +353,26 @@ describe("authority at the commit boundary", () => {
   });
 });
 
+/** A one-change page the store can be handed directly. */
+function pageOf(blob?: Uint8Array) {
+  const changes: VerifiedChange[] =
+    blob === undefined
+      ? [{ key: "notes/z", deleted: true }]
+      : [{ key: "notes/z", deleted: false, etag: `"blake3-${contentHash(blob)}"`, hash: contentHash(blob), metadata: {}, content: true }];
+  return {
+    changes,
+    blobs: new Map(blob === undefined ? [] : [[contentHash(blob), blob]]),
+    cursor: "9:9",
+    source: { nodeDid: NODE_DID, space: "s", prefix: "notes/" },
+    authority: null,
+    coverage: "complete" as const,
+    at: new Date().toISOString(),
+    window: { notBefore: null, expiresAt: null },
+    complete: true,
+    promoteGrant: null,
+  };
+}
+
 describe("revocation purge fencing", () => {
   test("an outstanding writer cannot commit, collect or reset after the purge", async () => {
     const dir = await tempDir();
@@ -253,24 +382,115 @@ describe("revocation purge fencing", () => {
     await new Replica({ store, transport: node }).sync();
     const writer = (await store.acquireSyncLease(60_000))!;
     await store.markRevoked("delegation-revoked: bafy");
-    const page = {
-      changes: [{ key: "notes/z", deleted: true as const }],
-      blobs: new Map<string, Uint8Array>(),
-      cursor: "9:9",
-      source: { nodeDid: NODE_DID, space: "s", prefix: "notes/" },
-      authority: null,
-      coverage: "complete" as const,
-      at: new Date().toISOString(),
-      now: Date.now(),
-      window: { notBefore: null, expiresAt: null },
-      complete: true,
-      promoteGrant: null,
-    };
-    expect(await codeOf(store.applyPage(writer, page))).toBe(ReplicaErrorCode.GRANT_REVOKED);
+    expect(await codeOf(store.applyPage(writer, pageOf()))).toBe(ReplicaErrorCode.GRANT_REVOKED);
     expect(await codeOf(store.collectGarbage(writer))).toBe(ReplicaErrorCode.GRANT_REVOKED);
     expect(await codeOf(store.reset(writer, "x"))).toBe(ReplicaErrorCode.GRANT_REVOKED);
     expect(await store.list({})).toEqual([]);
     expect(await blobCount(dir)).toBe(0);
+  });
+
+  test("a writer resuming after the purge writes no content, also after a reopen", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    const writer = (await store.acquireSyncLease(60_000))!;
+    await store.markRevoked("delegation-revoked: bafy");
+    expect(await codeOf(store.applyPage(writer, pageOf(new TextEncoder().encode("secret"))))).toBe(ReplicaErrorCode.GRANT_REVOKED);
+    expect(await blobCount(dir)).toBe(0);
+    await store.close();
+    await (await SqliteReplicaStore.open(dir, { create: false })).close();
+    expect(await blobCount(dir)).toBe(0);
+  });
+
+  test("a writer revoked while it wrote its blobs takes them back out", async () => {
+    const dir = await tempDir();
+    const other = await newStore(dir);
+    const faults: TestStoreOptions = { [FAULTS]: { afterBlobs: () => other.markRevoked("delegation-revoked: bafy") } };
+    const store = await SqliteReplicaStore.open(dir, { ...faults, create: false });
+    const writer = (await store.acquireSyncLease(60_000))!;
+    expect(await codeOf(store.applyPage(writer, pageOf(new TextEncoder().encode("secret"))))).toBe(ReplicaErrorCode.GRANT_REVOKED);
+    expect([await blobCount(dir), (await store.status()).purgePending]).toEqual([0, false]);
+  });
+
+  test("content files a crashed writer left in a revoked replica are removed on open", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.markRevoked("delegation-revoked: bafy");
+    await store.close();
+    const hash = contentHash(new TextEncoder().encode("secret"));
+    await mkdir(join(dir, "blobs", hash.slice(0, 2)));
+    await writeFile(join(dir, "blobs", hash.slice(0, 2), hash), "secret");
+    await writeFile(join(dir, "blobs", ".tmp", `${hash}.abc`), "secret");
+    const reopened = await SqliteReplicaStore.open(dir, { create: false });
+    expect([await blobCount(dir), await readdir(join(dir, "blobs", ".tmp"))]).toEqual([0, []]);
+    expect((await reopened.status()).purgePending).toBe(false);
+  });
+
+  test.skipIf(process.getuid?.() === 0)("an unreadable shard keeps the purge pending until a later open removes it", async () => {
+    const dir = await tempDir();
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    const store = await newStore(dir);
+    await new Replica({ store, transport: node }).sync();
+    const [shard] = (await readdir(join(dir, "blobs"))).filter((name) => name !== ".tmp");
+    await chmod(join(dir, "blobs", shard!), 0o000);
+    try {
+      await store.markRevoked("delegation-revoked: bafy");
+      expect([(await store.open())!.revoked, (await store.status()).purgePending]).toEqual(["delegation-revoked: bafy", true]);
+    } finally {
+      await chmod(join(dir, "blobs", shard!), 0o700);
+    }
+    // Still there: the purge did not pretend the unreadable shard was empty.
+    expect(await blobCount(dir)).toBe(1);
+    const reopened = await SqliteReplicaStore.open(dir, { create: false });
+    expect([await blobCount(dir), (await reopened.status()).purgePending]).toEqual([0, false]);
+  });
+});
+
+describe("lease expiry", () => {
+  test("an expired lease no one took over cannot commit, renew, collect, reset or remove", async () => {
+    let now = Date.now();
+    const dir = await tempDir();
+    const store = await newStore(dir, {}, { now: () => now });
+    const lease = (await store.acquireSyncLease(1000))!;
+    now += 2000;
+    expect(await codeOf(store.applyPage(lease, pageOf(new TextEncoder().encode("late"))))).toBe(ReplicaErrorCode.BUSY);
+    expect(await codeOf(store.renewLease(lease, 1000))).toBe(ReplicaErrorCode.BUSY);
+    expect(await codeOf(store.collectGarbage(lease))).toBe(ReplicaErrorCode.BUSY);
+    expect(await codeOf(store.reset(lease, "x"))).toBe(ReplicaErrorCode.BUSY);
+    expect(await codeOf(store.destroy(lease))).toBe(ReplicaErrorCode.BUSY);
+    expect([(await store.open())!.cursor, await store.get("notes/z"), await blobCount(dir)]).toEqual([null, undefined, 0]);
+  });
+});
+
+describe("replica removal (reset --purge)", () => {
+  test("a stale lease cannot remove a replica another process took over", async () => {
+    let now = Date.now();
+    const dir = await tempDir();
+    const a = await newStore(dir, {}, { now: () => now });
+    const b = await SqliteReplicaStore.open(dir, { create: false, now: () => now });
+    const stale = (await a.acquireSyncLease(1000))!;
+    now += 2000;
+    expect(await b.acquireSyncLease(60_000)).not.toBeNull();
+    expect(await codeOf(a.destroy(stale))).toBe(ReplicaErrorCode.BUSY);
+    expect((await b.open())?.config.name).toBe("notes");
+  });
+
+  test("a store cannot remove a replacement replica created at the same path", async () => {
+    const dir = await tempDir();
+    const a = await newStore(dir);
+    const lease = (await a.acquireSyncLease(60_000))!;
+    await rm(dir, { recursive: true, force: true });
+    const replacement = await newStore(dir, { replicaId: "r-replacement" });
+    expect(await codeOf(a.destroy(lease))).toBe(ReplicaErrorCode.NOT_FOUND);
+    expect((await replacement.open())?.config.replicaId).toBe("r-replacement");
+  });
+
+  test("a live lease removes the replica, also a revoked one", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.markRevoked("delegation-revoked: bafy");
+    await store.destroy((await store.acquireSyncLease(60_000))!);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
   });
 });
 
@@ -300,31 +520,47 @@ describe("deleted replica directory", () => {
     expect([(await fresh.open())!.cursor, await fresh.list({})]).toEqual([null, []]);
   });
 
-  test("the guard runs around every filesystem mutation", async () => {
+  test("a refusing guard blocks every mutation: database and files stay exactly as they were", async () => {
     const dir = await tempDir();
     const node = new FakeNode();
     node.put("notes/a", "one");
-    await (await newStore(dir)).close();
+    const plain = await newStore(dir, { localReadPolicy: "retainAfterExpiry", retentionGrantCid: "bafyretain" });
+    await new Replica({ store: plain, transport: node }).sync();
+    await plain.installGrant(deviceGrant({ exp: Math.floor(Date.now() / 1000) + 9000 }));
+    const lease = (await plain.acquireSyncLease(60_000))!;
+    const snapshot = async () => JSON.stringify([await plain.open(), await plain.list({}), await blobCount(dir)]);
+    const before = await snapshot();
     let sections = 0;
-    const store = await SqliteReplicaStore.open(dir, {
-      create: false,
-      guard: async (section) => {
-        sections += 1;
-        return section();
-      },
-    });
-    await new Replica({ store, transport: node }).sync();
-    // One page commit and one GC.
-    expect(sections).toBe(2);
     const refusing = await SqliteReplicaStore.open(dir, {
       create: false,
       guard: async () => {
+        sections += 1;
         throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "profile deleted");
       },
     });
-    node.put("notes/b", "two");
-    expect(await codeOf(new Replica({ store: refusing, transport: node }).sync())).toBe(ReplicaErrorCode.NOT_FOUND);
-    expect(await refusing.get("notes/b")).toBeUndefined();
+    const pending = (await plain.open())!.pendingGrant!;
+    const mutations: Array<[string, () => Promise<unknown>]> = [
+      ["init", () => refusing.init(config({ name: "other" }))],
+      ["setRetentionGrant", () => refusing.setRetentionGrant(null)],
+      ["installGrant", () => refusing.installGrant(deviceGrant({ exp: Math.floor(Date.now() / 1000) + 9999 }))],
+      ["discardPendingGrant", () => refusing.discardPendingGrant(pending.cid, "x")],
+      ["recordPendingGrantError", () => refusing.recordPendingGrantError(pending.cid, { at: "t", code: "X", message: "x" })],
+      ["markRetentionRevoked", () => refusing.markRetentionRevoked("bafyretain", "x")],
+      ["acquireSyncLease", () => refusing.acquireSyncLease(60_000)],
+      ["renewLease", () => refusing.renewLease(lease, 60_000)],
+      ["releaseLease", () => refusing.releaseLease(lease)],
+      ["recordError", () => refusing.recordError({ at: "t", code: "X", message: "x" })],
+      ["applyPage", () => refusing.applyPage(lease, pageOf(new TextEncoder().encode("new")))],
+      ["collectGarbage", () => refusing.collectGarbage(lease)],
+      ["reset", () => refusing.reset(lease, "x")],
+      ["markRevoked", () => refusing.markRevoked("x")],
+      ["destroy", () => refusing.destroy(lease)],
+    ];
+    const refused: Record<string, string | undefined> = {};
+    for (const [name, mutation] of mutations) refused[name] = await codeOf(mutation());
+    expect(refused).toEqual(Object.fromEntries(mutations.map(([name]) => [name, ReplicaErrorCode.NOT_FOUND])));
+    expect(sections).toBe(mutations.length);
+    expect(await snapshot()).toBe(before);
   });
 });
 

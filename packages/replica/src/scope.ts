@@ -29,6 +29,13 @@ export function hashFromEtag(etag: string): string | undefined {
   return match?.[1];
 }
 
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** An RFC 3339 instant that parses: the only form an authority bound may take. */
+export function isInstant(value: string): boolean {
+  return RFC3339.test(value) && Number.isFinite(Date.parse(value));
+}
+
 export type EffectiveAuthority = {
   state: AuthorityState;
   notBefore: string | null;

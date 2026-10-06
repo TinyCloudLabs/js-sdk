@@ -113,11 +113,13 @@ export type VerifiedPage = {
   source: SyncSource;
   authority: AuthorityWindow | null;
   coverage: Coverage;
-  /** Commit time (ISO-8601). */
+  /** Commit time (ISO-8601), recorded as the sync time. */
   at: string;
-  /** Commit time (ms since epoch), checked against `window` inside the commit transaction. */
-  now: number;
-  /** The effective authority window this page commits under; outside it nothing commits. */
+  /**
+   * The effective authority window this page commits under. The store checks
+   * it against its own clock inside the commit transaction; outside it
+   * nothing commits.
+   */
   window: { notBefore: string | null; expiresAt: string | null };
   /** True when this page closes a sync run (`more: false`). */
   complete: boolean;
@@ -162,6 +164,8 @@ export type ReplicaStatus = {
   bytes: number;
   durability: string;
   syncing: boolean;
+  /** A revocation purge has not removed every content file yet; the next open retries it. */
+  purgePending: boolean;
   lastError: ReplicaLastError | null;
   lastReset: { at: string; reason: string } | null;
 };
@@ -176,7 +180,7 @@ export interface ReplicaStore {
   releaseLease(t: LeaseToken): Promise<void>;
   /** Hashes whose blobs are referenced by a committed entry. */
   hasContent(hashes: string[]): Promise<Set<string>>;
-  /** ONE transaction: blob refs + entries + tombstones + cursor + coverage; fenced by the lease token. */
+  /** ONE transaction: blob refs + entries + tombstones + cursor + coverage; fenced by a live lease token. */
   applyPage(t: LeaseToken, p: VerifiedPage): Promise<void>;
   /**
    * Clear entries, blobs and cursor; keep config and grants. The nodeDid pin
@@ -188,8 +192,11 @@ export interface ReplicaStore {
    * outstanding lease; later commits, GC and resets refuse.
    */
   markRevoked(detail: string): Promise<void>;
-  /** The retention grant was revoked: drop it and its retainUntil; post-expiry reads raise GRANT_REVOKED. */
-  markRetentionRevoked(detail: string): Promise<void>;
+  /**
+   * The node revoked the retention grant `cid`: drop it and its retainUntil, so
+   * post-expiry reads raise GRANT_REVOKED. A different current grant is kept.
+   */
+  markRetentionRevoked(cid: string, detail: string): Promise<void>;
   /** The node revoked the pending grant: discard it (the active grant keeps serving). */
   discardPendingGrant(cid: string, detail: string): Promise<void>;
   /** The node refused the pending grant (not a revocation): keep it pending, with the reason. */

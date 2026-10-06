@@ -330,7 +330,6 @@ describe("writer fencing", () => {
         coverage: "bootstrapping",
         at: new Date().toISOString(),
         complete: false,
-        now: Date.now(),
         window: { notBefore: null, expiresAt: null },
         promoteGrant: null,
       }),

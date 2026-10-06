@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { contentHash } from "../src/engine.js";
 import { ReplicaError, ReplicaErrorCode } from "../src/errors.js";
 import { parseUcanGrant, type ParsedUcanGrant } from "../src/grant.js";
-import { SqliteReplicaStore } from "../src/sqlite/store.js";
+import { FAULTS, SqliteReplicaStore, type SqliteReplicaStoreOptions, type StoreFaults } from "../src/sqlite/store.js";
 import type { AuthorityWindow, Change, FetchedContent, ReplicaConfig, ReplicaTransport, SyncPage } from "../src/types.js";
 
 export const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
@@ -193,9 +193,15 @@ export function config(overrides: Partial<ReplicaConfig> = {}): ReplicaConfig {
   };
 }
 
+export type TestStoreOptions = Omit<SqliteReplicaStoreOptions, "create"> & { [FAULTS]?: StoreFaults };
+
 /** A created store with a pending device grant installed. */
-export async function newStore(dir?: string, overrides: Partial<ReplicaConfig> = {}): Promise<SqliteReplicaStore> {
-  const store = await SqliteReplicaStore.open(dir ?? (await tempDir()), { create: true });
+export async function newStore(
+  dir?: string,
+  overrides: Partial<ReplicaConfig> = {},
+  options: TestStoreOptions = {},
+): Promise<SqliteReplicaStore> {
+  const store = await SqliteReplicaStore.open(dir ?? (await tempDir()), { ...options, create: true });
   await store.init(config(overrides));
   await store.installGrant(deviceGrant({ prefix: overrides.prefix ?? "notes/" }));
   return store;

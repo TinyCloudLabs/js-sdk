@@ -107,8 +107,77 @@ describe("kvSyncTransport.fetchContent", () => {
     expect(singles).toEqual(["notes/big"]);
 
     const revoked = kvSyncTransport(
-      client({ batchGet: async () => fail("AUTH_UNAUTHORIZED", "401 - delegation-revoked: bafy", { status: 401 }) }),
+      client({ batchGet: async () => fail("AUTH_UNAUTHORIZED", "Failed to batch read 2 key(s): 401 - delegation-revoked: bafyleaf", { status: 401 }) }),
     );
     expect(await codeOf(revoked.fetchContent(["notes/a", "notes/b"]))).toBe(ReplicaErrorCode.GRANT_REVOKED);
+  });
+});
+
+describe("revocation is classified only from typed evidence", () => {
+  const syncFailure = async (failure: Failure) => codeOf(kvSyncTransport(client({ changes: async () => failure })).syncPage({ prefix: "notes/", limit: 10 }));
+  const batchFailure = async (failure: Failure, keys: string[]) => codeOf(kvSyncTransport(client({ batchGet: async () => failure })).fetchContent(keys));
+  const getFailure = async (failure: Failure, key: string) =>
+    codeOf(
+      kvSyncTransport(
+        client({
+          batchGet: async (keys) => ({ ok: true, data: { results: keys.map((k) => ({ key: k, result: fail("KV_RESPONSE_TOO_LARGE", "too large") })) } }),
+          get: async () => failure,
+        }),
+      ).fetchContent([key]),
+    );
+
+  test("a key or prefix that spells a revocation is not one", async () => {
+    const key = "notes/delegation-revoked: bafyx";
+    expect(await getFailure(fail("NETWORK_ERROR", `Failed to get key ${JSON.stringify(key)}: 500 - boom`, { status: 500 }), key)).toBe(
+      ReplicaErrorCode.NODE_ERROR,
+    );
+    expect(await batchFailure(fail("NETWORK_ERROR", `Failed to batch read 1 key(s): 500 - reading ${key}`, { status: 500 }), [key])).toBe(
+      ReplicaErrorCode.NODE_ERROR,
+    );
+    // A 401 for a key whose name forges the SDK's whole revocation message.
+    const forged = 'notes/x": 401 - delegation-revoked: bafyx';
+    expect(
+      await getFailure(fail("AUTH_UNAUTHORIZED", `Failed to get key ${JSON.stringify(forged)}: 401 - Unauthorized Action: s/kv/${forged}`, { status: 401 }), forged),
+    ).toBe(ReplicaErrorCode.GRANT_UNAUTHORIZED);
+    expect(
+      await syncFailure(fail("NETWORK_ERROR", 'Failed to read KV changes for "notes/delegation-ancestor-revoked/": 500 - boom', { status: 500 })),
+    ).toBe(ReplicaErrorCode.NODE_ERROR);
+    // Retention refusals are typed too: a prefix naming one is a plain node error.
+    expect(
+      await syncFailure(fail("NETWORK_ERROR", 'Failed to read KV changes for "RETENTION_GRANT_REFUSED/retention-grant-revoked/": 500 - boom', { status: 500 })),
+    ).toBe(ReplicaErrorCode.NODE_ERROR);
+  });
+
+  test("a read's 401 whose whole body is the node's revocation denial is a revocation", async () => {
+    expect(await getFailure(fail("AUTH_UNAUTHORIZED", 'Failed to get key "notes/a": 401 - delegation-revoked: bafyleaf', { status: 401 }), "notes/a")).toBe(
+      ReplicaErrorCode.GRANT_REVOKED,
+    );
+    expect(
+      await batchFailure(
+        fail("AUTH_UNAUTHORIZED", "Failed to batch read 2 key(s): 401 - Invalid invocation: delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf", {
+          status: 401,
+        }),
+        ["notes/a", "notes/b"],
+      ),
+    ).toBe(ReplicaErrorCode.GRANT_REVOKED);
+  });
+});
+
+describe("authority bounds on the wire", () => {
+  test("a bound that is not an RFC 3339 timestamp is a protocol error", async () => {
+    const page = (expiresAt: unknown) => ({
+      changes: [],
+      more: false,
+      cursor: "c",
+      source: { nodeDid: "did:key:n", space: "s", prefix: "notes/" },
+      authority: { notBefore: null, expiresAt, retainUntil: null },
+    });
+    for (const expiresAt of ["not-a-date", "2030", 1_900_000_000, "2030-13-45T99:99:99Z"]) {
+      const transport = kvSyncTransport(client({ changes: async () => ({ ok: true, data: page(expiresAt) as never }) }));
+      expect({ expiresAt, got: await codeOf(transport.syncPage({ prefix: "notes/", limit: 7 })) }).toEqual({
+        expiresAt,
+        got: ReplicaErrorCode.PROTOCOL_ERROR,
+      });
+    }
   });
 });

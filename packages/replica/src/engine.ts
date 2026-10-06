@@ -2,7 +2,7 @@ import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex } from "@noble/hashes/utils";
 
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
-import { assertReadable, effectiveAuthority, hashFromEtag, kvPrefixCovers } from "./scope.js";
+import { assertReadable, effectiveAuthority, hashFromEtag, isInstant, kvPrefixCovers } from "./scope.js";
 import type {
   AuthorityState,
   AuthorityWindow,
@@ -284,13 +284,14 @@ export class Replica {
       await this.#store.markRevoked(error.message);
       return;
     }
-    if (
-      isReplicaError(error, ReplicaErrorCode.RETENTION_GRANT_REFUSED) &&
-      typeof error.detail?.reason === "string" &&
-      RETENTION_REVOKED.has(error.detail.reason)
-    ) {
-      await this.#store.markRetentionRevoked(error.message);
-      return;
+    if (isReplicaError(error, ReplicaErrorCode.RETENTION_GRANT_REFUSED)) {
+      const cid = error.detail?.retentionGrantCid;
+      const reason = error.detail?.reason;
+      if (typeof cid === "string" && typeof reason === "string" && RETENTION_REVOKED.has(reason)) {
+        // Bound to the grant the refused request presented: a replacement installed meanwhile stays.
+        await this.#store.markRetentionRevoked(cid, error.message);
+        return;
+      }
     }
     await this.#store.recordError(lastErrorOf(error, this.#now())).catch(() => undefined);
   }
@@ -328,12 +329,13 @@ export class Replica {
 
     for (;;) {
       let page: SyncPage;
+      const retentionGrant = config.retentionGrantCid;
       try {
         page = await attempt.transport.syncPage({
           prefix: config.prefix,
           ...(cursor === null ? {} : { cursor }),
           limit,
-          ...(config.retentionGrantCid === null ? {} : { retentionGrant: config.retentionGrantCid }),
+          ...(retentionGrant === null ? {} : { retentionGrant }),
           ...(attempt.signal === undefined ? {} : { signal: attempt.signal }),
         });
       } catch (error) {
@@ -345,6 +347,9 @@ export class Replica {
           coverage = "empty";
           continue;
         }
+        if (isReplicaError(error, ReplicaErrorCode.RETENTION_GRANT_REFUSED) && retentionGrant !== null) {
+          throw new ReplicaError(error.code, error.message, { ...error.detail, retentionGrantCid: retentionGrant }, { cause: error });
+        }
         throw error;
       }
 
@@ -353,7 +358,8 @@ export class Replica {
       const window = this.#syncWindow(page.authority, attempt.grant);
       const verified = await this.#verify(page, attempt);
       coverage = page.more ? (coverage === "complete" ? "complete" : "bootstrapping") : "complete";
-      const now = this.#now();
+      const at = new Date(this.#now()).toISOString();
+      // The store checks `window` against its clock inside the commit transaction.
       await this.#store.applyPage(attempt.lease, {
         changes: verified.changes,
         blobs: verified.blobs,
@@ -361,8 +367,7 @@ export class Replica {
         source: page.source,
         authority: page.authority,
         coverage,
-        at: new Date(now).toISOString(),
-        now,
+        at,
         window,
         complete: !page.more,
         promoteGrant: attempt.promote,
@@ -395,6 +400,15 @@ export class Replica {
         ReplicaErrorCode.PROTOCOL_ERROR,
         `The node answered for ${page.source.space}/${page.source.prefix}, not ${space}/${prefix}.`,
       );
+    }
+    // A bound that does not parse would widen the window (NaN compares false): fail closed.
+    for (const [name, value] of Object.entries(page.authority)) {
+      if (value !== null && (typeof value !== "string" || !isInstant(value))) {
+        throw new ReplicaError(
+          ReplicaErrorCode.PROTOCOL_ERROR,
+          `The node attested authority.${name} = ${JSON.stringify(value)}, which is not a timestamp; nothing was committed.`,
+        );
+      }
     }
     if (pinnedNodeDid !== null && page.source.nodeDid !== pinnedNodeDid) {
       throw new ReplicaError(
@@ -486,7 +500,6 @@ export class Replica {
       await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
       if (changes.length === 0) continue;
       const state = await this.#state();
-      const now = this.#now();
       await this.#store.applyPage(attempt.lease, {
         changes,
         blobs,
@@ -494,8 +507,7 @@ export class Replica {
         source: { nodeDid: nodeDid ?? "", space: state.config.space, prefix: state.config.prefix },
         authority: null,
         coverage,
-        at: new Date(now).toISOString(),
-        now,
+        at: new Date(this.#now()).toISOString(),
         window: this.#syncWindow(state.authority, attempt.grant),
         complete: false,
         promoteGrant: null,
