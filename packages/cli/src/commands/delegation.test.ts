@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
+import { DelegationManager } from "@tinycloud/sdk-core/delegations";
+import type { ServiceSession } from "@tinycloud/sdk-services";
 
 let hasRevokeAuthority = false;
+let hasDelegationListAuthority = true;
 const authorityRequests: unknown[] = [];
 const revokeCalls: unknown[][] = [];
 const outputs: unknown[] = [];
@@ -9,6 +12,7 @@ const errors: unknown[] = [];
 const targetSpaceId = "tinycloud:pkh:eip155:1:0xtarget:archive";
 const fallbackSpaceId = "tinycloud:pkh:eip155:1:0xhistory:archive";
 let revokeResult: unknown;
+let delegationManagerOverride: any;
 let grantHistory: any[];
 let delegationListResult: any;
 let delegationQueryResult: any;
@@ -30,8 +34,11 @@ mock.module("../lib/permissions.js", () => ({
 
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => ({
-    hasRuntimePermissions: () => hasRevokeAuthority,
-    delegationManager: {
+    hasRuntimePermissions: (permissions: Array<{ actions: string[] }>) =>
+      permissions[0]?.actions.includes("tinycloud.delegation/revoke")
+        ? hasRevokeAuthority
+        : hasDelegationListAuthority,
+    delegationManager: delegationManagerOverride ?? {
       list: async () => delegationListResult,
       query: async () => delegationQueryResult,
       revoke: async (...args: unknown[]) => {
@@ -45,7 +52,12 @@ mock.module("../lib/sdk.js", () => ({
 mock.module("./auth.js", () => ({
   ensureDelegationAuthority: async (params: { requested: unknown[] }) => {
     authorityRequests.push(params);
-    hasRevokeAuthority = true;
+    const requested = params.requested[0];
+    if (requested && typeof requested === "object" && "actions" in requested && Array.isArray(requested.actions)) {
+      const action = requested.actions[0];
+      if (action === "tinycloud.delegation/list") hasDelegationListAuthority = true;
+      if (action === "tinycloud.delegation/revoke") hasRevokeAuthority = true;
+    }
   },
 }));
 
@@ -68,6 +80,8 @@ async function runRevoke(cid = "bafy-device-grant"): Promise<void> {
   await program.parseAsync(["node", "tc", "delegation", "revoke", cid], { from: "node" });
 }
 beforeEach(() => {
+  delegationManagerOverride = undefined;
+  hasDelegationListAuthority = true;
   hasRevokeAuthority = false;
   authorityRequests.length = 0;
   revokeCalls.length = 0;
@@ -111,6 +125,29 @@ describe("tc delegation revoke authority", () => {
       reason: "Revoke delegation bafy-device-grant",
       yes: true,
     });
+    expect(revokeCalls).toEqual([["bafy-device-grant", {
+      targetSpaceId,
+      targetDelegation: { delegatorDID: "did:pkh:eip155:1:0xowner", delegateDID: "did:key:device" },
+    }]]);
+    expect(outputs).toEqual([{ cid: "bafy-device-grant", revoked: true, targetSpaceSource: "node" }]);
+    expect(errors).toEqual([]);
+  });
+  test("acquires list authority to resolve live revocation principals", async () => {
+    hasDelegationListAuthority = false;
+    hasRevokeAuthority = true;
+
+    await runRevoke();
+
+    expect(authorityRequests).toEqual([expect.objectContaining({
+      requested: [{
+        service: "tinycloud.delegation",
+        space: "tinycloud:pkh:eip155:1:0xowner:default",
+        path: "",
+        actions: ["tinycloud.delegation/list"],
+      }],
+      reason: "Look up delegation bafy-device-grant before revoking",
+      yes: true,
+    })]);
     expect(revokeCalls).toEqual([["bafy-device-grant", {
       targetSpaceId,
       targetDelegation: { delegatorDID: "did:pkh:eip155:1:0xowner", delegateDID: "did:key:device" },
@@ -197,5 +234,82 @@ describe("tc delegation revoke authority", () => {
       revoked: true,
       targetSpaceSource: "local-grant-history",
     }]);
+  });
+  test("routes CLI revocation through DelegationManager to the node endpoint", async () => {
+    const targetCid = "bafy-device-grant";
+    const requests: Array<{ method: string; path: string }> = [];
+    const signedOperations: Array<Array<{ resource?: string; spaceId?: string; action: string }>> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname;
+        requests.push({ method: request.method, path });
+        if (path === "/invoke") return Response.json([]);
+        if (path === "/delegation/query") {
+          return Response.json({
+            schemaVersion: 2,
+            items: [{
+              cid: targetCid,
+              direction: "granted",
+              delegatorDid: "did:key:owner-session",
+              delegateDid: "did:key:device",
+              resources: [{
+                resource: `${targetSpaceId}/kv/target/`,
+                actions: ["tinycloud.kv/get"],
+                caveats: [{}],
+              }],
+              parents: [],
+              issuedAt: null,
+              notBefore: null,
+              expiresAt: null,
+              status: "active",
+            }],
+          });
+        }
+        if (path === "/revoke") return Response.json({ revoked: true, cid: targetCid });
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const session = { spaceId: targetSpaceId } as ServiceSession;
+    const manager = new DelegationManager({
+      hosts: [`http://127.0.0.1:${server.port}`],
+      session,
+      invoke: () => ({ Authorization: "list" }),
+      invokeAny: (_session, entries) => {
+        signedOperations.push(entries.map((entry) => ({
+          resource: entry.resource,
+          spaceId: entry.spaceId,
+          action: entry.action,
+        })));
+        return { Authorization: "signed" };
+      },
+    });
+    delegationManagerOverride = manager;
+    hasDelegationListAuthority = true;
+    hasRevokeAuthority = true;
+
+    try {
+      await runRevoke(targetCid);
+
+      expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "POST /invoke",
+        "POST /delegation/query",
+        "POST /revoke",
+      ]);
+      expect(signedOperations.at(-1)).toEqual([{
+        resource: `urn:cid:${targetCid}`,
+        spaceId: targetSpaceId,
+        action: "tinycloud.delegation/revoke",
+      }]);
+      expect(outputs).toEqual([{
+        cid: targetCid,
+        revoked: true,
+        targetSpaceSource: "node",
+      }]);
+      expect(errors).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
   });
 });

@@ -150,6 +150,25 @@ export function registerDelegationCommand(program: Command): void {
         let queriedTarget;
         let cursor: string | undefined;
         if (!listedTarget) {
+          if (profile.spaceId) {
+            const listPermission: PermissionEntry = {
+              service: "tinycloud.delegation",
+              space: profile.spaceId,
+              path: "",
+              actions: ["tinycloud.delegation/list"],
+            };
+            if (!node.hasRuntimePermissions([listPermission])) {
+              await ensureDelegationAuthority({
+                ctx,
+                profile,
+                node,
+                requested: [listPermission],
+                expiryOption: undefined,
+                reason: `Look up delegation ${cid} before revoking`,
+                yes: true,
+              });
+            }
+          }
           do {
             const query = await node.delegationManager.query({
               direction: "all",
