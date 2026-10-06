@@ -400,6 +400,12 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
   }
 }
 
+function revocationAuthorityError(message: string): Error & { code: string } {
+  return Object.assign(new Error(message), {
+    code: "DELEGATION_REVOCATION_AUTHORITY_NOT_FOUND",
+  });
+}
+
 function clonePersistedSessionJwk(jwk: unknown): object {
   if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) {
     throw new Error("Persisted session has an invalid private Ed25519 session key.");
@@ -889,6 +895,8 @@ interface RuntimePermissionOperation {
   action: string;
   /** Exact signed ReCap attenuation for this action, if any. */
   caveats?: Record<string, unknown>[];
+  /** Local-only hint; removed before the entry reaches WASM. */
+  revocationTarget?: { delegatorDID?: string; delegateDID?: string };
 }
 
 interface RuntimePermissionGrant {
@@ -1219,7 +1227,10 @@ export class TinyCloudNode {
     if (!this.wasmBindings.invokeAny) {
       throw new Error("WASM binding does not support invokeAny");
     }
-    const operations = entries.flatMap((entry) => {
+    const routedEntries = entries as Array<typeof entries[number] & {
+      revocationTarget?: { delegatorDID?: string; delegateDID?: string };
+    }>;
+    const operations = routedEntries.flatMap((entry) => {
       const operation = this.operationFromInvokeAnyEntry(entry);
       return operation ? [operation] : [];
     });
@@ -1230,23 +1241,21 @@ export class TinyCloudNode {
     // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
     const invocationSession =
       !grant || grant.provenance === "primary" ? session : grant.session;
-    const caveatPreservingEntries = grant
-      ? entries.map((entry) => {
-        const requested = this.operationFromInvokeAnyEntry(entry);
-        const granted = requested && grant.operations.find((candidate) =>
-          this.operationCovers(candidate, requested) ||
-          this.revocationGrantOperationCovers(candidate, requested),
-        );
-        if (!granted?.caveats?.length) {
-          return entry;
-        }
-        if (entry.caveats !== undefined &&
-          !recapCaveatsEqual(entry.caveats, granted.caveats)) {
-          throw new Error("Invocation caveats do not match signed ReCap authority.");
-        }
-        return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
-      })
-      : entries;
+    const caveatPreservingEntries = routedEntries.map(({ revocationTarget: _target, ...entry }) => {
+      const requested = this.operationFromInvokeAnyEntry({ ...entry });
+      const granted = grant && requested && grant.operations.find((candidate) =>
+        this.operationCovers(candidate, requested) ||
+        this.revocationGrantOperationCovers(candidate, requested),
+      );
+      if (!granted?.caveats?.length) {
+        return entry;
+      }
+      if (entry.caveats !== undefined &&
+        !recapCaveatsEqual(entry.caveats, granted.caveats)) {
+        throw new Error("Invocation caveats do not match signed ReCap authority.");
+      }
+      return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
+    });
     return this.wasmBindings.invokeAny(invocationSession, caveatPreservingEntries, facts);
   };
 
@@ -6624,32 +6633,53 @@ export class TinyCloudNode {
     }
     this.pruneExpiredRuntimePermissionGrants();
     const candidates = this.runtimePermissionGrants
-      .filter((grant) => grant.provenance === "runtime" || grant.provenance === "delegated")
-      .flatMap((grant) =>
+      .filter((grant) =>
+        grant.provenance === "primary" || grant.provenance === "runtime" || grant.provenance === "delegated"
+      )
+      .filter((grant) =>
         grant.operations.some((operation) =>
           operation.service === requested.service &&
           operation.action === requested.action &&
           this.pathContains(operation.path, requested.path)
         )
-          ? [grant]
-          : []
       );
-    if (candidates.length === 0) return undefined;
     if (requested.spaceId === undefined) {
-      throw new Error("Target space is required to select delegation revocation authority.");
+      throw revocationAuthorityError("Target space is required to select delegation revocation authority.");
     }
     const matchingGrant = candidates.find((grant) =>
       grant.operations.some((operation) =>
         this.revocationGrantOperationCovers(operation, requested)
-      )
+      ) && this.runtimeGrantPrincipalCanRevoke(grant, requested)
     );
     if (!matchingGrant) {
-      throw new Error(
-        `No delegation revocation authority matches target space ${requested.spaceId}.`,
+      throw revocationAuthorityError(
+        `No installed delegation revocation authority can revoke ${requested.resource} in ${requested.spaceId}.`,
       );
     }
     return matchingGrant;
   }
+
+  private runtimeGrantPrincipalCanRevoke(
+    grant: RuntimePermissionGrant,
+    requested: RuntimePermissionOperation,
+  ): boolean {
+    const targetSpaceOwner = requested.spaceId === undefined
+      ? undefined
+      : this.ownerDidFromSpaceId(requested.spaceId);
+    const permittedPrincipals = [
+      requested.revocationTarget?.delegatorDID,
+      requested.revocationTarget?.delegateDID,
+      targetSpaceOwner,
+    ].filter((principal): principal is string => typeof principal === "string" && principal.length > 0);
+    const grantPrincipals = [
+      grant.session.verificationMethod,
+      grant.delegation.delegateDID,
+    ].filter((principal): principal is string => typeof principal === "string" && principal.length > 0);
+    return grantPrincipals.some((principal) =>
+      permittedPrincipals.some((permitted) => didPrincipalMatches(principal, permitted))
+    );
+  }
+
 
   private revocationGrantOperationCovers(
     granted: RuntimePermissionOperation,
@@ -6767,6 +6797,7 @@ export class TinyCloudNode {
     path: string;
     action: string;
     caveats?: Record<string, unknown>[];
+    revocationTarget?: { delegatorDID?: string; delegateDID?: string };
   }): RuntimePermissionOperation | undefined {
     const service = this.invocationServiceName(entry.service);
     if (typeof entry.resource === "string") {
@@ -6777,6 +6808,7 @@ export class TinyCloudNode {
         path: entry.path,
         action: entry.action,
         ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
+        ...(entry.revocationTarget === undefined ? {} : { revocationTarget: entry.revocationTarget }),
       };
     }
     if (entry.spaceId === undefined && this.isEncryptionNetworkOperation(service, entry.path)) {

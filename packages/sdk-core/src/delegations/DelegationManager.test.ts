@@ -53,7 +53,11 @@ describe("DelegationManager.revoke", () => {
       }), { status: 200, headers: { "content-type": "application/json" } })),
     });
 
-    const result = await manager.revoke("bafy-child", { targetSpaceId });
+    const targetDelegation = {
+      delegatorDID: "did:pkh:eip155:1:owner",
+      delegateDID: "did:key:target",
+    };
+    const result = await manager.revoke("bafy-child", { targetSpaceId, targetDelegation });
 
     expect(result.ok).toBe(true);
     expect(invokeAny).toHaveBeenCalledWith(session, [{
@@ -63,6 +67,11 @@ describe("DelegationManager.revoke", () => {
       path: "",
       action: "tinycloud.delegation/revoke",
     }]);
+    const entry = invokeAny.mock.calls[0]?.[1][0] as typeof invokeAny.mock.calls[0][1][number] & {
+      revocationTarget?: typeof targetDelegation;
+    };
+    expect(entry.revocationTarget).toEqual(targetDelegation);
+    expect(Object.keys(entry)).not.toContain("revocationTarget");
   });
 
   test("fails closed when raw-resource signing is unavailable", async () => {
@@ -99,6 +108,32 @@ describe("DelegationManager.revoke", () => {
     });
 
     expect((await manager.revoke("bafy-child")).ok).toBe(false);
+  });
+
+  test("preserves the typed no-principal error without sending a request", async () => {
+    const fetch = mock(async () => new Response(null, { status: 200 }));
+    const invokeAny = mock(() => {
+      throw Object.assign(new Error("No installed revocation principal qualifies."), {
+        code: "DELEGATION_REVOCATION_AUTHORITY_NOT_FOUND",
+      });
+    });
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch,
+    });
+
+    const result = await manager.revoke("bafy-child", {
+      targetSpaceId: "space",
+      targetDelegation: { delegateDID: "did:key:target" },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("A missing principal cannot succeed");
+    expect(result.error.code).toBe("DELEGATION_REVOCATION_AUTHORITY_NOT_FOUND");
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   test("preserves an HTTP authorization rejection instead of reporting revocation success", async () => {
@@ -139,6 +174,32 @@ describe("DelegationManager.revoke", () => {
 });
 
 describe("DelegationManager.query", () => {
+  test("uses the session space when account-space configuration is unavailable", async () => {
+    const session = { spaceId: "tinycloud:pkh:eip155:1:owner:default" } as ServiceSession;
+    const invokeAny = mock(() => ({ Authorization: "session-space" }));
+    const fetch = mock(async () => new Response(JSON.stringify({
+      schemaVersion: 2,
+      items: [],
+    }), { headers: { "content-type": "application/json" } }));
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch,
+    });
+
+    const result = await manager.query();
+
+    expect(result.ok).toBe(true);
+    expect(invokeAny).toHaveBeenCalledWith(session, [{
+      spaceId: session.spaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/list",
+    }]);
+    expect(fetch).toHaveBeenCalled();
+  });
   test("rejects invalid filters before signing or sending a request", async () => {
     const invokeAny = mock(() => ({ Authorization: "unused" }));
     const fetch = mock(async () => new Response(null, { status: 200 }));

@@ -143,13 +143,45 @@ export function registerDelegationCommand(program: Command): void {
         const profile = await ProfileManager.getProfile(ctx.profile);
         const grantHistory = await readGrantHistory(ctx.profile);
         const recordedGrant = [...grantHistory].reverse().find((entry) => entry.delegationCid === cid);
-        let targetSpaceId = recordedGrant?.addedCaps.find((cap) => cap.space)?.space;
-        if (targetSpaceId === undefined) {
-          const delegations = await node.delegationManager.list();
-          if (delegations.ok) {
-            targetSpaceId = delegations.data.find((delegation) => delegation.cid === cid)?.spaceId;
-          }
+        const delegations = await node.delegationManager.list();
+        const listedTarget = delegations.ok
+          ? delegations.data.find((delegation) => delegation.cid === cid)
+          : undefined;
+        let queriedTarget;
+        let cursor: string | undefined;
+        if (!listedTarget) {
+          do {
+            const query = await node.delegationManager.query({
+              direction: "all",
+              limit: 100,
+              ...(cursor === undefined ? {} : { cursor }),
+            });
+            if (!query.ok) break;
+            queriedTarget = query.data.items.find((delegation) => delegation.cid === cid);
+            cursor = queriedTarget ? undefined : query.data.nextCursor;
+          } while (cursor !== undefined);
         }
+        const targetDelegation = listedTarget
+          ? {
+            spaceId: listedTarget.spaceId,
+            delegatorDID: listedTarget.delegatorDID,
+            delegateDID: listedTarget.delegateDID,
+          }
+          : queriedTarget
+            ? {
+              spaceId: queriedTarget.resources
+                .map(({ resource }) => {
+                  const separator = resource.indexOf("/");
+                  return separator > 0 ? resource.slice(0, separator) : undefined;
+                })
+                .find((space): space is string => space !== undefined),
+              delegatorDID: queriedTarget.delegatorDid,
+              delegateDID: queriedTarget.delegateDid,
+            }
+            : undefined;
+        const targetSpaceId = targetDelegation?.spaceId ??
+          recordedGrant?.addedCaps.find((cap) => cap.space)?.space;
+        const targetSpaceSource = targetDelegation?.spaceId ? "node" : "local-grant-history";
         if (targetSpaceId === undefined) {
           throw new CLIError(
             "TARGET_SPACE_UNKNOWN",
@@ -178,12 +210,20 @@ export function registerDelegationCommand(program: Command): void {
           });
         }
 
-        const result = await node.delegationManager.revoke(cid, { targetSpaceId });
+        const result = await node.delegationManager.revoke(cid, {
+          targetSpaceId,
+          ...(targetDelegation === undefined ? {} : {
+            targetDelegation: {
+              delegatorDID: targetDelegation.delegatorDID,
+              delegateDID: targetDelegation.delegateDID,
+            },
+          }),
+        });
         if (!result.ok) {
           throw cliErrorFromService(result.error);
         }
 
-        outputJson({ cid, revoked: true });
+        outputJson({ cid, revoked: true, targetSpaceSource });
       } catch (error) {
         handleError(error);
       }
