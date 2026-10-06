@@ -70,8 +70,11 @@ jobs:
       - name: Assert complete operations typecheck inputs
         run: bun run --cwd packages/operations check:typecheck-inputs
 
+      # The operations tests spawn the CLI from source (auth-import lock
+      # contention), which imports @tinycloud/replica.
       - name: Build, test, and verify the operations catalog
         run: |
           bun run --cwd packages/operations build
+          bun run --cwd packages/replica build
           bun run --cwd packages/operations test
           bun run --cwd packages/operations check:generated

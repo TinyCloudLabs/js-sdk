@@ -34,15 +34,18 @@ jobs:
           bun run --cwd packages/share-sdk build
           bun run --cwd packages/sdk-core build
           bun run --cwd packages/node-sdk build
-      - name: Build operations package for source scanners
-        run: bun run --cwd packages/operations build
+      # The scanners import the CLI command registry, whose `tc replica`
+      # handlers import @tinycloud/replica.
+      - name: Build operations and replica packages for source scanners
+        run: |
+          bun run --cwd packages/operations build
+          bun run --cwd packages/replica build
       - name: Generate and scan authored coverage
         run: |
           bun run check:operations-mcp
           bun run check:operations-mcp-boundaries
       - name: Build operations, CLI, and MCP
         run: |
-          bun run --cwd packages/replica build
           bun run --cwd packages/cli build
           bun run --cwd packages/mcp build
       - name: Run focused conformance and concurrency tests
