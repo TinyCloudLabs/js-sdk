@@ -24,10 +24,14 @@
     "@tinycloud/web-sdk": "3.0.0",
     "@tinycloud/mcp-sdk-contract": "0.0.0",
     "@tinycloud/operations-mcp-conformance": "0.0.0",
-    "@tinycloud/sdk-services-test": "16.0.0"
+    "@tinycloud/sdk-services-test": "16.0.0",
+    "@tinycloud/replica": "0.0.0"
   },
   "changesets": [
     "sdk-services-request-timeout",
+    "tc-18-kv-sync-revocation-body",
+    "tc-18-profile-lock-require-profile",
+    "tc-18-replica",
     "tc-548-profile-lock-writers",
     "tc-550-typed-auth-verdicts",
     "tc-571-share-notify-delivery-email",

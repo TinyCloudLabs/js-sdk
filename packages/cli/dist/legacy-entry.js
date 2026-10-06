@@ -442,12 +442,12 @@ function wrapError(error) {
   return new CLIError("ERROR", message, ExitCode.ERROR);
 }
 function missingPrivateKeyError() {
-  const profileName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
+  const profileName2 = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
   return new CLIError(
     "AUTH_REQUIRED",
-    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    `Profile "${profileName2}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
-    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` }
+    { hint: `Sign in again with: tc --profile ${profileName2} auth login --method openkey` }
   );
 }
 function storageFullError(error, progress) {
@@ -643,8 +643,8 @@ function resolveChainId(profile, session) {
   if (typeof sessChain === "number" && Number.isFinite(sessChain)) return sessChain;
   return profile.chainId;
 }
-async function resolveSpaceUri(input, profileName, options = {}) {
-  const profile = await ProfileManager.getProfile(profileName);
+async function resolveSpaceUri(input, profileName2, options = {}) {
+  const profile = await ProfileManager.getProfile(profileName2);
   const useProfileDefault = options.useProfileDefault ?? true;
   const effective = input || (useProfileDefault ? profile.defaultSpace : void 0);
   if (!effective) return void 0;
@@ -666,7 +666,7 @@ async function resolveSpaceUri(input, profileName, options = {}) {
       ExitCode.USAGE_ERROR
     );
   }
-  const session = await ProfileManager.getSession(profileName);
+  const session = await ProfileManager.getSession(profileName2);
   const address = resolveAddress(profile, session);
   const chainId = resolveChainId(profile, session);
   return makePkhSpaceId(address, chainId, effective);
@@ -694,17 +694,17 @@ __export(host_exports, {
 import {
   discoverLocalTinyCloudNode
 } from "@tinycloud/sdk-core";
-function profileLocalNodeIdentityStore(profileName) {
+function profileLocalNodeIdentityStore(profileName2) {
   return {
     get: async (url) => {
-      const profile = await ProfileManager.getProfile(profileName).catch(
+      const profile = await ProfileManager.getProfile(profileName2).catch(
         () => null
       );
       return profile?.pinnedLocalNodeDids?.[url];
     },
     set: async (url, nodeDid) => {
-      if (!await ProfileManager.profileExists(profileName)) return;
-      await ProfileManager.updateProfile(profileName, (profile) => ({
+      if (!await ProfileManager.profileExists(profileName2)) return;
+      await ProfileManager.updateProfile(profileName2, (profile) => ({
         ...profile,
         pinnedLocalNodeDids: {
           ...profile.pinnedLocalNodeDids,
@@ -714,8 +714,8 @@ function profileLocalNodeIdentityStore(profileName) {
     }
   };
 }
-async function discoverLocalNodeHost(profileName) {
-  const profile = await ProfileManager.getProfile(profileName).catch(
+async function discoverLocalNodeHost(profileName2) {
+  const profile = await ProfileManager.getProfile(profileName2).catch(
     () => null
   );
   if (profile?.autoDiscoverLocalNode === false) {
@@ -725,7 +725,7 @@ async function discoverLocalNodeHost(profileName) {
     localNodeUrl: profile?.localNodeUrl,
     localLinkName: profile?.localLinkName,
     expectedNodeDid: profile?.expectedNodeDid,
-    identityStore: profileLocalNodeIdentityStore(profileName)
+    identityStore: profileLocalNodeIdentityStore(profileName2)
   });
   return discovered?.url ?? null;
 }
@@ -733,8 +733,8 @@ function canonicalizeAddress2(address) {
   const trimmed = address.trim();
   return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
 }
-async function resolveLocalAddress(profile, profileName) {
-  const session = await ProfileManager.getSession(profileName);
+async function resolveLocalAddress(profile, profileName2) {
+  const session = await ProfileManager.getSession(profileName2);
   const sessAddr = session?.address;
   if (typeof sessAddr === "string" && sessAddr.length > 0) {
     return canonicalizeAddress2(sessAddr);
@@ -755,24 +755,24 @@ function ownerDidFromSpaceUri(spaceUri) {
   if (!match) return null;
   return `did:pkh:eip155:${match[1]}:${canonicalizeAddress2(match[2])}`;
 }
-async function isRootAuthority(spaceUri, profileName) {
-  const profile = await ProfileManager.getProfile(profileName);
+async function isRootAuthority(spaceUri, profileName2) {
+  const profile = await ProfileManager.getProfile(profileName2);
   if (resolveProfilePosture(profile) === "delegate-session") return false;
   const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
   if (!ownerAddr) return false;
-  const selfAddr = await resolveLocalAddress(profile, profileName);
+  const selfAddr = await resolveLocalAddress(profile, profileName2);
   return selfAddr !== null && selfAddr === ownerAddr;
 }
 function spaceNameFromUri(spaceUri) {
   return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
 }
-async function unhostedSpaceError(error, spaceUri, profileName) {
+async function unhostedSpaceError(error, spaceUri, profileName2) {
   if (!spaceUri) return null;
   const status = error.meta?.status;
   const isUnhosted = status === 404 && /space not found/i.test(error.message);
   if (!isUnhosted) return null;
   const spaceName = spaceNameFromUri(spaceUri);
-  const owner = await isRootAuthority(spaceUri, profileName);
+  const owner = await isRootAuthority(spaceUri, profileName2);
   const hint = owner ? [
     "You are the owner. Host it once:",
     `  tc space host ${spaceName}`,
@@ -786,8 +786,8 @@ async function unhostedSpaceError(error, spaceUri, profileName) {
   const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
   return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
 }
-async function resolveHostSpace(name, profileName) {
-  const resolved = await resolveSpaceUri(name, profileName);
+async function resolveHostSpace(name, profileName2) {
+  const resolved = await resolveSpaceUri(name, profileName2);
   if (!resolved) {
     throw new Error(`Could not resolve a space for "${name}".`);
   }
@@ -886,8 +886,8 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profilePath2 = join3(PROFILES_DIR, name, "profile.json");
-        const profile = await readJson(profilePath2);
+        const profilePath3 = join3(PROFILES_DIR, name, "profile.json");
+        const profile = await readJson(profilePath3);
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -7721,6 +7721,12 @@ var MAX_KV_BATCH_READ_ITEMS = 100;
 function isJsonObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+var REVOKED_BODY = /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
+function revocationCodeOf(body) {
+  const match = REVOKED_BODY.exec(body.trim());
+  if (match === null) return void 0;
+  return match[1] !== void 0 ? ErrorCodes.AUTH_DELEGATION_REVOKED : ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED;
+}
 function encodeKvBatchPartName(path) {
   return encodeURIComponent(path).replace(
     /[!'()*]/g,
@@ -8705,8 +8711,8 @@ var KVService = class extends BaseService {
   }
   /**
    * Map a failed `kv/sync` response. 410 and the retention 403 carry
-   * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose text names
-   * `delegation-revoked` or `delegation-ancestor-revoked`. A body read that
+   * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose whole body
+   * is the node's revocation error (see REVOKED_BODY). A body read that
    * fails because the request was cancelled or timed out rethrows, so the
    * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
    */
@@ -8751,7 +8757,7 @@ var KVService = class extends BaseService {
       ));
     }
     if (response.status === 401) {
-      const revoked = /\bdelegation-ancestor-revoked\b/.test(errorText) ? ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED : /\bdelegation-revoked\b/.test(errorText) ? ErrorCodes.AUTH_DELEGATION_REVOKED : void 0;
+      const revoked = revocationCodeOf(errorText);
       if (revoked !== void 0) {
         return err(serviceError(revoked, `${context}: 401 - ${errorText}`, "kv", { meta }));
       }
@@ -9998,8 +10004,8 @@ var AsyncQueue = class {
     if (this.closed) {
       return Promise.resolve({ value: void 0, done: true });
     }
-    return new Promise((resolve4) => {
-      this.waiters.push(resolve4);
+    return new Promise((resolve5) => {
+      this.waiters.push(resolve5);
     });
   }
 };
@@ -10668,7 +10674,7 @@ function isBrowser() {
   }
 }
 function openDB() {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -10676,43 +10682,43 @@ function openDB() {
         db.createObjectStore(STORE_NAME);
       }
     };
-    request.onsuccess = () => resolve4(request.result);
+    request.onsuccess = () => resolve5(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 function idbGet(db, key) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(key);
-    req.onsuccess = () => resolve4(req.result);
+    req.onsuccess = () => resolve5(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 function idbPut(db, key, value) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.put(value, key);
-    req.onsuccess = () => resolve4();
+    req.onsuccess = () => resolve5();
     req.onerror = () => reject(req.error);
   });
 }
 function idbDelete(db, key) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const req = store.delete(key);
-    req.onsuccess = () => resolve4();
+    req.onsuccess = () => resolve5();
     req.onerror = () => reject(req.error);
   });
 }
 function idbKeys(db) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.getAllKeys();
-    req.onsuccess = () => resolve4(req.result.filter((k) => typeof k === "string"));
+    req.onsuccess = () => resolve5(req.result.filter((k) => typeof k === "string"));
     req.onerror = () => reject(req.error);
   });
 }
@@ -13851,7 +13857,7 @@ async function replayAdditionalDelegations(node, profile, options) {
     host: options.host,
     migrate: options.migrate
   });
-  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
+  const resolveSpace2 = operationSpaceResolver(node, options.ownerSpace);
   const entries = await loadAdditionalDelegations(profile);
   for (const stored of entries) {
     const kind = storedDelegationKind(stored);
@@ -13859,7 +13865,7 @@ async function replayAdditionalDelegations(node, profile, options) {
       const replay = await replayStoredDelegation(activator, stored, {
         host: options.host,
         migrated,
-        resolveSpace
+        resolveSpace: resolveSpace2
       });
       if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
         process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}
@@ -14022,15 +14028,15 @@ async function secretPermissionsFromAppManifest(manifest, profile, requestedOwne
   }
   return permissions;
 }
-async function defaultSecretsNetworkId(profileName, requestedOwner) {
-  const profile = await ProfileManager.getProfile(profileName);
+async function defaultSecretsNetworkId(profileName2, requestedOwner) {
+  const profile = await ProfileManager.getProfile(profileName2);
   const ownDid = profile.did?.split("#")[0];
   const recorded = profile.ownerDid ?? (ownDid?.startsWith("did:pkh:") ? ownDid : void 0);
   const owner = (recorded ?? requestedOwner)?.split("#")[0];
   if (!owner) {
     throw new CLIError(
       "OWNER_DID_UNKNOWN",
-      `Cannot determine the secrets owner for profile "${profileName}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
+      `Cannot determine the secrets owner for profile "${profileName2}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -14156,28 +14162,28 @@ function serviceFromActions(actions) {
 init_constants();
 init_errors();
 var SESSION_EXPIRED_REASON = "session_expired";
-function signInAgainHint(profileName, posture) {
+function signInAgainHint(profileName2, posture) {
   if (posture === "local-owner-key") {
-    return `Sign in again with: tc --profile ${profileName} auth login --method local`;
+    return `Sign in again with: tc --profile ${profileName2} auth login --method local`;
   }
   if (posture === "delegate-session") {
-    return `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+    return `Have the owner approve a new scoped login: tc --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
   }
-  return `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
+  return `Sign in again with: tc --profile ${profileName2} auth login --method openkey`;
 }
-function sessionExpiredError(profileName, posture) {
+function sessionExpiredError(profileName2, posture) {
   return new CLIError(
     "AUTH_REQUIRED",
-    `The session for profile "${profileName}" has expired or is no longer valid.`,
+    `The session for profile "${profileName2}" has expired or is no longer valid.`,
     ExitCode.AUTH_REQUIRED,
-    { hint: signInAgainHint(profileName, posture), reason: SESSION_EXPIRED_REASON }
+    { hint: signInAgainHint(profileName2, posture), reason: SESSION_EXPIRED_REASON }
   );
 }
-function withSignInHint(error, profileName, posture) {
+function withSignInHint(error, profileName2, posture) {
   if (error.code !== "AUTH_REQUIRED") return error;
   return new CLIError(error.code, error.message, error.exitCode, {
     ...error.metadata,
-    hint: signInAgainHint(profileName, posture)
+    hint: signInAgainHint(profileName2, posture)
   });
 }
 
@@ -14193,26 +14199,26 @@ function selectSignerJwk(sessionJwk, key) {
   }
   return key ?? void 0;
 }
-function signerJwkForProfile(profileName, sessionJwk, key) {
+function signerJwkForProfile(profileName2, sessionJwk, key) {
   const jwk = selectSignerJwk(sessionJwk, key);
   if (jwkHasPrivateParameter(jwk)) {
     return jwk;
   }
   throw new CLIError(
     "AUTH_REQUIRED",
-    `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
+    `Profile "${profileName2}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
     {
-      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+      hint: `Sign in again with: tc --profile ${profileName2} auth login --method openkey`
     }
   );
 }
-async function restoreProfileSession(node, profileName, profile, sessionData) {
+async function restoreProfileSession(node, profileName2, profile, sessionData) {
   try {
     await node.restoreSession(sessionData);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
-      throw sessionExpiredError(profileName, profile === null ? void 0 : resolveProfilePosture(profile));
+      throw sessionExpiredError(profileName2, profile === null ? void 0 : resolveProfilePosture(profile));
     }
     throw error;
   }
@@ -14354,11 +14360,11 @@ async function bootstrapDelegatedSession(ctx, delegation) {
   }
   return { node, abandon };
 }
-async function restoreBeforeBootstrap(profileName, previousProfile) {
+async function restoreBeforeBootstrap(profileName2, previousProfile) {
   const failures = [];
   for (const write of [
-    () => ProfileManager.clearSession(profileName),
-    () => ProfileManager.updateProfile(profileName, (current) => {
+    () => ProfileManager.clearSession(profileName2),
+    () => ProfileManager.updateProfile(profileName2, (current) => {
       const restored = { ...current };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === void 0) delete restored[field];
@@ -14372,7 +14378,7 @@ async function restoreBeforeBootstrap(profileName, previousProfile) {
     });
   }
   if (failures.length === 0) return void 0;
-  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+  return `Rolling back the provisional session of profile "${profileName2}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName2} context\`.`;
 }
 function failureName(error) {
   if (error instanceof SyntaxError) return "a profile file is not valid JSON";
@@ -14879,8 +14885,8 @@ async function delegationFromInput(input, did, options) {
       }
     }
   }
-  const invalid = validateDelegationCallbackPayload(parsed);
-  if (invalid) throw new Error(`Invalid delegation code: ${invalid}`);
+  const invalid2 = validateDelegationCallbackPayload(parsed);
+  if (invalid2) throw new Error(`Invalid delegation code: ${invalid2}`);
   return parsed;
 }
 function shouldOpenBrowser(options) {
@@ -14889,7 +14895,7 @@ function shouldOpenBrowser(options) {
   return env !== "1" && env !== "true";
 }
 async function callbackFlow(did, options = {}) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     let timeout;
     let settled = false;
     let rl;
@@ -14902,7 +14908,7 @@ async function callbackFlow(did, options = {}) {
         rl.close();
       }
       if (result.data) {
-        resolve4(result.data);
+        resolve5(result.data);
       } else {
         reject(result.error);
       }
@@ -14916,11 +14922,11 @@ async function callbackFlow(did, options = {}) {
         req.on("end", () => {
           try {
             const data = JSON.parse(body);
-            const invalid = validateDelegationCallbackPayload(data);
-            if (invalid) {
+            const invalid2 = validateDelegationCallbackPayload(data);
+            if (invalid2) {
               res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: invalid }));
-              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
+              res.end(JSON.stringify({ error: invalid2 }));
+              settle({ error: new Error(`Invalid delegation payload: ${invalid2}`) });
               return;
             }
             res.writeHead(200, {
@@ -14966,8 +14972,8 @@ async function callbackFlow(did, options = {}) {
       }
       if (openBrowser) {
         try {
-          const open5 = (await import("open")).default;
-          await open5(authUrl);
+          const open7 = (await import("open")).default;
+          await open7(authUrl);
         } catch {
           settle({ error: new Error("Failed to open browser") });
           return;
@@ -15010,13 +15016,13 @@ Open this URL in a browser to authenticate:
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     let answered = false;
     rl.on("line", (input) => {
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
-      void delegationFromInput(input, did, options).then(resolve4, reject);
+      void delegationFromInput(input, did, options).then(resolve5, reject);
     });
     rl.on("close", () => {
       if (answered) return;
@@ -15197,10 +15203,10 @@ function withVerifiedAuthority(session, signed) {
     expirationTime: signed.expiresAt
   };
 }
-function expectedOwnerFor(profileName, profile, requested) {
+function expectedOwnerFor(profileName2, profile, requested) {
   const pinned = pinnedOwner(profile);
   if (pinned && requested && normalizePkhIdentifier(pinned) !== normalizePkhIdentifier(requested)) {
-    throw new CLIError("OPENKEY_OWNER_MISMATCH", `Profile "${profileName}" belongs to ${pinned}, not ${requested}. Use a new profile for another account.`, ExitCode.USAGE_ERROR);
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", `Profile "${profileName2}" belongs to ${pinned}, not ${requested}. Use a new profile for another account.`, ExitCode.USAGE_ERROR);
   }
   return pinned ?? requested;
 }
@@ -15401,23 +15407,23 @@ init_profiles();
 init_errors();
 init_space();
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
-function assertNotLocalOwner(profileName, profile, flow) {
+function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile(profile)) return;
   throw new CLIError(
     "LOCAL_OWNER_PROFILE",
-    `Profile "${profileName}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
+    `Profile "${profileName2}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
     ExitCode.USAGE_ERROR
   );
 }
-async function readProfileSnapshot(profileName) {
-  const profile = await ProfileManager.getProfile(profileName).catch((error) => {
+async function readProfileSnapshot(profileName2) {
+  const profile = await ProfileManager.getProfile(profileName2).catch((error) => {
     if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
     throw error;
   });
   return {
     profile,
-    key: await ProfileManager.getKey(profileName),
-    session: await ProfileManager.getSession(profileName)
+    key: await ProfileManager.getKey(profileName2),
+    session: await ProfileManager.getSession(profileName2)
   };
 }
 function inconsistency(snapshot) {
@@ -15435,12 +15441,12 @@ function inconsistency(snapshot) {
   }
   return void 0;
 }
-function assertSessionReplaceable(profileName, snapshot, ownerDid, scope, newExpiresAt) {
+function assertSessionReplaceable(profileName2, snapshot, ownerDid, scope, newExpiresAt) {
   const problem = inconsistency(snapshot);
   if (problem !== void 0) {
     throw new CLIError(
       "PROFILE_STATE_INCONSISTENT",
-      `Profile "${profileName}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`tc --profile ${profileName} context\`, then pass --replace-session to replace this state, or use a new profile.`,
+      `Profile "${profileName2}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`tc --profile ${profileName2} context\`, then pass --replace-session to replace this state, or use a new profile.`,
       ExitCode.ERROR
     );
   }
@@ -15455,15 +15461,15 @@ function assertSessionReplaceable(profileName, snapshot, ownerDid, scope, newExp
   const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";
   throw new CLIError(
     "SESSION_IN_USE",
-    `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. Keep the user's existing profiles: use a new profile name (\`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
+    `Profile "${profileName2}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. Keep the user's existing profiles: use a new profile name (\`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
     ExitCode.USAGE_ERROR
   );
 }
-async function restore(profileName, state) {
+async function restore(profileName2, state) {
   const writes = [
-    () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
-    () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session),
-    () => state.profile === null ? ProfileManager.removeProfileConfig(profileName) : ProfileManager.setProfile(profileName, state.profile)
+    () => state.key === null ? ProfileManager.removeKey(profileName2) : ProfileManager.setKey(profileName2, state.key),
+    () => state.session === null ? ProfileManager.clearSession(profileName2) : ProfileManager.setSession(profileName2, state.session),
+    () => state.profile === null ? ProfileManager.removeProfileConfig(profileName2) : ProfileManager.setProfile(profileName2, state.profile)
   ];
   const failures = [];
   for (const write of writes) {
@@ -15478,30 +15484,30 @@ async function restore(profileName, state) {
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
-async function commitLogin(profileName, snapshot, commit) {
-  await ProfileManager.withLock(profileName, async () => {
-    const current = await readProfileSnapshot(profileName);
+async function commitLogin(profileName2, snapshot, commit) {
+  await ProfileManager.withLock(profileName2, async () => {
+    const current = await readProfileSnapshot(profileName2);
     if (canonicalJson(current.profile) !== canonicalJson(snapshot.profile) || canonicalJson(current.key) !== canonicalJson(snapshot.key) || canonicalJson(current.session) !== canonicalJson(snapshot.session)) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
-        `Profile "${profileName}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`tc --profile ${profileName} context\` and run the login again if it is still needed.`,
+        `Profile "${profileName2}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`tc --profile ${profileName2} context\` and run the login again if it is still needed.`,
         ExitCode.ERROR
       );
     }
     if (commit.approved && !commit.approved.replaceSession) {
       const newExpiresAt = sessionExpiresAt(commit.session) ?? void 0;
-      assertSessionReplaceable(profileName, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
+      assertSessionReplaceable(profileName2, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
     }
     try {
-      await ProfileManager.setKey(profileName, commit.key);
-      await ProfileManager.setSession(profileName, commit.session);
-      await ProfileManager.setProfile(profileName, commit.profile);
+      await ProfileManager.setKey(profileName2, commit.key);
+      await ProfileManager.setSession(profileName2, commit.session);
+      await ProfileManager.setProfile(profileName2, commit.profile);
     } catch (error) {
-      const failures = await restore(profileName, current);
+      const failures = await restore(profileName2, current);
       if (failures.length === 0) throw error;
       throw new CLIError(
         "PROFILE_STATE_INCONSISTENT",
-        `Saving the login for profile "${profileName}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). The profile's key, session and settings may not match. Check \`tc --profile ${profileName} context\`, then run the login again with --replace-session, or use a new profile.`,
+        `Saving the login for profile "${profileName2}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). The profile's key, session and settings may not match. Check \`tc --profile ${profileName2} context\`, then run the login again with --replace-session, or use a new profile.`,
         ExitCode.ERROR
       );
     }
@@ -15509,7 +15515,7 @@ async function commitLogin(profileName, snapshot, commit) {
     if (!(error instanceof ProfileLockTimeoutError2)) throw error;
     throw new CLIError(
       "PROFILE_LOCK_TIMEOUT",
-      `Another tc process kept profile "${profileName}" locked for ${PROFILE_COMMIT_LOCK_TIMEOUT_MS / 1e3} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
+      `Another tc process kept profile "${profileName2}" locked for ${PROFILE_COMMIT_LOCK_TIMEOUT_MS / 1e3} s, so the approved login was not saved. Wait for it to finish (a crashed process's lock is reclaimed after 30 s) and run the login again.`,
       ExitCode.ERROR
     );
   });
@@ -15727,8 +15733,8 @@ async function verifyApproval(input) {
   if (!delegation.jwk || typeof delegation.jwk !== "object" || !jsonEqual(publicSessionJwk(delegation.jwk), input.publicJwk)) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation for a different CLI session key. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  const invalid = validateDelegationCallbackPayload(delegation);
-  if (invalid) throw invalidResponse(`OpenKey returned an invalid delegation: ${invalid}`);
+  const invalid2 = validateDelegationCallbackPayload(delegation);
+  if (invalid2) throw invalidResponse(`OpenKey returned an invalid delegation: ${invalid2}`);
   const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry
@@ -15752,9 +15758,9 @@ async function verifyApproval(input) {
   };
 }
 function writeApprovalPrompt(prompt) {
-  const link2 = prompt.verificationUriComplete ?? prompt.verificationUri;
+  const link3 = prompt.verificationUriComplete ?? prompt.verificationUri;
   process.stderr.write(
-    `Approve on your phone: ${link2} (code ${prompt.userCode})
+    `Approve on your phone: ${link3} (code ${prompt.userCode})
   Or open ${prompt.verificationUri} and enter code ${prompt.userCode}.
   Waiting for approval until ${prompt.expiresAt}. Keep this command running.
 `
@@ -15839,7 +15845,7 @@ async function acquireDeviceDelegation(input) {
     expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z")
   });
   let interval = started.interval;
-  const wait = input.wait ?? ((milliseconds) => new Promise((resolve4) => setTimeout(resolve4, milliseconds)));
+  const wait = input.wait ?? ((milliseconds) => new Promise((resolve5) => setTimeout(resolve5, milliseconds)));
   while (Date.now() < deadline) {
     await wait(interval * 1e3);
     let response;
@@ -15965,7 +15971,7 @@ async function promptAuthMethod() {
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve4) => {
+  return new Promise((resolve5) => {
     process.stderr.write("\n" + theme.heading("Choose authentication method:") + "\n");
     process.stderr.write(`  ${theme.accent("1)")} OpenKey ${theme.muted("(browser-based, for interactive use)")}
 `);
@@ -15976,9 +15982,9 @@ async function promptAuthMethod() {
       rl.close();
       const trimmed = answer.trim();
       if (trimmed === "2" || trimmed.toLowerCase() === "local") {
-        resolve4("local");
+        resolve5("local");
       } else {
-        resolve4("openkey");
+        resolve5("openkey");
       }
     });
   });
@@ -16600,13 +16606,13 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 function readUrl(source) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const getter = source.startsWith("https://") ? httpsGet : httpGet;
     const request = getter(source, (response) => {
       const status = response.statusCode ?? 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        readUrl(new URL(response.headers.location, source).toString()).then(resolve4, reject);
+        readUrl(new URL(response.headers.location, source).toString()).then(resolve5, reject);
         return;
       }
       if (status < 200 || status >= 300) {
@@ -16622,7 +16628,7 @@ function readUrl(source) {
       response.on("data", (chunk) => {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       });
-      response.on("end", () => resolve4(Buffer.concat(chunks).toString("utf8")));
+      response.on("end", () => resolve5(Buffer.concat(chunks).toString("utf8")));
     });
     request.on("error", reject);
   });
@@ -16753,20 +16759,20 @@ function normalizePortableDelegation(delegation) {
   }
   return { ...delegation, expiry };
 }
-async function activateAndStoreOpenKeyGrants(profileName, host, node, grants, source) {
+async function activateAndStoreOpenKeyGrants(profileName2, host, node, grants, source) {
   if (grants.length === 0) return;
   const records = await Promise.all(grants.map(({ delegation, effective }) => cliGrantRecord(node, delegation, effective, host)));
   for (const { delegation } of grants) await node.useRuntimeDelegation(delegation);
-  await ProfileManager.withLock(profileName, async () => {
+  await ProfileManager.withLock(profileName2, async () => {
     for (const { delegation, effective } of grants) {
-      await appendGrantHistory(profileName, {
+      await appendGrantHistory(profileName2, {
         addedCaps: effective,
         source,
         delegationCid: delegation.cid,
         expiry: delegation.expiry.toISOString()
       });
     }
-    await appendAdditionalDelegations(profileName, records);
+    await appendAdditionalDelegations(profileName2, records);
   });
 }
 async function ensureDelegationAuthority(params) {
@@ -16843,7 +16849,7 @@ function permissionGrantReason(context, permissions) {
   return `${context} Requested: ${summary}${more}.`;
 }
 function execCapturedCommand(command) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
       cwd: command.cwd,
       env: process.env,
@@ -16862,7 +16868,7 @@ function execCapturedCommand(command) {
       if (code3 && code3 !== 0) {
         process.exitCode = code3;
       }
-      resolve4();
+      resolve5();
     });
   });
 }
@@ -16891,8 +16897,8 @@ async function confirmPermissionRequest(permissions) {
     input: process.stdin,
     output: process.stderr
   });
-  const answer = await new Promise((resolve4) => {
-    rl.question("Approve local-key delegation? [y/N] ", resolve4);
+  const answer = await new Promise((resolve5) => {
+    rl.question("Approve local-key delegation? [y/N] ", resolve5);
   });
   rl.close();
   if (!/^y(es)?$/i.test(answer.trim())) {
@@ -16984,14 +16990,14 @@ function portableFromOpenKeyDelegation(data, requested, host, proof) {
     siweProof: { siwe: data.siwe, signature: data.signature }
   };
 }
-async function rotateAuthKey(profileName, host, options = {}) {
-  const profile = await ProfileManager.getProfile(profileName);
+async function rotateAuthKey(profileName2, host, options = {}) {
+  const profile = await ProfileManager.getProfile(profileName2);
   const posture = resolveProfilePosture(profile);
   const oldDid = profile.sessionDid ?? profile.did;
   if (posture === "delegate-session") {
     throw new CLIError(
       "ROTATE_DELEGATE_SESSION_UNSUPPORTED",
-      `Profile "${profileName}" is a delegated session. Request or import a new owner delegation instead of rotating it locally.`,
+      `Profile "${profileName2}" is a delegated session. Request or import a new owner delegation instead of rotating it locally.`,
       ExitCode.PERMISSION_DENIED
     );
   }
@@ -16999,25 +17005,25 @@ async function rotateAuthKey(profileName, host, options = {}) {
     if (!profile.privateKey) {
       throw new CLIError(
         "LOCAL_OWNER_KEY_REQUIRED",
-        `Profile "${profileName}" does not have a local owner private key. Run \`tc auth login --method local\` first.`,
+        `Profile "${profileName2}" does not have a local owner private key. Run \`tc auth login --method local\` first.`,
         ExitCode.AUTH_REQUIRED
       );
     }
-    const result2 = await handleLocalAuth(profileName, host, {
+    const result2 = await handleLocalAuth(profileName2, host, {
       emitOutput: false,
       forceSessionKey: true
     });
-    outputRotationResult(result2.profile, profileName, oldDid, "local");
+    outputRotationResult(result2.profile, profileName2, oldDid, "local");
     return;
   }
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
     return generateKey();
   });
-  await ProfileManager.withLock(profileName, async () => {
-    const current = await ProfileManager.getProfile(profileName);
-    await ProfileManager.setKey(profileName, jwk);
-    await ProfileManager.clearSession(profileName);
-    await ProfileManager.setProfile(profileName, {
+  await ProfileManager.withLock(profileName2, async () => {
+    const current = await ProfileManager.getProfile(profileName2);
+    await ProfileManager.setKey(profileName2, jwk);
+    await ProfileManager.clearSession(profileName2);
+    await ProfileManager.setProfile(profileName2, {
       ...current,
       host,
       did,
@@ -17027,16 +17033,16 @@ async function rotateAuthKey(profileName, host, options = {}) {
       authMethod: "openkey"
     });
   });
-  const result = await refreshOpenKeySession(profileName, host, {
+  const result = await refreshOpenKeySession(profileName2, host, {
     paste: options.paste,
     noPopup: options.noPopup
   });
-  outputRotationResult(result.profile, profileName, oldDid, "openkey");
+  outputRotationResult(result.profile, profileName2, oldDid, "openkey");
 }
-function outputRotationResult(profile, profileName, oldDid, authMethod) {
+function outputRotationResult(profile, profileName2, oldDid, authMethod) {
   outputJson({
     rotated: true,
-    profile: profileName,
+    profile: profileName2,
     oldDid,
     did: profile.did,
     sessionDid: profile.sessionDid ?? null,
@@ -17044,10 +17050,10 @@ function outputRotationResult(profile, profileName, oldDid, authMethod) {
     spaceId: profile.spaceId ?? null
   });
 }
-async function persistCurrentLocalSession(profileName, profile, session) {
+async function persistCurrentLocalSession(profileName2, profile, session) {
   if (!session) return;
-  await ProfileManager.withLock(profileName, async () => {
-    await ProfileManager.setSession(profileName, {
+  await ProfileManager.withLock(profileName2, async () => {
+    await ProfileManager.setSession(profileName2, {
       authMethod: "local",
       address: session.address,
       chainId: session.chainId,
@@ -17060,7 +17066,7 @@ async function persistCurrentLocalSession(profileName, profile, session) {
       signature: session.signature
     });
     if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
-      await ProfileManager.updateProfile(profileName, (current) => ({
+      await ProfileManager.updateProfile(profileName2, (current) => ({
         ...current,
         sessionDid: session.verificationMethod,
         spaceId: session.spaceId
@@ -17068,8 +17074,8 @@ async function persistCurrentLocalSession(profileName, profile, session) {
     }
   });
 }
-async function handleLocalAuth(profileName, host, options = {}) {
-  const snapshot = await readProfileSnapshot(profileName);
+async function handleLocalAuth(profileName2, host, options = {}) {
+  const snapshot = await readProfileSnapshot(profileName2);
   const profile = snapshot.profile;
   const posture = profile ? resolveProfilePosture(profile) : null;
   let privateKey;
@@ -17127,7 +17133,7 @@ async function handleLocalAuth(profileName, host, options = {}) {
   sessionDid = sessionResult.verificationMethod;
   const updatedProfile = {
     ...profile,
-    name: profileName,
+    name: profileName2,
     host,
     chainId: DEFAULT_CHAIN_ID,
     spaceName: "default",
@@ -17142,11 +17148,11 @@ async function handleLocalAuth(profileName, host, options = {}) {
     privateKey,
     address
   };
-  await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
+  await commitLogin(profileName2, snapshot, { key, session, profile: updatedProfile });
   if (options.emitOutput ?? true) {
     outputJson({
       authenticated: true,
-      profile: profileName,
+      profile: profileName2,
       did,
       sessionDid,
       address,
@@ -17156,12 +17162,12 @@ async function handleLocalAuth(profileName, host, options = {}) {
   }
   return { profile: updatedProfile, sessionResult };
 }
-async function handleOpenKeyAuth(profileName, host, options = {}) {
-  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
+async function handleOpenKeyAuth(profileName2, host, options = {}) {
+  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName2, host, options);
   reportDeclined(declined, legacyNested);
   outputJson({
     authenticated: true,
-    profile: profileName,
+    profile: profileName2,
     did: profile.did,
     spaceId: delegationData.spaceId,
     authMethod: "openkey",
@@ -17188,28 +17194,28 @@ ${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}
 `);
   }
 }
-async function refreshOpenKeySession(profileName, host, options = {}) {
-  const snapshot = await readProfileSnapshot(profileName);
-  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
+async function refreshOpenKeySession(profileName2, host, options = {}) {
+  const snapshot = await readProfileSnapshot(profileName2);
+  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName2);
   const key = snapshot.key;
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${profileName}". Run \`tc --profile ${profileName} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${profileName2}". Run \`tc --profile ${profileName2} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
   if (options.permissions !== void 0) validateLoginPermissions(options.permissions);
   const permissions = options.permissions === void 0 ? void 0 : scopedLoginPermissions(options.permissions);
   if (permissions !== void 0) {
-    assertNotLocalOwner(profileName, profile, "Scoped browser login");
+    assertNotLocalOwner(profileName2, profile, "Scoped browser login");
   }
   const expiry = options.expiry === void 0 ? void 0 : parseRequestedExpiry(options.expiry);
   const openKeyExpiry = expiry === void 0 ? void 0 : openKeyExpiryParam(expiry);
-  const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
+  const expectedOwner = expectedOwnerFor(profileName2, profile, options.expectedOwner);
   if (permissions !== void 0 && options.replaceSession !== true) {
     const estimatedExpiry = expiry === void 0 ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
-    assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
+    assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(profile.did, {
@@ -17257,7 +17263,7 @@ async function refreshOpenKeySession(profileName, host, options = {}) {
     ...typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {},
     ...verifiedOwner === void 0 ? {} : { ownerDid: verifiedOwner }
   }, ownerKeyPrimary);
-  await commitLogin(profileName, snapshot, {
+  await commitLogin(profileName2, snapshot, {
     key,
     session: sanitizedSession,
     profile: updatedProfile,
@@ -17559,27 +17565,27 @@ function registerDoctorCommand(program) {
       const nodeVersion = process.version;
       const nodeOk = parseInt(nodeVersion.slice(1)) >= 18;
       checks.push({ name: "Node.js", ok: nodeOk, detail: nodeVersion });
-      let profileName = globalOpts.profile;
+      let profileName2 = globalOpts.profile;
       let profileOk = false;
       let profileDetail = "";
       try {
         const config = await ProfileManager.getConfig();
-        profileName = profileName || config.defaultProfile;
-        const profile = await ProfileManager.getProfile(profileName);
+        profileName2 = profileName2 || config.defaultProfile;
+        const profile = await ProfileManager.getProfile(profileName2);
         profileOk = true;
-        profileDetail = `"${profileName}" at ${profile.host}`;
+        profileDetail = `"${profileName2}" at ${profile.host}`;
       } catch {
-        profileDetail = profileName ? `"${profileName}" not found` : "no profiles configured";
+        profileDetail = profileName2 ? `"${profileName2}" not found` : "no profiles configured";
       }
       checks.push({ name: "Profile", ok: profileOk, detail: profileDetail });
       let keyOk = false;
       let keyDetail = "";
-      if (profileOk && profileName) {
+      if (profileOk && profileName2) {
         try {
-          const key = await ProfileManager.getKey(profileName);
+          const key = await ProfileManager.getKey(profileName2);
           keyOk = key !== null;
           if (keyOk) {
-            const profile = await ProfileManager.getProfile(profileName);
+            const profile = await ProfileManager.getProfile(profileName2);
             keyDetail = profile.did ? `${profile.did.slice(0, 20)}...` : "key found";
           } else {
             keyDetail = "no key \u2014 run tc init";
@@ -17593,9 +17599,9 @@ function registerDoctorCommand(program) {
       checks.push({ name: "Key", ok: keyOk, detail: keyDetail });
       let sessionOk = false;
       let sessionDetail = "";
-      if (profileOk && profileName) {
+      if (profileOk && profileName2) {
         try {
-          const session = await ProfileManager.getSession(profileName);
+          const session = await ProfileManager.getSession(profileName2);
           sessionOk = session !== null;
           sessionDetail = sessionOk ? "active" : "no session \u2014 run tc auth login";
         } catch {
@@ -17608,7 +17614,7 @@ function registerDoctorCommand(program) {
       let nodeReachable = false;
       let nodeDetail = "";
       try {
-        const host = profileOk && profileName ? (await ProfileManager.getProfile(profileName)).host : globalOpts.host || DEFAULT_HOST;
+        const host = profileOk && profileName2 ? (await ProfileManager.getProfile(profileName2)).host : globalOpts.host || DEFAULT_HOST;
         const start = Date.now();
         const response = await fetch(`${host}/health`);
         const latency = Date.now() - start;
@@ -17620,9 +17626,9 @@ function registerDoctorCommand(program) {
       checks.push({ name: "Node", ok: nodeReachable, detail: nodeDetail });
       let spaceOk = false;
       let spaceDetail = "";
-      if (sessionOk && profileName) {
+      if (sessionOk && profileName2) {
         try {
-          const profile = await ProfileManager.getProfile(profileName);
+          const profile = await ProfileManager.getProfile(profileName2);
           spaceOk = Boolean(profile.spaceId);
           spaceDetail = spaceOk ? `${profile.spaceId.slice(0, 16)}...` : "no space \u2014 run tc space create";
         } catch {
@@ -17859,7 +17865,7 @@ function registerInitCommand(program) {
   program.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const profileName = options.name;
+      const profileName2 = options.name;
       const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
       const defaultSpace = options.defaultSpace;
       if (defaultSpace !== void 0 && !/^[A-Za-z0-9_-]+$/.test(defaultSpace)) {
@@ -17869,10 +17875,10 @@ function registerInitCommand(program) {
           ExitCode.USAGE_ERROR
         );
       }
-      if (await ProfileManager.profileExists(profileName)) {
+      if (await ProfileManager.profileExists(profileName2)) {
         throw new CLIError(
           "PROFILE_EXISTS",
-          `Profile "${profileName}" already exists. Use \`tc profile delete ${profileName}\` first or choose a different name.`,
+          `Profile "${profileName2}" already exists. Use \`tc profile delete ${profileName2}\` first or choose a different name.`,
           ExitCode.ERROR
         );
       }
@@ -17880,9 +17886,9 @@ function registerInitCommand(program) {
       const { jwk, did } = await withSpinner("Generating key...", async () => {
         return generateKey();
       });
-      await ProfileManager.setKey(profileName, jwk);
+      await ProfileManager.setKey(profileName2, jwk);
       const profileConfig = {
-        name: profileName,
+        name: profileName2,
         host,
         chainId: DEFAULT_CHAIN_ID,
         spaceName: "default",
@@ -17890,27 +17896,27 @@ function registerInitCommand(program) {
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         ...defaultSpace ? { defaultSpace } : {}
       };
-      await ProfileManager.setProfile(profileName, profileConfig);
+      await ProfileManager.setProfile(profileName2, profileConfig);
       const config = await ProfileManager.getConfig();
-      if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
-        await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
+      if (profileName2 === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
+        await ProfileManager.setConfig({ ...config, defaultProfile: profileName2 });
       }
       if (options.keyOnly) {
         outputJson({
-          profile: profileName,
+          profile: profileName2,
           did,
           host,
           authenticated: false
         });
         return;
       }
-      const { delegationData } = await refreshOpenKeySession(profileName, host, {
+      const { delegationData } = await refreshOpenKeySession(profileName2, host, {
         paste: options.paste,
         noPopup: options.popup === false,
         persistHost: true
       });
       outputJson({
-        profile: profileName,
+        profile: profileName2,
         did,
         host,
         spaceId: delegationData.spaceId,
@@ -17932,8 +17938,8 @@ import { writeFile as writeFile4 } from "fs/promises";
 init_space();
 init_host();
 init_theme();
-async function throwKvError(error, spaceUri, profileName) {
-  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+async function throwKvError(error, spaceUri, profileName2) {
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName2);
   if (hosted) throw hosted;
   throw cliErrorFromService(error);
 }
@@ -17952,8 +17958,8 @@ async function readStdin2() {
   }
   return Buffer.concat(chunks);
 }
-async function kvHandle(node, spaceInput, profileName) {
-  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
+async function kvHandle(node, spaceInput, profileName2) {
+  const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
   const kv = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
   return { kv, spaceUri };
 }
@@ -18425,12 +18431,12 @@ function registerProfileCommand(program) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const profileName = name ?? ctx.profile;
-      const p = await ProfileManager.getProfile(profileName);
-      const hasKey = await ProfileManager.getKey(profileName) !== null;
-      const hasSession = await ProfileManager.getSession(profileName) !== null;
+      const profileName2 = name ?? ctx.profile;
+      const p = await ProfileManager.getProfile(profileName2);
+      const hasKey = await ProfileManager.getKey(profileName2) !== null;
+      const hasSession = await ProfileManager.getSession(profileName2) !== null;
       const config = await ProfileManager.getConfig();
-      const isDefault = profileName === config.defaultProfile;
+      const isDefault = profileName2 === config.defaultProfile;
       const posture = resolveProfilePosture(p);
       const operatorType = resolveProfileOperatorType(p);
       if (shouldOutputJson()) {
@@ -18489,7 +18495,7 @@ Examples:
         ...globalOpts,
         profile: options.profile ?? globalOpts.profile
       });
-      const profileName = ctx.profile;
+      const profileName2 = ctx.profile;
       if (!options.unset && (name === void 0 || name === "")) {
         throw new CLIError(
           "USAGE_ERROR",
@@ -18505,8 +18511,8 @@ Examples:
         );
       }
       const defaultSpace = options.unset ? void 0 : name;
-      await ProfileManager.updateProfile(profileName, (p) => ({ ...p, defaultSpace }));
-      outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
+      await ProfileManager.updateProfile(profileName2, (p) => ({ ...p, defaultSpace }));
+      outputJson({ profile: profileName2, defaultSpace: defaultSpace ?? null, updated: true });
     } catch (error) {
       handleError(error);
     }
@@ -18515,8 +18521,8 @@ Examples:
     try {
       if (isInteractive()) {
         const rl = createInterface3({ input: process.stdin, output: process.stderr });
-        const answer = await new Promise((resolve4) => {
-          rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve4);
+        const answer = await new Promise((resolve5) => {
+          rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve5);
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
@@ -18550,1118 +18556,356 @@ function parseOperatorType(raw) {
   );
 }
 
-// src/commands/secrets.ts
-init_profiles();
-init_formatter();
-init_theme();
-init_errors();
-init_constants();
-init_storage();
-import { randomUUID as randomUUID2 } from "crypto";
-import { lstat as lstat2, open as open2, readFile as readFile8, rename as rename2, rm as rm3 } from "fs/promises";
-import { basename as basename2, dirname as dirname3, join as join5 } from "path";
-import { homedir } from "os";
-import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
+// src/commands/replica.ts
+import { randomBytes as randomBytes5 } from "crypto";
+import { constants as fsConstants2 } from "fs";
+import { open as open3, readdir as readdir4, rename as rename2, stat as stat3, unlink as unlink2 } from "fs/promises";
+import { basename as basename2, dirname as dirname3, join as join6, resolve as resolve2 } from "path";
 import {
-  SECRET_DECRYPT_CAPABILITY,
-  secretCapabilityAction
-} from "@tinycloud/operations/secret-capabilities";
-import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
-init_space();
-init_types();
-var SECRETS_SPACE3 = "secrets";
-var SECRET_KV_ABILITIES = {
-  get: secretCapabilityAction("get"),
-  put: secretCapabilityAction("put"),
-  del: secretCapabilityAction("del"),
-  list: secretCapabilityAction("list")
-};
-async function readStdin3() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
+  ProfileDeletedError as ProfileDeletedError2,
+  profilePath as profilePath2,
+  readAdditionalDelegations as readAdditionalDelegations2,
+  readSession as readSession2,
+  withProfileLock as withProfileLock3
+} from "@tinycloud/operations/state";
+
+// ../../node_modules/@noble/hashes/esm/blake3.js
+init_md();
+init_u64();
+
+// ../../node_modules/@noble/hashes/esm/_blake.js
+init_utils();
+function G1s(a, b, c, d, x) {
+  a = a + b + x | 0;
+  d = rotr(d ^ a, 16);
+  c = c + d | 0;
+  b = rotr(b ^ c, 12);
+  return { a, b, c, d };
 }
-function authOptions(options) {
-  const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
-  return privateKey ? { privateKey } : void 0;
-}
-function resolveSecretScope(options) {
-  return options.scope ? { scope: options.scope } : void 0;
-}
-async function resolveSecretSpace(input, profileName) {
-  return resolveSpaceUri(input, profileName, { useProfileDefault: false });
-}
-function secretsServiceForSpace(node, spaceUri) {
-  return spaceUri ? node.secretsForSpace(spaceUri) : node.secrets;
-}
-var SECRET_NAME_RE2 = /^[A-Z][A-Z0-9_]*$/;
-var RESERVED_SECRET_SCOPES2 = /* @__PURE__ */ new Set(["default", "global"]);
-function canonicalizeSecretScope2(scope) {
-  if (scope === void 0) return void 0;
-  const trimmed = scope.trim();
-  if (trimmed === "") {
-    throw new CLIError(
-      "INVALID_SECRET_SCOPE",
-      "Secret scope must be non-empty; omit scope for global secrets.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const canonical = trimmed.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-  if (canonical === "") {
-    throw new CLIError(
-      "INVALID_SECRET_SCOPE",
-      "Secret scope must contain at least one letter or number.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  if (RESERVED_SECRET_SCOPES2.has(canonical)) {
-    throw new CLIError(
-      "INVALID_SECRET_SCOPE",
-      `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-  return canonical;
-}
-function resolveSecretPath2(name, options = {}) {
-  const normalizedName = name.trim();
-  if (!SECRET_NAME_RE2.test(normalizedName)) {
-    throw new CLIError(
-      "INVALID_SECRET_NAME",
-      `Invalid secret name ${JSON.stringify(name)}. Secret names must match ${SECRET_NAME_RE2.source}.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const scope = canonicalizeSecretScope2(options.scope);
-  const vaultKey = scope === void 0 ? `secrets/${normalizedName}` : `secrets/scoped/${scope}/${normalizedName}`;
-  return {
-    name: normalizedName,
-    ...scope !== void 0 ? { scope } : {},
-    vaultKey,
-    permissionPaths: {
-      vault: `vault/${vaultKey}`
-    }
-  };
-}
-function resolveSecretListPrefix(options = {}) {
-  const scope = canonicalizeSecretScope2(options.scope);
-  return scope === void 0 ? "vault/secrets/" : `vault/secrets/scoped/${scope}/`;
-}
-function resolveProfilesDir() {
-  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join5(home, ".tinycloud", "profiles");
-}
-async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
-  const auth = authOptions(options);
-  if (auth?.privateKey) {
-    return ensureAuthenticated(ctx, auth);
-  }
-  const profile = selectedProfile ?? await ProfileManager.getProfile(ctx.profile).catch(() => null);
-  if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
-    const session = await ProfileManager.getSession(ctx.profile);
-    if (!session || isStoredSessionExpired(session)) {
-      if (!process.stdin.isTTY && !process.stderr.isTTY) {
-        throw new CLIError(
-          "AUTH_REQUIRED",
-          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
-          ExitCode.AUTH_REQUIRED,
-          { hint: scopedSecretLoginHint(ctx.profile) }
-        );
-      }
-      await withSpinner(
-        session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
-        () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition })
-      );
-    }
-  }
-  return ensureAuthenticated(ctx, auth);
-}
-async function runSecretOperation(params) {
-  const first = await runSecretOperationAttempt(params.label, params.operation);
-  if (first.ok || !shouldRequestSecretPermissions(first.error)) {
-    return first;
-  }
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) {
-    return first;
-  }
-  assertOwnerApprovalPossible(params.ctx.profile, profile, params.action, params.name);
-  const requested = secretPermissionEntries({
-    action: params.action,
-    name: params.name,
-    options: params.scopeOptions,
-    space: params.space,
-    node: params.node
-  });
-  await withSpinner(
-    "Requesting secret permissions...",
-    () => ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node: params.node,
-      requested,
-      expiryOption: void 0,
-      reason: secretPermissionReason(params.action, params.name),
-      yes: true,
-      force: true,
-      anchorSpace: params.space ?? SECRETS_SPACE3,
-      openKeyAcquisition: params.openKeyAcquisition
-    })
-  );
-  return runSecretOperationAttempt(params.label, params.operation);
-}
-function secretPermissionReason(action, name) {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
-}
-function assertOwnerApprovalPossible(profileName, profile, action, name, missing = []) {
-  if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
-  const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
-  throw new CLIError(
-    "PERMISSION_DENIED",
-    action === "get" ? missing.length > 0 && missing.every((permission) => permission.service === "tinycloud.encryption" && Array.isArray(permission.actions) && permission.actions.length > 0 && permission.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
-    ExitCode.PERMISSION_DENIED,
-    {
-      hint: scopedSecretLoginHint(profileName)
-    }
-  );
-}
-function scopedSecretLoginHint(profileName) {
-  return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
-}
-async function validateSecretOutput(path) {
-  try {
-    const destination = await lstat2(path);
-    if (!destination.isFile()) {
-      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
-    }
-  } catch (error) {
-    if (!isMissingFileError(error)) throw error;
-  }
-  try {
-    const parent = await lstat2(dirname3(path));
-    if (!parent.isDirectory()) {
-      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
-    }
-  } catch (error) {
-    if (!isMissingFileError(error)) throw error;
-    throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
-  }
-}
-async function writeSecretFile(path, value) {
-  await validateSecretOutput(path);
-  const parentPath = dirname3(path);
-  const temp = join5(parentPath, `.${basename2(path)}.${randomUUID2()}.tmp`);
-  let created = false;
-  try {
-    const handle = await open2(temp, "wx", PRIVATE_FILE_MODE);
-    created = true;
-    try {
-      await handle.writeFile(value);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rename2(temp, path);
-  } catch (error) {
-    if (created) {
-      await rm3(temp, { force: true }).catch(() => void 0);
-    }
-    const code3 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
-    throw new CLIError("ERROR", `Could not write secret output "${path}"${code3}.`, ExitCode.ERROR);
-  }
-  try {
-    const parent = await open2(parentPath, "r");
-    try {
-      await parent.sync();
-    } finally {
-      await parent.close();
-    }
-  } catch {
-  }
-}
-async function runSecretOperationAttempt(label, operation) {
-  try {
-    return await withSpinner(label, operation);
-  } catch (error) {
-    const permissionError = thrownPermissionError(error);
-    if (permissionError) return permissionError;
-    throw error;
-  }
-}
-function withOperationWarnings(error, warnings) {
-  if (warnings === void 0 || warnings.length === 0) return error;
-  const cliError = wrapError(error);
-  cliError.metadata = { ...cliError.metadata, warnings };
-  return cliError;
-}
-async function invokeCanonicalSecretGet(params) {
-  const warnings = /* @__PURE__ */ new Map();
-  const collect = (result) => {
-    for (const warning of result.warnings ?? []) warnings.set(JSON.stringify(warning), warning);
-    return result;
-  };
-  try {
-    const result = await canonicalSecretGet(params, collect);
-    return warnings.size === 0 ? result : { ...result, warnings: [...warnings.values()] };
-  } catch (error) {
-    throw withOperationWarnings(error, [...warnings.values()]);
-  }
-}
-async function canonicalSecretGet(params, collect) {
-  const auth = authOptions(params.options);
-  let ownerNode;
-  if (!auth?.privateKey) {
-    const profile2 = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile2?.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
-      const session = await ProfileManager.getSession(params.ctx.profile);
-      if (!session || isStoredSessionExpired(session)) {
-        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
-      }
-    }
-  }
-  const target = {
-    profile: params.ctx.profile,
-    host: params.ctx.host,
-    allowOwnerProfile: true,
-    ...auth ?? {}
-  };
-  const input = {
-    name: params.name,
-    ...params.scope === void 0 ? {} : { scope: params.scope },
-    ...params.space === void 0 ? {} : { space: params.space }
-  };
-  const invoke = async () => collect(await withSpinner(
-    params.label,
-    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
-  ));
-  let first = await invoke();
-  if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
-    const profile2 = await ProfileManager.getProfile(params.ctx.profile);
-    if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
-      ownerNode = await ensureSecretsNode(
-        params.ctx,
-        params.options,
-        params.openKeyAcquisition,
-        profile2
-      );
-      first = await invoke();
-    }
-  }
-  if (first.status !== "authority_required") return first;
-  if (auth?.privateKey !== void 0) return first;
-  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
-    return first;
-  }
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) return first;
-  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
-  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
-    params.ctx,
-    params.options,
-    params.openKeyAcquisition
-  );
-  await withSpinner(
-    "Requesting secret permissions...",
-    () => ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node,
-      requested: first.missing,
-      expiryOption: void 0,
-      reason: secretPermissionReason("get", params.name),
-      yes: true,
-      force: true,
-      anchorSpace: params.space ?? SECRETS_SPACE3,
-      openKeyAcquisition: params.openKeyAcquisition
-    })
-  );
-  return invoke();
-}
-function throwCanonicalSecretGetError(result, name) {
-  switch (result.status) {
-    case "authority_required":
-      throw new CLIError(
-        "PERMISSION_DENIED",
-        "Permission denied while reading secret",
-        ExitCode.PERMISSION_DENIED
-      );
-    case "setup_required":
-      throw new CLIError(
-        "NOT_FOUND",
-        result.setup.message,
-        ExitCode.NOT_FOUND,
-        { hint: `${result.setup.url}
-${result.setup.message}`, setup: result.setup }
-      );
-    case "error":
-      if (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated") {
-        throw new CLIError(
-          "AUTH_REQUIRED",
-          "Not signed in to TinyCloud.",
-          ExitCode.AUTH_REQUIRED,
-          { hint: `Sign in with: tc --profile ${result.context.profile} auth login` }
-        );
-      }
-      if (result.error.code === "NODE_UNREACHABLE") {
-        throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
-      }
-      if (result.error.code === "PERMISSION_HINT_INVALID") {
-        throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
-      }
-      throw withSignInHint(cliErrorFromService(result.error), result.context.profile, result.context.posture);
-    case "ok":
-      throw new Error("Expected a failed canonical secret result.");
-  }
-}
-function canRequestOwnerPermissions(profile) {
-  const posture = resolveProfilePosture(profile);
-  return posture === "owner-openkey" || posture === "local-owner-key";
-}
-function shouldRequestSecretPermissions(error) {
-  if (error.code !== "PERMISSION_DENIED") return false;
-  return /permission|session expired|autosign|capabilit/i.test(error.message);
-}
-function thrownPermissionError(error) {
-  const record = error;
-  const message = typeof record?.message === "string" ? record.message : String(error);
-  const code3 = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
-  if (code3 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
-    return null;
-  }
-  return {
-    ok: false,
-    error: {
-      code: "PERMISSION_DENIED",
-      message
-    }
-  };
-}
-function isMissingFileError(error) {
-  const typed = error;
-  return typed?.code === "ENOENT";
-}
-function hasPermissionAction(actions, action) {
-  return actions.some(
-    (entry) => entry === action || entry.endsWith(`/${action.split("/").at(-1)}`) || entry === action.split("/").at(-1)
-  );
-}
-function delegationCoversPath(permissions, path, space = SECRETS_SPACE3) {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.kv") return false;
-    if (!permissionTargetsSpace(permission, space)) return false;
-    if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
-    return permission.path === path || permission.path.endsWith("/") && path.startsWith(permission.path);
-  });
-}
-function spaceMatches(granted, requested) {
-  return granted === requested;
-}
-function permissionTargetsSpace(permission, expectedSpace) {
-  if (permission.service !== "tinycloud.kv") return false;
-  if (typeof permission.space !== "string") return false;
-  const space = permission.space.trim();
-  if (space === "") return false;
-  return spaceMatches(space, expectedSpace);
-}
-function delegationCoversDecrypt(permissions, networkId) {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.encryption") return false;
-    if (!hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY)) return false;
-    return permission.path === networkId;
-  });
-}
-function parseDelegationExpiry(expiry) {
-  const parsed = expiry instanceof Date ? expiry : typeof expiry === "number" ? new Date(expiry) : new Date(String(expiry));
-  if (Number.isNaN(parsed.getTime())) {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      "Delegation must include a valid expiry.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  return parsed;
-}
-function normalizePortableDelegation2(value) {
-  if (value === null || typeof value !== "object") {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      "Delegation source must contain a PortableDelegation object.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const candidate = value;
-  const authorization = candidate.delegationHeader;
-  if (typeof candidate.cid !== "string" || typeof candidate.spaceId !== "string" || typeof candidate.path !== "string" || !Array.isArray(candidate.actions) || typeof candidate.delegateDID !== "string" || typeof candidate.ownerAddress !== "string" || typeof candidate.chainId !== "number" || typeof authorization !== "object" || authorization === null || typeof authorization.Authorization !== "string") {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      "Delegation source must contain a PortableDelegation object.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-  return {
-    ...candidate,
-    actions: [...candidate.actions],
-    expiry: parseDelegationExpiry(candidate.expiry),
-    delegationHeader: { Authorization: authorization.Authorization }
-  };
-}
-function normalizeDelegationCandidates(value, source) {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => normalizeDelegationCandidates(entry, source));
-  }
-  if (value === null || typeof value !== "object") {
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      `Delegation source "${source}" must be a delegation file or imported profile reference.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-  const candidate = value;
-  if (candidate.delegation !== void 0) {
-    const delegation2 = normalizePortableDelegation2(candidate.delegation);
-    return [{
-      delegation: delegation2,
-      permissions: Array.isArray(candidate.permissions) && candidate.permissions.length > 0 ? candidate.permissions : permissionsFromDelegation2(delegation2)
-    }];
-  }
-  const delegation = normalizePortableDelegation2(candidate);
-  return [{
-    delegation,
-    permissions: permissionsFromDelegation2(delegation)
-  }];
-}
-function permissionsFromDelegation2(delegation) {
-  if (delegation.resources?.length) {
-    return delegation.resources.map((resource) => ({
-      service: resource.service.startsWith("tinycloud.") ? resource.service : `tinycloud.${resource.service}`,
-      space: resource.space,
-      path: resource.path,
-      actions: [...resource.actions]
-    }));
-  }
-  const service = delegation.actions[0]?.includes("/") ? delegation.actions[0].slice(0, delegation.actions[0].indexOf("/")) : "tinycloud.unknown";
-  return [{
-    service,
-    space: delegation.spaceId,
-    path: delegation.path,
-    actions: [...delegation.actions]
-  }];
-}
-async function loadDelegationCandidates(source) {
-  try {
-    const raw = JSON.parse(await readFile8(source, "utf8"));
-    return normalizeDelegationCandidates(raw, source);
-  } catch (error) {
-    if (!isMissingFileError(error)) {
-      if (error instanceof SyntaxError) {
-        throw new CLIError(
-          "INVALID_DELEGATION_SOURCE",
-          `Delegation source "${source}" must be valid JSON.`,
-          ExitCode.USAGE_ERROR
-        );
-      }
-      throw new CLIError(
-        "INVALID_DELEGATION_SOURCE",
-        `Delegation source "${source}" could not be read.`,
-        ExitCode.USAGE_ERROR
-      );
-    }
-  }
-  try {
-    const importedPath = join5(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile8(importedPath, "utf8"));
-    return normalizeDelegationCandidates(raw, source);
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return [];
-    }
-    if (error instanceof SyntaxError) {
-      throw new CLIError(
-        "INVALID_DELEGATION_SOURCE",
-        `Delegation source "${source}" must be valid JSON.`,
-        ExitCode.USAGE_ERROR
-      );
-    }
-    throw new CLIError(
-      "INVALID_DELEGATION_SOURCE",
-      `Delegation source "${source}" could not be read.`,
-      ExitCode.USAGE_ERROR
-    );
-  }
-}
-function selectDelegationCandidate(candidates, source, secretPath, space = SECRETS_SPACE3) {
-  const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
-  if (liveCandidates.length === 0) {
-    throw new CLIError(
-      "DELEGATION_EXPIRED",
-      `Delegation source "${source}" has no live delegations.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const secretsSpaceCandidates = liveCandidates.filter(
-    (candidate) => candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
-  );
-  if (secretsSpaceCandidates.length === 0) {
-    throw new CLIError(
-      "PERMISSION_DENIED",
-      `Delegation source "${source}" does not target secrets space "${space}".`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const exact = secretsSpaceCandidates.find(
-    (candidate) => delegationCoversPath(candidate.permissions, secretPath, space)
-  );
-  if (exact) {
-    return exact;
-  }
-  throw new CLIError(
-    "PERMISSION_DENIED",
-    `Delegation source "${source}" does not cover secret "${secretPath}".`,
-    ExitCode.PERMISSION_DENIED
-  );
-}
-async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_SPACE3) {
-  const candidates = await loadDelegationCandidates(source);
-  if (candidates.length === 0) {
-    throw new CLIError(
-      "DELEGATION_NOT_FOUND",
-      `Delegation source "${source}" did not resolve to any imported delegations.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const selected = selectDelegationCandidate(candidates, source, secretPath, space);
-  return { ...selected, source };
-}
-function mapEncryptionResultError(error) {
-  const code3 = error.code || "DECRYPTION_FAILED";
-  const exitCode = code3 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code3 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code3 === "NETWORK_ERROR" || code3 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
-  return new CLIError(code3, error.message, exitCode);
-}
-function parseDecryptedSecretPayload(data, secretPath) {
-  const text = new TextDecoder().decode(data);
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new CLIError(
-      "INVALID_SECRET_PAYLOAD",
-      `Delegated secret "${secretPath}" did not decrypt to valid JSON.`,
-      ExitCode.ERROR
-    );
-  }
-  if (parsed === null || typeof parsed !== "object" || typeof parsed.value !== "string") {
-    throw new CLIError(
-      "INVALID_SECRET_PAYLOAD",
-      `Delegated secret "${secretPath}" did not decrypt to { value: string }.`,
-      ExitCode.ERROR
-    );
-  }
-  return parsed.value;
-}
-async function readDelegatedSecretValue(params) {
-  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE3)) {
-    throw new CLIError(
-      "PERMISSION_DENIED",
-      `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const access = await params.node.useDelegation(params.delegation);
-  if (typeof access?.kv?.get !== "function") {
-    throw new CLIError(
-      "DELEGATION_INVALID",
-      `Delegation "${params.delegationCid}" did not resolve delegated KV access.`,
-      ExitCode.ERROR
-    );
-  }
-  const envelopeResult = await access.kv.get(params.secretPath, {
-    raw: true,
-    prefix: ""
-  });
-  if (!envelopeResult.ok) {
-    if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
-      throw new CLIError(
-        "NOT_FOUND",
-        `Secret "${params.name}" not found`,
-        ExitCode.NOT_FOUND
-      );
-    }
-    if (envelopeResult.error.code === "PERMISSION_DENIED") {
-      throw new CLIError(
-        "PERMISSION_DENIED",
-        `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
-        ExitCode.PERMISSION_DENIED
-      );
-    }
-    throw new CLIError(
-      envelopeResult.error.code,
-      envelopeResult.error.message,
-      ExitCode.ERROR
-    );
-  }
-  const rawEnvelope = envelopeResult.data.data;
-  if (typeof rawEnvelope !== "string") {
-    throw new CLIError(
-      "INVALID_ENVELOPE",
-      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
-      ExitCode.ERROR
-    );
-  }
-  let envelope;
-  try {
-    envelope = JSON.parse(rawEnvelope);
-  } catch {
-    throw new CLIError(
-      "INVALID_ENVELOPE",
-      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
-      ExitCode.ERROR
-    );
-  }
-  const networkId = envelope.networkId;
-  if (typeof networkId !== "string") {
-    throw new CLIError(
-      "INVALID_ENVELOPE",
-      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
-      ExitCode.ERROR
-    );
-  }
-  if (!delegationCoversDecrypt(params.permissions, networkId)) {
-    throw new CLIError(
-      "PERMISSION_DENIED",
-      `Delegation "${params.delegationCid}" does not include ${SECRET_DECRYPT_CAPABILITY} for ${networkId}.`,
-      ExitCode.PERMISSION_DENIED
-    );
-  }
-  const decrypted = await params.node.encryption.decryptEnvelope(
-    envelope,
-    { proofs: [params.delegationCid] }
-  );
-  if (!decrypted.ok) {
-    throw mapEncryptionResultError(decrypted.error);
-  }
-  return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
-}
-function isStoredSessionExpired(session) {
-  const record = session;
-  const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
-  if (direct) return direct.getTime() <= Date.now();
-  if (typeof record.siwe !== "string") return false;
-  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  const expiry = match ? parseDate(match[1].trim()) : null;
-  return expiry !== null && expiry.getTime() <= Date.now();
-}
-function parseDate(value) {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-  if (typeof value === "number") {
-    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
-    return Number.isNaN(date2.getTime()) ? null : date2;
-  }
-  if (typeof value !== "string" || value.trim() === "") return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-function secretKvAbility(action) {
-  return SECRET_KV_ABILITIES[action];
-}
-function secretPermissionEntries(params) {
-  const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
-  const permissions = [{
-    service: "tinycloud.kv",
-    space: params.space ?? SECRETS_SPACE3,
-    path,
-    actions: [secretKvAbility(params.action)],
-    skipPrefix: true
-  }];
-  if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE3) : params.node.getDefaultEncryptionNetworkId();
-    permissions.push({
-      service: "tinycloud.encryption",
-      path: networkId,
-      actions: [SECRET_DECRYPT_CAPABILITY],
-      skipPrefix: true
-    });
-  }
-  return permissions;
-}
-function formatSecretScopeFlag(options) {
-  return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
-}
-function outputSecretDoctor(result) {
-  if (shouldOutputJson()) {
-    outputJson(result);
-    return;
-  }
-  process.stderr.write(formatSection("Secrets") + "\n");
-  for (const check of result.checks) {
-    process.stdout.write(formatCheck(check.ok, check.name, check.detail) + "\n");
-    if (check.hint) {
-      process.stdout.write(`  ${theme.hint(check.hint)}
-`);
-    }
-  }
-  process.stdout.write("\n");
-  if (result.healthy) {
-    process.stdout.write(theme.success("Secrets checks passed.") + "\n");
-  } else {
-    const failed = result.checks.filter((check) => check.ok === false).length;
-    process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
-  }
-}
-function registerSecretsCommand(program, openKeyAcquisition) {
-  const secrets = program.command("secrets").description("Encrypted secrets management");
-  const network = secrets.command("network").description("Manage the default secrets encryption network");
-  network.command("show [nameOrNetworkId]").description("Show a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (nameOrNetworkId, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
-      const requested = nameOrNetworkId ?? "default";
-      const networkId = requested.startsWith("urn:tinycloud:encryption:") ? requested : node.getDefaultEncryptionNetworkId(requested);
-      const descriptor = await withSpinner(
-        "Fetching encryption network...",
-        () => node.getEncryptionNetwork(requested)
-      );
-      outputJson({
-        networkId,
-        exists: descriptor !== null,
-        ...descriptor ? { descriptor } : {}
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  network.command("init [name]").description("Create a secrets encryption network if needed").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
-      const descriptor = await withSpinner(
-        "Ensuring encryption network...",
-        () => node.ensureEncryptionNetwork(name ?? "default")
-      );
-      outputJson({
-        networkId: descriptor.networkId,
-        state: descriptor.state,
-        descriptor
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const networkName = options.network ?? "default";
-      const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
-      const descriptor = await withSpinner(
-        "Checking secrets encryption network...",
-        () => node.getEncryptionNetwork(networkName)
-      );
-      const checks = [
-        descriptor ? {
-          name: "Encryption network",
-          ok: descriptor.state === "active" ? true : "warn",
-          detail: `${networkName} (${descriptor.state})`
-        } : {
-          name: "Encryption network",
-          ok: false,
-          detail: `${networkName} not found`,
-          hint: `tc secrets network init ${networkName}`
-        }
-      ];
-      let secret;
-      if (name) {
-        const scopeOptions = resolveSecretScope(options);
-        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-        const secrets2 = secretsServiceForSpace(node, spaceUri);
-        const resolved = resolveSecretPath2(name, scopeOptions);
-        const result = await runSecretOperation({
-          ctx,
-          node,
-          action: "get",
-          name,
-          scopeOptions,
-          space: spaceUri,
-          label: `Checking secret ${name}...`,
-          operation: () => secrets2.get(name, scopeOptions)
-        });
-        if (result.ok) {
-          secret = {
-            name: resolved.name,
-            path: resolved.permissionPaths.vault,
-            ...resolved.scope ? { scope: resolved.scope } : {},
-            exists: true,
-            readable: true
-          };
-          checks.push({
-            name: "Secret access",
-            ok: true,
-            detail: `${resolved.permissionPaths.vault} readable`
-          });
-        } else {
-          const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
-          secret = {
-            name: resolved.name,
-            path: resolved.permissionPaths.vault,
-            ...resolved.scope ? { scope: resolved.scope } : {},
-            exists: !notFound,
-            readable: false
-          };
-          checks.push({
-            name: "Secret access",
-            ok: false,
-            detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
-            hint: notFound ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
-          });
-        }
-      } else {
-        checks.push({
-          name: "Secret access",
-          ok: "warn",
-          detail: "skipped; pass a secret name to verify read access"
-        });
-      }
-      outputSecretDoctor({
-        healthy: checks.every((check) => check.ok !== false),
-        network: {
-          name: networkName,
-          networkId,
-          exists: descriptor !== null,
-          ...descriptor?.state ? { state: descriptor.state } : {}
-        },
-        ...secret ? { secret } : {},
-        checks
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const scopeOptions = resolveSecretScope(options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      const result = await runSecretOperation({
-        ctx,
-        node,
-        action: "list",
-        scopeOptions,
-        space: spaceUri,
-        label: "Listing secrets...",
-        operation: () => secrets2.list(scopeOptions)
-      });
-      if (!result.ok) {
-        throw cliErrorFromService(result.error);
-      }
-      const secretNames = Array.isArray(result.data) ? result.data : [];
-      outputJson({
-        secrets: secretNames,
-        count: secretNames.length,
-        ...options.scope ? { scope: options.scope } : {},
-        ...spaceUri ? { space: spaceUri } : {}
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const scopeOptions = resolveSecretScope(options);
-      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secretPath = resolveSecretPath2(name, scopeOptions).permissionPaths.vault;
-      if (options.output) await validateSecretOutput(options.output);
-      if (options.delegation) {
-        const delegated = await resolveDelegatedSecretSource(
-          options.delegation,
-          secretPath,
-          legacySpaceUri ?? SECRETS_SPACE3
-        );
-        const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
-        const delegatedCtx = { ...ctx, host: effectiveHost };
-        const node = await ensureSecretsNode(delegatedCtx, options);
-        const value2 = await withSpinner(
-          `Getting secret ${name}...`,
-          () => readDelegatedSecretValue({
-            node,
-            delegation: delegated.delegation,
-            delegationCid: delegated.delegation.cid,
-            permissions: delegated.permissions,
-            secretPath,
-            space: legacySpaceUri ?? SECRETS_SPACE3,
-            name
-          })
-        );
-        if (options.output) {
-          await writeSecretFile(options.output, value2);
-          outputJson({ name, written: options.output });
-          return;
-        }
-        if (options.raw) {
-          process.stdout.write(value2);
-          return;
-        }
-        outputJson({ name, value: value2 });
-        return;
-      }
-      const privateKey = authOptions(options)?.privateKey;
-      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
-      const result = await invokeCanonicalSecretGet({
-        ctx,
-        name,
-        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
-        ...spaceUri === void 0 ? {} : { space: spaceUri },
-        options,
-        label: `Getting secret ${name}...`,
-        openKeyAcquisition
-      });
-      if (result.status !== "ok") {
-        try {
-          throwCanonicalSecretGetError(result, name);
-        } catch (error) {
-          throw withOperationWarnings(error, result.warnings);
-        }
-      }
-      const value = result.output.value;
-      try {
-        if (options.output) {
-          await writeSecretFile(options.output, value);
-          outputJson({ name, written: options.output });
-        } else if (options.raw || options.valueOnly) {
-          process.stdout.write(value);
-        } else {
-          outputJson({ name, value });
-        }
-      } catch (error) {
-        throw withOperationWarnings(error, result.warnings);
-      }
-      outputWarnings(operationWarnings(result.warnings));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      let secretValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
-      if (sources.length === 0) {
-        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (sources.length > 1) {
-        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
-      }
-      if (options.file) {
-        secretValue = await readFile8(options.file, "utf-8");
-      } else if (options.stdin) {
-        secretValue = (await readStdin3()).toString("utf-8");
-      } else {
-        secretValue = value;
-      }
-      const scopeOptions = resolveSecretScope(options);
-      const result = await runSecretOperation({
-        ctx,
-        node,
-        action: "put",
-        name,
-        scopeOptions,
-        space: spaceUri,
-        label: `Storing secret ${name}...`,
-        operation: () => secrets2.put(name, secretValue, scopeOptions)
-      });
-      if (!result.ok) {
-        throw cliErrorFromService(result.error);
-      }
-      outputJson({ name, written: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
-      const scopeOptions = resolveSecretScope(options);
-      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secrets2 = secretsServiceForSpace(node, spaceUri);
-      const result = await runSecretOperation({
-        ctx,
-        node,
-        action: "del",
-        name,
-        scopeOptions,
-        space: spaceUri,
-        label: `Deleting secret ${name}...`,
-        operation: () => secrets2.delete(name, scopeOptions)
-      });
-      if (!result.ok) {
-        throw cliErrorFromService(result.error);
-      }
-      outputJson({ name, deleted: true });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx, authOptions(options));
-      const networkName = name ?? "default";
-      const descriptor = await withSpinner(
-        "Ensuring encryption network...",
-        () => node.ensureEncryptionNetwork(networkName)
-      );
-      const permission = {
-        service: "tinycloud.encryption",
-        path: descriptor.networkId,
-        actions: ["decrypt"]
-      };
-      const result = await withSpinner(
-        `Granting decrypt permission to ${recipientDid}...`,
-        () => node.delegateTo(recipientDid, [permission])
-      );
-      outputJson({
-        networkId: descriptor.networkId,
-        recipientDid,
-        cid: result.delegation.cid,
-        prompted: result.prompted,
-        path: result.delegation.path,
-        actions: result.delegation.actions
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-  secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
-    try {
-      const open5 = (await import("open")).default;
-      await open5("https://secrets.tinycloud.xyz");
-      outputJson({ opened: "https://secrets.tinycloud.xyz" });
-    } catch (error) {
-      handleError(error);
-    }
-  });
+function G2s(a, b, c, d, x) {
+  a = a + b + x | 0;
+  d = rotr(d ^ a, 8);
+  c = c + d | 0;
+  b = rotr(b ^ c, 7);
+  return { a, b, c, d };
 }
 
-// ../share-sdk/dist/index.js
-init_sha2();
+// ../../node_modules/@noble/hashes/esm/blake2.js
+init_utils();
+var BLAKE2 = class extends Hash {
+  constructor(blockLen, outputLen) {
+    super();
+    this.finished = false;
+    this.destroyed = false;
+    this.length = 0;
+    this.pos = 0;
+    anumber(blockLen);
+    anumber(outputLen);
+    this.blockLen = blockLen;
+    this.outputLen = outputLen;
+    this.buffer = new Uint8Array(blockLen);
+    this.buffer32 = u32(this.buffer);
+  }
+  update(data) {
+    aexists(this);
+    data = toBytes(data);
+    abytes(data);
+    const { blockLen, buffer, buffer32 } = this;
+    const len = data.length;
+    const offset = data.byteOffset;
+    const buf = data.buffer;
+    for (let pos = 0; pos < len; ) {
+      if (this.pos === blockLen) {
+        swap32IfBE(buffer32);
+        this.compress(buffer32, 0, false);
+        swap32IfBE(buffer32);
+        this.pos = 0;
+      }
+      const take = Math.min(blockLen - this.pos, len - pos);
+      const dataOffset = offset + pos;
+      if (take === blockLen && !(dataOffset % 4) && pos + take < len) {
+        const data32 = new Uint32Array(buf, dataOffset, Math.floor((len - pos) / 4));
+        swap32IfBE(data32);
+        for (let pos32 = 0; pos + blockLen < len; pos32 += buffer32.length, pos += blockLen) {
+          this.length += blockLen;
+          this.compress(data32, pos32, false);
+        }
+        swap32IfBE(data32);
+        continue;
+      }
+      buffer.set(data.subarray(pos, pos + take), this.pos);
+      this.pos += take;
+      this.length += take;
+      pos += take;
+    }
+    return this;
+  }
+  digestInto(out) {
+    aexists(this);
+    aoutput(out, this);
+    const { pos, buffer32 } = this;
+    this.finished = true;
+    clean(this.buffer.subarray(pos));
+    swap32IfBE(buffer32);
+    this.compress(buffer32, 0, true);
+    swap32IfBE(buffer32);
+    const out32 = u32(out);
+    this.get().forEach((v, i) => out32[i] = swap8IfBE(v));
+  }
+  digest() {
+    const { buffer, outputLen } = this;
+    this.digestInto(buffer);
+    const res = buffer.slice(0, outputLen);
+    this.destroy();
+    return res;
+  }
+  _cloneInto(to) {
+    const { buffer, length: length4, finished, destroyed, outputLen, pos } = this;
+    to || (to = new this.constructor({ dkLen: outputLen }));
+    to.set(...this.get());
+    to.buffer.set(buffer);
+    to.destroyed = destroyed;
+    to.finished = finished;
+    to.length = length4;
+    to.pos = pos;
+    to.outputLen = outputLen;
+    return to;
+  }
+  clone() {
+    return this._cloneInto();
+  }
+};
+function compress(s, offset, msg, rounds, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) {
+  let j = 0;
+  for (let i = 0; i < rounds; i++) {
+    ({ a: v0, b: v4, c: v8, d: v12 } = G1s(v0, v4, v8, v12, msg[offset + s[j++]]));
+    ({ a: v0, b: v4, c: v8, d: v12 } = G2s(v0, v4, v8, v12, msg[offset + s[j++]]));
+    ({ a: v1, b: v5, c: v9, d: v13 } = G1s(v1, v5, v9, v13, msg[offset + s[j++]]));
+    ({ a: v1, b: v5, c: v9, d: v13 } = G2s(v1, v5, v9, v13, msg[offset + s[j++]]));
+    ({ a: v2, b: v6, c: v10, d: v14 } = G1s(v2, v6, v10, v14, msg[offset + s[j++]]));
+    ({ a: v2, b: v6, c: v10, d: v14 } = G2s(v2, v6, v10, v14, msg[offset + s[j++]]));
+    ({ a: v3, b: v7, c: v11, d: v15 } = G1s(v3, v7, v11, v15, msg[offset + s[j++]]));
+    ({ a: v3, b: v7, c: v11, d: v15 } = G2s(v3, v7, v11, v15, msg[offset + s[j++]]));
+    ({ a: v0, b: v5, c: v10, d: v15 } = G1s(v0, v5, v10, v15, msg[offset + s[j++]]));
+    ({ a: v0, b: v5, c: v10, d: v15 } = G2s(v0, v5, v10, v15, msg[offset + s[j++]]));
+    ({ a: v1, b: v6, c: v11, d: v12 } = G1s(v1, v6, v11, v12, msg[offset + s[j++]]));
+    ({ a: v1, b: v6, c: v11, d: v12 } = G2s(v1, v6, v11, v12, msg[offset + s[j++]]));
+    ({ a: v2, b: v7, c: v8, d: v13 } = G1s(v2, v7, v8, v13, msg[offset + s[j++]]));
+    ({ a: v2, b: v7, c: v8, d: v13 } = G2s(v2, v7, v8, v13, msg[offset + s[j++]]));
+    ({ a: v3, b: v4, c: v9, d: v14 } = G1s(v3, v4, v9, v14, msg[offset + s[j++]]));
+    ({ a: v3, b: v4, c: v9, d: v14 } = G2s(v3, v4, v9, v14, msg[offset + s[j++]]));
+  }
+  return { v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15 };
+}
+
+// ../../node_modules/@noble/hashes/esm/blake3.js
+init_utils();
+var B3_Flags = {
+  CHUNK_START: 1,
+  CHUNK_END: 2,
+  PARENT: 4,
+  ROOT: 8,
+  KEYED_HASH: 16,
+  DERIVE_KEY_CONTEXT: 32,
+  DERIVE_KEY_MATERIAL: 64
+};
+var B3_IV = SHA256_IV.slice();
+var B3_SIGMA = /* @__PURE__ */ (() => {
+  const Id = Array.from({ length: 16 }, (_, i) => i);
+  const permute = (arr) => [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8].map((i) => arr[i]);
+  const res = [];
+  for (let i = 0, v = Id; i < 7; i++, v = permute(v))
+    res.push(...v);
+  return Uint8Array.from(res);
+})();
+var BLAKE3 = class _BLAKE3 extends BLAKE2 {
+  constructor(opts = {}, flags = 0) {
+    super(64, opts.dkLen === void 0 ? 32 : opts.dkLen);
+    this.chunkPos = 0;
+    this.chunksDone = 0;
+    this.flags = 0 | 0;
+    this.stack = [];
+    this.posOut = 0;
+    this.bufferOut32 = new Uint32Array(16);
+    this.chunkOut = 0;
+    this.enableXOF = true;
+    const { key, context } = opts;
+    const hasContext = context !== void 0;
+    if (key !== void 0) {
+      if (hasContext)
+        throw new Error('Only "key" or "context" can be specified at same time');
+      const k = toBytes(key).slice();
+      abytes(k, 32);
+      this.IV = u32(k);
+      swap32IfBE(this.IV);
+      this.flags = flags | B3_Flags.KEYED_HASH;
+    } else if (hasContext) {
+      const ctx = toBytes(context);
+      const contextKey = new _BLAKE3({ dkLen: 32 }, B3_Flags.DERIVE_KEY_CONTEXT).update(ctx).digest();
+      this.IV = u32(contextKey);
+      swap32IfBE(this.IV);
+      this.flags = flags | B3_Flags.DERIVE_KEY_MATERIAL;
+    } else {
+      this.IV = B3_IV.slice();
+      this.flags = flags;
+    }
+    this.state = this.IV.slice();
+    this.bufferOut = u8(this.bufferOut32);
+  }
+  // Unused
+  get() {
+    return [];
+  }
+  set() {
+  }
+  b2Compress(counter, flags, buf, bufPos = 0) {
+    const { state: s, pos } = this;
+    const { h, l } = fromBig(BigInt(counter), true);
+    const { v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15 } = compress(B3_SIGMA, bufPos, buf, 7, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], B3_IV[0], B3_IV[1], B3_IV[2], B3_IV[3], h, l, pos, flags);
+    s[0] = v0 ^ v8;
+    s[1] = v1 ^ v9;
+    s[2] = v2 ^ v10;
+    s[3] = v3 ^ v11;
+    s[4] = v4 ^ v12;
+    s[5] = v5 ^ v13;
+    s[6] = v6 ^ v14;
+    s[7] = v7 ^ v15;
+  }
+  compress(buf, bufPos = 0, isLast = false) {
+    let flags = this.flags;
+    if (!this.chunkPos)
+      flags |= B3_Flags.CHUNK_START;
+    if (this.chunkPos === 15 || isLast)
+      flags |= B3_Flags.CHUNK_END;
+    if (!isLast)
+      this.pos = this.blockLen;
+    this.b2Compress(this.chunksDone, flags, buf, bufPos);
+    this.chunkPos += 1;
+    if (this.chunkPos === 16 || isLast) {
+      let chunk = this.state;
+      this.state = this.IV.slice();
+      for (let last, chunks = this.chunksDone + 1; isLast || !(chunks & 1); chunks >>= 1) {
+        if (!(last = this.stack.pop()))
+          break;
+        this.buffer32.set(last, 0);
+        this.buffer32.set(chunk, 8);
+        this.pos = this.blockLen;
+        this.b2Compress(0, this.flags | B3_Flags.PARENT, this.buffer32, 0);
+        chunk = this.state;
+        this.state = this.IV.slice();
+      }
+      this.chunksDone++;
+      this.chunkPos = 0;
+      this.stack.push(chunk);
+    }
+    this.pos = 0;
+  }
+  _cloneInto(to) {
+    to = super._cloneInto(to);
+    const { IV, flags, state, chunkPos, posOut, chunkOut, stack, chunksDone } = this;
+    to.state.set(state.slice());
+    to.stack = stack.map((i) => Uint32Array.from(i));
+    to.IV.set(IV);
+    to.flags = flags;
+    to.chunkPos = chunkPos;
+    to.chunksDone = chunksDone;
+    to.posOut = posOut;
+    to.chunkOut = chunkOut;
+    to.enableXOF = this.enableXOF;
+    to.bufferOut32.set(this.bufferOut32);
+    return to;
+  }
+  destroy() {
+    this.destroyed = true;
+    clean(this.state, this.buffer32, this.IV, this.bufferOut32);
+    clean(...this.stack);
+  }
+  // Same as b2Compress, but doesn't modify state and returns 16 u32 array (instead of 8)
+  b2CompressOut() {
+    const { state: s, pos, flags, buffer32, bufferOut32: out32 } = this;
+    const { h, l } = fromBig(BigInt(this.chunkOut++));
+    swap32IfBE(buffer32);
+    const { v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15 } = compress(B3_SIGMA, 0, buffer32, 7, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], B3_IV[0], B3_IV[1], B3_IV[2], B3_IV[3], l, h, pos, flags);
+    out32[0] = v0 ^ v8;
+    out32[1] = v1 ^ v9;
+    out32[2] = v2 ^ v10;
+    out32[3] = v3 ^ v11;
+    out32[4] = v4 ^ v12;
+    out32[5] = v5 ^ v13;
+    out32[6] = v6 ^ v14;
+    out32[7] = v7 ^ v15;
+    out32[8] = s[0] ^ v8;
+    out32[9] = s[1] ^ v9;
+    out32[10] = s[2] ^ v10;
+    out32[11] = s[3] ^ v11;
+    out32[12] = s[4] ^ v12;
+    out32[13] = s[5] ^ v13;
+    out32[14] = s[6] ^ v14;
+    out32[15] = s[7] ^ v15;
+    swap32IfBE(buffer32);
+    swap32IfBE(out32);
+    this.posOut = 0;
+  }
+  finish() {
+    if (this.finished)
+      return;
+    this.finished = true;
+    clean(this.buffer.subarray(this.pos));
+    let flags = this.flags | B3_Flags.ROOT;
+    if (this.stack.length) {
+      flags |= B3_Flags.PARENT;
+      swap32IfBE(this.buffer32);
+      this.compress(this.buffer32, 0, true);
+      swap32IfBE(this.buffer32);
+      this.chunksDone = 0;
+      this.pos = this.blockLen;
+    } else {
+      flags |= (!this.chunkPos ? B3_Flags.CHUNK_START : 0) | B3_Flags.CHUNK_END;
+    }
+    this.flags = flags;
+    this.b2CompressOut();
+  }
+  writeInto(out) {
+    aexists(this, false);
+    abytes(out);
+    this.finish();
+    const { blockLen, bufferOut } = this;
+    for (let pos = 0, len = out.length; pos < len; ) {
+      if (this.posOut >= blockLen)
+        this.b2CompressOut();
+      const take = Math.min(blockLen - this.posOut, len - pos);
+      out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
+      this.posOut += take;
+      pos += take;
+    }
+    return out;
+  }
+  xofInto(out) {
+    if (!this.enableXOF)
+      throw new Error("XOF is not possible after digest call");
+    return this.writeInto(out);
+  }
+  xof(bytes) {
+    anumber(bytes);
+    return this.xofInto(new Uint8Array(bytes));
+  }
+  digestInto(out) {
+    aoutput(out, this);
+    if (this.finished)
+      throw new Error("digest() was already called");
+    this.enableXOF = false;
+    this.writeInto(out);
+    this.destroy();
+    return out;
+  }
+  digest() {
+    return this.digestInto(new Uint8Array(this.outputLen));
+  }
+};
+var blake3 = /* @__PURE__ */ createXOFer((opts) => new BLAKE3(opts));
+
+// ../replica/dist/index.js
+init_utils();
 
 // ../../node_modules/@noble/curves/esm/ed25519.js
 init_sha2();
@@ -20738,7 +19982,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   });
   const { prehash } = eddsaOpts;
   const { BASE, Fp: Fp2, Fn: Fn2 } = Point;
-  const randomBytes6 = eddsaOpts.randomBytes || randomBytes;
+  const randomBytes8 = eddsaOpts.randomBytes || randomBytes;
   const adjustScalarBytes2 = eddsaOpts.adjustScalarBytes || ((bytes) => bytes);
   const domain = eddsaOpts.domain || ((data, ctx, phflag) => {
     _abool2(phflag, "phflag");
@@ -20820,7 +20064,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
     signature: 2 * _size,
     seed: _size
   };
-  function randomSecretKey(seed = randomBytes6(lengths.seed)) {
+  function randomSecretKey(seed = randomBytes8(lengths.seed)) {
     return _abytes2(seed, lengths.seed, "seed");
   }
   function keygen(seed) {
@@ -21145,342 +20389,3421 @@ _RistrettoPoint.ZERO = /* @__PURE__ */ (() => new _RistrettoPoint(ed25519.Point.
 _RistrettoPoint.Fp = /* @__PURE__ */ (() => Fp)();
 _RistrettoPoint.Fn = /* @__PURE__ */ (() => Fn)();
 
-// ../../node_modules/@noble/hashes/esm/blake3.js
-init_md();
-init_u64();
-
-// ../../node_modules/@noble/hashes/esm/_blake.js
-init_utils();
-function G1s(a, b, c, d, x) {
-  a = a + b + x | 0;
-  d = rotr(d ^ a, 16);
-  c = c + d | 0;
-  b = rotr(b ^ c, 12);
-  return { a, b, c, d };
-}
-function G2s(a, b, c, d, x) {
-  a = a + b + x | 0;
-  d = rotr(d ^ a, 8);
-  c = c + d | 0;
-  b = rotr(b ^ c, 7);
-  return { a, b, c, d };
-}
-
-// ../../node_modules/@noble/hashes/esm/blake2.js
-init_utils();
-var BLAKE2 = class extends Hash {
-  constructor(blockLen, outputLen) {
-    super();
-    this.finished = false;
-    this.destroyed = false;
-    this.length = 0;
-    this.pos = 0;
-    anumber(blockLen);
-    anumber(outputLen);
-    this.blockLen = blockLen;
-    this.outputLen = outputLen;
-    this.buffer = new Uint8Array(blockLen);
-    this.buffer32 = u32(this.buffer);
+// ../replica/dist/index.js
+var ReplicaErrorCode = {
+  /** Another process holds the sync lease. */
+  BUSY: "REPLICA_BUSY",
+  /** No replica with this name exists. */
+  NOT_FOUND: "REPLICA_NOT_FOUND",
+  /** The replica exists but its stored configuration differs from the request. */
+  CONFIG_MISMATCH: "REPLICA_CONFIG_MISMATCH",
+  /** The runtime has no supported durable store (e.g. Node < 22.13). */
+  RUNTIME_UNSUPPORTED: "RUNTIME_UNSUPPORTED",
+  /** The local store failed (I/O, corruption, schema). */
+  STORAGE_ERROR: "STORAGE_ERROR",
+  /** The local disk is full. */
+  STORAGE_FULL: "STORAGE_FULL",
+  /** The key is outside the replica's prefix. */
+  NOT_COVERED: "NOT_COVERED",
+  /** Syncing the secrets space or the vault namespace needs an explicit opt-in. */
+  SECRETS_OPT_IN_REQUIRED: "SECRETS_OPT_IN_REQUIRED",
+  /** No grant is installed, or none covers the requested scope. */
+  GRANT_MISSING: "GRANT_MISSING",
+  /** The grant bytes are not a verifiable UCAN, or its signature is wrong. */
+  GRANT_INVALID: "GRANT_INVALID",
+  /** SIWE/CACAO and other non-UCAN grants cannot be used for a replica. */
+  GRANT_FORMAT_UNSUPPORTED: "GRANT_FORMAT_UNSUPPORTED",
+  /** The grant was issued to a different device. */
+  GRANT_AUDIENCE_MISMATCH: "GRANT_AUDIENCE_MISMATCH",
+  /** The grant lacks `tinycloud.kv/sync` or `tinycloud.kv/get` on the prefix. */
+  GRANT_NOT_COVERING: "GRANT_NOT_COVERING",
+  GRANT_NOT_YET_VALID: "GRANT_NOT_YET_VALID",
+  GRANT_EXPIRED: "GRANT_EXPIRED",
+  GRANT_REVOKED: "GRANT_REVOKED",
+  /** The node refused the invocation for a reason other than revocation. */
+  GRANT_UNAUTHORIZED: "GRANT_UNAUTHORIZED",
+  /** The node refused the retention grant. */
+  RETENTION_GRANT_REFUSED: "RETENTION_GRANT_REFUSED",
+  /** The node could not be reached. */
+  NETWORK_ERROR: "NETWORK_ERROR",
+  /** The node answered with an unexpected status. */
+  NODE_ERROR: "NODE_ERROR",
+  /** The node's answer violates the wire contract. */
+  PROTOCOL_ERROR: "PROTOCOL_ERROR",
+  /** The node asked for a fresh bootstrap (410). Handled inside sync. */
+  RESET_REQUIRED: "RESET_REQUIRED",
+  /** The feed now comes from a different node than the one pinned. */
+  SOURCE_CHANGED: "SOURCE_CHANGED",
+  /** The feed delivered a key outside the replica's prefix. */
+  SCOPE_VIOLATION: "SCOPE_VIOLATION",
+  /** Fetched bytes do not hash to the ETag the node attested for them. */
+  CONTENT_MISMATCH: "CONTENT_MISMATCH",
+  /** A stored blob no longer hashes to its name. */
+  INTEGRITY_ERROR: "INTEGRITY_ERROR"
+};
+var REPLICA_ERROR = /* @__PURE__ */ Symbol.for("tinycloud.replica.error");
+var ReplicaError = class extends Error {
+  [REPLICA_ERROR] = true;
+  code;
+  detail;
+  constructor(code3, message, detail, options) {
+    super(message, options);
+    this.name = "ReplicaError";
+    this.code = code3;
+    if (detail !== void 0) this.detail = detail;
   }
-  update(data) {
-    aexists(this);
-    data = toBytes(data);
-    abytes(data);
-    const { blockLen, buffer, buffer32 } = this;
-    const len = data.length;
-    const offset = data.byteOffset;
-    const buf = data.buffer;
-    for (let pos = 0; pos < len; ) {
-      if (this.pos === blockLen) {
-        swap32IfBE(buffer32);
-        this.compress(buffer32, 0, false);
-        swap32IfBE(buffer32);
-        this.pos = 0;
+};
+function isReplicaError(error, code3) {
+  return typeof error === "object" && error !== null && error[REPLICA_ERROR] === true && (code3 === void 0 || error.code === code3);
+}
+function kvPrefixCovers(prefix, key) {
+  if (prefix === "") return true;
+  if (prefix.endsWith("/")) return key.startsWith(prefix);
+  return key === prefix || key.startsWith(`${prefix}/`);
+}
+function requiresSecretsOptIn(space, prefix) {
+  if (space === "secrets" || space.endsWith(":secrets")) return true;
+  const firstSegment = prefix.split("/", 1)[0];
+  return firstSegment === "vault";
+}
+function hashFromEtag(etag) {
+  const match = /^"?blake3-([0-9a-f]{64})"?$/.exec(etag);
+  return match?.[1];
+}
+var RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+function isInstant(value) {
+  return RFC3339.test(value) && Number.isFinite(Date.parse(value));
+}
+function minIso(a, bSeconds) {
+  if (bSeconds === null) return a;
+  const b = new Date(bSeconds * 1e3).toISOString();
+  if (a === null) return b;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
+}
+function maxIso(a, bSeconds) {
+  if (bSeconds === null) return a;
+  const b = new Date(bSeconds * 1e3).toISOString();
+  if (a === null) return b;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+function effectiveAuthority(input) {
+  const notBefore = maxIso(input.window?.notBefore ?? null, input.grant?.notBefore ?? null);
+  const expiresAt = minIso(input.window?.expiresAt ?? null, input.grant?.expiresAt ?? null);
+  const retainUntil = input.policy === "retainAfterExpiry" ? input.window?.retainUntil ?? null : null;
+  let state = "valid";
+  if (input.revoked !== null) state = "revoked";
+  else if (notBefore !== null && input.now < Date.parse(notBefore)) state = "not-yet-valid";
+  else if (expiresAt !== null && input.now >= Date.parse(expiresAt)) state = "expired";
+  return { state, notBefore, expiresAt, retainUntil, retentionRevoked: (input.retentionRevoked ?? null) !== null };
+}
+function assertReadable(authority, now) {
+  switch (authority.state) {
+    case "valid":
+      return "valid";
+    case "revoked":
+      throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, "The replica's grant was revoked; local reads are blocked.");
+    case "not-yet-valid":
+      throw new ReplicaError(
+        ReplicaErrorCode.GRANT_NOT_YET_VALID,
+        `The replica's grant is not valid before ${authority.notBefore}.`
+      );
+    case "expired":
+      if (authority.retentionRevoked) {
+        throw new ReplicaError(
+          ReplicaErrorCode.GRANT_REVOKED,
+          `The replica's grant expired at ${authority.expiresAt} and its retention grant was revoked; local reads are blocked.`
+        );
       }
-      const take = Math.min(blockLen - this.pos, len - pos);
-      const dataOffset = offset + pos;
-      if (take === blockLen && !(dataOffset % 4) && pos + take < len) {
-        const data32 = new Uint32Array(buf, dataOffset, Math.floor((len - pos) / 4));
-        swap32IfBE(data32);
-        for (let pos32 = 0; pos + blockLen < len; pos32 += buffer32.length, pos += blockLen) {
-          this.length += blockLen;
-          this.compress(data32, pos32, false);
+      if (authority.retainUntil !== null && now < Date.parse(authority.retainUntil)) return "expired";
+      throw new ReplicaError(
+        ReplicaErrorCode.GRANT_EXPIRED,
+        authority.retainUntil === null ? `The replica's grant expired at ${authority.expiresAt}; local reads are blocked.` : `The replica's retention ended at ${authority.retainUntil}; local reads are blocked.`
+      );
+  }
+}
+var DEFAULT_PAGE_LIMIT = 500;
+var DEFAULT_LEASE_TTL_MS = 12e4;
+var FETCH_CHUNK = 100;
+var REPAIR_BATCH = 100;
+var RETENTION_REVOKED = /* @__PURE__ */ new Set(["retention-grant-revoked", "retention-grant-ancestor-revoked"]);
+var PENDING_REFUSALS = /* @__PURE__ */ new Set([
+  ReplicaErrorCode.GRANT_UNAUTHORIZED,
+  ReplicaErrorCode.GRANT_EXPIRED,
+  ReplicaErrorCode.GRANT_NOT_YET_VALID
+]);
+function contentHash(bytes) {
+  return bytesToHex(blake3(bytes));
+}
+function sameEtag(a, b) {
+  return a.replace(/^"|"$/g, "") === b.replace(/^"|"$/g, "");
+}
+function lastErrorOf(error, at) {
+  return {
+    at: new Date(at).toISOString(),
+    code: isReplicaError(error) ? error.code : "ERROR",
+    message: error instanceof Error ? error.message : String(error)
+  };
+}
+var Replica = class {
+  #store;
+  #transportFor;
+  #now;
+  #leaseTtlMs;
+  constructor(options) {
+    this.#store = options.store;
+    const transport = options.transport;
+    this.#transportFor = options.transportFor ?? (transport === void 0 ? void 0 : () => transport);
+    this.#now = options.now ?? Date.now;
+    this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+  }
+  async #state() {
+    const state = await this.#store.open();
+    if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
+    return state;
+  }
+  /** Throws unless local reads are allowed now; returns the meta every read reports. */
+  #readMeta(state) {
+    const now = this.#now();
+    const authority = assertReadable(
+      effectiveAuthority({
+        window: state.authority,
+        grant: state.grant,
+        revoked: state.revoked,
+        retentionRevoked: state.retentionRevoked,
+        policy: state.config.localReadPolicy,
+        now
+      }),
+      now
+    );
+    return {
+      consistency: "observed",
+      source: { host: state.config.host, nodeDid: state.nodeDid, space: state.config.space, prefix: state.config.prefix },
+      asOf: state.lastSyncAt,
+      coverage: state.coverage,
+      authority
+    };
+  }
+  /**
+   * Authority again, from the store's current state and the clock, once the
+   * read has its data: a revocation (and its purge) or an expiry that landed
+   * while the read ran wins, and the caller gets the error, not the data.
+   */
+  async #confirmedMeta() {
+    return this.#readMeta(await this.#state());
+  }
+  async get(key, options = {}) {
+    const state = await this.#state();
+    this.#readMeta(state);
+    if (!kvPrefixCovers(state.config.prefix, key)) return { status: "not_covered", key, meta: await this.#confirmedMeta() };
+    for (let attempt = 0; ; attempt += 1) {
+      const entry = await this.#store.get(key);
+      if (entry === void 0) {
+        const status = state.coverage === "complete" ? "absent" : "coverage_incomplete";
+        return { status, key, meta: await this.#confirmedMeta() };
+      }
+      if (entry.deleted) return { status: "deleted", key, meta: await this.#confirmedMeta() };
+      if (!entry.content) {
+        return { status: "content_missing", key, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
+      }
+      const value = await this.#store.readContent(entry.hash);
+      const intact = value !== void 0 && (options.verify === false || contentHash(value) === entry.hash);
+      if (intact) {
+        return { status: "present", key, value, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
+      }
+      if (attempt === 0) continue;
+      await this.#confirmedMeta();
+      throw new ReplicaError(
+        ReplicaErrorCode.INTEGRITY_ERROR,
+        value === void 0 ? `The stored content for ${JSON.stringify(key)} is missing.` : `The stored content for ${JSON.stringify(key)} does not match its hash.`,
+        { key }
+      );
+    }
+  }
+  /** Live keys under `prefix` (a plain string prefix within the replica's scope). */
+  async list(options = {}) {
+    const state = await this.#state();
+    this.#readMeta(state);
+    const scope = state.config.prefix;
+    const prefix = options.prefix ?? "";
+    if (prefix !== "" && !scope.startsWith(prefix) && !kvPrefixCovers(scope, prefix)) {
+      throw new ReplicaError(
+        ReplicaErrorCode.NOT_COVERED,
+        `${JSON.stringify(prefix)} is outside the replica's prefix ${JSON.stringify(scope)}.`
+      );
+    }
+    const rows = await this.#store.list(options);
+    const entries = [];
+    for (const row of rows) {
+      if (row.deleted) continue;
+      entries.push({ key: row.key, etag: row.etag, metadata: row.metadata, content: row.content });
+    }
+    return { entries, meta: await this.#confirmedMeta() };
+  }
+  async status() {
+    await this.#state();
+    return this.#store.status(this.#now());
+  }
+  /** Clear entries, blobs, cursor and the source pin; keep the configuration and grant. */
+  async reset(reason) {
+    await this.#state();
+    const lease = await this.#store.acquireSyncLease(this.#leaseTtlMs);
+    if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
+    try {
+      await this.#store.reset(lease, reason);
+    } finally {
+      await this.#store.releaseLease(lease);
+    }
+  }
+  /**
+   * Sync under the pending grant if there is one, else the active grant. If
+   * the node refuses a pending grant before anything committed under it, the
+   * active grant serves: a revoked pending grant is discarded, any other
+   * refusal is recorded on it. A revocation of the grant serving the replica,
+   * learned anywhere in the sync, purges the replica before this returns.
+   */
+  async sync(options = {}) {
+    const transportFor = this.#transportFor;
+    if (transportFor === void 0) throw new Error("Replica.sync needs a transport");
+    const initial = await this.#state();
+    if (initial.revoked !== null) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${initial.revoked}`);
+    }
+    const candidates = [initial.pendingGrant, initial.grant].filter((grant) => grant !== null);
+    if (candidates.length === 0) throw new ReplicaError(ReplicaErrorCode.GRANT_MISSING, "No grant is installed for this replica.");
+    const lease = await this.#store.acquireSyncLease(this.#leaseTtlMs);
+    if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
+    try {
+      for (const [index, grant] of candidates.entries()) {
+        const pending = grant.cid === initial.pendingGrant?.cid;
+        const attempt = {
+          lease,
+          grant,
+          transport: transportFor(grant),
+          promote: pending ? grant : null,
+          signal: options.signal
+        };
+        try {
+          return await this.#syncUnder(attempt, options.limit ?? DEFAULT_PAGE_LIMIT);
+        } catch (error) {
+          const canFallBack = pending && attempt.promote !== null && index < candidates.length - 1;
+          if (canFallBack && isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
+            await this.#store.discardPendingGrant(grant.cid, error.message);
+            continue;
+          }
+          if (canFallBack && isReplicaError(error) && PENDING_REFUSALS.has(error.code)) {
+            await this.#store.recordPendingGrantError(grant.cid, lastErrorOf(error, this.#now()));
+            continue;
+          }
+          throw error;
         }
-        swap32IfBE(data32);
+      }
+      throw new Error("unreachable: the last candidate either returns or throws");
+    } catch (error) {
+      await this.#learn(error);
+      throw error;
+    } finally {
+      await this.#store.releaseLease(lease).catch(() => void 0);
+    }
+  }
+  /** Persist what a failed sync taught us before the error reaches the caller. */
+  async #learn(error) {
+    if (isReplicaError(error, ReplicaErrorCode.GRANT_REVOKED)) {
+      if ((await this.#store.open())?.revoked != null) return;
+      await this.#store.markRevoked(error.message);
+      return;
+    }
+    if (isReplicaError(error, ReplicaErrorCode.RETENTION_GRANT_REFUSED)) {
+      const cid = error.detail?.retentionGrantCid;
+      const reason = error.detail?.reason;
+      if (typeof cid === "string" && typeof reason === "string" && RETENTION_REVOKED.has(reason)) {
+        await this.#store.markRetentionRevoked(cid, error.message);
+        return;
+      }
+    }
+    await this.#store.recordError(lastErrorOf(error, this.#now())).catch(() => void 0);
+  }
+  /** The effective window for `grant` under `window`; throws unless it holds now (no retention for syncing). */
+  #syncWindow(window, grant) {
+    const now = this.#now();
+    const authority = effectiveAuthority({ window, grant, revoked: null, policy: "whileGrantValid", now });
+    if (authority.state !== "valid") assertReadable({ ...authority, retainUntil: null }, now);
+    return { notBefore: authority.notBefore, expiresAt: authority.expiresAt };
+  }
+  async #syncUnder(attempt, limit) {
+    const state = await this.#state();
+    const { config } = state;
+    this.#syncWindow(attempt.promote === null ? state.authority : null, attempt.grant);
+    const report = {
+      pages: 0,
+      changes: 0,
+      deleted: 0,
+      fetched: 0,
+      contentMissing: 0,
+      repaired: 0,
+      resets: 0,
+      coverage: state.coverage,
+      cursorAdvanced: false,
+      promotedGrant: false,
+      blobsCollected: 0
+    };
+    let cursor = state.cursor;
+    let pinned = state.nodeDid;
+    let coverage = state.coverage;
+    for (; ; ) {
+      let page;
+      const retentionGrant = config.retentionGrantCid;
+      try {
+        page = await attempt.transport.syncPage({
+          prefix: config.prefix,
+          ...cursor === null ? {} : { cursor },
+          limit,
+          ...retentionGrant === null ? {} : { retentionGrant },
+          ...attempt.signal === void 0 ? {} : { signal: attempt.signal }
+        });
+      } catch (error) {
+        if (isReplicaError(error, ReplicaErrorCode.RESET_REQUIRED) && report.resets === 0) {
+          const reason = typeof error.detail?.reason === "string" ? error.detail.reason : "reset-required";
+          await this.#store.reset(attempt.lease, `node: ${reason}`, { keepSource: true });
+          report.resets += 1;
+          cursor = null;
+          coverage = "empty";
+          continue;
+        }
+        if (isReplicaError(error, ReplicaErrorCode.RETENTION_GRANT_REFUSED) && retentionGrant !== null) {
+          throw new ReplicaError(error.code, error.message, { ...error.detail, retentionGrantCid: retentionGrant }, { cause: error });
+        }
+        throw error;
+      }
+      this.#checkPage(page, config.space, config.prefix, pinned);
+      const window = this.#syncWindow(page.authority, attempt.grant);
+      const verified = await this.#verify(page, attempt);
+      coverage = page.more ? coverage === "complete" ? "complete" : "bootstrapping" : "complete";
+      const at = new Date(this.#now()).toISOString();
+      await this.#store.applyPage(attempt.lease, {
+        changes: verified.changes,
+        blobs: verified.blobs,
+        cursor: page.cursor,
+        source: page.source,
+        authority: page.authority,
+        coverage,
+        at,
+        window,
+        complete: !page.more,
+        promoteGrant: attempt.promote
+      });
+      if (attempt.promote !== null) {
+        report.promotedGrant = true;
+        attempt.promote = null;
+      }
+      report.pages += 1;
+      report.changes += page.changes.length;
+      report.deleted += page.changes.filter((change) => change.deleted).length;
+      report.fetched += verified.fetched;
+      if (page.cursor !== cursor) report.cursorAdvanced = true;
+      cursor = page.cursor;
+      pinned = page.source.nodeDid;
+      await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
+      if (!page.more) break;
+    }
+    report.repaired = await this.#repair(attempt, cursor, pinned, coverage);
+    report.blobsCollected = await this.#store.collectGarbage(attempt.lease);
+    report.coverage = coverage;
+    report.contentMissing = (await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER)).length;
+    return report;
+  }
+  #checkPage(page, space, prefix, pinnedNodeDid) {
+    if (page.source.space !== space || page.source.prefix !== prefix) {
+      throw new ReplicaError(
+        ReplicaErrorCode.PROTOCOL_ERROR,
+        `The node answered for ${page.source.space}/${page.source.prefix}, not ${space}/${prefix}.`
+      );
+    }
+    for (const [name, value] of Object.entries(page.authority)) {
+      if (value !== null && (typeof value !== "string" || !isInstant(value))) {
+        throw new ReplicaError(
+          ReplicaErrorCode.PROTOCOL_ERROR,
+          `The node attested authority.${name} = ${JSON.stringify(value)}, which is not a timestamp; nothing was committed.`
+        );
+      }
+    }
+    if (pinnedNodeDid !== null && page.source.nodeDid !== pinnedNodeDid) {
+      throw new ReplicaError(
+        ReplicaErrorCode.SOURCE_CHANGED,
+        `The feed now comes from ${page.source.nodeDid}, not the pinned source ${pinnedNodeDid}. Reset the replica to follow a new source.`,
+        { pinned: pinnedNodeDid, received: page.source.nodeDid }
+      );
+    }
+    for (const change of page.changes) {
+      if (!kvPrefixCovers(prefix, change.key)) {
+        throw new ReplicaError(
+          ReplicaErrorCode.SCOPE_VIOLATION,
+          `The feed delivered ${JSON.stringify(change.key)}, outside the prefix ${JSON.stringify(prefix)}.`,
+          { key: change.key }
+        );
+      }
+    }
+  }
+  async #verify(page, attempt) {
+    const blobs = /* @__PURE__ */ new Map();
+    const changes = [];
+    const candidates = [];
+    for (const change of page.changes) {
+      if (change.deleted) {
+        changes.push({ key: change.key, deleted: true });
         continue;
       }
-      buffer.set(data.subarray(pos, pos + take), this.pos);
-      this.pos += take;
-      this.length += take;
-      pos += take;
+      const hash = hashFromEtag(change.etag);
+      if (hash === void 0) {
+        throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, `The feed sent an ETag that is not blake3: ${change.etag}`, {
+          key: change.key
+        });
+      }
+      const previous = await this.#store.get(change.key);
+      const unchanged = previous !== void 0 && !previous.deleted && previous.etag === change.etag && previous.content;
+      changes.push({ key: change.key, deleted: false, etag: change.etag, hash, metadata: change.metadata, content: unchanged });
+      if (!unchanged) candidates.push({ index: changes.length - 1, key: change.key, etag: change.etag, hash });
     }
-    return this;
+    const held = await this.#store.hasContent([...new Set(candidates.map((candidate) => candidate.hash))]);
+    const needed = candidates.filter((candidate) => {
+      if (!held.has(candidate.hash)) return true;
+      changes[candidate.index].content = true;
+      return false;
+    });
+    let fetched2 = 0;
+    for (let start = 0; start < needed.length; start += FETCH_CHUNK) {
+      const chunk = needed.slice(start, start + FETCH_CHUNK);
+      const contents = await attempt.transport.fetchContent(
+        chunk.map((candidate) => candidate.key),
+        attempt.signal === void 0 ? void 0 : { signal: attempt.signal }
+      );
+      for (const candidate of chunk) {
+        const ok2 = acceptContent(candidate, contents.get(candidate.key));
+        if (ok2 === void 0) continue;
+        blobs.set(candidate.hash, ok2);
+        changes[candidate.index].content = true;
+        fetched2 += 1;
+      }
+      await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
+    }
+    return { changes, blobs, fetched: fetched2 };
   }
-  digestInto(out) {
-    aexists(this);
-    aoutput(out, this);
-    const { pos, buffer32 } = this;
-    this.finished = true;
-    clean(this.buffer.subarray(pos));
-    swap32IfBE(buffer32);
-    this.compress(buffer32, 0, true);
-    swap32IfBE(buffer32);
-    const out32 = u32(out);
-    this.get().forEach((v, i) => out32[i] = swap8IfBE(v));
-  }
-  digest() {
-    const { buffer, outputLen } = this;
-    this.digestInto(buffer);
-    const res = buffer.slice(0, outputLen);
-    this.destroy();
-    return res;
-  }
-  _cloneInto(to) {
-    const { buffer, length: length4, finished, destroyed, outputLen, pos } = this;
-    to || (to = new this.constructor({ dkLen: outputLen }));
-    to.set(...this.get());
-    to.buffer.set(buffer);
-    to.destroyed = destroyed;
-    to.finished = finished;
-    to.length = length4;
-    to.pos = pos;
-    to.outputLen = outputLen;
-    return to;
-  }
-  clone() {
-    return this._cloneInto();
+  async #repair(attempt, cursor, nodeDid, coverage) {
+    const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+    let repaired = 0;
+    for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
+      const chunk = pending.slice(start, start + REPAIR_BATCH);
+      const contents = await attempt.transport.fetchContent(
+        chunk.map((entry) => entry.key),
+        attempt.signal === void 0 ? void 0 : { signal: attempt.signal }
+      );
+      const blobs = /* @__PURE__ */ new Map();
+      const changes = [];
+      for (const entry of chunk) {
+        const bytes = acceptContent(entry, contents.get(entry.key));
+        if (bytes === void 0) continue;
+        blobs.set(entry.hash, bytes);
+        changes.push({ ...entry, content: true });
+      }
+      await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
+      if (changes.length === 0) continue;
+      const state = await this.#state();
+      await this.#store.applyPage(attempt.lease, {
+        changes,
+        blobs,
+        cursor,
+        source: { nodeDid: nodeDid ?? "", space: state.config.space, prefix: state.config.prefix },
+        authority: null,
+        coverage,
+        at: new Date(this.#now()).toISOString(),
+        window: this.#syncWindow(state.authority, attempt.grant),
+        complete: false,
+        promoteGrant: null
+      });
+      repaired += changes.length;
+    }
+    return repaired;
   }
 };
-function compress(s, offset, msg, rounds, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) {
-  let j = 0;
-  for (let i = 0; i < rounds; i++) {
-    ({ a: v0, b: v4, c: v8, d: v12 } = G1s(v0, v4, v8, v12, msg[offset + s[j++]]));
-    ({ a: v0, b: v4, c: v8, d: v12 } = G2s(v0, v4, v8, v12, msg[offset + s[j++]]));
-    ({ a: v1, b: v5, c: v9, d: v13 } = G1s(v1, v5, v9, v13, msg[offset + s[j++]]));
-    ({ a: v1, b: v5, c: v9, d: v13 } = G2s(v1, v5, v9, v13, msg[offset + s[j++]]));
-    ({ a: v2, b: v6, c: v10, d: v14 } = G1s(v2, v6, v10, v14, msg[offset + s[j++]]));
-    ({ a: v2, b: v6, c: v10, d: v14 } = G2s(v2, v6, v10, v14, msg[offset + s[j++]]));
-    ({ a: v3, b: v7, c: v11, d: v15 } = G1s(v3, v7, v11, v15, msg[offset + s[j++]]));
-    ({ a: v3, b: v7, c: v11, d: v15 } = G2s(v3, v7, v11, v15, msg[offset + s[j++]]));
-    ({ a: v0, b: v5, c: v10, d: v15 } = G1s(v0, v5, v10, v15, msg[offset + s[j++]]));
-    ({ a: v0, b: v5, c: v10, d: v15 } = G2s(v0, v5, v10, v15, msg[offset + s[j++]]));
-    ({ a: v1, b: v6, c: v11, d: v12 } = G1s(v1, v6, v11, v12, msg[offset + s[j++]]));
-    ({ a: v1, b: v6, c: v11, d: v12 } = G2s(v1, v6, v11, v12, msg[offset + s[j++]]));
-    ({ a: v2, b: v7, c: v8, d: v13 } = G1s(v2, v7, v8, v13, msg[offset + s[j++]]));
-    ({ a: v2, b: v7, c: v8, d: v13 } = G2s(v2, v7, v8, v13, msg[offset + s[j++]]));
-    ({ a: v3, b: v4, c: v9, d: v14 } = G1s(v3, v4, v9, v14, msg[offset + s[j++]]));
-    ({ a: v3, b: v4, c: v9, d: v14 } = G2s(v3, v4, v9, v14, msg[offset + s[j++]]));
+function acceptContent(expected, fetched2) {
+  if (fetched2 === void 0 || "missing" in fetched2) return void 0;
+  if (contentHash(fetched2.bytes) === expected.hash) return fetched2.bytes;
+  if (sameEtag(fetched2.etag, expected.etag)) {
+    throw new ReplicaError(
+      ReplicaErrorCode.CONTENT_MISMATCH,
+      `The content of ${JSON.stringify(expected.key)} does not hash to its ETag ${expected.etag}.`,
+      { key: expected.key }
+    );
   }
-  return { v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15 };
+  return void 0;
+}
+var BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+var BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+function base58Decode(text) {
+  let value = 0n;
+  for (const char of text) {
+    const digit = BASE58.indexOf(char);
+    if (digit < 0) throw new Error("invalid base58");
+    value = value * 58n + BigInt(digit);
+  }
+  const bytes = [];
+  while (value > 0n) {
+    bytes.unshift(Number(value & 0xffn));
+    value >>= 8n;
+  }
+  for (const char of text) {
+    if (char !== "1") break;
+    bytes.unshift(0);
+  }
+  return Uint8Array.from(bytes);
+}
+function base32Encode(bytes) {
+  let out = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    buffer = buffer << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[buffer >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += BASE32[buffer << 5 - bits & 31];
+  return out;
+}
+function base64UrlDecode(text) {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new Error("invalid base64url");
+  const padded = text.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((text.length + 3) % 4);
+  const binary = globalThis.atob(padded);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+function ucanCid(jwt) {
+  const digest2 = blake3(new TextEncoder().encode(jwt));
+  const bytes = new Uint8Array(4 + digest2.length);
+  bytes.set([1, 85, 30, 32]);
+  bytes.set(digest2, 4);
+  return `b${base32Encode(bytes)}`;
+}
+function ed25519KeyOfDid(did) {
+  const bare = did.split("#", 1)[0];
+  if (!bare.startsWith("did:key:z")) return void 0;
+  let decoded;
+  try {
+    decoded = base58Decode(bare.slice("did:key:z".length));
+  } catch {
+    return void 0;
+  }
+  if (decoded.length !== 34 || decoded[0] !== 237 || decoded[1] !== 1) return void 0;
+  return decoded.subarray(2);
+}
+function invalid(message) {
+  return new ReplicaError(ReplicaErrorCode.GRANT_INVALID, message);
+}
+function parseUcanGrant(input) {
+  const raw = typeof input === "string" ? input : new TextDecoder().decode(input);
+  const jwt = raw.trim().replace(/^Bearer\s+/i, "");
+  const parts = jwt.split(".");
+  if (parts.length !== 3) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_FORMAT_UNSUPPORTED,
+      "The grant is not a compact UCAN. SIWE/CACAO grants cannot back a replica; ask the owner for a device grant (tc auth grant)."
+    );
+  }
+  const [headerPart, payloadPart, signaturePart] = parts;
+  let header;
+  let payload;
+  let signature;
+  try {
+    header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerPart)));
+    payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
+    signature = base64UrlDecode(signaturePart);
+  } catch {
+    throw invalid("The grant is not well-formed base64url JSON.");
+  }
+  if (header?.alg !== "EdDSA") {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_FORMAT_UNSUPPORTED,
+      `The grant is signed with ${String(header?.alg)}; a replica needs an Ed25519 (EdDSA) device grant.`
+    );
+  }
+  const issuer = payload?.iss;
+  const audience = payload?.aud;
+  if (typeof issuer !== "string" || typeof audience !== "string" || audience.length === 0) {
+    throw invalid("The grant has no signed issuer or audience.");
+  }
+  const key = ed25519KeyOfDid(issuer);
+  if (key === void 0) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_FORMAT_UNSUPPORTED,
+      `The grant issuer ${issuer} is not an Ed25519 did:key.`
+    );
+  }
+  let verified = false;
+  try {
+    verified = ed25519.verify(signature, new TextEncoder().encode(`${headerPart}.${payloadPart}`), key);
+  } catch {
+    verified = false;
+  }
+  if (!verified) throw invalid("The grant's signature does not verify against its issuer.");
+  const att = payload.att;
+  if (att === null || typeof att !== "object" || Array.isArray(att)) throw invalid("The grant has no signed attenuation.");
+  for (const abilities of Object.values(att)) {
+    if (abilities === null || typeof abilities !== "object" || Array.isArray(abilities)) {
+      throw invalid("The grant has a malformed signed attenuation.");
+    }
+  }
+  const prf = payload.prf ?? [];
+  if (!Array.isArray(prf) || prf.some((proof) => typeof proof !== "string")) throw invalid("The grant has malformed signed proofs.");
+  const window = (name) => {
+    const value = payload[name];
+    if (value === void 0 || value === null) return null;
+    if (typeof value !== "number" || !Number.isFinite(value)) throw invalid(`The grant's signed ${name} is not a number.`);
+    return value;
+  };
+  return {
+    cid: ucanCid(jwt),
+    bytes: new TextEncoder().encode(jwt),
+    jwt,
+    issuer,
+    audience,
+    notBefore: window("nbf"),
+    expiresAt: window("exp"),
+    att,
+    prf
+  };
+}
+function kvPathIn(resource, space) {
+  for (const base4 of [`${space}/kv/`, `tinycloud://${space}/kv/`]) {
+    if (resource.startsWith(base4)) return resource.slice(base4.length);
+  }
+  return void 0;
+}
+function grantCovers(grant, space, prefix, ability) {
+  for (const [resource, abilities] of Object.entries(grant.att)) {
+    const path = kvPathIn(resource, space);
+    if (path === void 0 || !kvPrefixCovers(path, prefix)) continue;
+    if (ability in abilities) return true;
+    if (ability !== "tinycloud.kv/sync" && ability !== "tinycloud.kv/retain" && "tinycloud.kv/*" in abilities) return true;
+  }
+  return false;
+}
+function syncGrantSpaces(grant) {
+  const spaces = /* @__PURE__ */ new Set();
+  for (const [resource, abilities] of Object.entries(grant.att)) {
+    if (!("tinycloud.kv/sync" in abilities)) continue;
+    const match = /^(?:tinycloud:\/\/)?(tinycloud:[^/]+)\/kv\//.exec(resource);
+    if (match) spaces.add(match[1]);
+  }
+  return [...spaces];
+}
+function assertGrantInstallable(grant, input) {
+  if (grant.audience.split("#", 1)[0] !== input.deviceDid.split("#", 1)[0]) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_AUDIENCE_MISMATCH,
+      `The grant was issued to ${grant.audience}, not this device (${input.deviceDid}).`
+    );
+  }
+  for (const ability of ["tinycloud.kv/sync", "tinycloud.kv/get"]) {
+    if (!grantCovers(grant, input.space, input.prefix, ability)) {
+      throw new ReplicaError(
+        ReplicaErrorCode.GRANT_NOT_COVERING,
+        `The grant does not carry ${ability} on ${input.space}/kv/${input.prefix}.`,
+        { ability }
+      );
+    }
+  }
+  const nowSeconds = input.now / 1e3;
+  if (grant.notBefore !== null && nowSeconds < grant.notBefore) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_NOT_YET_VALID,
+      `The grant is not valid before ${new Date(grant.notBefore * 1e3).toISOString()}.`
+    );
+  }
+  if (grant.expiresAt !== null && nowSeconds >= grant.expiresAt) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_EXPIRED,
+      `The grant expired at ${new Date(grant.expiresAt * 1e3).toISOString()}.`
+    );
+  }
+}
+var REVOKED_CODES = /* @__PURE__ */ new Set(["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCESTOR_REVOKED"]);
+var REVOKED_BODY2 = /^(?:Invalid invocation: )?(?:delegation-revoked: [A-Za-z0-9]+|delegation-ancestor-revoked: ancestor=[A-Za-z0-9]+ (?:invoked|parent)=[A-Za-z0-9]+)$/;
+function isRevocation(error, status, request) {
+  if (REVOKED_CODES.has(error.code)) return true;
+  if (status !== 401 || request === void 0) return false;
+  const lead = `${request}: 401 - `;
+  return error.message.startsWith(lead) && REVOKED_BODY2.test(error.message.slice(lead.length));
+}
+function replicaErrorFromService(error, context, request) {
+  const meta = error.meta ?? {};
+  const status = typeof meta.status === "number" ? meta.status : void 0;
+  const detail = { serviceCode: error.code, ...status === void 0 ? {} : { status } };
+  const reason = typeof meta.reason === "string" ? meta.reason : void 0;
+  if (error.code === "KV_SYNC_RESET_REQUIRED" || status === 410) {
+    return new ReplicaError(
+      ReplicaErrorCode.RESET_REQUIRED,
+      `${context}: the node requires a fresh bootstrap (${reason ?? "reason not given"}).`,
+      { ...detail, reason: reason ?? "reset-required" }
+    );
+  }
+  if (isRevocation(error, status, request)) {
+    return new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `${context}: ${error.message}`, detail);
+  }
+  if (error.code === "KV_RETENTION_GRANT_REFUSED") {
+    return new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, `${context}: ${error.message}`, {
+      ...detail,
+      ...reason === void 0 ? {} : { reason }
+    });
+  }
+  if (status === 401 || status === 403 || /^AUTH_/.test(error.code)) {
+    if (/expired/i.test(error.message)) {
+      return new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `${context}: ${error.message}`, detail);
+    }
+    return new ReplicaError(ReplicaErrorCode.GRANT_UNAUTHORIZED, `${context}: ${error.message}`, detail);
+  }
+  if (status !== void 0) {
+    return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context}: ${error.message}`, detail);
+  }
+  if (error.code === "NETWORK_ERROR" || /TIMEOUT|ABORT/.test(error.code)) {
+    return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context}: ${error.message}`, detail);
+  }
+  return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context}: ${error.message}`, detail);
+}
+var encoder = new TextEncoder();
+function compareKeyBytes(a, b) {
+  const x = encoder.encode(a);
+  const y = encoder.encode(b);
+  for (let index = 0; index < Math.min(x.length, y.length); index += 1) {
+    if (x[index] !== y[index]) return x[index] - y[index];
+  }
+  return x.length - y.length;
+}
+function isNotFound(error) {
+  return error.code === "KV_NOT_FOUND" || error.code === "NOT_FOUND";
+}
+function instant(value) {
+  if (value === null) return null;
+  if (typeof value === "string" && isInstant(value)) return value;
+  throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, `The kv/sync authority holds a bound that is not a timestamp: ${JSON.stringify(value)}.`);
+}
+function checkPage(data) {
+  const ok2 = data !== null && typeof data === "object" && Array.isArray(data.changes) && typeof data.more === "boolean" && typeof data.cursor === "string" && typeof data.source?.nodeDid === "string" && typeof data.source?.space === "string" && typeof data.source?.prefix === "string" && data.authority !== null && typeof data.authority === "object" && data.changes.every(
+    (change) => typeof change?.key === "string" && (change.deleted === true || change.deleted === false && typeof change.etag === "string" && change.metadata !== null && typeof change.metadata === "object" && Object.values(change.metadata).every((value) => typeof value === "string"))
+  );
+  if (!ok2) throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, "The kv/sync response does not match the wire contract.");
+  return {
+    changes: data.changes.map(
+      (change) => change.deleted ? { key: change.key, deleted: true } : { key: change.key, deleted: false, etag: change.etag, metadata: { ...change.metadata } }
+    ),
+    more: data.more,
+    cursor: data.cursor,
+    source: { nodeDid: data.source.nodeDid, space: data.source.space, prefix: data.source.prefix },
+    authority: {
+      notBefore: instant(data.authority.notBefore),
+      expiresAt: instant(data.authority.expiresAt),
+      retainUntil: instant(data.authority.retainUntil)
+    }
+  };
+}
+function fetched(key, result, request) {
+  if (!result.ok) {
+    if (isNotFound(result.error)) return { missing: true };
+    throw replicaErrorFromService(result.error, `Fetching ${JSON.stringify(key)}`, request);
+  }
+  if (!(result.data.data instanceof Uint8Array)) {
+    throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, `The value of ${JSON.stringify(key)} did not arrive as bytes.`);
+  }
+  return { bytes: result.data.data, etag: result.data.headers.etag ?? "" };
+}
+function kvSyncTransport(kv) {
+  return {
+    async syncPage({ prefix, cursor, limit, retentionGrant, signal }) {
+      const result = await kv.changes({
+        prefix,
+        limit,
+        ...cursor === void 0 ? {} : { cursor },
+        ...retentionGrant === void 0 ? {} : { retentionGrant },
+        ...signal === void 0 ? {} : { signal }
+      });
+      if (!result.ok) throw replicaErrorFromService(result.error, "Syncing");
+      return checkPage(result.data);
+    },
+    async fetchContent(keys, options) {
+      const contents = /* @__PURE__ */ new Map();
+      if (keys.length === 0) return contents;
+      const signal = options?.signal;
+      const ordered = [...keys].sort(compareKeyBytes);
+      const batch = await kv.batchGet(ordered, { binary: true, ...signal === void 0 ? {} : { signal } });
+      if (batch.ok) {
+        for (const item of batch.data.results) {
+          const result = item.result;
+          if (!result.ok && result.error.code === "KV_RESPONSE_TOO_LARGE") continue;
+          contents.set(item.key, fetched(item.key, result, `Failed to get key ${JSON.stringify(item.key)}`));
+        }
+      } else if (batch.error.code !== "KV_RESPONSE_TOO_LARGE") {
+        throw replicaErrorFromService(batch.error, `Fetching ${keys.length} value(s)`, `Failed to batch read ${ordered.length} key(s)`);
+      }
+      for (const key of keys) {
+        if (contents.has(key)) continue;
+        const request = `Failed to get key ${JSON.stringify(key)}`;
+        contents.set(key, fetched(key, await kv.get(key, { binary: true, ...signal === void 0 ? {} : { signal } }), request));
+      }
+      return contents;
+    }
+  };
 }
 
-// ../../node_modules/@noble/hashes/esm/blake3.js
-init_utils();
-var B3_Flags = {
-  CHUNK_START: 1,
-  CHUNK_END: 2,
-  PARENT: 4,
-  ROOT: 8,
-  KEYED_HASH: 16,
-  DERIVE_KEY_CONTEXT: 32,
-  DERIVE_KEY_MATERIAL: 64
+// ../replica/dist/sqlite.js
+import { randomBytes as randomBytes4 } from "crypto";
+import { constants as fsConstants } from "fs";
+import { chmod as chmod3, link, mkdir as mkdir3, open as open2, readFile as readFile8, readdir as readdir3, rm as rm3, rmdir as rmdir2, stat as stat2, unlink } from "fs/promises";
+import { join as join5 } from "path";
+var ReplicaErrorCode2 = {
+  /** Another process holds the sync lease. */
+  BUSY: "REPLICA_BUSY",
+  /** No replica with this name exists. */
+  NOT_FOUND: "REPLICA_NOT_FOUND",
+  /** The replica exists but its stored configuration differs from the request. */
+  CONFIG_MISMATCH: "REPLICA_CONFIG_MISMATCH",
+  /** The runtime has no supported durable store (e.g. Node < 22.13). */
+  RUNTIME_UNSUPPORTED: "RUNTIME_UNSUPPORTED",
+  /** The local store failed (I/O, corruption, schema). */
+  STORAGE_ERROR: "STORAGE_ERROR",
+  /** The local disk is full. */
+  STORAGE_FULL: "STORAGE_FULL",
+  /** The key is outside the replica's prefix. */
+  NOT_COVERED: "NOT_COVERED",
+  /** Syncing the secrets space or the vault namespace needs an explicit opt-in. */
+  SECRETS_OPT_IN_REQUIRED: "SECRETS_OPT_IN_REQUIRED",
+  /** No grant is installed, or none covers the requested scope. */
+  GRANT_MISSING: "GRANT_MISSING",
+  /** The grant bytes are not a verifiable UCAN, or its signature is wrong. */
+  GRANT_INVALID: "GRANT_INVALID",
+  /** SIWE/CACAO and other non-UCAN grants cannot be used for a replica. */
+  GRANT_FORMAT_UNSUPPORTED: "GRANT_FORMAT_UNSUPPORTED",
+  /** The grant was issued to a different device. */
+  GRANT_AUDIENCE_MISMATCH: "GRANT_AUDIENCE_MISMATCH",
+  /** The grant lacks `tinycloud.kv/sync` or `tinycloud.kv/get` on the prefix. */
+  GRANT_NOT_COVERING: "GRANT_NOT_COVERING",
+  GRANT_NOT_YET_VALID: "GRANT_NOT_YET_VALID",
+  GRANT_EXPIRED: "GRANT_EXPIRED",
+  GRANT_REVOKED: "GRANT_REVOKED",
+  /** The node refused the invocation for a reason other than revocation. */
+  GRANT_UNAUTHORIZED: "GRANT_UNAUTHORIZED",
+  /** The node refused the retention grant. */
+  RETENTION_GRANT_REFUSED: "RETENTION_GRANT_REFUSED",
+  /** The node could not be reached. */
+  NETWORK_ERROR: "NETWORK_ERROR",
+  /** The node answered with an unexpected status. */
+  NODE_ERROR: "NODE_ERROR",
+  /** The node's answer violates the wire contract. */
+  PROTOCOL_ERROR: "PROTOCOL_ERROR",
+  /** The node asked for a fresh bootstrap (410). Handled inside sync. */
+  RESET_REQUIRED: "RESET_REQUIRED",
+  /** The feed now comes from a different node than the one pinned. */
+  SOURCE_CHANGED: "SOURCE_CHANGED",
+  /** The feed delivered a key outside the replica's prefix. */
+  SCOPE_VIOLATION: "SCOPE_VIOLATION",
+  /** Fetched bytes do not hash to the ETag the node attested for them. */
+  CONTENT_MISMATCH: "CONTENT_MISMATCH",
+  /** A stored blob no longer hashes to its name. */
+  INTEGRITY_ERROR: "INTEGRITY_ERROR"
 };
-var B3_IV = SHA256_IV.slice();
-var B3_SIGMA = /* @__PURE__ */ (() => {
-  const Id = Array.from({ length: 16 }, (_, i) => i);
-  const permute = (arr) => [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8].map((i) => arr[i]);
-  const res = [];
-  for (let i = 0, v = Id; i < 7; i++, v = permute(v))
-    res.push(...v);
-  return Uint8Array.from(res);
-})();
-var BLAKE3 = class _BLAKE3 extends BLAKE2 {
-  constructor(opts = {}, flags = 0) {
-    super(64, opts.dkLen === void 0 ? 32 : opts.dkLen);
-    this.chunkPos = 0;
-    this.chunksDone = 0;
-    this.flags = 0 | 0;
-    this.stack = [];
-    this.posOut = 0;
-    this.bufferOut32 = new Uint32Array(16);
-    this.chunkOut = 0;
-    this.enableXOF = true;
-    const { key, context } = opts;
-    const hasContext = context !== void 0;
-    if (key !== void 0) {
-      if (hasContext)
-        throw new Error('Only "key" or "context" can be specified at same time');
-      const k = toBytes(key).slice();
-      abytes(k, 32);
-      this.IV = u32(k);
-      swap32IfBE(this.IV);
-      this.flags = flags | B3_Flags.KEYED_HASH;
-    } else if (hasContext) {
-      const ctx = toBytes(context);
-      const contextKey = new _BLAKE3({ dkLen: 32 }, B3_Flags.DERIVE_KEY_CONTEXT).update(ctx).digest();
-      this.IV = u32(contextKey);
-      swap32IfBE(this.IV);
-      this.flags = flags | B3_Flags.DERIVE_KEY_MATERIAL;
-    } else {
-      this.IV = B3_IV.slice();
-      this.flags = flags;
+var REPLICA_ERROR2 = /* @__PURE__ */ Symbol.for("tinycloud.replica.error");
+var ReplicaError2 = class extends Error {
+  [REPLICA_ERROR2] = true;
+  code;
+  detail;
+  constructor(code3, message, detail, options) {
+    super(message, options);
+    this.name = "ReplicaError";
+    this.code = code3;
+    if (detail !== void 0) this.detail = detail;
+  }
+};
+function isReplicaError2(error, code3) {
+  return typeof error === "object" && error !== null && error[REPLICA_ERROR2] === true && (code3 === void 0 || error.code === code3);
+}
+function minIso2(a, bSeconds) {
+  if (bSeconds === null) return a;
+  const b = new Date(bSeconds * 1e3).toISOString();
+  if (a === null) return b;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
+}
+function maxIso2(a, bSeconds) {
+  if (bSeconds === null) return a;
+  const b = new Date(bSeconds * 1e3).toISOString();
+  if (a === null) return b;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+function effectiveAuthority2(input) {
+  const notBefore = maxIso2(input.window?.notBefore ?? null, input.grant?.notBefore ?? null);
+  const expiresAt = minIso2(input.window?.expiresAt ?? null, input.grant?.expiresAt ?? null);
+  const retainUntil = input.policy === "retainAfterExpiry" ? input.window?.retainUntil ?? null : null;
+  let state = "valid";
+  if (input.revoked !== null) state = "revoked";
+  else if (notBefore !== null && input.now < Date.parse(notBefore)) state = "not-yet-valid";
+  else if (expiresAt !== null && input.now >= Date.parse(expiresAt)) state = "expired";
+  return { state, notBefore, expiresAt, retainUntil, retentionRevoked: (input.retentionRevoked ?? null) !== null };
+}
+function wrap(native) {
+  const statements = /* @__PURE__ */ new Map();
+  const prepared = (sql) => {
+    let statement = statements.get(sql);
+    if (statement === void 0) {
+      statement = native.prepare(sql);
+      statements.set(sql, statement);
     }
-    this.state = this.IV.slice();
-    this.bufferOut = u8(this.bufferOut32);
+    return statement;
+  };
+  return {
+    exec: (sql) => native.exec(sql),
+    run: (sql, ...params) => void prepared(sql).run(...params),
+    // bun:sqlite answers a missing row with null, node:sqlite with undefined.
+    get: (sql, ...params) => prepared(sql).get(...params) ?? void 0,
+    all: (sql, ...params) => prepared(sql).all(...params),
+    close: () => {
+      statements.clear();
+      native.close();
+    }
+  };
+}
+function nodeSqliteSupported(version) {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major > 22 || major === 22 && minor >= 13;
+}
+async function loadSqlite() {
+  const runtime = globalThis;
+  const load = (specifier) => import(specifier);
+  if (runtime.Bun !== void 0) {
+    const module2 = await load(["bun", "sqlite"].join(":"));
+    const Database = module2.Database;
+    return (path) => wrap(new Database(path, { create: true }));
   }
-  // Unused
-  get() {
-    return [];
+  const version = runtime.process?.versions?.node ?? "0.0.0";
+  if (!nodeSqliteSupported(version)) {
+    throw new ReplicaError2(
+      ReplicaErrorCode2.RUNTIME_UNSUPPORTED,
+      `tc replica needs Node.js 22.13 or newer (built-in SQLite); this is Node.js ${version}.`,
+      { node: version }
+    );
   }
-  set() {
+  const process2 = runtime.process;
+  const emitWarning = process2.emitWarning;
+  process2.emitWarning = function(warning, ...rest) {
+    const message = typeof warning === "string" ? warning : warning.message;
+    const type = typeof rest[0] === "string" ? rest[0] : rest[0]?.type ?? warning.name;
+    if (type === "ExperimentalWarning" && /SQLite/i.test(message)) return;
+    return emitWarning.call(this, warning, ...rest);
+  };
+  let module;
+  try {
+    module = await load(["node", "sqlite"].join(":"));
+  } finally {
+    process2.emitWarning = emitWarning;
   }
-  b2Compress(counter, flags, buf, bufPos = 0) {
-    const { state: s, pos } = this;
-    const { h, l } = fromBig(BigInt(counter), true);
-    const { v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15 } = compress(B3_SIGMA, bufPos, buf, 7, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], B3_IV[0], B3_IV[1], B3_IV[2], B3_IV[3], h, l, pos, flags);
-    s[0] = v0 ^ v8;
-    s[1] = v1 ^ v9;
-    s[2] = v2 ^ v10;
-    s[3] = v3 ^ v11;
-    s[4] = v4 ^ v12;
-    s[5] = v5 ^ v13;
-    s[6] = v6 ^ v14;
-    s[7] = v7 ^ v15;
+  const DatabaseSync = module.DatabaseSync;
+  return (path) => wrap(new DatabaseSync(path));
+}
+var SCHEMA_VERSION = 1;
+var DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
+var SCHEMA = `
+CREATE TABLE IF NOT EXISTS replica (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  name TEXT NOT NULL,
+  replica_id TEXT NOT NULL,
+  host TEXT NOT NULL,
+  space TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  device_did TEXT NOT NULL,
+  allow_secrets INTEGER NOT NULL CHECK (allow_secrets IN (0, 1)),
+  local_read_policy TEXT NOT NULL CHECK (local_read_policy IN ('whileGrantValid', 'retainAfterExpiry')),
+  retention_grant_cid TEXT,
+  grant_cid TEXT,
+  grant_bytes BLOB,
+  grant_audience TEXT,
+  grant_issuer TEXT,
+  grant_nbf INTEGER,
+  grant_exp INTEGER,
+  pending_grant_cid TEXT,
+  pending_grant_bytes BLOB,
+  pending_grant_audience TEXT,
+  pending_grant_issuer TEXT,
+  pending_grant_nbf INTEGER,
+  pending_grant_exp INTEGER,
+  node_did TEXT,
+  attested INTEGER NOT NULL DEFAULT 0 CHECK (attested IN (0, 1)),
+  not_before TEXT,
+  expires_at TEXT,
+  retain_until TEXT,
+  revoked_detail TEXT,
+  purge_pending INTEGER NOT NULL DEFAULT 0 CHECK (purge_pending IN (0, 1)),
+  retention_revoked TEXT,
+  pending_grant_error TEXT,
+  cursor TEXT,
+  coverage TEXT NOT NULL CHECK (coverage IN ('empty', 'bootstrapping', 'complete')),
+  generation INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  last_sync_at TEXT,
+  last_complete_at TEXT,
+  last_error TEXT,
+  last_reset TEXT,
+  lease_token INTEGER NOT NULL DEFAULT 0,
+  lease_holder TEXT,
+  lease_expires_at INTEGER
+) STRICT;
+CREATE TABLE IF NOT EXISTS entry (
+  key TEXT PRIMARY KEY,
+  deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+  etag TEXT,
+  hash TEXT,
+  metadata TEXT NOT NULL,
+  content INTEGER NOT NULL CHECK (content IN (0, 1)),
+  size INTEGER,
+  CHECK (
+    (deleted = 1 AND etag IS NULL AND hash IS NULL AND content = 0 AND size IS NULL) OR
+    (deleted = 0 AND etag IS NOT NULL AND hash IS NOT NULL)
+  )
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS entry_hash ON entry (hash) WHERE hash IS NOT NULL;
+`;
+function grantOf(cid, bytes, audience, issuer, nbf, exp) {
+  if (cid === null || bytes === null || audience === null || issuer === null) return null;
+  return { cid, bytes: new Uint8Array(bytes), audience, issuer, notBefore: nbf, expiresAt: exp };
+}
+function entryOf(row) {
+  if (row.deleted === 1) return { key: row.key, deleted: true };
+  return {
+    key: row.key,
+    deleted: false,
+    etag: row.etag,
+    hash: row.hash,
+    metadata: JSON.parse(row.metadata),
+    content: row.content === 1
+  };
+}
+function storageError(error, action) {
+  if (isReplicaError2(error)) return error;
+  const code3 = errnoOf(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (code3 === "ENOSPC" || code3 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code3)} ${message}`)) {
+    return new ReplicaError2(ReplicaErrorCode2.STORAGE_FULL, `${action}: the local disk is full.`, void 0, { cause: error });
   }
-  compress(buf, bufPos = 0, isLast = false) {
-    let flags = this.flags;
-    if (!this.chunkPos)
-      flags |= B3_Flags.CHUNK_START;
-    if (this.chunkPos === 15 || isLast)
-      flags |= B3_Flags.CHUNK_END;
-    if (!isLast)
-      this.pos = this.blockLen;
-    this.b2Compress(this.chunksDone, flags, buf, bufPos);
-    this.chunkPos += 1;
-    if (this.chunkPos === 16 || isLast) {
-      let chunk = this.state;
-      this.state = this.IV.slice();
-      for (let last, chunks = this.chunksDone + 1; isLast || !(chunks & 1); chunks >>= 1) {
-        if (!(last = this.stack.pop()))
-          break;
-        this.buffer32.set(last, 0);
-        this.buffer32.set(chunk, 8);
-        this.pos = this.blockLen;
-        this.b2Compress(0, this.flags | B3_Flags.PARENT, this.buffer32, 0);
-        chunk = this.state;
-        this.state = this.IV.slice();
+  return new ReplicaError2(ReplicaErrorCode2.STORAGE_ERROR, `${action}: ${message}`, void 0, { cause: error });
+}
+var isHash = (name) => /^[0-9a-f]{64}$/.test(name);
+function errnoOf(error) {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+}
+async function entriesOf(path) {
+  try {
+    return await readdir3(path);
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") return [];
+    throw error;
+  }
+}
+var FAULTS = /* @__PURE__ */ Symbol("tinycloud.replica.faults");
+var SqliteReplicaStore = class _SqliteReplicaStore {
+  dir;
+  #db;
+  #holder = `${process.pid}-${randomBytes4(6).toString("hex")}`;
+  #now;
+  #faults;
+  #guard;
+  /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
+  #ino;
+  constructor(dir, db, ino, options) {
+    this.dir = dir;
+    this.#db = db;
+    this.#ino = ino;
+    this.#now = options.now ?? Date.now;
+    this.#faults = options[FAULTS] ?? {};
+    this.#guard = options.guard ?? ((section) => section());
+  }
+  /**
+   * Open the replica store in `dir`. With `create: false` a missing replica is
+   * REPLICA_NOT_FOUND and nothing is written to disk.
+   */
+  static async open(dir, options) {
+    const dbPath = join5(dir, "replica.db");
+    if (!options.create) {
+      const exists = await stat2(dbPath).then(
+        () => true,
+        () => false
+      );
+      if (!exists) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, `No replica at ${dir}.`);
+    }
+    const opener = options.sqlite ?? await loadSqlite();
+    let store;
+    try {
+      if (options.create) {
+        await mkdir3(join5(dir, "blobs", ".tmp"), { recursive: true, mode: 448 });
+        await Promise.all([chmod3(dir, 448), chmod3(join5(dir, "blobs"), 448), chmod3(join5(dir, "blobs", ".tmp"), 448)]);
+        const handle = await open2(dbPath, fsConstants.O_CREAT | fsConstants.O_RDWR, 384);
+        await handle.close();
+        await chmod3(dbPath, 384);
       }
-      this.chunksDone++;
-      this.chunkPos = 0;
-      this.stack.push(chunk);
+      const ino = (await stat2(dbPath)).ino;
+      const db = opener(dbPath);
+      db.exec("PRAGMA busy_timeout = 5000");
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA synchronous = FULL");
+      db.exec("PRAGMA secure_delete = ON");
+      db.exec("PRAGMA foreign_keys = ON");
+      const version = db.get("PRAGMA user_version")?.user_version ?? 0;
+      if (version > SCHEMA_VERSION) {
+        db.close();
+        throw new ReplicaError2(
+          ReplicaErrorCode2.STORAGE_ERROR,
+          `The replica at ${dir} was written by a newer tc (schema ${version}); upgrade tc to read it.`
+        );
+      }
+      if (version < SCHEMA_VERSION) {
+        db.exec("BEGIN IMMEDIATE");
+        db.exec(SCHEMA);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+        db.exec("COMMIT");
+      }
+      store = new _SqliteReplicaStore(dir, db, ino, options);
+    } catch (error) {
+      throw storageError(error, `Opening the replica at ${dir}`);
     }
-    this.pos = 0;
-  }
-  _cloneInto(to) {
-    to = super._cloneInto(to);
-    const { IV, flags, state, chunkPos, posOut, chunkOut, stack, chunksDone } = this;
-    to.state.set(state.slice());
-    to.stack = stack.map((i) => Uint32Array.from(i));
-    to.IV.set(IV);
-    to.flags = flags;
-    to.chunkPos = chunkPos;
-    to.chunksDone = chunksDone;
-    to.posOut = posOut;
-    to.chunkOut = chunkOut;
-    to.enableXOF = this.enableXOF;
-    to.bufferOut32.set(this.bufferOut32);
-    return to;
-  }
-  destroy() {
-    this.destroyed = true;
-    clean(this.state, this.buffer32, this.IV, this.bufferOut32);
-    clean(...this.stack);
-  }
-  // Same as b2Compress, but doesn't modify state and returns 16 u32 array (instead of 8)
-  b2CompressOut() {
-    const { state: s, pos, flags, buffer32, bufferOut32: out32 } = this;
-    const { h, l } = fromBig(BigInt(this.chunkOut++));
-    swap32IfBE(buffer32);
-    const { v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15 } = compress(B3_SIGMA, 0, buffer32, 7, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], B3_IV[0], B3_IV[1], B3_IV[2], B3_IV[3], l, h, pos, flags);
-    out32[0] = v0 ^ v8;
-    out32[1] = v1 ^ v9;
-    out32[2] = v2 ^ v10;
-    out32[3] = v3 ^ v11;
-    out32[4] = v4 ^ v12;
-    out32[5] = v5 ^ v13;
-    out32[6] = v6 ^ v14;
-    out32[7] = v7 ^ v15;
-    out32[8] = s[0] ^ v8;
-    out32[9] = s[1] ^ v9;
-    out32[10] = s[2] ^ v10;
-    out32[11] = s[3] ^ v11;
-    out32[12] = s[4] ^ v12;
-    out32[13] = s[5] ^ v13;
-    out32[14] = s[6] ^ v14;
-    out32[15] = s[7] ^ v15;
-    swap32IfBE(buffer32);
-    swap32IfBE(out32);
-    this.posOut = 0;
-  }
-  finish() {
-    if (this.finished)
-      return;
-    this.finished = true;
-    clean(this.buffer.subarray(this.pos));
-    let flags = this.flags | B3_Flags.ROOT;
-    if (this.stack.length) {
-      flags |= B3_Flags.PARENT;
-      swap32IfBE(this.buffer32);
-      this.compress(this.buffer32, 0, true);
-      swap32IfBE(this.buffer32);
-      this.chunksDone = 0;
-      this.pos = this.blockLen;
-    } else {
-      flags |= (!this.chunkPos ? B3_Flags.CHUNK_START : 0) | B3_Flags.CHUNK_END;
+    const row = store.#row();
+    if (row?.revoked_detail != null && (row.purge_pending === 1 || await store.#holdsContentFiles().catch(() => true))) {
+      await store.#finishRevocationPurge().catch(() => void 0);
     }
-    this.flags = flags;
-    this.b2CompressOut();
+    return store;
   }
-  writeInto(out) {
-    aexists(this, false);
-    abytes(out);
-    this.finish();
-    const { blockLen, bufferOut } = this;
-    for (let pos = 0, len = out.length; pos < len; ) {
-      if (this.posOut >= blockLen)
-        this.b2CompressOut();
-      const take = Math.min(blockLen - this.posOut, len - pos);
-      out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
-      this.posOut += take;
-      pos += take;
+  #row() {
+    return this.#db.get("SELECT * FROM replica WHERE id = 1");
+  }
+  /** Refuse to touch the filesystem for a replica that was deleted (or replaced) under us. */
+  async #assertPresent() {
+    const ino = await stat2(join5(this.dir, "replica.db")).then(
+      (stats) => stats.ino,
+      () => void 0
+    );
+    if (ino !== this.#ino) {
+      throw new ReplicaError2(
+        ReplicaErrorCode2.NOT_FOUND,
+        `The replica at ${this.dir} was deleted while this command ran (its profile was deleted or the replica purged); nothing more was written.`
+      );
     }
-    return out;
   }
-  xofInto(out) {
-    if (!this.enableXOF)
-      throw new Error("XOF is not possible after digest call");
-    return this.writeInto(out);
+  /** A short mutation section: guarded (profile lock) and checked against the database this store opened. */
+  #mutate(section) {
+    return this.#guard(async () => {
+      await this.#assertPresent();
+      return section();
+    });
   }
-  xof(bytes) {
-    anumber(bytes);
-    return this.xofInto(new Uint8Array(bytes));
+  /** Run `body` in a write transaction (BEGIN IMMEDIATE). Callers outside a mutation section use `#guardedWrite`. */
+  #write(action, body) {
+    try {
+      this.#db.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      throw storageError(error, action);
+    }
+    try {
+      const result = body();
+      this.#db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+      }
+      throw storageError(error, action);
+    }
   }
-  digestInto(out) {
-    aoutput(out, this);
-    if (this.finished)
-      throw new Error("digest() was already called");
-    this.enableXOF = false;
-    this.writeInto(out);
-    this.destroy();
-    return out;
+  /** One write transaction as its own mutation section. */
+  #guardedWrite(action, body) {
+    return this.#mutate(async () => this.#write(action, body));
   }
-  digest() {
-    return this.digestInto(new Uint8Array(this.outputLen));
+  /**
+   * The caller still holds a live lease (its token, not expired), and the
+   * replica is not revoked (unless `allowRevoked`). Inside a write
+   * transaction this fences the write; before one it refuses early.
+   */
+  #checkLease(t, options = {}) {
+    const row = this.#db.get(
+      "SELECT lease_token, lease_holder, lease_expires_at, revoked_detail FROM replica WHERE id = 1"
+    );
+    if (row?.revoked_detail != null && options.allowRevoked !== true) {
+      throw new ReplicaError2(ReplicaErrorCode2.GRANT_REVOKED, `The replica's grant was revoked: ${row.revoked_detail}`);
+    }
+    if (row === void 0 || row.lease_token !== t.token || row.lease_holder !== t.holder) {
+      throw new ReplicaError2(ReplicaErrorCode2.BUSY, "Another process took over this replica's sync lease.");
+    }
+    if (row.lease_expires_at === null || row.lease_expires_at <= this.#now()) {
+      throw new ReplicaError2(ReplicaErrorCode2.BUSY, "This process's sync lease expired; nothing was written.");
+    }
+  }
+  async open() {
+    let row;
+    try {
+      row = this.#row();
+    } catch (error) {
+      throw storageError(error, "Reading the replica");
+    }
+    if (row === void 0) return null;
+    return {
+      config: {
+        name: row.name,
+        replicaId: row.replica_id,
+        host: row.host,
+        space: row.space,
+        prefix: row.prefix,
+        deviceDid: row.device_did,
+        allowSecrets: row.allow_secrets === 1,
+        localReadPolicy: row.local_read_policy,
+        retentionGrantCid: row.retention_grant_cid
+      },
+      grant: grantOf(row.grant_cid, row.grant_bytes, row.grant_audience, row.grant_issuer, row.grant_nbf, row.grant_exp),
+      pendingGrant: grantOf(
+        row.pending_grant_cid,
+        row.pending_grant_bytes,
+        row.pending_grant_audience,
+        row.pending_grant_issuer,
+        row.pending_grant_nbf,
+        row.pending_grant_exp
+      ),
+      nodeDid: row.node_did,
+      authority: row.attested === 1 ? { notBefore: row.not_before, expiresAt: row.expires_at, retainUntil: row.retain_until } : null,
+      revoked: row.revoked_detail,
+      retentionRevoked: row.retention_revoked,
+      pendingGrantError: row.pending_grant_error === null ? null : JSON.parse(row.pending_grant_error),
+      cursor: row.cursor,
+      coverage: row.coverage,
+      generation: row.generation,
+      createdAt: row.created_at,
+      lastSyncAt: row.last_sync_at,
+      lastCompleteAt: row.last_complete_at,
+      lastError: row.last_error === null ? null : JSON.parse(row.last_error),
+      lastReset: row.last_reset === null ? null : JSON.parse(row.last_reset)
+    };
+  }
+  async init(c) {
+    await this.#guardedWrite("Creating the replica", () => {
+      if (this.#row() !== void 0) {
+        throw new ReplicaError2(ReplicaErrorCode2.CONFIG_MISMATCH, `Replica ${c.name} already exists.`);
+      }
+      this.#db.run(
+        `INSERT INTO replica (id, name, replica_id, host, space, prefix, device_did, allow_secrets, local_read_policy,
+           retention_grant_cid, coverage, created_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'empty', ?)`,
+        c.name,
+        c.replicaId,
+        c.host,
+        c.space,
+        c.prefix,
+        c.deviceDid,
+        c.allowSecrets ? 1 : 0,
+        c.localReadPolicy,
+        c.retentionGrantCid,
+        new Date(this.#now()).toISOString()
+      );
+    });
+  }
+  /** Update the retention opt-in; it takes effect at the next sync. */
+  async setRetentionGrant(cid) {
+    await this.#guardedWrite("Updating the retention grant", () => {
+      this.#db.run(
+        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ? WHERE id = 1",
+        cid,
+        cid === null ? "whileGrantValid" : "retainAfterExpiry"
+      );
+    });
+  }
+  async installGrant(g) {
+    await this.#guardedWrite("Installing the grant", () => {
+      const row = this.#row();
+      if (row === void 0) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, "The replica has not been created.");
+      if (row.grant_cid === g.cid || row.pending_grant_cid === g.cid) return;
+      this.#db.run(
+        `UPDATE replica SET pending_grant_cid = ?, pending_grant_bytes = ?, pending_grant_audience = ?,
+           pending_grant_issuer = ?, pending_grant_nbf = ?, pending_grant_exp = ?, pending_grant_error = NULL WHERE id = 1`,
+        g.cid,
+        g.bytes,
+        g.audience,
+        g.issuer,
+        g.notBefore,
+        g.expiresAt
+      );
+    });
+  }
+  async discardPendingGrant(cid, detail) {
+    await this.#guardedWrite("Discarding the revoked pending grant", () => {
+      this.#db.run(
+        `UPDATE replica SET pending_grant_cid = NULL, pending_grant_bytes = NULL, pending_grant_audience = NULL,
+           pending_grant_issuer = NULL, pending_grant_nbf = NULL, pending_grant_exp = NULL, pending_grant_error = NULL,
+           last_error = ? WHERE id = 1 AND pending_grant_cid = ?`,
+        JSON.stringify({
+          at: new Date(this.#now()).toISOString(),
+          code: ReplicaErrorCode2.GRANT_REVOKED,
+          message: `The pending grant ${cid} was revoked and discarded: ${detail}`
+        }),
+        cid
+      );
+    });
+  }
+  async recordPendingGrantError(cid, e) {
+    await this.#guardedWrite("Recording the pending grant's refusal", () => {
+      this.#db.run("UPDATE replica SET pending_grant_error = ? WHERE id = 1 AND pending_grant_cid = ?", JSON.stringify(e), cid);
+    });
+  }
+  async markRetentionRevoked(cid, detail) {
+    await this.#guardedWrite("Recording the retention grant's revocation", () => {
+      this.#db.run(
+        `UPDATE replica SET retention_grant_cid = NULL, local_read_policy = 'whileGrantValid', retain_until = NULL,
+           retention_revoked = ? WHERE id = 1 AND retention_grant_cid = ?`,
+        detail,
+        cid
+      );
+      this.#db.run(
+        "UPDATE replica SET last_error = ? WHERE id = 1",
+        JSON.stringify({ at: new Date(this.#now()).toISOString(), code: ReplicaErrorCode2.RETENTION_GRANT_REFUSED, message: detail })
+      );
+    });
+  }
+  async acquireSyncLease(ttlMs) {
+    return this.#guardedWrite("Taking the sync lease", () => {
+      const row = this.#row();
+      if (row === void 0) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, "The replica has not been created.");
+      const now = this.#now();
+      if (row.lease_holder !== null && row.lease_expires_at !== null && row.lease_expires_at > now) return null;
+      const token = row.lease_token + 1;
+      this.#db.run(
+        "UPDATE replica SET lease_token = ?, lease_holder = ?, lease_expires_at = ? WHERE id = 1",
+        token,
+        this.#holder,
+        now + ttlMs
+      );
+      return { token, holder: this.#holder };
+    });
+  }
+  async renewLease(t, ttlMs) {
+    await this.#guardedWrite("Renewing the sync lease", () => {
+      this.#checkLease(t);
+      this.#db.run("UPDATE replica SET lease_expires_at = ? WHERE id = 1", this.#now() + ttlMs);
+    });
+  }
+  async releaseLease(t) {
+    await this.#guardedWrite("Releasing the sync lease", () => {
+      this.#db.run(
+        "UPDATE replica SET lease_holder = NULL, lease_expires_at = NULL WHERE id = 1 AND lease_token = ? AND lease_holder = ?",
+        t.token,
+        t.holder
+      );
+    });
+  }
+  async hasContent(hashes) {
+    const held = /* @__PURE__ */ new Set();
+    for (let start = 0; start < hashes.length; start += 500) {
+      const chunk = hashes.slice(start, start + 500);
+      const rows = this.#db.all(
+        `SELECT DISTINCT hash FROM entry WHERE content = 1 AND hash IN (${chunk.map(() => "?").join(",")})`,
+        ...chunk
+      );
+      for (const row of rows) held.add(row.hash);
+    }
+    return held;
+  }
+  #blobPath(hash) {
+    return join5(this.dir, "blobs", hash.slice(0, 2), hash);
+  }
+  /**
+   * Make every blob durable before any row references it: write to a fresh
+   * temp file (O_EXCL, 0600), fsync, link to its content address (an existing
+   * blob wins), unlink the temp, then fsync each touched directory once.
+   * Never creates the replica's own directories: a deleted replica fails.
+   */
+  async #writeBlobs(blobs) {
+    const dirs = /* @__PURE__ */ new Set();
+    for (const [hash, bytes] of blobs) {
+      const final = this.#blobPath(hash);
+      const exists = await stat2(final).then(
+        () => true,
+        () => false
+      );
+      if (exists) continue;
+      const shard = join5(this.dir, "blobs", hash.slice(0, 2));
+      await mkdir3(shard, { mode: 448 }).catch((error) => {
+        if (errnoOf(error) !== "EEXIST") throw error;
+      });
+      const temp = join5(this.dir, "blobs", ".tmp", `${hash}.${randomBytes4(6).toString("hex")}`);
+      const handle = await open2(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 384);
+      try {
+        await handle.writeFile(bytes);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await link(temp, final);
+      } catch (error) {
+        if (errnoOf(error) !== "EEXIST") throw error;
+      } finally {
+        await unlink(temp);
+      }
+      dirs.add(shard);
+      dirs.add(join5(this.dir, "blobs"));
+    }
+    for (const dir of dirs) {
+      const handle = await open2(dir, fsConstants.O_RDONLY);
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    }
+  }
+  async applyPage(t, p) {
+    await this.#mutate(async () => {
+      this.#checkLease(t);
+      const reused = /* @__PURE__ */ new Map();
+      for (const change of p.changes) {
+        if (change.deleted || !change.content || p.blobs.has(change.hash) || reused.has(change.hash)) continue;
+        const size = this.#db.get(
+          "SELECT size FROM entry WHERE hash = ? AND content = 1 AND size IS NOT NULL LIMIT 1",
+          change.hash
+        )?.size;
+        if (size === void 0 || size === null) {
+          throw new ReplicaError2(ReplicaErrorCode2.STORAGE_ERROR, `No stored content backs ${JSON.stringify(change.key)}.`);
+        }
+        reused.set(change.hash, size);
+      }
+      try {
+        await this.#writeBlobs(p.blobs);
+      } catch (error) {
+        throw storageError(error, "Writing replica content");
+      }
+      await this.#faults.afterBlobs?.();
+      try {
+        this.#write("Committing a sync page", () => {
+          this.#checkLease(t);
+          const now = this.#now();
+          if (p.window.notBefore !== null && now < Date.parse(p.window.notBefore)) {
+            throw new ReplicaError2(ReplicaErrorCode2.GRANT_NOT_YET_VALID, `The grant is not valid before ${p.window.notBefore}; nothing was committed.`);
+          }
+          if (p.window.expiresAt !== null && now >= Date.parse(p.window.expiresAt)) {
+            throw new ReplicaError2(ReplicaErrorCode2.GRANT_EXPIRED, `The grant expired at ${p.window.expiresAt}; nothing was committed.`);
+          }
+          for (const change of p.changes) {
+            if (change.deleted) {
+              this.#db.run(
+                `INSERT INTO entry (key, deleted, etag, hash, metadata, content, size) VALUES (?, 1, NULL, NULL, '{}', 0, NULL)
+                 ON CONFLICT (key) DO UPDATE SET deleted = 1, etag = NULL, hash = NULL, metadata = '{}', content = 0, size = NULL`,
+                change.key
+              );
+              continue;
+            }
+            const size = change.content ? p.blobs.get(change.hash)?.length ?? reused.get(change.hash) : null;
+            this.#db.run(
+              `INSERT INTO entry (key, deleted, etag, hash, metadata, content, size) VALUES (?, 0, ?, ?, ?, ?, ?)
+               ON CONFLICT (key) DO UPDATE SET deleted = 0, etag = excluded.etag, hash = excluded.hash,
+                 metadata = excluded.metadata, content = excluded.content, size = excluded.size`,
+              change.key,
+              change.etag,
+              change.hash,
+              JSON.stringify(change.metadata),
+              change.content ? 1 : 0,
+              size
+            );
+          }
+          const sets = ["cursor = ?", "coverage = ?"];
+          const params = [p.cursor, p.coverage];
+          if (p.authority !== null) {
+            sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "retain_until = ?", "last_sync_at = ?");
+            params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.authority.retainUntil, p.at);
+            if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
+          }
+          if (p.complete) {
+            sets.push("last_complete_at = ?", "last_error = NULL");
+            params.push(p.at);
+          }
+          if (p.promoteGrant !== null) {
+            const g = p.promoteGrant;
+            sets.push("grant_cid = ?", "grant_bytes = ?", "grant_audience = ?", "grant_issuer = ?", "grant_nbf = ?", "grant_exp = ?");
+            params.push(g.cid, g.bytes, g.audience, g.issuer, g.notBefore, g.expiresAt);
+            if (this.#row().pending_grant_cid === g.cid) {
+              sets.push(
+                "pending_grant_cid = NULL",
+                "pending_grant_bytes = NULL",
+                "pending_grant_audience = NULL",
+                "pending_grant_issuer = NULL",
+                "pending_grant_nbf = NULL",
+                "pending_grant_exp = NULL",
+                "pending_grant_error = NULL"
+              );
+            }
+          }
+          this.#db.run(`UPDATE replica SET ${sets.join(", ")} WHERE id = 1`, ...params);
+          this.#faults.beforeCommit?.();
+        });
+      } catch (error) {
+        if (isReplicaError2(error, ReplicaErrorCode2.GRANT_REVOKED)) await this.#purgeContent().catch(() => void 0);
+        throw error;
+      }
+      this.#faults.afterCommit?.();
+    });
+  }
+  /** Unlink every blob not in `keep`, and every temp file. Only a missing directory counts as empty. */
+  async #unlinkBlobs(keep) {
+    let removed = 0;
+    const root = join5(this.dir, "blobs");
+    for (const shard of await entriesOf(root)) {
+      const shardPath = join5(root, shard);
+      if (shard === ".tmp") {
+        for (const name of await entriesOf(shardPath)) {
+          await rm3(join5(shardPath, name), { force: true });
+          removed += 1;
+        }
+        continue;
+      }
+      let kept = 0;
+      for (const name of await entriesOf(shardPath)) {
+        if (isHash(name) && keep.has(name)) {
+          kept += 1;
+          continue;
+        }
+        await rm3(join5(shardPath, name), { force: true });
+        removed += 1;
+      }
+      if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
+    }
+    return removed;
+  }
+  /** Whether any content file (a blob or a temp file) is on disk. */
+  async #holdsContentFiles() {
+    const root = join5(this.dir, "blobs");
+    for (const shard of await entriesOf(root)) {
+      if ((await entriesOf(join5(root, shard))).length > 0) return true;
+    }
+    return false;
+  }
+  async collectGarbage(t) {
+    return this.#mutate(async () => {
+      try {
+        this.#db.exec("BEGIN IMMEDIATE");
+      } catch (error) {
+        throw storageError(error, "Collecting unused content");
+      }
+      try {
+        this.#checkLease(t);
+        const keep = new Set(
+          this.#db.all("SELECT DISTINCT hash FROM entry WHERE content = 1").map((row) => row.hash)
+        );
+        const removed = await this.#unlinkBlobs(keep);
+        this.#db.exec("COMMIT");
+        return removed;
+      } catch (error) {
+        try {
+          this.#db.exec("ROLLBACK");
+        } catch {
+        }
+        throw storageError(error, "Collecting unused content");
+      }
+    });
+  }
+  async reset(t, reason, options = {}) {
+    await this.#mutate(async () => {
+      this.#write("Resetting the replica", () => {
+        this.#checkLease(t);
+        this.#db.run("DELETE FROM entry");
+        this.#db.run(
+          `UPDATE replica SET cursor = NULL, ${options.keepSource ? "" : "node_did = NULL, "}coverage = 'empty', last_sync_at = NULL,
+             last_complete_at = NULL, last_error = NULL, last_reset = ?, generation = generation + 1 WHERE id = 1`,
+          JSON.stringify({ at: new Date(this.#now()).toISOString(), reason })
+        );
+      });
+    });
+    await this.collectGarbage(t);
+    if (!this.#checkpoint()) {
+      throw new ReplicaError2(
+        ReplicaErrorCode2.BUSY,
+        "The replica was reset, but another process is reading it, so its old pages are still in the write-ahead log. Run the reset again when that process ends."
+      );
+    }
+  }
+  /**
+   * Remove this replica's directory for good (`tc replica reset --purge`).
+   * Fenced like a commit: `t` must still be a live lease on the database this
+   * store opened, checked under the write lock, so a paused process can
+   * never remove a replica another process took over or recreated. Allowed
+   * on a revoked replica. The store is unusable afterwards; close it.
+   */
+  async destroy(t) {
+    await this.#mutate(async () => {
+      try {
+        this.#db.exec("BEGIN IMMEDIATE");
+      } catch (error) {
+        throw storageError(error, "Removing the replica");
+      }
+      try {
+        this.#checkLease(t, { allowRevoked: true });
+        await this.#assertPresent();
+        await rm3(this.dir, { recursive: true, force: true });
+      } catch (error) {
+        throw storageError(error, "Removing the replica");
+      } finally {
+        try {
+          this.#db.exec("ROLLBACK");
+        } catch {
+        }
+      }
+    });
+  }
+  /**
+   * Truncate the WAL so purged pages do not linger in it. TRUNCATE waits on
+   * readers through busy_timeout; false when one still held it.
+   */
+  #checkpoint() {
+    try {
+      const result = this.#db.get("PRAGMA wal_checkpoint(TRUNCATE)");
+      return result === void 0 || Number(result.busy) === 0;
+    } catch (error) {
+      throw storageError(error, "Checkpointing the replica");
+    }
+  }
+  /**
+   * Record the revocation (durable before this returns: reads are blocked
+   * from here on, also after a restart), then purge. A purge that fails
+   * keeps purge_pending set: status reports it and every open retries it.
+   */
+  async markRevoked(detail) {
+    await this.#guardedWrite("Recording the revocation", () => {
+      this.#db.run("DELETE FROM entry");
+      this.#db.run(
+        `UPDATE replica SET revoked_detail = ?, cursor = NULL, coverage = 'empty', purge_pending = 1,
+           lease_token = lease_token + 1, lease_holder = NULL, lease_expires_at = NULL, generation = generation + 1,
+           last_error = ? WHERE id = 1`,
+        detail,
+        JSON.stringify({ at: new Date(this.#now()).toISOString(), code: ReplicaErrorCode2.GRANT_REVOKED, message: detail })
+      );
+    });
+    this.#faults.afterPurgeMark?.();
+    await this.#finishRevocationPurge().catch(() => void 0);
+  }
+  #finishRevocationPurge() {
+    return this.#mutate(() => this.#purgeContent());
+  }
+  /**
+   * Inside a mutation section of a revoked replica: unlink every content
+   * file and truncate the WAL. purge_pending is set first and cleared only
+   * when both are done.
+   */
+  async #purgeContent() {
+    this.#write("Starting the revocation purge", () => {
+      this.#db.run("UPDATE replica SET purge_pending = 1 WHERE id = 1 AND revoked_detail IS NOT NULL");
+    });
+    try {
+      await this.#unlinkBlobs(/* @__PURE__ */ new Set());
+    } catch (error) {
+      throw storageError(error, "Purging revoked content");
+    }
+    if (!this.#checkpoint()) {
+      throw new ReplicaError2(ReplicaErrorCode2.BUSY, "A reader holds the replica's write-ahead log; the purge finishes on the next open.");
+    }
+    this.#write("Finishing the revocation purge", () => {
+      this.#db.run("UPDATE replica SET purge_pending = 0 WHERE id = 1 AND revoked_detail IS NOT NULL");
+    });
+  }
+  async recordError(e) {
+    await this.#guardedWrite("Recording the sync error", () => {
+      this.#db.run("UPDATE replica SET last_error = ? WHERE id = 1", JSON.stringify(e));
+    });
+  }
+  async get(key) {
+    try {
+      const row = this.#db.get("SELECT key, deleted, etag, hash, metadata, content FROM entry WHERE key = ?", key);
+      return row === void 0 ? void 0 : entryOf(row);
+    } catch (error) {
+      throw storageError(error, "Reading the replica");
+    }
+  }
+  async list(o) {
+    const where = ["deleted = 0"];
+    const params = [];
+    if (o.prefix !== void 0 && o.prefix !== "") {
+      where.push("key >= ?", "substr(key, 1, length(?)) = ?");
+      params.push(o.prefix, o.prefix, o.prefix);
+    }
+    if (o.after !== void 0) {
+      where.push("key > ?");
+      params.push(o.after);
+    }
+    params.push(o.limit ?? -1);
+    try {
+      return this.#db.all(
+        `SELECT key, deleted, etag, hash, metadata, content FROM entry WHERE ${where.join(" AND ")} ORDER BY key LIMIT ?`,
+        ...params
+      ).map(entryOf);
+    } catch (error) {
+      throw storageError(error, "Listing the replica");
+    }
+  }
+  async pendingRepairs(limit) {
+    return this.#db.all(
+      "SELECT key, deleted, etag, hash, metadata, content FROM entry WHERE deleted = 0 AND content = 0 ORDER BY key LIMIT ?",
+      limit
+    ).map(entryOf);
+  }
+  async readContent(hash) {
+    if (!isHash(hash)) return void 0;
+    try {
+      return new Uint8Array(await readFile8(this.#blobPath(hash)));
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT") return void 0;
+      throw storageError(error, "Reading replica content");
+    }
+  }
+  async status(now = this.#now()) {
+    const state = await this.open();
+    if (state === null) throw new ReplicaError2(ReplicaErrorCode2.NOT_FOUND, "The replica has not been created.");
+    const row = this.#row();
+    const counts = this.#db.get(
+      `SELECT
+         COALESCE(SUM(deleted = 0), 0) AS keys,
+         COALESCE(SUM(deleted = 0 AND content = 0), 0) AS missing,
+         COALESCE(SUM(deleted = 1), 0) AS tombstones,
+         COALESCE(SUM(CASE WHEN deleted = 0 AND content = 1 THEN size ELSE 0 END), 0) AS bytes
+       FROM entry`
+    );
+    const { retentionRevoked: _retentionRevoked, ...authority } = effectiveAuthority2({
+      window: state.authority,
+      grant: state.grant,
+      revoked: state.revoked,
+      retentionRevoked: state.retentionRevoked,
+      policy: state.config.localReadPolicy,
+      now
+    });
+    return {
+      name: state.config.name,
+      replicaId: state.config.replicaId,
+      source: { host: state.config.host, nodeDid: state.nodeDid, space: state.config.space, prefix: state.config.prefix },
+      device: {
+        did: state.config.deviceDid,
+        delegationCid: state.grant?.cid ?? null,
+        pendingDelegationCid: state.pendingGrant?.cid ?? null,
+        pendingDelegationError: state.pendingGrantError
+      },
+      authority: {
+        ...authority,
+        localReadPolicy: state.config.localReadPolicy,
+        retentionGrantCid: state.config.retentionGrantCid,
+        revokedDetail: state.revoked,
+        retentionRevokedDetail: state.retentionRevoked
+      },
+      consistency: "observed",
+      coverage: state.coverage,
+      lastSyncAt: state.lastSyncAt,
+      lastCompleteAt: state.lastCompleteAt,
+      counts: { keys: Number(counts.keys), contentMissing: Number(counts.missing), tombstones: Number(counts.tombstones) },
+      bytes: Number(counts.bytes),
+      durability: DURABILITY,
+      syncing: row.lease_holder !== null && row.lease_expires_at !== null && row.lease_expires_at > now,
+      purgePending: row.purge_pending === 1,
+      lastError: state.lastError,
+      lastReset: state.lastReset
+    };
+  }
+  async close() {
+    this.#db.close();
   }
 };
-var blake3 = /* @__PURE__ */ createXOFer((opts) => new BLAKE3(opts));
+
+// src/commands/replica.ts
+init_profiles();
+init_constants();
+init_errors();
+init_formatter();
+init_theme();
+var EXIT_BY_CODE = {
+  [ReplicaErrorCode.BUSY]: ExitCode.ERROR,
+  [ReplicaErrorCode.RUNTIME_UNSUPPORTED]: ExitCode.ERROR,
+  [ReplicaErrorCode.STORAGE_ERROR]: ExitCode.ERROR,
+  [ReplicaErrorCode.STORAGE_FULL]: ExitCode.STORAGE_FULL,
+  [ReplicaErrorCode.NOT_FOUND]: ExitCode.NOT_FOUND,
+  [ReplicaErrorCode.CONFIG_MISMATCH]: ExitCode.USAGE_ERROR,
+  [ReplicaErrorCode.NOT_COVERED]: ExitCode.USAGE_ERROR,
+  [ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED]: ExitCode.USAGE_ERROR,
+  [ReplicaErrorCode.GRANT_MISSING]: ExitCode.AUTH_REQUIRED,
+  [ReplicaErrorCode.GRANT_INVALID]: ExitCode.AUTH_REQUIRED,
+  [ReplicaErrorCode.GRANT_FORMAT_UNSUPPORTED]: ExitCode.AUTH_REQUIRED,
+  [ReplicaErrorCode.GRANT_AUDIENCE_MISMATCH]: ExitCode.AUTH_REQUIRED,
+  [ReplicaErrorCode.GRANT_NOT_COVERING]: ExitCode.AUTH_REQUIRED,
+  [ReplicaErrorCode.GRANT_NOT_YET_VALID]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GRANT_EXPIRED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GRANT_REVOKED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.GRANT_UNAUTHORIZED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.RETENTION_GRANT_REFUSED]: ExitCode.PERMISSION_DENIED,
+  [ReplicaErrorCode.NETWORK_ERROR]: ExitCode.NETWORK_ERROR,
+  [ReplicaErrorCode.NODE_ERROR]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.PROTOCOL_ERROR]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.RESET_REQUIRED]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.SOURCE_CHANGED]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.SCOPE_VIOLATION]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.CONTENT_MISMATCH]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.INTEGRITY_ERROR]: ExitCode.NODE_ERROR
+};
+var READ_FAILURE = {
+  absent: { code: "KEY_ABSENT", exit: ExitCode.NOT_FOUND, what: "is not in the replica (the replica covers its whole prefix)" },
+  deleted: { code: "KEY_DELETED", exit: ExitCode.NOT_FOUND, what: "was deleted at the source" },
+  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: "is known but its content has not been fetched yet; run tc replica sync" },
+  coverage_incomplete: {
+    code: "COVERAGE_INCOMPLETE",
+    exit: ExitCode.NOT_FOUND,
+    what: "is not in the replica, which has not finished its first sync; run tc replica sync"
+  },
+  not_covered: { code: "NOT_COVERED", exit: ExitCode.USAGE_ERROR, what: "is outside the replica's prefix" }
+};
+var NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+function toCliError(error) {
+  if (!isReplicaError(error)) return error;
+  const hint = error.code === ReplicaErrorCode.GRANT_MISSING && typeof error.detail?.hint === "string" ? error.detail.hint : void 0;
+  return new CLIError(error.code, error.message, EXIT_BY_CODE[error.code], hint === void 0 ? void 0 : { hint });
+}
+async function run(action) {
+  try {
+    await loadSqlite();
+    await action();
+  } catch (error) {
+    handleError(toCliError(error));
+  }
+}
+async function profileName(cmd) {
+  const globals = cmd.optsWithGlobals();
+  if (globals.profile) return globals.profile;
+  if (process.env.TC_PROFILE) return process.env.TC_PROFILE;
+  const config = await ProfileManager.getConfig().catch(() => void 0);
+  return config?.defaultProfile ?? DEFAULT_PROFILE;
+}
+function replicasRoot(profile) {
+  return join6(profilePath2(profile), "replicas");
+}
+async function replicaNames(profile) {
+  const names = [];
+  for (const name of await readdir4(replicasRoot(profile)).catch(() => [])) {
+    if (!NAME.test(name)) continue;
+    const exists = await stat3(join6(replicasRoot(profile), name, "replica.db")).then(
+      () => true,
+      () => false
+    );
+    if (exists) names.push(name);
+  }
+  return names.sort();
+}
+function assertName(name) {
+  if (!NAME.test(name)) {
+    throw new CLIError("USAGE_ERROR", `Replica names use letters, digits, '.', '_' and '-' (got ${JSON.stringify(name)}).`, ExitCode.USAGE_ERROR);
+  }
+  return name;
+}
+async function existingReplicaName(profile, option) {
+  if (option !== void 0) return assertName(option);
+  const names = await replicaNames(profile);
+  if (names.length === 1) return names[0];
+  if (names.length === 0) {
+    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: tc replica sync --prefix <prefix>`);
+  }
+  throw new CLIError("USAGE_ERROR", `Profile "${profile}" has several replicas (${names.join(", ")}); pass --replica <name>.`, ExitCode.USAGE_ERROR);
+}
+function profileGuard(profile) {
+  return async (section) => {
+    try {
+      return await withProfileLock3(profile, section, { requireProfile: true });
+    } catch (error) {
+      if (error instanceof ProfileDeletedError2) {
+        throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted; its replicas are gone and nothing was written.`);
+      }
+      throw error;
+    }
+  };
+}
+async function openReplica(profile, name) {
+  return SqliteReplicaStore.open(join6(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
+}
+async function createReplica(profile, config) {
+  const guard = profileGuard(profile);
+  return guard(async () => {
+    const store = await SqliteReplicaStore.open(join6(replicasRoot(profile), config.name), { create: true, guard });
+    if (await store.open() === null) await store.init(config);
+    return store;
+  });
+}
+async function storedGrants(profile) {
+  const authorizations = [];
+  const session = await readSession2(profile).catch(() => null);
+  if (typeof session?.delegationHeader?.Authorization === "string") authorizations.push(session.delegationHeader.Authorization);
+  const records = await readAdditionalDelegations2(profile).catch(
+    () => []
+  );
+  for (const record of records) {
+    const authorization = record.delegation?.delegationHeader?.Authorization;
+    if (typeof authorization === "string") authorizations.push(authorization);
+  }
+  const grants = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const authorization of authorizations) {
+    let grant;
+    try {
+      grant = parseUcanGrant(authorization);
+    } catch {
+      continue;
+    }
+    if (seen.has(grant.cid)) continue;
+    seen.add(grant.cid);
+    grants.push(grant);
+  }
+  return grants;
+}
+function grantHint(space, prefix) {
+  return [
+    "A replica needs a device grant with get and sync on its prefix:",
+    `  device: tc auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
+    "  owner:  tc auth grant req.json > grant.json",
+    "  device: tc auth import grant.json"
+  ].join("\n");
+}
+function resolveSpace(input, prefix, grants) {
+  if (input?.startsWith("tinycloud:")) return input;
+  const candidates = /* @__PURE__ */ new Set();
+  for (const grant of grants) {
+    for (const space of syncGrantSpaces(grant)) {
+      if (input !== void 0 && !space.endsWith(`:${input}`)) continue;
+      candidates.add(space);
+    }
+  }
+  if (candidates.size === 1) return [...candidates][0];
+  if (candidates.size === 0) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_MISSING,
+      input === void 0 ? `No imported grant carries tinycloud.kv/sync; pass --space with the full space id or import a device grant.` : `No imported grant carries tinycloud.kv/sync on a space named ${JSON.stringify(input)}; pass the full space id.`,
+      { hint: grantHint(input ?? "<space>", prefix) }
+    );
+  }
+  throw new CLIError(
+    "USAGE_ERROR",
+    `Several spaces have sync grants (${[...candidates].join(", ")}); pass --space with the full space id.`,
+    ExitCode.USAGE_ERROR
+  );
+}
+function chooseGrant(grants, deviceDid, space, prefix) {
+  const now = Date.now();
+  const usable = grants.filter((grant) => {
+    try {
+      assertGrantInstallable(grant, { deviceDid, space, prefix, now });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  usable.sort((a, b) => (b.expiresAt ?? Number.MAX_SAFE_INTEGER) - (a.expiresAt ?? Number.MAX_SAFE_INTEGER));
+  const best = usable[0];
+  if (best === void 0) {
+    throw new ReplicaError(
+      ReplicaErrorCode.GRANT_MISSING,
+      `This device (${deviceDid}) holds no unexpired grant with tinycloud.kv/sync and tinycloud.kv/get on ${space}/kv/${prefix}.`,
+      { hint: grantHint(space, prefix) }
+    );
+  }
+  return best;
+}
+async function grantTransports(input) {
+  const [{ KVService: KVService2, ServiceContext }, wasm] = await Promise.all([import("@tinycloud/sdk-core"), import("@tinycloud/node-sdk-wasm")]);
+  return (grant) => {
+    const context = new ServiceContext({
+      invoke: wasm.invoke,
+      invokeAny: wasm.invokeAny,
+      fetch: globalThis.fetch.bind(globalThis),
+      hosts: [input.host]
+    });
+    const kv = new KVService2({});
+    kv.initialize(context);
+    context.registerService("kv", kv);
+    context.setSession({
+      delegationHeader: { Authorization: new TextDecoder().decode(grant.bytes) },
+      delegationCid: grant.cid,
+      spaceId: input.space,
+      verificationMethod: input.deviceDid,
+      jwk: input.jwk
+    });
+    const client = kv;
+    return kvSyncTransport(client);
+  };
+}
+function syncOptionsDiffer(stored, requested) {
+  if (requested.prefix !== void 0 && requested.prefix !== stored.prefix) return `prefix ${stored.prefix}`;
+  if (requested.host !== void 0 && requested.host.replace(/\/+$/, "") !== stored.host) return `host ${stored.host}`;
+  if (requested.space !== void 0 && requested.space !== stored.space && !stored.space.endsWith(`:${requested.space}`)) {
+    return `space ${stored.space}`;
+  }
+  return void 0;
+}
+function describeStatus(status) {
+  return [
+    theme.heading(`Replica ${status.name}`),
+    formatField("Source", `${status.source.host} ${status.source.space}/kv/${status.source.prefix}`),
+    formatField("Node", status.source.nodeDid),
+    formatField("Authority", `${status.authority.state}${status.authority.expiresAt ? ` (expires ${status.authority.expiresAt})` : ""}`),
+    formatField("Retain until", status.authority.retainUntil),
+    formatField("Coverage", status.coverage),
+    formatField("Last sync", status.lastSyncAt),
+    formatField("Keys", `${status.counts.keys} (${status.counts.contentMissing} content missing, ${status.counts.tombstones} deleted)`),
+    formatField("Size", formatBytes(status.bytes)),
+    formatField("Grant", status.device.delegationCid),
+    formatField("Last error", status.lastError ? `${status.lastError.code}: ${status.lastError.message}` : null),
+    formatField("Purge", status.purgePending ? "incomplete: content files remain; the next tc replica command retries" : null)
+  ].join("\n");
+}
+async function writeFileAtomic(path, bytes) {
+  const target = resolve2(path);
+  const temp = join6(dirname3(target), `.${basename2(target)}.${randomBytes5(6).toString("hex")}.tmp`);
+  const handle = await open3(temp, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_WRONLY, 384);
+  try {
+    await handle.writeFile(bytes);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename2(temp, target);
+  } catch (error) {
+    await unlink2(temp).catch(() => void 0);
+    throw error;
+  }
+}
+function jsonValue(bytes) {
+  try {
+    return { value: new TextDecoder("utf-8", { fatal: true }).decode(bytes), encoding: "utf8" };
+  } catch {
+    return { value: Buffer.from(bytes).toString("base64"), encoding: "base64" };
+  }
+}
+function registerReplicaCommand(program) {
+  const replica = program.command("replica").description("Durable read-only local replicas of a KV prefix (sync online, read offline)").addHelpText(
+    "after",
+    `
+A replica keeps the latest state of one KV prefix on this device. \`sync\` pulls
+the tinycloud.kv/sync feed from the replica's pinned host under a device grant;
+\`get\`, \`list\`, \`status\` and \`reset\` never touch the network.
+
+Exit codes: 0 ok; 1 busy, runtime or storage error; 2 usage, NOT_COVERED,
+SECRETS_OPT_IN_REQUIRED; 3 grant missing; 4 key absent, deleted, content missing
+or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
+7 node, protocol or integrity error; 10 storage full.`
+  );
+  replica.command("sync").description("Create or update a replica from its source host").option("--replica <name>", "Replica name (default: the profile's only replica, or one named after the prefix)").option("--space <id|name>", "Space to replicate (first sync; default: the space of the sync grant)").option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)").option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires").option("--limit <n>", "Feed page size (1-1000)", (value) => Number.parseInt(value, 10)).option("--allow-secrets", "Allow replicating the secrets space or the vault namespace").action(
+    (options, cmd) => run(async () => {
+      const profile = await profileName(cmd);
+      const globals = cmd.optsWithGlobals();
+      const config = await ProfileManager.getProfile(profile);
+      const deviceDid = config.sessionDid ?? config.did;
+      const jwk = await ProfileManager.getKey(profile);
+      if (jwk === null) {
+        throw new CLIError("AUTH_REQUIRED", `Profile "${profile}" has no device key.`, ExitCode.AUTH_REQUIRED);
+      }
+      if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
+        throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000.", ExitCode.USAGE_ERROR);
+      }
+      const existing = await replicaNames(profile);
+      const name = options.replica !== void 0 ? assertName(options.replica) : options.prefix !== void 0 ? assertName(options.prefix.replace(/\/+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "default") : await existingReplicaName(profile, void 0);
+      const grants = await storedGrants(profile);
+      let store;
+      if (existing.includes(name)) {
+        store = await openReplica(profile, name);
+        const state = await store.open();
+        const differs = syncOptionsDiffer(state.config, {
+          ...options.space === void 0 ? {} : { space: options.space },
+          ...options.prefix === void 0 ? {} : { prefix: options.prefix },
+          ...globals.host === void 0 ? {} : { host: globals.host }
+        });
+        if (differs !== void 0) {
+          await store.close();
+          throw new ReplicaError(
+            ReplicaErrorCode.CONFIG_MISMATCH,
+            `Replica ${name} already follows ${differs}. Use another --replica name, or tc replica reset --replica ${name} --purge first.`
+          );
+        }
+      } else {
+        const prefix = options.prefix;
+        if (prefix === void 0 || prefix === "") {
+          throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
+        }
+        const space = resolveSpace(options.space, prefix, grants);
+        if (requiresSecretsOptIn(space, prefix) && options.allowSecrets !== true) {
+          throw new ReplicaError(
+            ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
+            `Replicating ${space}/kv/${prefix} copies encrypted secret material to this disk; pass --allow-secrets to opt in.`
+          );
+        }
+        const host = (globals.host ?? process.env.TC_HOST ?? config.host)?.replace(/\/+$/, "");
+        if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
+        chooseGrant(grants, deviceDid, space, prefix);
+        store = await createReplica(profile, {
+          name,
+          replicaId: randomBytes5(16).toString("hex"),
+          host,
+          space,
+          prefix,
+          deviceDid,
+          allowSecrets: options.allowSecrets === true,
+          localReadPolicy: "whileGrantValid",
+          retentionGrantCid: null
+        });
+      }
+      try {
+        const state = await store.open();
+        const { space, prefix, host } = state.config;
+        if (requiresSecretsOptIn(space, prefix) && !state.config.allowSecrets && options.allowSecrets !== true) {
+          throw new ReplicaError(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, `Replicating ${space}/kv/${prefix} needs --allow-secrets.`);
+        }
+        let grant;
+        try {
+          grant = chooseGrant(grants, state.config.deviceDid, space, prefix);
+        } catch (error) {
+          if (!isReplicaError(error, ReplicaErrorCode.GRANT_MISSING) || (state.grant ?? state.pendingGrant) === null) throw error;
+        }
+        if (grant !== void 0) await store.installGrant(grant);
+        if (options.retentionGrant !== void 0 && options.retentionGrant !== state.config.retentionGrantCid) {
+          await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
+        }
+        const current = await store.open();
+        const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+        const report = await new Replica({ store, transportFor }).sync(options.limit === void 0 ? {} : { limit: options.limit });
+        const status = await store.status();
+        if (shouldOutputJson()) {
+          outputJson({ replica: current.config.name, sync: report, status });
+        } else {
+          process.stdout.write(
+            `${theme.success("\u2713")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).
+${describeStatus(status)}
+`
+          );
+        }
+      } finally {
+        await store.close();
+      }
+    })
+  );
+  replica.command("get <key>").description("Read a key from the local replica (never touches the network)").option("--replica <name>", "Replica name").option("--raw", "Write the value's bytes to stdout").option("-o, --output <file>", "Write the value to a file (atomically, mode 0600)").option("--no-verify", "Skip re-hashing the stored content").action(
+    (key, options, cmd) => run(async () => {
+      const profile = await profileName(cmd);
+      const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
+      let result;
+      try {
+        result = await new Replica({ store }).get(key, { verify: options.verify !== false });
+      } finally {
+        await store.close();
+      }
+      if (result.status !== "present") {
+        const failure = READ_FAILURE[result.status];
+        throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
+      }
+      if (options.output) {
+        await writeFileAtomic(options.output, result.value);
+        outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
+        return;
+      }
+      if (options.raw) {
+        process.stdout.write(result.value);
+        return;
+      }
+      if (shouldOutputJson()) {
+        outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
+        return;
+      }
+      process.stdout.write(result.value);
+      process.stdout.write("\n");
+    })
+  );
+  replica.command("list [prefix]").description("List live keys in the local replica (never touches the network)").option("--replica <name>", "Replica name").option("--after <key>", "Start after this key").option("--limit <n>", "Maximum keys", (value) => Number.parseInt(value, 10)).action(
+    (prefix, options, cmd) => run(async () => {
+      if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1)) {
+        throw new CLIError("USAGE_ERROR", "--limit must be a positive integer.", ExitCode.USAGE_ERROR);
+      }
+      const profile = await profileName(cmd);
+      const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
+      try {
+        const { entries, meta } = await new Replica({ store }).list({
+          ...prefix === void 0 ? {} : { prefix },
+          ...options.after === void 0 ? {} : { after: options.after },
+          ...options.limit === void 0 ? {} : { limit: options.limit }
+        });
+        if (shouldOutputJson()) {
+          outputJson({ keys: entries, count: entries.length, prefix: prefix ?? null, meta });
+        } else if (entries.length === 0) {
+          process.stdout.write(theme.muted("No keys.") + "\n");
+        } else {
+          process.stdout.write(
+            formatTable(
+              ["Key", "Content"],
+              entries.map((entry) => [entry.key, entry.content ? "local" : "missing"])
+            ) + "\n"
+          );
+        }
+      } finally {
+        await store.close();
+      }
+    })
+  );
+  replica.command("status").description("Show one replica's sync state, authority and counts, or all of them").option("--replica <name>", "Replica name").action(
+    (options, cmd) => run(async () => {
+      const profile = await profileName(cmd);
+      const names = options.replica === void 0 ? await replicaNames(profile) : [assertName(options.replica)];
+      const statuses = [];
+      for (const name of names) {
+        const store = await openReplica(profile, name);
+        try {
+          statuses.push(await new Replica({ store }).status());
+        } finally {
+          await store.close();
+        }
+      }
+      if (shouldOutputJson()) {
+        outputJson(options.replica === void 0 ? { replicas: statuses } : statuses[0]);
+      } else if (statuses.length === 0) {
+        process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
+      } else {
+        process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
+      }
+    })
+  );
+  replica.command("reset").description("Clear a replica's entries, content and cursor (keeps its configuration and grant)").option("--replica <name>", "Replica name").option("--purge", "Remove the replica entirely").action(
+    (options, cmd) => run(async () => {
+      const profile = await profileName(cmd);
+      const name = await existingReplicaName(profile, options.replica);
+      const store = await openReplica(profile, name);
+      try {
+        if (options.purge) {
+          const lease = await store.acquireSyncLease(6e4);
+          if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
+          await store.destroy(lease);
+        } else {
+          await new Replica({ store }).reset("manual");
+        }
+      } finally {
+        await store.close();
+      }
+      outputJson({ replica: name, reset: true, purged: options.purge === true });
+    })
+  );
+}
+
+// src/commands/secrets.ts
+init_profiles();
+init_formatter();
+init_theme();
+init_errors();
+init_constants();
+init_storage();
+import { randomUUID as randomUUID2 } from "crypto";
+import { lstat as lstat2, open as open4, readFile as readFile9, rename as rename3, rm as rm4 } from "fs/promises";
+import { basename as basename3, dirname as dirname4, join as join7 } from "path";
+import { homedir } from "os";
+import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
+import {
+  SECRET_DECRYPT_CAPABILITY,
+  secretCapabilityAction
+} from "@tinycloud/operations/secret-capabilities";
+import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
+init_space();
+init_types();
+var SECRETS_SPACE3 = "secrets";
+var SECRET_KV_ABILITIES = {
+  get: secretCapabilityAction("get"),
+  put: secretCapabilityAction("put"),
+  del: secretCapabilityAction("del"),
+  list: secretCapabilityAction("list")
+};
+async function readStdin3() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function authOptions(options) {
+  const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
+  return privateKey ? { privateKey } : void 0;
+}
+function resolveSecretScope(options) {
+  return options.scope ? { scope: options.scope } : void 0;
+}
+async function resolveSecretSpace(input, profileName2) {
+  return resolveSpaceUri(input, profileName2, { useProfileDefault: false });
+}
+function secretsServiceForSpace(node, spaceUri) {
+  return spaceUri ? node.secretsForSpace(spaceUri) : node.secrets;
+}
+var SECRET_NAME_RE2 = /^[A-Z][A-Z0-9_]*$/;
+var RESERVED_SECRET_SCOPES2 = /* @__PURE__ */ new Set(["default", "global"]);
+function canonicalizeSecretScope2(scope) {
+  if (scope === void 0) return void 0;
+  const trimmed = scope.trim();
+  if (trimmed === "") {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      "Secret scope must be non-empty; omit scope for global secrets.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const canonical = trimmed.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (canonical === "") {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      "Secret scope must contain at least one letter or number.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  if (RESERVED_SECRET_SCOPES2.has(canonical)) {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return canonical;
+}
+function resolveSecretPath2(name, options = {}) {
+  const normalizedName = name.trim();
+  if (!SECRET_NAME_RE2.test(normalizedName)) {
+    throw new CLIError(
+      "INVALID_SECRET_NAME",
+      `Invalid secret name ${JSON.stringify(name)}. Secret names must match ${SECRET_NAME_RE2.source}.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const scope = canonicalizeSecretScope2(options.scope);
+  const vaultKey = scope === void 0 ? `secrets/${normalizedName}` : `secrets/scoped/${scope}/${normalizedName}`;
+  return {
+    name: normalizedName,
+    ...scope !== void 0 ? { scope } : {},
+    vaultKey,
+    permissionPaths: {
+      vault: `vault/${vaultKey}`
+    }
+  };
+}
+function resolveSecretListPrefix(options = {}) {
+  const scope = canonicalizeSecretScope2(options.scope);
+  return scope === void 0 ? "vault/secrets/" : `vault/secrets/scoped/${scope}/`;
+}
+function resolveProfilesDir() {
+  const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  return join7(home, ".tinycloud", "profiles");
+}
+async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
+  const auth = authOptions(options);
+  if (auth?.privateKey) {
+    return ensureAuthenticated(ctx, auth);
+  }
+  const profile = selectedProfile ?? await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    const session = await ProfileManager.getSession(ctx.profile);
+    if (!session || isStoredSessionExpired(session)) {
+      if (!process.stdin.isTTY && !process.stderr.isTTY) {
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
+          ExitCode.AUTH_REQUIRED,
+          { hint: scopedSecretLoginHint(ctx.profile) }
+        );
+      }
+      await withSpinner(
+        session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
+        () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition })
+      );
+    }
+  }
+  return ensureAuthenticated(ctx, auth);
+}
+async function runSecretOperation(params) {
+  const first = await runSecretOperationAttempt(params.label, params.operation);
+  if (first.ok || !shouldRequestSecretPermissions(first.error)) {
+    return first;
+  }
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) {
+    return first;
+  }
+  assertOwnerApprovalPossible(params.ctx.profile, profile, params.action, params.name);
+  const requested = secretPermissionEntries({
+    action: params.action,
+    name: params.name,
+    options: params.scopeOptions,
+    space: params.space,
+    node: params.node
+  });
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node: params.node,
+      requested,
+      expiryOption: void 0,
+      reason: secretPermissionReason(params.action, params.name),
+      yes: true,
+      force: true,
+      anchorSpace: params.space ?? SECRETS_SPACE3,
+      openKeyAcquisition: params.openKeyAcquisition
+    })
+  );
+  return runSecretOperationAttempt(params.label, params.operation);
+}
+function secretPermissionReason(action, name) {
+  const target = name ? ` secret "${name}"` : " secrets";
+  return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+}
+function assertOwnerApprovalPossible(profileName2, profile, action, name, missing = []) {
+  if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
+  const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  throw new CLIError(
+    "PERMISSION_DENIED",
+    action === "get" ? missing.length > 0 && missing.every((permission) => permission.service === "tinycloud.encryption" && Array.isArray(permission.actions) && permission.actions.length > 0 && permission.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName2}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
+    ExitCode.PERMISSION_DENIED,
+    {
+      hint: scopedSecretLoginHint(profileName2)
+    }
+  );
+}
+function scopedSecretLoginHint(profileName2) {
+  return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+async function validateSecretOutput(path) {
+  try {
+    const destination = await lstat2(path);
+    if (!destination.isFile()) {
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
+    }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+  }
+  try {
+    const parent = await lstat2(dirname4(path));
+    if (!parent.isDirectory()) {
+      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
+    }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+    throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
+  }
+}
+async function writeSecretFile(path, value) {
+  await validateSecretOutput(path);
+  const parentPath = dirname4(path);
+  const temp = join7(parentPath, `.${basename3(path)}.${randomUUID2()}.tmp`);
+  let created = false;
+  try {
+    const handle = await open4(temp, "wx", PRIVATE_FILE_MODE);
+    created = true;
+    try {
+      await handle.writeFile(value);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename3(temp, path);
+  } catch (error) {
+    if (created) {
+      await rm4(temp, { force: true }).catch(() => void 0);
+    }
+    const code3 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
+    throw new CLIError("ERROR", `Could not write secret output "${path}"${code3}.`, ExitCode.ERROR);
+  }
+  try {
+    const parent = await open4(parentPath, "r");
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
+  } catch {
+  }
+}
+async function runSecretOperationAttempt(label, operation) {
+  try {
+    return await withSpinner(label, operation);
+  } catch (error) {
+    const permissionError = thrownPermissionError(error);
+    if (permissionError) return permissionError;
+    throw error;
+  }
+}
+function withOperationWarnings(error, warnings) {
+  if (warnings === void 0 || warnings.length === 0) return error;
+  const cliError = wrapError(error);
+  cliError.metadata = { ...cliError.metadata, warnings };
+  return cliError;
+}
+async function invokeCanonicalSecretGet(params) {
+  const warnings = /* @__PURE__ */ new Map();
+  const collect = (result) => {
+    for (const warning of result.warnings ?? []) warnings.set(JSON.stringify(warning), warning);
+    return result;
+  };
+  try {
+    const result = await canonicalSecretGet(params, collect);
+    return warnings.size === 0 ? result : { ...result, warnings: [...warnings.values()] };
+  } catch (error) {
+    throw withOperationWarnings(error, [...warnings.values()]);
+  }
+}
+async function canonicalSecretGet(params, collect) {
+  const auth = authOptions(params.options);
+  let ownerNode;
+  if (!auth?.privateKey) {
+    const profile2 = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
+    if (profile2?.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+      const session = await ProfileManager.getSession(params.ctx.profile);
+      if (!session || isStoredSessionExpired(session)) {
+        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+      }
+    }
+  }
+  const target = {
+    profile: params.ctx.profile,
+    host: params.ctx.host,
+    allowOwnerProfile: true,
+    ...auth ?? {}
+  };
+  const input = {
+    name: params.name,
+    ...params.scope === void 0 ? {} : { scope: params.scope },
+    ...params.space === void 0 ? {} : { space: params.space }
+  };
+  const invoke = async () => collect(await withSpinner(
+    params.label,
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation2("tinycloud.secrets.get", 1, target, input)
+  ));
+  let first = await invoke();
+  if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
+    const profile2 = await ProfileManager.getProfile(params.ctx.profile);
+    if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+      ownerNode = await ensureSecretsNode(
+        params.ctx,
+        params.options,
+        params.openKeyAcquisition,
+        profile2
+      );
+      first = await invoke();
+    }
+  }
+  if (first.status !== "authority_required") return first;
+  if (auth?.privateKey !== void 0) return first;
+  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
+    return first;
+  }
+  const profile = await ProfileManager.getProfile(params.ctx.profile);
+  if (!canRequestOwnerPermissions(profile)) return first;
+  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
+  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+    params.ctx,
+    params.options,
+    params.openKeyAcquisition
+  );
+  await withSpinner(
+    "Requesting secret permissions...",
+    () => ensureDelegationAuthority({
+      ctx: params.ctx,
+      profile,
+      node,
+      requested: first.missing,
+      expiryOption: void 0,
+      reason: secretPermissionReason("get", params.name),
+      yes: true,
+      force: true,
+      anchorSpace: params.space ?? SECRETS_SPACE3,
+      openKeyAcquisition: params.openKeyAcquisition
+    })
+  );
+  return invoke();
+}
+function throwCanonicalSecretGetError(result, name) {
+  switch (result.status) {
+    case "authority_required":
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        "Permission denied while reading secret",
+        ExitCode.PERMISSION_DENIED
+      );
+    case "setup_required":
+      throw new CLIError(
+        "NOT_FOUND",
+        result.setup.message,
+        ExitCode.NOT_FOUND,
+        { hint: `${result.setup.url}
+${result.setup.message}`, setup: result.setup }
+      );
+    case "error":
+      if (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated") {
+        throw new CLIError(
+          "AUTH_REQUIRED",
+          "Not signed in to TinyCloud.",
+          ExitCode.AUTH_REQUIRED,
+          { hint: `Sign in with: tc --profile ${result.context.profile} auth login` }
+        );
+      }
+      if (result.error.code === "NODE_UNREACHABLE") {
+        throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
+      }
+      if (result.error.code === "PERMISSION_HINT_INVALID") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
+      }
+      throw withSignInHint(cliErrorFromService(result.error), result.context.profile, result.context.posture);
+    case "ok":
+      throw new Error("Expected a failed canonical secret result.");
+  }
+}
+function canRequestOwnerPermissions(profile) {
+  const posture = resolveProfilePosture(profile);
+  return posture === "owner-openkey" || posture === "local-owner-key";
+}
+function shouldRequestSecretPermissions(error) {
+  if (error.code !== "PERMISSION_DENIED") return false;
+  return /permission|session expired|autosign|capabilit/i.test(error.message);
+}
+function thrownPermissionError(error) {
+  const record = error;
+  const message = typeof record?.message === "string" ? record.message : String(error);
+  const code3 = typeof record?.code === "string" ? record.code : "PERMISSION_DENIED";
+  if (code3 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      code: "PERMISSION_DENIED",
+      message
+    }
+  };
+}
+function isMissingFileError(error) {
+  const typed = error;
+  return typed?.code === "ENOENT";
+}
+function hasPermissionAction(actions, action) {
+  return actions.some(
+    (entry) => entry === action || entry.endsWith(`/${action.split("/").at(-1)}`) || entry === action.split("/").at(-1)
+  );
+}
+function delegationCoversPath(permissions, path, space = SECRETS_SPACE3) {
+  return permissions.some((permission) => {
+    if (permission.service !== "tinycloud.kv") return false;
+    if (!permissionTargetsSpace(permission, space)) return false;
+    if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
+    return permission.path === path || permission.path.endsWith("/") && path.startsWith(permission.path);
+  });
+}
+function spaceMatches(granted, requested) {
+  return granted === requested;
+}
+function permissionTargetsSpace(permission, expectedSpace) {
+  if (permission.service !== "tinycloud.kv") return false;
+  if (typeof permission.space !== "string") return false;
+  const space = permission.space.trim();
+  if (space === "") return false;
+  return spaceMatches(space, expectedSpace);
+}
+function delegationCoversDecrypt(permissions, networkId) {
+  return permissions.some((permission) => {
+    if (permission.service !== "tinycloud.encryption") return false;
+    if (!hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY)) return false;
+    return permission.path === networkId;
+  });
+}
+function parseDelegationExpiry(expiry) {
+  const parsed = expiry instanceof Date ? expiry : typeof expiry === "number" ? new Date(expiry) : new Date(String(expiry));
+  if (Number.isNaN(parsed.getTime())) {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation must include a valid expiry.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return parsed;
+}
+function normalizePortableDelegation2(value) {
+  if (value === null || typeof value !== "object") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation source must contain a PortableDelegation object.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const candidate = value;
+  const authorization = candidate.delegationHeader;
+  if (typeof candidate.cid !== "string" || typeof candidate.spaceId !== "string" || typeof candidate.path !== "string" || !Array.isArray(candidate.actions) || typeof candidate.delegateDID !== "string" || typeof candidate.ownerAddress !== "string" || typeof candidate.chainId !== "number" || typeof authorization !== "object" || authorization === null || typeof authorization.Authorization !== "string") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      "Delegation source must contain a PortableDelegation object.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return {
+    ...candidate,
+    actions: [...candidate.actions],
+    expiry: parseDelegationExpiry(candidate.expiry),
+    delegationHeader: { Authorization: authorization.Authorization }
+  };
+}
+function normalizeDelegationCandidates(value, source) {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeDelegationCandidates(entry, source));
+  }
+  if (value === null || typeof value !== "object") {
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      `Delegation source "${source}" must be a delegation file or imported profile reference.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  const candidate = value;
+  if (candidate.delegation !== void 0) {
+    const delegation2 = normalizePortableDelegation2(candidate.delegation);
+    return [{
+      delegation: delegation2,
+      permissions: Array.isArray(candidate.permissions) && candidate.permissions.length > 0 ? candidate.permissions : permissionsFromDelegation2(delegation2)
+    }];
+  }
+  const delegation = normalizePortableDelegation2(candidate);
+  return [{
+    delegation,
+    permissions: permissionsFromDelegation2(delegation)
+  }];
+}
+function permissionsFromDelegation2(delegation) {
+  if (delegation.resources?.length) {
+    return delegation.resources.map((resource) => ({
+      service: resource.service.startsWith("tinycloud.") ? resource.service : `tinycloud.${resource.service}`,
+      space: resource.space,
+      path: resource.path,
+      actions: [...resource.actions]
+    }));
+  }
+  const service = delegation.actions[0]?.includes("/") ? delegation.actions[0].slice(0, delegation.actions[0].indexOf("/")) : "tinycloud.unknown";
+  return [{
+    service,
+    space: delegation.spaceId,
+    path: delegation.path,
+    actions: [...delegation.actions]
+  }];
+}
+async function loadDelegationCandidates(source) {
+  try {
+    const raw = JSON.parse(await readFile9(source, "utf8"));
+    return normalizeDelegationCandidates(raw, source);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      if (error instanceof SyntaxError) {
+        throw new CLIError(
+          "INVALID_DELEGATION_SOURCE",
+          `Delegation source "${source}" must be valid JSON.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      throw new CLIError(
+        "INVALID_DELEGATION_SOURCE",
+        `Delegation source "${source}" could not be read.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+  }
+  try {
+    const importedPath = join7(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile9(importedPath, "utf8"));
+    return normalizeDelegationCandidates(raw, source);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+    if (error instanceof SyntaxError) {
+      throw new CLIError(
+        "INVALID_DELEGATION_SOURCE",
+        `Delegation source "${source}" must be valid JSON.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+    throw new CLIError(
+      "INVALID_DELEGATION_SOURCE",
+      `Delegation source "${source}" could not be read.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+}
+function selectDelegationCandidate(candidates, source, secretPath, space = SECRETS_SPACE3) {
+  const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
+  if (liveCandidates.length === 0) {
+    throw new CLIError(
+      "DELEGATION_EXPIRED",
+      `Delegation source "${source}" has no live delegations.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const secretsSpaceCandidates = liveCandidates.filter(
+    (candidate) => candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
+  );
+  if (secretsSpaceCandidates.length === 0) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation source "${source}" does not target secrets space "${space}".`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const exact = secretsSpaceCandidates.find(
+    (candidate) => delegationCoversPath(candidate.permissions, secretPath, space)
+  );
+  if (exact) {
+    return exact;
+  }
+  throw new CLIError(
+    "PERMISSION_DENIED",
+    `Delegation source "${source}" does not cover secret "${secretPath}".`,
+    ExitCode.PERMISSION_DENIED
+  );
+}
+async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_SPACE3) {
+  const candidates = await loadDelegationCandidates(source);
+  if (candidates.length === 0) {
+    throw new CLIError(
+      "DELEGATION_NOT_FOUND",
+      `Delegation source "${source}" did not resolve to any imported delegations.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const selected = selectDelegationCandidate(candidates, source, secretPath, space);
+  return { ...selected, source };
+}
+function mapEncryptionResultError(error) {
+  const code3 = error.code || "DECRYPTION_FAILED";
+  const exitCode = code3 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code3 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code3 === "NETWORK_ERROR" || code3 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
+  return new CLIError(code3, error.message, exitCode);
+}
+function parseDecryptedSecretPayload(data, secretPath) {
+  const text = new TextDecoder().decode(data);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new CLIError(
+      "INVALID_SECRET_PAYLOAD",
+      `Delegated secret "${secretPath}" did not decrypt to valid JSON.`,
+      ExitCode.ERROR
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || typeof parsed.value !== "string") {
+    throw new CLIError(
+      "INVALID_SECRET_PAYLOAD",
+      `Delegated secret "${secretPath}" did not decrypt to { value: string }.`,
+      ExitCode.ERROR
+    );
+  }
+  return parsed.value;
+}
+async function readDelegatedSecretValue(params) {
+  if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE3)) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const access = await params.node.useDelegation(params.delegation);
+  if (typeof access?.kv?.get !== "function") {
+    throw new CLIError(
+      "DELEGATION_INVALID",
+      `Delegation "${params.delegationCid}" did not resolve delegated KV access.`,
+      ExitCode.ERROR
+    );
+  }
+  const envelopeResult = await access.kv.get(params.secretPath, {
+    raw: true,
+    prefix: ""
+  });
+  if (!envelopeResult.ok) {
+    if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
+      throw new CLIError(
+        "NOT_FOUND",
+        `Secret "${params.name}" not found`,
+        ExitCode.NOT_FOUND
+      );
+    }
+    if (envelopeResult.error.code === "PERMISSION_DENIED") {
+      throw new CLIError(
+        "PERMISSION_DENIED",
+        `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
+        ExitCode.PERMISSION_DENIED
+      );
+    }
+    throw new CLIError(
+      envelopeResult.error.code,
+      envelopeResult.error.message,
+      ExitCode.ERROR
+    );
+  }
+  const rawEnvelope = envelopeResult.data.data;
+  if (typeof rawEnvelope !== "string") {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR
+    );
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(rawEnvelope);
+  } catch {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR
+    );
+  }
+  const networkId = envelope.networkId;
+  if (typeof networkId !== "string") {
+    throw new CLIError(
+      "INVALID_ENVELOPE",
+      `Secret "${params.secretPath}" did not contain an encrypted envelope.`,
+      ExitCode.ERROR
+    );
+  }
+  if (!delegationCoversDecrypt(params.permissions, networkId)) {
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      `Delegation "${params.delegationCid}" does not include ${SECRET_DECRYPT_CAPABILITY} for ${networkId}.`,
+      ExitCode.PERMISSION_DENIED
+    );
+  }
+  const decrypted = await params.node.encryption.decryptEnvelope(
+    envelope,
+    { proofs: [params.delegationCid] }
+  );
+  if (!decrypted.ok) {
+    throw mapEncryptionResultError(decrypted.error);
+  }
+  return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
+}
+function isStoredSessionExpired(session) {
+  const record = session;
+  const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
+  if (direct) return direct.getTime() <= Date.now();
+  if (typeof record.siwe !== "string") return false;
+  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
+  const expiry = match ? parseDate(match[1].trim()) : null;
+  return expiry !== null && expiry.getTime() <= Date.now();
+}
+function parseDate(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
+    return Number.isNaN(date2.getTime()) ? null : date2;
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+function secretKvAbility(action) {
+  return SECRET_KV_ABILITIES[action];
+}
+function secretPermissionEntries(params) {
+  const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
+  const permissions = [{
+    service: "tinycloud.kv",
+    space: params.space ?? SECRETS_SPACE3,
+    path,
+    actions: [secretKvAbility(params.action)],
+    skipPrefix: true
+  }];
+  if (params.action === "get") {
+    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE3) : params.node.getDefaultEncryptionNetworkId();
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: networkId,
+      actions: [SECRET_DECRYPT_CAPABILITY],
+      skipPrefix: true
+    });
+  }
+  return permissions;
+}
+function formatSecretScopeFlag(options) {
+  return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
+}
+function outputSecretDoctor(result) {
+  if (shouldOutputJson()) {
+    outputJson(result);
+    return;
+  }
+  process.stderr.write(formatSection("Secrets") + "\n");
+  for (const check of result.checks) {
+    process.stdout.write(formatCheck(check.ok, check.name, check.detail) + "\n");
+    if (check.hint) {
+      process.stdout.write(`  ${theme.hint(check.hint)}
+`);
+    }
+  }
+  process.stdout.write("\n");
+  if (result.healthy) {
+    process.stdout.write(theme.success("Secrets checks passed.") + "\n");
+  } else {
+    const failed = result.checks.filter((check) => check.ok === false).length;
+    process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
+  }
+}
+function registerSecretsCommand(program, openKeyAcquisition) {
+  const secrets = program.command("secrets").description("Encrypted secrets management");
+  const network = secrets.command("network").description("Manage the default secrets encryption network");
+  network.command("show [nameOrNetworkId]").description("Show a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (nameOrNetworkId, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const requested = nameOrNetworkId ?? "default";
+      const networkId = requested.startsWith("urn:tinycloud:encryption:") ? requested : node.getDefaultEncryptionNetworkId(requested);
+      const descriptor = await withSpinner(
+        "Fetching encryption network...",
+        () => node.getEncryptionNetwork(requested)
+      );
+      outputJson({
+        networkId,
+        exists: descriptor !== null,
+        ...descriptor ? { descriptor } : {}
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  network.command("init [name]").description("Create a secrets encryption network if needed").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const descriptor = await withSpinner(
+        "Ensuring encryption network...",
+        () => node.ensureEncryptionNetwork(name ?? "default")
+      );
+      outputJson({
+        networkId: descriptor.networkId,
+        state: descriptor.state,
+        descriptor
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const networkName = options.network ?? "default";
+      const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
+      const descriptor = await withSpinner(
+        "Checking secrets encryption network...",
+        () => node.getEncryptionNetwork(networkName)
+      );
+      const checks = [
+        descriptor ? {
+          name: "Encryption network",
+          ok: descriptor.state === "active" ? true : "warn",
+          detail: `${networkName} (${descriptor.state})`
+        } : {
+          name: "Encryption network",
+          ok: false,
+          detail: `${networkName} not found`,
+          hint: `tc secrets network init ${networkName}`
+        }
+      ];
+      let secret;
+      if (name) {
+        const scopeOptions = resolveSecretScope(options);
+        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+        const secrets2 = secretsServiceForSpace(node, spaceUri);
+        const resolved = resolveSecretPath2(name, scopeOptions);
+        const result = await runSecretOperation({
+          ctx,
+          node,
+          action: "get",
+          name,
+          scopeOptions,
+          space: spaceUri,
+          label: `Checking secret ${name}...`,
+          operation: () => secrets2.get(name, scopeOptions)
+        });
+        if (result.ok) {
+          secret = {
+            name: resolved.name,
+            path: resolved.permissionPaths.vault,
+            ...resolved.scope ? { scope: resolved.scope } : {},
+            exists: true,
+            readable: true
+          };
+          checks.push({
+            name: "Secret access",
+            ok: true,
+            detail: `${resolved.permissionPaths.vault} readable`
+          });
+        } else {
+          const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
+          secret = {
+            name: resolved.name,
+            path: resolved.permissionPaths.vault,
+            ...resolved.scope ? { scope: resolved.scope } : {},
+            exists: !notFound,
+            readable: false
+          };
+          checks.push({
+            name: "Secret access",
+            ok: false,
+            detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
+            hint: notFound ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
+          });
+        }
+      } else {
+        checks.push({
+          name: "Secret access",
+          ok: "warn",
+          detail: "skipped; pass a secret name to verify read access"
+        });
+      }
+      outputSecretDoctor({
+        healthy: checks.every((check) => check.ok !== false),
+        network: {
+          name: networkName,
+          networkId,
+          exists: descriptor !== null,
+          ...descriptor?.state ? { state: descriptor.state } : {}
+        },
+        ...secret ? { secret } : {},
+        checks
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const scopeOptions = resolveSecretScope(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "list",
+        scopeOptions,
+        space: spaceUri,
+        label: "Listing secrets...",
+        operation: () => secrets2.list(scopeOptions)
+      });
+      if (!result.ok) {
+        throw cliErrorFromService(result.error);
+      }
+      const secretNames = Array.isArray(result.data) ? result.data : [];
+      outputJson({
+        secrets: secretNames,
+        count: secretNames.length,
+        ...options.scope ? { scope: options.scope } : {},
+        ...spaceUri ? { space: spaceUri } : {}
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const scopeOptions = resolveSecretScope(options);
+      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secretPath = resolveSecretPath2(name, scopeOptions).permissionPaths.vault;
+      if (options.output) await validateSecretOutput(options.output);
+      if (options.delegation) {
+        const delegated = await resolveDelegatedSecretSource(
+          options.delegation,
+          secretPath,
+          legacySpaceUri ?? SECRETS_SPACE3
+        );
+        const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
+        const delegatedCtx = { ...ctx, host: effectiveHost };
+        const node = await ensureSecretsNode(delegatedCtx, options);
+        const value2 = await withSpinner(
+          `Getting secret ${name}...`,
+          () => readDelegatedSecretValue({
+            node,
+            delegation: delegated.delegation,
+            delegationCid: delegated.delegation.cid,
+            permissions: delegated.permissions,
+            secretPath,
+            space: legacySpaceUri ?? SECRETS_SPACE3,
+            name
+          })
+        );
+        if (options.output) {
+          await writeSecretFile(options.output, value2);
+          outputJson({ name, written: options.output });
+          return;
+        }
+        if (options.raw) {
+          process.stdout.write(value2);
+          return;
+        }
+        outputJson({ name, value: value2 });
+        return;
+      }
+      const privateKey = authOptions(options)?.privateKey;
+      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
+      const result = await invokeCanonicalSecretGet({
+        ctx,
+        name,
+        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
+        ...spaceUri === void 0 ? {} : { space: spaceUri },
+        options,
+        label: `Getting secret ${name}...`,
+        openKeyAcquisition
+      });
+      if (result.status !== "ok") {
+        try {
+          throwCanonicalSecretGetError(result, name);
+        } catch (error) {
+          throw withOperationWarnings(error, result.warnings);
+        }
+      }
+      const value = result.output.value;
+      try {
+        if (options.output) {
+          await writeSecretFile(options.output, value);
+          outputJson({ name, written: options.output });
+        } else if (options.raw || options.valueOnly) {
+          process.stdout.write(value);
+        } else {
+          outputJson({ name, value });
+        }
+      } catch (error) {
+        throw withOperationWarnings(error, result.warnings);
+      }
+      outputWarnings(operationWarnings(result.warnings));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
+      let secretValue;
+      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      if (sources.length === 0) {
+        throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (sources.length > 1) {
+        throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
+      }
+      if (options.file) {
+        secretValue = await readFile9(options.file, "utf-8");
+      } else if (options.stdin) {
+        secretValue = (await readStdin3()).toString("utf-8");
+      } else {
+        secretValue = value;
+      }
+      const scopeOptions = resolveSecretScope(options);
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "put",
+        name,
+        scopeOptions,
+        space: spaceUri,
+        label: `Storing secret ${name}...`,
+        operation: () => secrets2.put(name, secretValue, scopeOptions)
+      });
+      if (!result.ok) {
+        throw cliErrorFromService(result.error);
+      }
+      outputJson({ name, written: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const scopeOptions = resolveSecretScope(options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const secrets2 = secretsServiceForSpace(node, spaceUri);
+      const result = await runSecretOperation({
+        ctx,
+        node,
+        action: "del",
+        name,
+        scopeOptions,
+        space: spaceUri,
+        label: `Deleting secret ${name}...`,
+        operation: () => secrets2.delete(name, scopeOptions)
+      });
+      if (!result.ok) {
+        throw cliErrorFromService(result.error);
+      }
+      outputJson({ name, deleted: true });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx, authOptions(options));
+      const networkName = name ?? "default";
+      const descriptor = await withSpinner(
+        "Ensuring encryption network...",
+        () => node.ensureEncryptionNetwork(networkName)
+      );
+      const permission = {
+        service: "tinycloud.encryption",
+        path: descriptor.networkId,
+        actions: ["decrypt"]
+      };
+      const result = await withSpinner(
+        `Granting decrypt permission to ${recipientDid}...`,
+        () => node.delegateTo(recipientDid, [permission])
+      );
+      outputJson({
+        networkId: descriptor.networkId,
+        recipientDid,
+        cid: result.delegation.cid,
+        prompted: result.prompted,
+        path: result.delegation.path,
+        actions: result.delegation.actions
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+  secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
+    try {
+      const open7 = (await import("open")).default;
+      await open7("https://secrets.tinycloud.xyz");
+      outputJson({ opened: "https://secrets.tinycloud.xyz" });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
 
 // ../share-sdk/dist/index.js
+init_sha2();
 var __defProp2 = Object.defineProperty;
 var __export2 = (target, all) => {
   for (var name in all)
@@ -26042,13 +28365,13 @@ var Digest = class {
     this.bytes = bytes3;
   }
 };
-function format(link2, base22) {
-  const { bytes: bytes3, version } = link2;
+function format(link3, base22) {
+  const { bytes: bytes3, version } = link3;
   switch (version) {
     case 0:
-      return toStringV0(bytes3, baseCache(link2), base22 ?? base58btc.encoder);
+      return toStringV0(bytes3, baseCache(link3), base22 ?? base58btc.encoder);
     default:
-      return toStringV1(bytes3, baseCache(link2), base22 ?? base32.encoder);
+      return toStringV1(bytes3, baseCache(link3), base22 ?? base32.encoder);
   }
 }
 var cache = /* @__PURE__ */ new WeakMap();
@@ -26847,7 +29170,7 @@ async function importAesKey(key32, usage) {
     [usage]
   );
 }
-async function open3(blob, key32) {
+async function open5(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -27169,13 +29492,13 @@ function metadataFor(envelope, origin) {
     }
   };
 }
-async function resolvePolicyShare(link2, options) {
+async function resolvePolicyShare(link3, options) {
   options.signal?.throwIfAborted();
   let url;
   let parsed;
   try {
-    url = new URL(link2);
-    parsed = await parseSealedInlineShareUrl(link2, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+    url = new URL(link3);
+    parsed = await parseSealedInlineShareUrl(link3, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
@@ -27185,7 +29508,7 @@ async function resolvePolicyShare(link2, options) {
   options.signal?.throwIfAborted();
   let envelope;
   try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open3(parsed.ciphertext, parsed.key32));
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open5(parsed.ciphertext, parsed.key32));
     const value = JSON.parse(encoded);
     if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
     envelope = shareEnvelopeV3Schema.parse(value);
@@ -27204,12 +29527,12 @@ async function resolvePolicyShare(link2, options) {
   options.onResolvedAddressedEnvelope?.(envelope, parsed.ciphertextCid);
   return { envelope, origin: url.origin, cid: parsed.ciphertextCid };
 }
-async function inspectShare(link2, options = {}) {
-  const resolved = await resolvePolicyShare(link2, options);
+async function inspectShare(link3, options = {}) {
+  const resolved = await resolvePolicyShare(link3, options);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
 }
-async function receiveShare(link2, options = {}) {
-  const resolved = await resolvePolicyShare(link2, options);
+async function receiveShare(link3, options = {}) {
+  const resolved = await resolvePolicyShare(link3, options);
   return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
 }
 var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
@@ -27880,13 +30203,13 @@ var Digest2 = class {
     this.bytes = bytes3;
   }
 };
-function format2(link2, base33) {
-  const { bytes: bytes3, version } = link2;
+function format2(link3, base33) {
+  const { bytes: bytes3, version } = link3;
   switch (version) {
     case 0:
-      return toStringV02(bytes3, baseCache2(link2), base33 ?? base58btc2.encoder);
+      return toStringV02(bytes3, baseCache2(link3), base33 ?? base58btc2.encoder);
     default:
-      return toStringV12(bytes3, baseCache2(link2), base33 ?? base322.encoder);
+      return toStringV12(bytes3, baseCache2(link3), base33 ?? base322.encoder);
   }
 }
 var cache2 = /* @__PURE__ */ new WeakMap();
@@ -28383,9 +30706,9 @@ async function revokeShare(input) {
   }
   return { state: "revoked", target, delegationCid, revokedAt };
 }
-function redactRecord(record, revealLink, link2) {
+function redactRecord(record, revealLink, link3) {
   const matcher = record.recipientMatcher;
-  const revealedLink = revealLink ? link2 ?? record.link : void 0;
+  const revealedLink = revealLink ? link3 ?? record.link : void 0;
   return {
     shareId: record.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
@@ -28949,13 +31272,13 @@ var Digest3 = class {
     this.bytes = bytes;
   }
 };
-function format3(link2, base22) {
-  const { bytes, version } = link2;
+function format3(link3, base22) {
+  const { bytes, version } = link3;
   switch (version) {
     case 0:
-      return toStringV03(bytes, baseCache3(link2), base22 ?? base58btc3.encoder);
+      return toStringV03(bytes, baseCache3(link3), base22 ?? base58btc3.encoder);
     default:
-      return toStringV13(bytes, baseCache3(link2), base22 ?? base323.encoder);
+      return toStringV13(bytes, baseCache3(link3), base22 ?? base323.encoder);
   }
 }
 var cache3 = /* @__PURE__ */ new WeakMap();
@@ -29773,9 +32096,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat3, mkdir as mkdir3, mkdtemp, open as open4, readFile as readFile9, realpath, stat as stat2, link, rename as rename3, rm as rm4, unlink } from "fs/promises";
-import { randomBytes as randomBytes4 } from "crypto";
-import { basename as basename3, join as join6, resolve as resolve2, sep } from "path";
+import { lstat as lstat3, mkdir as mkdir4, mkdtemp, open as open6, readFile as readFile10, realpath, stat as stat4, link as link2, rename as rename4, rm as rm5, unlink as unlink3 } from "fs/promises";
+import { randomBytes as randomBytes6 } from "crypto";
+import { basename as basename4, join as join8, resolve as resolve3, sep } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -29812,24 +32135,24 @@ function shareFilename(value) {
   }
 }
 function shareInputFilename(input, name) {
-  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename3(resolve2(input))));
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename4(resolve3(input))));
 }
 async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const filename = shareInputFilename(input, name);
   if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
-  const path = resolve2(input);
-  const info = await stat2(path);
+  const path = resolve3(input);
+  const info = await stat4(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile9(path));
+  const bytes = new Uint8Array(await readFile10(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
 async function assertDirectory(path) {
-  const absolute = resolve2(path);
+  const absolute = resolve3(path);
   const segments = absolute.split(sep).filter(Boolean);
   let current = absolute.startsWith(sep) ? sep : "";
   for (const segment of segments) {
-    current = current === sep ? join6(current, segment) : join6(current, segment);
+    current = current === sep ? join8(current, segment) : join8(current, segment);
     try {
       const info = await lstat3(current);
       if (info.isSymbolicLink()) {
@@ -29839,29 +32162,29 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir3(current, { mode: 448 });
+      await mkdir4(current, { mode: 448 });
       const created = await lstat3(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
 }
 async function writeShareOutput(directory, filename, bytes, force) {
-  const outputDirectory = resolve2(directory);
+  const outputDirectory = resolve3(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open4(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open6(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath(outputDirectory);
-  const outputPath = join6(stableDirectory, safeName);
+  const outputPath = join8(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
-    const current = await stat2(stableDirectory);
+    const current = await stat4(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join6(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join8(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat3(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join6(stagingDirectory, `.tinycloud-share-${randomBytes4(16).toString("hex")}.tmp`);
+  const stagingPath = join8(stagingDirectory, `.tinycloud-share-${randomBytes6(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -29873,16 +32196,16 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open4(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open6(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
     await assertStableDirectory();
     if (force) {
-      await rename3(temporaryPath, outputPath);
+      await rename4(temporaryPath, outputPath);
     } else {
-      await link(temporaryPath, outputPath);
-      await unlink(temporaryPath);
+      await link2(temporaryPath, outputPath);
+      await unlink3(temporaryPath);
     }
     await assertStableDirectory();
   } catch (error) {
@@ -29892,13 +32215,13 @@ async function writeShareOutput(directory, filename, bytes, force) {
   } finally {
     await handle?.close();
     try {
-      if (temporaryPath !== void 0) await unlink(temporaryPath);
+      if (temporaryPath !== void 0) await unlink3(temporaryPath);
     } catch {
     }
-    await rm4(stagingDirectory, { recursive: true, force: true });
+    await rm5(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join6(outputDirectory, safeName);
+  return join8(outputDirectory, safeName);
 }
 
 // src/share/errors.ts
@@ -29950,12 +32273,12 @@ function shareCliError(error, operation = "publish") {
   }
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
-    const profileName = "profileName" in failure ? failure.profileName : void 0;
+    const profileName2 = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
-    const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
+    const profileHint = profileName2 === void 0 ? "" : `--profile ${profileName2} `;
     const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
-      const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
+      const holder = profileName2 === void 0 ? "this session" : `profile ${profileName2}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
         `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
@@ -30042,11 +32365,11 @@ function inputUrl(value, stdin) {
   return Promise.resolve(value);
 }
 async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
-  const link2 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
+  const link3 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
   try {
-    parseNativeShareUrl(link2);
+    parseNativeShareUrl(link3);
   } catch {
-    return (dependencies.inspect ?? inspectShare)(link2, { expectedOrigin });
+    return (dependencies.inspect ?? inspectShare)(link3, { expectedOrigin });
   }
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
@@ -30199,16 +32522,16 @@ function registerShareCommand(program) {
       const json = jsonOutput(options, command);
       if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
       const maxBytes = byteLimit(options.maxBytes);
-      const link2 = await inputUrl(url, options.stdin === true);
+      const link3 = await inputUrl(url, options.stdin === true);
       let nativeLink = false;
       try {
-        parseNativeShareUrl(link2);
+        parseNativeShareUrl(link3);
         nativeLink = true;
       } catch {
       }
       if (nativeLink) {
         if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
-        const native = await shareServices.nativeReader(link2);
+        const native = await shareServices.nativeReader(link3);
         if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
         if (options.stdout) {
           process.stdout.write(Buffer.from(native.bytes));
@@ -30219,7 +32542,7 @@ function registerShareCommand(program) {
         else receiveHuman(output3);
         return;
       }
-      const result = await receiveShare(link2, {
+      const result = await receiveShare(link3, {
         expectedOrigin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
       });
@@ -30316,9 +32639,9 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { randomBytes as randomBytes5 } from "crypto";
-import { mkdir as mkdir4, writeFile as writeFile5 } from "fs/promises";
-import { dirname as dirname4 } from "path";
+import { randomBytes as randomBytes7 } from "crypto";
+import { mkdir as mkdir5, writeFile as writeFile5 } from "fs/promises";
+import { dirname as dirname5 } from "path";
 init_host();
 init_theme();
 function didWithoutFragment2(did) {
@@ -30399,7 +32722,7 @@ it directly with \`tc space host <name>\` (no request needed).
       const artifact = {
         kind: "tinycloud.host.request",
         version: 1,
-        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes5(4).toString("hex")}`,
+        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes7(4).toString("hex")}`,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         spaceName,
         spaceId,
@@ -30445,7 +32768,7 @@ it directly with \`tc space host <name>\` (no request needed).
 }
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir4(dirname4(emitOption), { recursive: true });
+    await mkdir5(dirname5(emitOption), { recursive: true });
     await writeFile5(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
@@ -30466,19 +32789,19 @@ init_formatter();
 init_errors();
 init_constants();
 import { writeFile as writeFile6 } from "fs/promises";
-import { resolve as resolve3 } from "path";
+import { resolve as resolve4 } from "path";
 init_space();
 init_host();
 init_theme();
-async function dbHandle(node, dbName, spaceInput, profileName) {
-  const spaceUri = await resolveSpaceUri(spaceInput, profileName);
+async function dbHandle(node, dbName, spaceInput, profileName2) {
+  const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
   return { handle: sql.db(dbName), spaceUri };
 }
-async function throwSqlError(error, spaceUri, profileName, prefix) {
+async function throwSqlError(error, spaceUri, profileName2, prefix) {
   const storageFull = storageFullError(error, prefix);
   if (storageFull) throw storageFull;
-  const hosted = await unhostedSpaceError(error, spaceUri, profileName);
+  const hosted = await unhostedSpaceError(error, spaceUri, profileName2);
   if (hosted) throw hosted;
   const message = prefix ? `${prefix}${error.message}` : error.message;
   throw cliErrorFromService(error, message);
@@ -30611,7 +32934,7 @@ Output:
       }
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
-      const outputPath = resolve3(options.output);
+      const outputPath = resolve4(options.output);
       await writeFile6(outputPath, buffer);
       outputJson({
         file: outputPath,
@@ -30698,12 +33021,12 @@ Notes:
       }
       for (const entry of plan) {
         const safe = quoteIdent(entry.table);
-        const fetched = await fromHandle.query(`SELECT * FROM ${safe}`);
-        if (!fetched.ok) {
-          await throwSqlError(fetched.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
+        const fetched2 = await fromHandle.query(`SELECT * FROM ${safe}`);
+        if (!fetched2.ok) {
+          await throwSqlError(fetched2.error, fromSpaceUriResolved, ctx.profile, `Failed to read "${entry.table}": `);
         }
-        const columns = fetched.data.columns;
-        const rows = fetched.data.rows;
+        const columns = fetched2.data.columns;
+        const rows = fetched2.data.rows;
         if (rows.length === 0) continue;
         const colList = columns.map(quoteIdent).join(", ");
         const placeholders = columns.map(() => "?").join(", ");
@@ -30784,7 +33107,7 @@ function registerStatusCommand(program) {
 async function inspectProfile(params) {
   const issues = [];
   const profile = await readProfile(params.name, issues);
-  const session = await readSession2(params.name, issues);
+  const session = await readSession3(params.name, issues);
   const hasKey = await readHasKey(params.name, issues);
   const storedDelegations = await readDelegations(params.name, issues);
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
@@ -30849,7 +33172,7 @@ async function readProfile(name, issues) {
     return null;
   }
 }
-async function readSession2(name, issues) {
+async function readSession3(name, issues) {
   try {
     return asRecord(await ProfileManager.getSession(name));
   } catch (error) {
@@ -31168,7 +33491,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { readFile as readFile10 } from "fs/promises";
+import { readFile as readFile11 } from "fs/promises";
 import { writeFile as writeFile7 } from "fs/promises";
 import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin4() {
@@ -31226,7 +33549,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile10(options.file));
+        putValue = new Uint8Array(await readFile11(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin4());
       } else {
@@ -31345,7 +33668,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { readFile as readFile11 } from "fs/promises";
+import { readFile as readFile12 } from "fs/promises";
 import { writeFile as writeFile8 } from "fs/promises";
 var VARIABLES_PREFIX = "variables/";
 async function readStdin5() {
@@ -31446,7 +33769,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile11(options.file, "utf-8");
+        varValue = await readFile12(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin5()).toString("utf-8");
       } else {
@@ -31491,6 +33814,7 @@ function registerTinyCloudCommands(program) {
   registerAuthCommand(program);
   registerEnableCommand(program);
   registerKvCommand(program);
+  registerReplicaCommand(program);
   registerSpaceCommand(program);
   registerDelegationCommand(program);
   registerShareCommand(program);

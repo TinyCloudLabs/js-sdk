@@ -1,5 +1,15 @@
 # @tinycloud/operations
 
+## 0.4.0-beta.14
+
+### Patch Changes
+
+- 37123c3: `withProfileLock` takes `requireProfile: true` for writers of state that lives inside an existing profile (TC-18 replicas): the lock is taken only while the profile's `profile.json` exists, checked before and after waiting for its turn, and never creates the profile directory. A missing or deleted profile is refused with `ProfileDeletedError` (`PROFILE_NOT_FOUND`), and an empty directory a deletion left behind is removed. Without the option the lock behaves as before.
+- Updated dependencies [37123c3]
+  - @tinycloud/sdk-services@3.1.0-beta.10
+  - @tinycloud/node-sdk@3.1.0-beta.10
+  - @tinycloud/sdk-core@3.1.0-beta.10
+
 ## 0.4.0-beta.13
 
 ### Patch Changes
