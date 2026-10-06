@@ -6,6 +6,7 @@ const authorityRequests: unknown[] = [];
 const revokeCalls: unknown[][] = [];
 const outputs: unknown[] = [];
 const errors: unknown[] = [];
+let revokeResult: unknown;
 const targetSpaceId = "tinycloud:pkh:eip155:1:0xtarget:archive";
 
 mock.module("../config/profiles.js", () => ({
@@ -36,7 +37,7 @@ mock.module("../lib/sdk.js", () => ({
       list: async () => ({ ok: true, data: [] }),
       revoke: async (...args: unknown[]) => {
         revokeCalls.push(args);
-        return { ok: true, data: undefined };
+        return revokeResult ?? { ok: true, data: undefined };
       },
     },
   }),
@@ -74,6 +75,7 @@ beforeEach(() => {
   revokeCalls.length = 0;
   outputs.length = 0;
   errors.length = 0;
+  revokeResult = undefined;
 });
 
 describe("tc delegation revoke authority", () => {
@@ -106,5 +108,20 @@ describe("tc delegation revoke authority", () => {
     expect(revokeCalls).toEqual([["bafy-device-grant", { targetSpaceId }]]);
     expect(outputs).toEqual([{ cid: "bafy-device-grant", revoked: true }]);
     expect(errors).toEqual([]);
+  });
+
+  test("does not print revoked when the node rejects the target", async () => {
+    hasRevokeAuthority = true;
+    const failure = {
+      ok: false,
+      error: { code: "REVOCATION_FAILED", message: "403 - Unauthorized Revoker", status: 403 },
+    };
+    revokeResult = failure;
+
+    await runRevoke();
+
+    expect(revokeCalls).toEqual([["bafy-device-grant", { targetSpaceId }]]);
+    expect(outputs).toEqual([]);
+    expect(errors).toEqual([failure.error]);
   });
 });
