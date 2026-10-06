@@ -3,7 +3,11 @@ name: Replica e2e
 # `tc replica` (TC-18) against a real TinyCloud node through the public CLI:
 # device grant, sync, offline restart reads, catch-up, scope. The node binary
 # comes from the pinned GHCR image of the tinycloud-node commit that serves
-# `tinycloud.kv/sync` (TC-732, d7f511f on main).
+# `tinycloud.kv/sync` (TC-732, d7f511f on main). That commit (PR #247) also
+# registers `tinycloud.kv/retain` and attests `retainUntil`, which the
+# retention test needs. The image is public; the job still logs in with the
+# workflow token so the pull keeps working if the package becomes private
+# (the package must then grant this repository read access).
 
 on:
   pull_request:
@@ -32,19 +36,6 @@ jobs:
       fail-fast: false
       matrix:
         database: [sqlite, postgres]
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: replica_e2e
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -80,6 +71,13 @@ jobs:
           bun run --cwd packages/replica build
           bun run --cwd packages/cli build
 
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Extract the pinned node binary
         run: |
           docker pull "$TINYCLOUD_NODE_IMAGE"
@@ -87,6 +85,17 @@ jobs:
           docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
+
+      - name: Start Postgres 16
+        if: matrix.database == 'postgres'
+        run: |
+          docker run -d --name replica-e2e-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=replica_e2e -p 127.0.0.1:5432:5432 postgres:16
+          for attempt in $(seq 1 30); do
+            docker exec replica-e2e-pg pg_isready -U postgres -d replica_e2e && exit 0
+            sleep 2
+          done
+          docker logs replica-e2e-pg
+          exit 1
 
       - name: Replica engine and store conformance
         if: matrix.database == 'sqlite'
