@@ -607,6 +607,55 @@ describe("lease and reader timing", () => {
   });
 });
 
+describe("authority after a local read", () => {
+  /** `store`, with `hook` run after `method` has its result and before the caller gets it. */
+  function pausedAfter(store: ReplicaStore, method: "readContent" | "list", hook: () => Promise<unknown> | void): ReplicaStore {
+    return new Proxy(store, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (typeof value !== "function") return value;
+        if (property !== method) return value.bind(target);
+        return async (...args: unknown[]) => {
+          const result: unknown = await value.apply(target, args);
+          await hook();
+          return result;
+        };
+      },
+    }) as ReplicaStore;
+  }
+
+  async function synced() {
+    let now = Date.now();
+    const node = new FakeNode();
+    node.put("notes/a", "secret");
+    node.authority = { notBefore: null, expiresAt: new Date(now + 60_000).toISOString(), retainUntil: null };
+    const store = await newStore(undefined, {}, { now: () => now });
+    await new Replica({ store, transport: node, now: () => now }).sync();
+    return { store, clock: () => now, expire: () => void (now += 61_000) };
+  }
+
+  test("a revocation purged while a get held the bytes returns GRANT_REVOKED, not the bytes", async () => {
+    const { store, clock } = await synced();
+    const paused = pausedAfter(store, "readContent", () => store.markRevoked("delegation-revoked: bafy"));
+    expect(await codeOf(new Replica({ store: paused, now: clock }).get("notes/a"))).toBe(ReplicaErrorCode.GRANT_REVOKED);
+  });
+
+  test("an expiry reached while a get held the bytes returns GRANT_EXPIRED, not the bytes", async () => {
+    const { store, clock, expire } = await synced();
+    const paused = pausedAfter(store, "readContent", expire);
+    expect(await codeOf(new Replica({ store: paused, now: clock }).get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
+
+  test("a list that read its rows before a revocation or an expiry returns the error, not the rows", async () => {
+    const revoked = await synced();
+    const whileRevoking = pausedAfter(revoked.store, "list", () => revoked.store.markRevoked("delegation-revoked: bafy"));
+    expect(await codeOf(new Replica({ store: whileRevoking, now: revoked.clock }).list())).toBe(ReplicaErrorCode.GRANT_REVOKED);
+    const expiring = await synced();
+    const whileExpiring = pausedAfter(expiring.store, "list", expiring.expire);
+    expect(await codeOf(new Replica({ store: whileExpiring, now: expiring.clock }).list())).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
+});
+
 describe("WAL checkpoint after a reset", () => {
   test("a reader holding the old pages makes the reset report busy instead of claiming success", async () => {
     const dir = await tempDir();

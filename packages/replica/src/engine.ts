@@ -155,25 +155,39 @@ export class Replica {
     };
   }
 
+  /**
+   * Authority again, from the store's current state and the clock, once the
+   * read has its data: a revocation (and its purge) or an expiry that landed
+   * while the read ran wins, and the caller gets the error, not the data.
+   */
+  async #confirmedMeta(): Promise<ReadMeta> {
+    return this.#readMeta(await this.#state());
+  }
+
   async get(key: string, options: { verify?: boolean } = {}): Promise<ReplicaReadResult> {
     const state = await this.#state();
-    const meta = this.#readMeta(state);
-    if (!kvPrefixCovers(state.config.prefix, key)) return { status: "not_covered", key, meta };
+    this.#readMeta(state);
+    if (!kvPrefixCovers(state.config.prefix, key)) return { status: "not_covered", key, meta: await this.#confirmedMeta() };
     // Readers take no lock: a sync may replace this entry and collect its old
     // blob between the two reads below. One re-read sees the new entry.
     for (let attempt = 0; ; attempt += 1) {
       const entry = await this.#store.get(key);
       if (entry === undefined) {
-        return { status: state.coverage === "complete" ? "absent" : "coverage_incomplete", key, meta };
+        const status = state.coverage === "complete" ? "absent" : "coverage_incomplete";
+        return { status, key, meta: await this.#confirmedMeta() };
       }
-      if (entry.deleted) return { status: "deleted", key, meta };
+      if (entry.deleted) return { status: "deleted", key, meta: await this.#confirmedMeta() };
       if (!entry.content) {
-        return { status: "content_missing", key, etag: entry.etag, metadata: entry.metadata, meta };
+        return { status: "content_missing", key, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
       }
       const value = await this.#store.readContent(entry.hash);
       const intact = value !== undefined && (options.verify === false || contentHash(value) === entry.hash);
-      if (intact) return { status: "present", key, value, etag: entry.etag, metadata: entry.metadata, meta };
+      if (intact) {
+        return { status: "present", key, value, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
+      }
       if (attempt === 0) continue;
+      // A purge that ran under this read surfaces as its revocation, not as corruption.
+      await this.#confirmedMeta();
       throw new ReplicaError(
         ReplicaErrorCode.INTEGRITY_ERROR,
         value === undefined
@@ -187,7 +201,7 @@ export class Replica {
   /** Live keys under `prefix` (a plain string prefix within the replica's scope). */
   async list(options: ListOpts = {}): Promise<ReplicaListResult> {
     const state = await this.#state();
-    const meta = this.#readMeta(state);
+    this.#readMeta(state);
     const scope = state.config.prefix;
     const prefix = options.prefix ?? "";
     if (prefix !== "" && !scope.startsWith(prefix) && !kvPrefixCovers(scope, prefix)) {
@@ -202,7 +216,7 @@ export class Replica {
       if (row.deleted) continue;
       entries.push({ key: row.key, etag: row.etag, metadata: row.metadata, content: row.content });
     }
-    return { entries, meta };
+    return { entries, meta: await this.#confirmedMeta() };
   }
 
   async status(): Promise<ReplicaStatus> {
