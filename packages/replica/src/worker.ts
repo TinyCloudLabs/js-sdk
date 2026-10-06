@@ -25,7 +25,7 @@ import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
 import { assertGrantInstallable, parseUcanGrant } from "./grant.js";
 import { requiresSecretsOptIn } from "./scope.js";
 import { kvSyncTransport } from "./transport.js";
-import type { ListOpts, ReplicaConfig, ReplicaState } from "./types.js";
+import type { GrantRecord, ListOpts, ReplicaConfig, ReplicaState } from "./types.js";
 import {
   IndexedDbReplicaStore,
   deleteReplicaDatabase,
@@ -150,10 +150,8 @@ function lockName(replicaId: string): string {
   return `tinycloud-replica:${replicaId}`;
 }
 
-/** A KV service bound to the replica's grant, device key and pinned host. */
-function boundKv(state: ReplicaState, s: Session) {
-  const grant = state.pendingGrant ?? state.grant;
-  if (grant === null) throw new ReplicaError(ReplicaErrorCode.GRANT_MISSING, "No grant is installed for this replica.");
+/** A KV service bound to one grant, the device key and the pinned host. */
+function boundKv(grant: GrantRecord, s: Session) {
   const context = new ServiceContext({
     invoke: tinycloud.invoke,
     invokeAny: tinycloud.invokeAny,
@@ -297,7 +295,7 @@ async function handleSync(request: SyncRequest): Promise<SyncResult> {
   const s = needSession();
   const state = await s.store.open();
   if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
-  const engine = new Replica({ store: s.store, transport: kvSyncTransport(boundKv(state, s)) });
+  const engine = new Replica({ store: s.store, transportFor: (grant) => kvSyncTransport(boundKv(grant, s)) });
   const outcome = await withWriterLock(s, () => engine.sync(request.limit === undefined ? {} : { limit: request.limit }));
   if (typeof outcome === "object" && "busy" in outcome) return { status: "busy" };
   const serial = await s.store.commitSerial();

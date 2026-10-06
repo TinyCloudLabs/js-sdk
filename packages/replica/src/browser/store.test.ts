@@ -143,7 +143,7 @@ describe("fencing and revocation (indexeddb)", () => {
     const lease = await store.acquireSyncLease(60_000);
 
     await store.markRevoked("revoked by the node");
-    // The outstanding lease is dead: commits fail the fence.
+    // The outstanding lease is dead: the fence reports the revocation.
     await rejectsWith(
       store.applyPage(lease!, {
         changes: [],
@@ -153,10 +153,12 @@ describe("fencing and revocation (indexeddb)", () => {
         authority: null,
         coverage: "empty",
         at: new Date().toISOString(),
+        now: Date.now(),
+        window: { notBefore: null, expiresAt: null },
         complete: false,
-        promoteGrant: false,
+        promoteGrant: null,
       }),
-      ReplicaErrorCode.BUSY,
+      ReplicaErrorCode.GRANT_REVOKED,
     );
     expect(await store.list({})).toEqual([]);
     const status = await store.status();

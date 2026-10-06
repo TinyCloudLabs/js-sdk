@@ -61,18 +61,23 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
   let space = "";
   let spaceId = "";
 
+  // A stable node key: a restart must come back with the same node DID, as a
+  // real deployment does — the replica pins its source and refuses a feed
+  // from a different DID as SOURCE_CHANGED.
+  const nodeSecret = randomBytes(48).toString("base64url");
+
   async function startNode(): Promise<void> {
     const child = spawn(NODE_BIN!, [], {
       cwd: dataDir,
       env: {
         ...process.env,
         TINYCLOUD_STORAGE__DATADIR: join(dataDir, "data"),
-        TINYCLOUD_PORT: String(port),
+        TINYCLOUD_KEYS__SECRET: nodeSecret,
         TINYCLOUD_ADDRESS: "127.0.0.1",
+        TINYCLOUD_PORT: String(port),
         ROCKET_PORT: String(port),
         ROCKET_ADDRESS: "127.0.0.1",
         TINYCLOUD_KEYS__TYPE: "Static",
-        TINYCLOUD_KEYS__SECRET: randomBytes(48).toString("base64url"),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -286,9 +291,9 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect(nodeRequests).toBe(0);
 
     // 4. Restart the node; the owner updates, deletes and adds while the
-    //    replica is away. The new host key invalidates the cursor: the sync
-    //    resets and replays the prefix's live state, so the deleted key is
-    //    simply absent (a tombstone needs an in-epoch delete, covered next).
+    //    replica is away. The node DID is stable across restarts, so the
+    //    cursor stays valid and the delete replays as a tombstone (deleted),
+    //    the update and the new key land as live changes.
     await startNode();
     await context.setOffline(false);
     await page.waitForFunction(() => window.__replica !== undefined);
@@ -302,7 +307,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect(convergedA.status === "present" && text(new Uint8Array(convergedA.value))).toBe(
       "alpha note, second version",
     );
-    expect((await page.evaluate(() => window.__replica.get("notes/b"))).status).toBe("absent");
+    expect((await page.evaluate(() => window.__replica.get("notes/b"))).status).toBe("deleted");
     const convergedNew = await page.evaluate(() => window.__replica.get("notes/deep/new"));
     expect(convergedNew.status === "present" && text(new Uint8Array(convergedNew.value))).toBe("added");
 
@@ -382,11 +387,10 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
   }, 120_000);
 
   test("expiry blocks reads; revocation purges and blocks reads", async () => {
-    // A fresh partition keeps this replica isolated from the happy-path
-    // database. Its grants come from `revoker`: a second session over the same
-    // private key whose SIWE manifest carries `tinycloud.delegation/revoke` —
-    // the node refuses `revokeDelegation` from a session that only holds a
-    // runtime grant (403 Unauthorized Revoker).
+    // Grants come from `revoker`: a second session over the same private key
+    // whose SIWE manifest carries `tinycloud.delegation/revoke` — the node
+    // refuses `revokeDelegation` from a session that only holds a runtime
+    // grant (403 Unauthorized Revoker).
     const revoker = new TinyCloudNode({
       privateKey: OWNER_KEY,
       host,
@@ -409,16 +413,16 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
 
     await page.goto(`${origin}/`);
     await page.waitForFunction(() => window.__replica !== undefined);
-    await openReplicaOnPage(page, { grantSubject });
 
-    // Two grants from the same revoker. Grant A exercises expiry, so it must
-    // be installed and synced first: the authority window reads enforce is
-    // attested at sync time under the invoking grant. Grant B stays pending
-    // until the post-expiry sync, which runs under it and learns its
-    // revocation. The node enforces signed absolute windows with its own
-    // clock: expiry needs a real wall-clock wait, and 75 s is the shortest
-    // it accepts.
-    const deviceDid = await page.evaluate(() => window.__replica.deviceDid());
+    // Two partitions (grantSubject is part of the database name): A carries
+    // the 75 s grant for expiry; B carries a long grant that is the ACTIVE
+    // grant of its replica — since the v2 contract, revoking a pending grant
+    // discards it without a purge, so revocation coverage must target the
+    // grant the replica is already syncing under. B opens with an empty
+    // grantSubject: distinct partition, and its installGrant skips the issuer
+    // check (the grants are still issued by `revoker`).
+    const openedA = await openReplicaOnPage(page, { grantSubject });
+    const deviceDid = openedA.deviceDid;
     const kvScope = [{ service: "tinycloud.kv", space, path: "notes/", actions: ["get", "list", "metadata", "sync"] }];
     const grantA = await revoker.delegateTo(deviceDid, kvScope as never, { expiry: "75s" });
     const grantB = await revoker.delegateTo(deviceDid, kvScope as never, { expiry: "30d" });
@@ -426,17 +430,16 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     const installedA = await page.evaluate((jwt) => window.__replica.installGrant(jwt), grantA.delegation.delegationHeader.Authorization);
     await page.evaluate(() => window.__replica.sync());
     expect((await page.evaluate(() => window.__replica.get("notes/a"))).status).toBe("present");
+
+    // Partition B: install grant B and sync once so it is the active grant.
+    const openedB = await openReplicaOnPage(page);
+    expect(openedB.replicaId).not.toBe(openedA.replicaId);
     await page.evaluate((jwt) => window.__replica.installGrant(jwt), grantB.delegation.delegationHeader.Authorization);
+    await page.evaluate(() => window.__replica.sync());
+    expect((await page.evaluate(() => window.__replica.get("notes/a"))).status).toBe("present");
 
-    // Wait out grant A's signed window (real clock; see comment above).
-    if (installedA.expiresAt === null) throw new Error("grant A has no expiry");
-    const waitMs = installedA.expiresAt * 1000 - Date.now() + 1500;
-    if (waitMs > 0) await Bun.sleep(waitMs);
-    const expired = await page.evaluate(() => window.__replica.get("notes/a").catch((error: Error) => ({ code: (error as { code?: string }).code })));
-    expect((expired as { code?: string }).code ?? (expired as { status?: string }).status).toMatch(/GRANT_EXPIRED|expired/);
-
-    // The revoker revokes grant B (the still-live one); the next sync learns
-    // it and the replica purges: reads throw and both stores are empty.
+    // The revoker revokes grant B (the active one); the next sync learns it
+    // and the replica purges: reads throw and both stores are empty.
     const revoke = await revoker.revokeDelegation(grantB.delegation.cid);
     if (!revoke.ok) throw new Error(`revokeDelegation failed: ${JSON.stringify(revoke.error)}`);
     const syncError = await page.evaluate(() => window.__replica.sync().catch((error: Error) => ({ code: (error as { code?: string }).code })));
@@ -444,9 +447,20 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     const revoked = await page.evaluate(() => window.__replica.get("notes/a").catch((error: Error) => ({ code: (error as { code?: string }).code })));
     expect((revoked as { code?: string }).code).toBe("GRANT_REVOKED");
     const dump = await page.evaluate(() => window.__replica.dumpDatabases());
-    const replicaDb = dump.find((db) => db.name.includes("tinycloud-replica"));
-    expect((replicaDb?.stores["entries"]?.keys ?? []) as string[]).toEqual([]);
+    const replicaDbB = dump.find((db) => db.name.includes(openedB.replicaId));
+    expect(replicaDbB).not.toBeUndefined();
+    expect((replicaDbB?.stores["entries"]?.keys ?? []) as string[]).toEqual([]);
     // Blob records key by `hash` (not `key`), so content shows up in `bytes`.
-    expect(replicaDb?.stores["blobs"]?.bytes ?? "").toBe("");
+    expect(replicaDbB?.stores["blobs"]?.bytes ?? "").toBe("");
+
+    // Wait out grant A's signed window (real clock — the node enforces signed
+    // absolute windows with its own clock, and 75 s is the shortest it
+    // accepts), then reads on partition A raise GRANT_EXPIRED.
+    await openReplicaOnPage(page, { grantSubject });
+    if (installedA.expiresAt === null) throw new Error("grant A has no expiry");
+    const waitMs = installedA.expiresAt * 1000 - Date.now() + 1500;
+    if (waitMs > 0) await Bun.sleep(waitMs);
+    const expired = await page.evaluate(() => window.__replica.get("notes/a").catch((error: Error) => ({ code: (error as { code?: string }).code })));
+    expect((expired as { code?: string }).code ?? (expired as { status?: string }).status).toMatch(/GRANT_EXPIRED|expired/);
   }, 240_000);
 });

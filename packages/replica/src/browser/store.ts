@@ -162,7 +162,10 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       if (isReplicaError(error)) throw error;
       throw idbError(error, "Opening the replica");
     }
-    return new IndexedDbReplicaStore(db, options.holder, options.now ?? Date.now);
+    const store = new IndexedDbReplicaStore(db, options.holder, options.now ?? Date.now);
+    // A revocation purge interrupted before commit finishes on the next open.
+    await store.finishPurgeIfPending().catch(() => undefined);
+    return store;
   }
 
   /** A read transaction over `meta` (and optionally `entries`/`blobs`). */
@@ -228,6 +231,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       nodeDid: state.nodeDid,
       authority: state.authority,
       revoked: state.revoked,
+      retentionRevoked: state.retentionRevoked,
+      pendingGrantError: state.pendingGrantError,
       cursor: state.cursor,
       coverage: state.coverage,
       generation: state.generation,
@@ -252,6 +257,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         nodeDid: null,
         authority: null,
         revoked: null,
+        retentionRevoked: null,
+        pendingGrantError: null,
         cursor: null,
         coverage: "empty",
         generation: 0,
@@ -289,6 +296,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       const state = this.#requireMeta(await this.#meta(tx));
       if (state.grant?.cid === g.cid || state.pendingGrant?.cid === g.cid) return;
       state.pendingGrant = g;
+      state.pendingGrantError = null;
       this.#putMeta(tx, state);
     });
   }
@@ -333,10 +341,21 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     });
   }
 
-  /** Inside a write transaction: the lease and the writer epoch must both hold. */
+  /**
+   * Inside a write transaction: the replica must not be revoked, the caller's
+   * lease must still be held and unexpired, and the writer epoch must match.
+   * Revocation is checked first so fenced writes, GC and resets surface
+   * GRANT_REVOKED rather than a stale BUSY.
+   */
   #checkFence(state: MetaState, t: LeaseToken): void {
+    if (state.revoked !== null) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${state.revoked}`);
+    }
     if (state.leaseToken !== t.token || state.leaseHolder !== t.holder) {
       throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process took over this replica's sync lease.");
+    }
+    if (state.leaseExpiresAt === null || state.leaseExpiresAt <= this.#now()) {
+      throw new ReplicaError(ReplicaErrorCode.BUSY, "This replica's sync lease expired.");
     }
     if (state.writerHolder !== this.#holder) {
       throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab took over this replica's writer lock.");
@@ -393,28 +412,30 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   async applyPage(t: LeaseToken, p: VerifiedPage): Promise<void> {
+    // Blob writes share the commit transaction, so unlike the file store a
+    // fenced writer cannot leave orphans: the check below fences the whole
+    // commit atomically.
     await this.#writeTx(ALL_STORES, "Committing a sync page", async (tx) => {
       const state = this.#requireMeta(await this.#meta(tx));
       this.#checkFence(state, t);
-      if (state.revoked !== null) {
-        throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${state.revoked}`);
+      // Malformed node-attested timestamps are a protocol violation: refuse
+      // without touching state.
+      const nbf = p.window.notBefore === null ? null : Date.parse(p.window.notBefore);
+      const exp = p.window.expiresAt === null ? null : Date.parse(p.window.expiresAt);
+      if ((p.window.notBefore !== null && Number.isNaN(nbf)) || (p.window.expiresAt !== null && Number.isNaN(exp))) {
+        throw new ReplicaError(
+          ReplicaErrorCode.PROTOCOL_ERROR,
+          `The node's authority window is not ISO-8601: ${JSON.stringify(p.window)}.`,
+        );
       }
-      // Re-check the window the node attested on this page inside the commit
-      // transaction: an expired or not-yet-valid window never reaches disk.
-      if (p.authority !== null) {
-        const authority = effectiveAuthority({
-          window: p.authority,
-          grant: state.grant,
-          revoked: null,
-          policy: "whileGrantValid",
-          now: this.#now(),
-        });
-        if (authority.state === "expired") {
-          throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `The grant expired at ${authority.expiresAt}.`);
-        }
-        if (authority.state === "not-yet-valid") {
-          throw new ReplicaError(ReplicaErrorCode.GRANT_NOT_YET_VALID, `The grant is not valid before ${authority.notBefore}.`);
-        }
+      // Re-check the window inside the commit transaction, on the injected
+      // clock: a page fetched across the expiry instant never commits.
+      const now = this.#now();
+      if (nbf !== null && now < nbf) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_NOT_YET_VALID, `The grant is not valid before ${p.window.notBefore}; nothing was committed.`);
+      }
+      if (exp !== null && now >= exp) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `The grant expired at ${p.window.expiresAt}; nothing was committed.`);
       }
       const entries = tx.objectStore(STORE_ENTRIES);
       const blobs = tx.objectStore(STORE_BLOBS);
@@ -470,19 +491,23 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         state.nodeDid = p.source.nodeDid;
         state.authority = p.authority;
         state.lastSyncAt = p.at;
+        // A node-attested retention under a new retain grant supersedes a
+        // learned revocation of the old one.
+        if (p.authority.retainUntil !== null) state.retentionRevoked = null;
       }
       if (p.complete) {
         state.lastCompleteAt = p.at;
         state.lastError = null;
       }
-      // Promotion is bound to the CID the node just validated; a newer pending
-      // grant stays pending until a page commits under it. (Post-review TC-18
-      // types carry the CID directly; a legacy boolean promotes the pending
-      // record unconditionally.)
-      const promotedCid = p.promoteGrant === true ? (state.pendingGrant?.cid ?? null) : p.promoteGrant;
-      if (state.pendingGrant !== null && state.pendingGrant.cid === promotedCid) {
-        state.grant = state.pendingGrant;
-        state.pendingGrant = null;
+      // Promotion is bound to the grant the node just validated for this
+      // page: it becomes active from the record carried on the page. A
+      // different grant installed as pending meanwhile stays pending.
+      if (p.promoteGrant !== null) {
+        state.grant = p.promoteGrant;
+        if (state.pendingGrant?.cid === p.promoteGrant.cid) {
+          state.pendingGrant = null;
+          state.pendingGrantError = null;
+        }
       }
       this.#putMeta(tx, state);
     });
@@ -511,15 +536,15 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     });
   }
 
-  async reset(t: LeaseToken, reason: string, options?: { keepNodeDid?: boolean }): Promise<void> {
+  async reset(t: LeaseToken, reason: string, options?: { keepSource?: boolean }): Promise<void> {
     await this.#writeTx(ALL_STORES, "Resetting the replica", async (tx) => {
       const state = this.#requireMeta(await this.#meta(tx));
       this.#checkFence(state, t);
       tx.objectStore(STORE_ENTRIES).clear();
       tx.objectStore(STORE_BLOBS).clear();
       state.cursor = null;
-      // An automatic 410 reset keeps the source pin; a manual or purge reset drops it.
-      if (options?.keepNodeDid !== true) state.nodeDid = null;
+      // An automatic 410 reset keeps the source pin; a manual reset drops it.
+      if (options?.keepSource !== true) state.nodeDid = null;
       state.coverage = "empty";
       state.lastSyncAt = null;
       state.lastCompleteAt = null;
@@ -542,17 +567,67 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         state.cursor = null;
         state.coverage = "empty";
         state.lastError = { at: new Date(this.#now()).toISOString(), code: ReplicaErrorCode.GRANT_REVOKED, message: detail };
-        // Fence any outstanding writer: its next commit sees a foreign
-        // writerHolder and a dead lease, and aborts.
+        // Fence every outstanding writer: bumping the lease token kills the
+        // lease while the epoch bump kills the writer identity, so its next
+        // commit, GC or reset aborts before touching a row.
         state.writerEpoch += 1;
         state.writerHolder = null;
+        state.leaseToken += 1;
         state.leaseHolder = null;
         state.leaseExpiresAt = null;
+        state.generation += 1;
         // The clears above commit atomically here; `purgePending` makes the
-        // intent durable so a torn-open repair can re-purge on next open.
+        // intent durable so a torn open re-purges on the next open.
         state.purgePending = true;
         this.#putMeta(tx, state);
       }
+    });
+  }
+
+  /** The node revoked the pending grant: discard it without a purge — the active grant keeps serving. */
+  async discardPendingGrant(cid: string, detail: string): Promise<void> {
+    await this.#writeTx([STORE_META], "Discarding the revoked pending grant", async (tx) => {
+      const state = await this.#meta(tx);
+      if (state === undefined || state.pendingGrant?.cid !== cid) return;
+      state.pendingGrant = null;
+      state.pendingGrantError = null;
+      state.lastError = {
+        at: new Date(this.#now()).toISOString(),
+        code: ReplicaErrorCode.GRANT_REVOKED,
+        message: `The pending grant ${cid} was revoked and discarded: ${detail}`,
+      };
+      this.#putMeta(tx, state);
+    });
+  }
+
+  /** The node refused the pending grant (not a revocation): keep it pending, with the reason. */
+  async recordPendingGrantError(cid: string, e: ReplicaLastError): Promise<void> {
+    await this.#writeTx([STORE_META], "Recording the pending grant's refusal", async (tx) => {
+      const state = await this.#meta(tx);
+      if (state === undefined || state.pendingGrant?.cid !== cid) return;
+      state.pendingGrantError = e;
+      this.#putMeta(tx, state);
+    });
+  }
+
+  /**
+   * The node revoked the retention grant: drop it and its retainUntil so
+   * post-expiry reads raise GRANT_REVOKED. Bound to the configured retain CID
+   * — the only CID the sync invocation could have used.
+   */
+  async markRetentionRevoked(detail: string): Promise<void> {
+    await this.#writeTx([STORE_META], "Recording the retention grant's revocation", async (tx) => {
+      const state = await this.#meta(tx);
+      if (state === undefined || state.config.retentionGrantCid === null) return;
+      state.config = { ...state.config, retentionGrantCid: null, localReadPolicy: "whileGrantValid" };
+      if (state.authority !== null) state.authority = { ...state.authority, retainUntil: null };
+      state.retentionRevoked = detail;
+      state.lastError = {
+        at: new Date(this.#now()).toISOString(),
+        code: ReplicaErrorCode.RETENTION_GRANT_REFUSED,
+        message: detail,
+      };
+      this.#putMeta(tx, state);
     });
   }
 
@@ -658,10 +733,11 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         else missing += 1;
       }
     }
-    const authority = effectiveAuthority({
+    const { retentionRevoked: _retentionRevoked, ...authority } = effectiveAuthority({
       window: state.authority,
       grant: state.grant,
       revoked: state.revoked,
+      retentionRevoked: state.retentionRevoked,
       policy: state.config.localReadPolicy,
       now,
     });
@@ -673,12 +749,14 @@ export class IndexedDbReplicaStore implements ReplicaStore {
         did: state.config.deviceDid,
         delegationCid: state.grant?.cid ?? null,
         pendingDelegationCid: state.pendingGrant?.cid ?? null,
+        pendingDelegationError: state.pendingGrantError,
       },
       authority: {
         ...authority,
         localReadPolicy: state.config.localReadPolicy,
         retentionGrantCid: state.config.retentionGrantCid,
         revokedDetail: state.revoked,
+        retentionRevokedDetail: state.retentionRevoked,
       },
       consistency: "observed",
       coverage: state.coverage,
