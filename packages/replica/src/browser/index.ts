@@ -19,6 +19,7 @@
  * reads are gated by the stored grant's node-attested window, like the CLI.
  */
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
+import { isPrincipalDid } from "../did.js";
 import type {
   GetResult,
   ListResult,
@@ -50,8 +51,12 @@ export type BrowserReplicaOpenOptions = {
   principal: string;
   /** Replicating the `secrets` space or a `vault/` prefix needs this opt-in. */
   allowSecrets?: boolean;
-  /** Spawn this worker instead of the bundled one (custom bundler layouts). */
-  worker?: Worker | URL | string;
+  /**
+   * Spawn this worker instead of the bundled one (custom bundler layouts).
+   * A factory (`() => Worker`) is also accepted: it runs after `principal`
+   * validation, so a bad open never spawns a worker — useful for tests.
+   */
+  worker?: Worker | URL | string | (() => Worker);
 };
 
 export type BrowserReplicaGetResult = GetResult;
@@ -75,10 +80,11 @@ type Pending = {
   reject: (error: Error) => void;
 };
 
-function workerFrom(source: Worker | URL | string | undefined): Worker {
+function workerFrom(source: Worker | URL | string | (() => Worker) | undefined): Worker {
   if (source !== undefined) {
     if (typeof Worker !== "undefined" && source instanceof Worker) return source;
     if (source instanceof URL || typeof source === "string") return new Worker(source, { type: "module" });
+    if (typeof source === "function") return source();
   }
   return new Worker(new URL("./replica.worker.js", import.meta.url), { type: "module" });
 }
@@ -99,19 +105,31 @@ function workerFrom(source: Worker | URL | string | undefined): Worker {
  * cursor.
  */
 export async function openReplica(options: BrowserReplicaOpenOptions, events: BrowserReplicaEvents = {}): Promise<BrowserReplica> {
-  if (typeof options.principal !== "string" || !/^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/u.test(options.principal)) {
+  // Validate before workerFrom(): a bad principal never spawns a worker.
+  if (typeof options.principal !== "string" || !isPrincipalDid(options.principal)) {
     throw new ReplicaError(
       ReplicaErrorCode.INVALID_ARGUMENT,
       `openReplica() requires \`principal\`, the signed-in user's identity DID (got ${JSON.stringify(options.principal)}).`,
     );
   }
-  const replica = new BrowserReplica(workerFrom(options.worker), events);
-  await replica.ready;
-  const persisted =
-    typeof navigator !== "undefined" && typeof navigator.storage?.persist === "function"
-      ? await navigator.storage.persist().catch(() => undefined)
-      : undefined;
-  return replica.open({ ...options, persisted });
+  const worker = workerFrom(options.worker);
+  const replica = new BrowserReplica(worker, events);
+  try {
+    await replica.ready;
+    const persisted =
+      typeof navigator !== "undefined" && typeof navigator.storage?.persist === "function"
+        ? await navigator.storage.persist().catch(() => undefined)
+        : undefined;
+    // `worker` selects the process, it is not a wire field: do not forward it.
+    return await replica.open({ ...options, worker: undefined, persisted });
+  } catch (error) {
+    // Any startup or open() failure abandons this replica: reject in-flight
+    // calls, terminate the worker, and never leak a live Worker the caller
+    // cannot reach.
+    await replica.close().catch(() => undefined);
+    worker.terminate();
+    throw error;
+  }
 }
 
 export class BrowserReplica {

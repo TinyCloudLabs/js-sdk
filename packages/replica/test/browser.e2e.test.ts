@@ -22,6 +22,8 @@ import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const FIXTURE_DIST = resolve(import.meta.dir, "browser/fixture/dist");
+/** The package root: `/pkg/` serves it verbatim for the default-worker page. */
+const PACKAGE_ROOT = resolve(import.meta.dir, "..");
 const OWNER_KEY = `0x${randomBytes(32).toString("hex")}`;
 
 async function freePort(): Promise<number> {
@@ -218,15 +220,32 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
       port: fixturePort,
       async fetch(request) {
         const url = new URL(request.url);
+        const typeOf = (path: string) =>
+          path.endsWith(".js") || path.endsWith(".ts")
+            ? "text/javascript"
+            : path.endsWith(".html")
+              ? "text/html"
+              : path.endsWith(".map")
+                ? "application/json"
+                : "application/octet-stream";
+        // `/pkg/` exposes the package root verbatim so the importmap page can
+        // load the real dist files — nothing emits a worker asset for it.
+        if (url.pathname.startsWith("/pkg/")) {
+          const rel = decodeURIComponent(url.pathname.slice(5));
+          const target = resolve(PACKAGE_ROOT, rel);
+          if (!target.startsWith(PACKAGE_ROOT)) return new Response("forbidden", { status: 403 });
+          const file = Bun.file(target);
+          if (!(await file.exists())) return new Response("not found", { status: 404 });
+          return new Response(file, { headers: { "content-type": typeOf(rel) } });
+        }
+        if (url.pathname === "/default.html") {
+          const file = Bun.file(join(import.meta.dir, "browser/default.html"));
+          return new Response(file, { headers: { "content-type": "text/html" } });
+        }
         const path = url.pathname === "/" ? "/index.html" : url.pathname;
         const file = Bun.file(join(FIXTURE_DIST, path));
         if (!(await file.exists())) return new Response("not found", { status: 404 });
-        const type = path.endsWith(".js") || path.endsWith(".ts")
-          ? "text/javascript"
-          : path.endsWith(".html")
-            ? "text/html"
-            : "application/octet-stream";
-        return new Response(file, { headers: { "content-type": type } });
+        return new Response(file, { headers: { "content-type": typeOf(path) } });
       },
     });
 
@@ -497,12 +516,19 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect((replicaDbB?.stores["entries"]?.keys ?? []) as string[]).toEqual([]);
     // Blob records key by `hash` (not `key`), so content shows up in `bytes`.
     expect(replicaDbB?.stores["blobs"]?.bytes ?? "").toBe("");
+    // Learned revocation is scoped to B's replicaId: partition A's data is
+    // untouched, and — while A's grant is still inside its window — A reads
+    // with the bytes it converged to in the happy path.
+    await openReplicaOnPage(page, { principal: ownerPrincipal() });
+    const intact = await page.evaluate(() => window.__replica.get("notes/a"));
+    expect(intact.status === "present" && text(new Uint8Array(intact.value))).toBe(
+      "alpha note, second version",
+    );
 
     // Wait out grant A's signed window (real clock — the node enforces signed
     // absolute windows with its own clock, and 75 s is the shortest it
     // accepts), then reads on partition A raise GRANT_EXPIRED. Re-presenting
     // the expired grant is refused with GRANT_EXPIRED too.
-    await openReplicaOnPage(page, { principal: ownerPrincipal() });
     if (installedA.expiresAt === null) throw new Error("grant A has no expiry");
     const waitMs = installedA.expiresAt * 1000 - Date.now() + 1500;
     if (waitMs > 0) await Bun.sleep(waitMs);
@@ -562,16 +588,32 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect(reopened.replicaId).toBe(opened.replicaId);
     await rotationPage.evaluate((jwt) => window.__replica.installGrant(jwt), g2.delegation.delegationHeader.Authorization);
 
+    // G2 is pending, not promoted: status still reports G1 as the active
+    // delegation until a node-attested page replaces it.
+    const preSync = await rotationPage.evaluate(() => window.__replica.status());
+    expect(preSync.status.device.delegationCid).toBe(g1.delegation.cid);
+    expect(preSync.status.device.pendingDelegationCid).toBe(g2.delegation.cid);
+
+    // The pending grant never replaces the window early: once G1's signed
+    // window lapses (75 s is the shortest the node accepts) reads fail — the
+    // stored data does not borrow authority from G2.
+    const waitMs = g1MintedAt + 75_000 - Date.now() + 1500;
+    if (waitMs > 0) await Bun.sleep(waitMs);
+    const expiredRead = await rotationPage.evaluate(() =>
+      window.__replica.get("notes/a").catch((error: Error) => ({ code: (error as { code?: string }).code })),
+    );
+    expect((expiredRead as { code?: string }).code).toBe("GRANT_EXPIRED");
+
     // One write, then sync: the cursor continues — exactly one change, not a
-    // resync of the fixture keys. The attested page also promotes G2.
+    // resync of the fixture keys. The attested page promotes G2.
     await kvPut("notes/rotation", "after rotation");
     const second = await rotationPage.evaluate(() => window.__replica.sync());
     expect(second).toMatchObject({ status: "synced", changes: 1 });
+    const postSync = await rotationPage.evaluate(() => window.__replica.status());
+    expect(postSync.status.device.delegationCid).toBe(g2.delegation.cid);
 
-    // Wait out G1's 75 s window: reads keep working under G2's attestation —
-    // the data no longer depends on the rotated-out grant.
-    const waitMs = g1MintedAt + 75_000 - Date.now() + 1500;
-    if (waitMs > 0) await Bun.sleep(waitMs);
+    // Reads work again under G2's attestation — past G1's expiry, so the
+    // data provably rides G2 now.
     const after = await rotationPage.evaluate(() => window.__replica.get("notes/rotation"));
     expect(after.status === "present" && text(new Uint8Array(after.value))).toBe("after rotation");
     await rotationPage.close();
@@ -604,8 +646,10 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     await pageB.evaluate(() => window.__replica.sync());
     expect((await pageB.evaluate(() => window.__replica.get("notes/partition"))).status).toBe("present");
 
-    // Purging A deletes only its database.
+    // Purging A deletes only its database — and reports the reset to its
+    // own client (BroadcastChannel never echoes to the sender).
     await pageA.evaluate(() => window.__replica.reset({ purge: true }));
+    expect(await pageA.evaluate(() => window.__replica.resetReasons())).toContain("purge");
     const dump = await pageA.evaluate(() => window.__replica.dumpDatabases());
     expect(dump.some((db) => db.name.includes(openedA.replicaId))).toBe(false);
     // B keeps its data — get never touches the network.
@@ -615,14 +659,15 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     await pageB.close();
   }, 120_000);
 
-  test("the bundled worker URL (no `worker` option) spawns and syncs", async () => {
-    // Fixture pages otherwise always pass the worker URL explicitly, which
-    // would let the packaged `new URL("./replica.worker.js", import.meta.url)`
-    // path rot. One real spawn exercises it.
+  test("the packaged worker URL (no `worker` option) spawns and syncs", async () => {
+    // /default.html uses an importmap to the raw package dist: the build
+    // emits no worker asset for it, so this passes only if the package's own
+    // `new URL("./replica.worker.js", import.meta.url)` resolves — the old
+    // ?url-imported asset used to mask a broken packaged path.
     const pageD = await context.newPage();
-    await pageD.goto(`${origin}/`);
+    await pageD.goto(`${origin}/default.html`);
     await pageD.waitForFunction(() => window.__replica !== undefined);
-    const opened = await openReplicaOnPage(pageD, { defaultWorker: true });
+    const opened = await openReplicaOnPage(pageD);
     expect(opened.deviceDid.length).toBeGreaterThan(0);
     await grantOnPage(pageD);
     expect(await pageD.evaluate(() => window.__replica.sync())).toMatchObject({ status: "synced" });

@@ -319,12 +319,20 @@ describe("engine commit notifications (indexeddb)", () => {
 });
 
 describe("client lifecycle", () => {
-  function stubWorker(behavior: { deliverGetMidClose?: boolean; ackClose?: boolean } = {}) {
+  function stubWorker(behavior: { deliverGetMidClose?: boolean; ackClose?: boolean; ready?: boolean; openError?: { code: string; message: string } } = {}) {
     type Handler = ((message: MessageEvent) => void) | null;
     let onmessage: Handler = null;
     const state = { terminated: false, getId: -1, closeId: -1 };
     const worker = {
       postMessage(message: { id: number; op?: string }) {
+        if (message.op === "open") {
+          if (behavior.openError !== undefined) {
+            onmessage?.({ data: { id: message.id, ok: false, err: behavior.openError } } as MessageEvent);
+          } else {
+            onmessage?.({ data: { id: message.id, ok: true, result: { replicaId: "r", deviceDid: "did:key:z", verificationMethod: "did:key:z#z", status: null, created: true } } } as MessageEvent);
+          }
+          return;
+        }
         if (message.op === "close") {
           state.closeId = message.id;
           if (behavior.deliverGetMidClose === true && state.getId >= 0) {
@@ -344,6 +352,8 @@ describe("client lifecycle", () => {
       },
       set onmessage(handler: Handler) {
         onmessage = handler;
+        // Report ready like the real worker does once it is listening.
+        if (behavior.ready === true) handler?.({ data: { event: { event: "ready" } } } as MessageEvent);
       },
       set onerror(_handler: unknown) {},
     } as unknown as Worker;
@@ -399,20 +409,49 @@ describe("client lifecycle", () => {
     }
   });
 
-  test("open() rejects a missing or malformed principal before spawning a worker", async () => {
+  test("open() rejects a missing or malformed principal without spawning a worker", async () => {
     const base = { host: "http://127.0.0.1:1", space: SPACE, prefix: "notes/" };
-    // Validation precedes workerFrom(): a bad principal never spawns.
-    await rejectsWith(
-      openReplica(base as unknown as Parameters<typeof openReplica>[0]),
-      ReplicaErrorCode.INVALID_ARGUMENT,
+    // A counting factory proves validation runs before workerFrom(): a bad
+    // principal never spawns a worker at all.
+    let spawned = 0;
+    const factory = () => {
+      spawned += 1;
+      const { worker } = stubWorker();
+      return worker;
+    };
+    const open = (options: unknown) =>
+      openReplica({ ...(options as object), worker: factory } as Parameters<typeof openReplica>[0]);
+    for (const options of [
+      base,
+      { ...base, principal: "not-a-did" },
+      { ...base, principal: "did:pkh:" },
+      { ...base, principal: "did:example:%QQ" },
+      { ...base, principal: "did:example::" },
+    ]) {
+      await rejectsWith(open(options), ReplicaErrorCode.INVALID_ARGUMENT);
+      expect(spawned).toBe(0);
+    }
+  });
+
+  test("openReplica() terminates the worker when open() fails", async () => {
+    // A failed open must not leak a live Worker the caller cannot reach:
+    // the worker is closed and terminated before the error propagates.
+    const base = { host: "http://127.0.0.1:1", space: SPACE, prefix: "vault/" };
+    const first = stubWorker({ ready: true, openError: { code: ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, message: "nope" } });
+    const error = await rejectsWith(
+      openReplica({ ...base, principal: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001", worker: () => first.worker }),
+      ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
     );
-    await rejectsWith(
-      openReplica({ ...base, principal: "not-a-did" }),
-      ReplicaErrorCode.INVALID_ARGUMENT,
-    );
-    await rejectsWith(
-      openReplica({ ...base, principal: "did:pkh:" }),
-      ReplicaErrorCode.INVALID_ARGUMENT,
-    );
+    expect(error.code).toBe(ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED);
+    expect(first.state.terminated).toBe(true);
+    // Three failures → three terminated workers, none left running.
+    for (let i = 0; i < 3; i += 1) {
+      const attempt = stubWorker({ ready: true, openError: { code: ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED, message: "nope" } });
+      await rejectsWith(
+        openReplica({ ...base, principal: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001", worker: () => attempt.worker }),
+        ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
+      );
+      expect(attempt.state.terminated).toBe(true);
+    }
   });
 });

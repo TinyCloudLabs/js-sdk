@@ -25,7 +25,9 @@ type OpenOptions = {
 const state: {
   replica: BrowserReplica | null;
   committedSerials: number[];
-} = { replica: null, committedSerials: [] };
+  /** Every `onReset` reason the client observed (local or broadcast). */
+  resetReasons: string[];
+} = { replica: null, committedSerials: [], resetReasons: [] };
 
 const statusEl = document.getElementById("status");
 const setStatus = (text: string) => {
@@ -37,10 +39,14 @@ async function open(
 ): Promise<{ replicaId: string; deviceDid: string; created: boolean; status: unknown }> {
   if (state.replica !== null) await state.replica.close().catch(() => undefined);
   state.committedSerials = [];
+  state.resetReasons = [];
   const { defaultWorker, ...openOptions } = options;
   const replica = await openReplica(
     { ...openOptions, ...(defaultWorker === true ? {} : { worker: new URL(workerUrl, import.meta.url) }) },
-    { onCommitted: (serial) => state.committedSerials.push(serial) },
+    {
+      onCommitted: (serial) => state.committedSerials.push(serial),
+      onReset: (reason) => state.resetReasons.push(reason),
+    },
   );
   state.replica = replica;
   const opened = replica.opened!;
@@ -60,6 +66,7 @@ function needReplica(): BrowserReplica {
 const api = {
   open,
   committedSerials: () => state.committedSerials.slice(),
+  resetReasons: () => state.resetReasons.slice(),
   deviceDid: () => needReplica().deviceDid,
   installGrant: (delegation: string) => needReplica().installGrant(delegation),
   sync: (options?: { limit?: number }) => needReplica().sync(options),

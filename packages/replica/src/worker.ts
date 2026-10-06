@@ -23,6 +23,7 @@ import { initialized, tinycloud, tcwSession } from "@tinycloud/web-sdk-wasm";
 import { Replica } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
 import { assertGrantInstallable, parseUcanGrant } from "./grant.js";
+import { isPrincipalDid, principalOf } from "./did.js";
 import { requiresSecretsOptIn } from "./scope.js";
 import { kvSyncTransport } from "./transport.js";
 import type { GrantRecord, ListOpts, ReplicaConfig, ReplicaState } from "./types.js";
@@ -32,6 +33,7 @@ import {
   replicaDatabaseName,
   type DeviceIdentity,
 } from "./browser/store.js";
+import { purgeReplicaStore } from "./browser/purge.js";
 import type {
   GetRequest,
   GetResult,
@@ -47,21 +49,6 @@ import type {
 } from "./browser/protocol.js";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-
-
-/** `did:key` verification method fragment → the principal DID. */
-function principalOf(did: string): string {
-  return did.split("#", 1)[0]!;
-}
-
-/**
- * A well-formed DID: `did:<method>:<method-specific-id>`. `principal` is an
- * app-asserted partition label, not a credential — this checks shape only.
- */
-function isDid(value: string): boolean {
-  return /^did:[a-z0-9]+:[a-zA-Z0-9._:%-]+$/u.test(value);
-}
-
 /** The worker global, narrowed to the two members this module uses. */
 const workerScope = self as unknown as {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -217,7 +204,7 @@ function broadcastCommitted(s: Session): void {
 
 async function handleOpen(request: OpenRequest): Promise<OpenResult> {
   await closeSession();
-  if (typeof request.principal !== "string" || !isDid(request.principal)) {
+  if (typeof request.principal !== "string" || !isPrincipalDid(request.principal)) {
     throw new ReplicaError(
       ReplicaErrorCode.INVALID_ARGUMENT,
       `open() requires \`principal\`, the signed-in user's identity DID (got ${JSON.stringify(request.principal)}).`,
@@ -371,22 +358,25 @@ async function handleStatus(): Promise<StatusResult> {
 async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
   const s = needSession();
   if (purge) {
-    // The store's fenced destroy checks the lease against the replica row
-    // before deleting the database — a stale or foreign lease refuses.
-    const lease = await s.store.acquireSyncLease(60_000);
-    if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
-    if (locks !== undefined) {
-      const outcome = await withWriterLock(s, async () => {
-        await s.store.destroy(lease);
-        return true;
-      });
-      if (outcome !== true) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
-    } else {
-      await s.store.destroy(lease);
-    }
-    // Siblings' connections die on `versionchange`; tell them the reset is
-    // permanent before closing the channel.
-    s.channel?.postMessage({ type: "reset", reason: "purge" });
+    // Lock first, then the durable lease: taking the lease before the lock
+    // leaked it when the Web Lock was busy — blocking the current writer's
+    // next sync and every later purge. The store's fenced destroy checks
+    // the lease against the replica row before deleting the database — a
+    // stale or foreign lease refuses.
+    const tell = () => {
+      s.channel?.postMessage({ type: "reset", reason: "purge" });
+      // BroadcastChannel does not echo: the purging tab's own client only
+      // sees the reset via postEvent.
+      postEvent("reset", { reason: "purge" });
+    };
+    await purgeReplicaStore(s.store, {
+      locks,
+      replicaId: s.replicaId,
+      // Siblings close on `versionchange`; tell them the reset is permanent
+      // so nothing holds the delete open.
+      onDeleteBlocked: tell,
+    });
+    tell();
     s.channel?.close();
     session = null;
     return { reset: true, purged: true };

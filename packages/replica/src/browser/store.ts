@@ -35,6 +35,7 @@ import type {
   VerifiedPage,
 } from "../types.js";
 import { compareKeyBytes, idbError, openDatabase, requestAsPromise, transactionDone } from "./idb.js";
+import { principalOf } from "../did.js";
 
 export const DURABILITY = "indexeddb-strict";
 
@@ -120,19 +121,21 @@ export async function deviceIdentity(getKey: () => Promise<DeviceIdentity> | Dev
   }
 }
 
-/** `did:key` verification method fragment → the principal DID. */
-function principalOf(did: string): string {
-  return did.split("#", 1)[0]!;
-}
-
-/** Delete the replica's database (purge). */
-export function deleteReplicaDatabase(replicaId: string): Promise<void> {
+/**
+ * Delete the replica's database (purge). `deleteDatabase` cannot be
+ * cancelled once issued: a `blocked` event means the delete is queued and
+ * will complete, so this waits for its `success`/`error` — never reporting
+ * failure for a deletion that is still queued. `onBlocked` fires when the
+ * delete starts queueing on another connection (siblings get a
+ * `versionchange` event and close theirs; the caller also broadcasts the
+ * reset so every holder knows to let go).
+ */
+export function deleteReplicaDatabase(replicaId: string, onBlocked?: () => void): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>();
   const request = indexedDB.deleteDatabase(replicaDatabaseName(replicaId));
   request.onsuccess = () => resolve();
   request.onerror = () => reject(request.error);
-  request.onblocked = () =>
-    reject(new ReplicaError(ReplicaErrorCode.BUSY, "Purging the replica is blocked by an open connection in another tab."));
+  request.onblocked = () => onBlocked?.();
   return promise;
 }
 
@@ -623,7 +626,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * delete the database a rival store took over. Allowed on a revoked
    * replica. The store is unusable afterwards; `close()` is a no-op.
    */
-  async destroy(t: LeaseToken): Promise<void> {
+  async destroy(t: LeaseToken, options: { onDeleteBlocked?: () => void } = {}): Promise<void> {
     await this.#writeTx([STORE_META], "Removing the replica", async (tx) => {
       const state = await this.#meta(tx);
       if (state === undefined) {
@@ -637,7 +640,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     this.#closed = true;
     this.#db.close();
     try {
-      await deleteReplicaDatabase(this.#replicaId);
+      await deleteReplicaDatabase(this.#replicaId, options.onDeleteBlocked);
     } catch (error) {
       throw idbError(error, "Removing the replica");
     }
