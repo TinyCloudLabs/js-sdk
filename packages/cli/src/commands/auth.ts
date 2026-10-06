@@ -677,6 +677,12 @@ export function registerAuthCommand(program: Command): void {
         // programmatically; this command is a thin wrapper. The CLI request
         // artifact is a structural superset of AuthRequestArtifact.
         const grant = await grantAuthRequest(node, resolvedRequest);
+        await appendGrantHistory(ctx.profile, {
+          addedCaps: grant.permissions,
+          source: "cli",
+          delegationCid: grant.delegationCid,
+          expiry: grant.expiry,
+        });
         outputJson(grant);
       } catch (error) {
         handleError(error);

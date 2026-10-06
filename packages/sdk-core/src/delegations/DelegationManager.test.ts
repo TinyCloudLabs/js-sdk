@@ -38,6 +38,33 @@ describe("DelegationManager.revoke", () => {
     expect(result).toEqual({ ok: true, data: { revoked: true, cid: "bafy-child" } });
   });
 
+  test("includes the target space when signing a CID revocation", async () => {
+    const session = { spaceId: "tinycloud:pkh:eip155:1:owner:source" } as ServiceSession;
+    const targetSpaceId = "tinycloud:pkh:eip155:1:owner:target";
+    const invokeAny = mock(() => ({ Authorization: "revocation" }));
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch: mock(async () => new Response(JSON.stringify({
+        revoked: true,
+        cid: "bafy-child",
+      }), { status: 200, headers: { "content-type": "application/json" } })),
+    });
+
+    const result = await manager.revoke("bafy-child", { targetSpaceId });
+
+    expect(result.ok).toBe(true);
+    expect(invokeAny).toHaveBeenCalledWith(session, [{
+      resource: "urn:cid:bafy-child",
+      spaceId: targetSpaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/revoke",
+    }]);
+  });
+
   test("fails closed when raw-resource signing is unavailable", async () => {
     const fetch = mock(async () => new Response(null, { status: 200 }));
     const manager = new DelegationManager({

@@ -7,6 +7,7 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { ensureDelegationAuthority } from "./auth.js";
 import { parseExpiry } from "../lib/duration.js";
+import { readGrantHistory } from "../lib/permissions.js";
 function normalizeDid(input: string): string {
   const normalized = input.trim();
   const fragmentIndex = normalized.indexOf("#");
@@ -140,9 +141,25 @@ export function registerDelegationCommand(program: Command): void {
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
         const profile = await ProfileManager.getProfile(ctx.profile);
+        const grantHistory = await readGrantHistory(ctx.profile);
+        const recordedGrant = [...grantHistory].reverse().find((entry) => entry.delegationCid === cid);
+        let targetSpaceId = recordedGrant?.addedCaps.find((cap) => cap.space)?.space;
+        if (targetSpaceId === undefined) {
+          const delegations = await node.delegationManager.list();
+          if (delegations.ok) {
+            targetSpaceId = delegations.data.find((delegation) => delegation.cid === cid)?.spaceId;
+          }
+        }
+        if (targetSpaceId === undefined) {
+          throw new CLIError(
+            "TARGET_SPACE_UNKNOWN",
+            `Cannot resolve the target space for delegation "${cid}"`,
+            ExitCode.INVALID_ARGUMENT,
+          );
+        }
         const revokePermission: PermissionEntry = {
           service: "tinycloud.delegation",
-          space: profile.spaceId ?? "default",
+          space: targetSpaceId,
           path: "",
           actions: ["tinycloud.delegation/revoke"],
         };
@@ -161,7 +178,7 @@ export function registerDelegationCommand(program: Command): void {
           });
         }
 
-        const result = await node.delegationManager.revoke(cid);
+        const result = await node.delegationManager.revoke(cid, { targetSpaceId });
         if (!result.ok) {
           throw cliErrorFromService(result.error);
         }

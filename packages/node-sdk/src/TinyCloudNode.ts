@@ -1234,7 +1234,8 @@ export class TinyCloudNode {
       ? entries.map((entry) => {
         const requested = this.operationFromInvokeAnyEntry(entry);
         const granted = requested && grant.operations.find((candidate) =>
-          this.operationCovers(candidate, requested),
+          this.operationCovers(candidate, requested) ||
+          this.revocationGrantOperationCovers(candidate, requested),
         );
         if (!granted?.caveats?.length) {
           return entry;
@@ -6622,14 +6623,47 @@ export class TinyCloudNode {
       return undefined;
     }
     this.pruneExpiredRuntimePermissionGrants();
-    return this.runtimePermissionGrants.find((grant) =>
-      (grant.provenance === "runtime" || grant.provenance === "delegated") &&
+    const candidates = this.runtimePermissionGrants
+      .filter((grant) => grant.provenance === "runtime" || grant.provenance === "delegated")
+      .flatMap((grant) =>
+        grant.operations.some((operation) =>
+          operation.service === requested.service &&
+          operation.action === requested.action &&
+          this.pathContains(operation.path, requested.path)
+        )
+          ? [grant]
+          : []
+      );
+    if (candidates.length === 0) return undefined;
+    if (requested.spaceId === undefined) {
+      throw new Error("Target space is required to select delegation revocation authority.");
+    }
+    const matchingGrant = candidates.find((grant) =>
       grant.operations.some((operation) =>
-        operation.service === requested.service &&
-        operation.action === requested.action &&
-        this.pathContains(operation.path, requested.path)
+        this.revocationGrantOperationCovers(operation, requested)
       )
     );
+    if (!matchingGrant) {
+      throw new Error(
+        `No delegation revocation authority matches target space ${requested.spaceId}.`,
+      );
+    }
+    return matchingGrant;
+  }
+
+  private revocationGrantOperationCovers(
+    granted: RuntimePermissionOperation,
+    requested: RuntimePermissionOperation,
+  ): boolean {
+    return requested.resource?.startsWith("urn:cid:") === true &&
+      requested.service === "delegation" &&
+      requested.action === "tinycloud.delegation/revoke" &&
+      granted.service === requested.service &&
+      granted.action === requested.action &&
+      granted.spaceId !== undefined &&
+      requested.spaceId !== undefined &&
+      this.spaceIdsEqual(granted.spaceId, requested.spaceId) &&
+      this.pathContains(granted.path, requested.path);
   }
 
   private findGrantForOperation(
@@ -6738,6 +6772,7 @@ export class TinyCloudNode {
     if (typeof entry.resource === "string") {
       return {
         resource: entry.resource,
+        ...(entry.spaceId === undefined ? {} : { spaceId: entry.spaceId }),
         service,
         path: entry.path,
         action: entry.action,

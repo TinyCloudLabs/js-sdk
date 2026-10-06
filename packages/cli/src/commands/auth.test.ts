@@ -95,6 +95,7 @@ const recorded = {
   spinners: [] as string[],
   generateKeyCalls: 0,
   grantedRequests: [] as Array<Record<string, unknown>>,
+  grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
 };
 
 let activeProfile = "default";
@@ -122,6 +123,7 @@ function resetState(): void {
   recorded.spinners.length = 0;
   recorded.generateKeyCalls = 0;
   recorded.grantedRequests.length = 0;
+  recorded.grantHistory.length = 0;
 
   activeProfile = "default";
   activeHost = "https://node.tinycloud.test";
@@ -269,7 +271,11 @@ mock.module("../auth/local-key.js", () => ({
 mock.module("@tinycloud/node-sdk", () => ({
   grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
     recorded.grantedRequests.push(request);
-    return { delegationCid: "bafy-granted-request" };
+    return {
+      delegationCid: "bafy-granted-request",
+      permissions: request.requested,
+      expiry: "2099-01-01T00:00:00.000Z",
+    };
   },
   principalDidEquals: (left: string, right: string) =>
     left.split("#", 1)[0] === right.split("#", 1)[0],
@@ -379,7 +385,9 @@ mock.module("../lib/permissions.js", () => ({
   isDelegationImportArtifact: validateDelegationImportArtifact,
   isCompatiblePermissionRequestArtifact: validateCompatiblePermissionRequestArtifact,
   isPermissionRequestArtifact: validatePermissionRequestArtifact,
-  appendGrantHistory: async () => {},
+  appendGrantHistory: async (profile: string, entry: Record<string, unknown>) => {
+    recorded.grantHistory.push({ profile, entry });
+  },
   cliGrantRecord: async (_node: unknown, delegation: object, permissions: object[]) => ({ delegation, permissions }),
   compactPermission: () => "",
   loadAdditionalDelegations: async () => [],
@@ -1403,6 +1411,15 @@ describe("CLI auth import command", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
     expect(recorded.grantedRequests[0]).not.toHaveProperty("command");
+    expect(recorded.grantHistory).toContainEqual({
+      profile: "default",
+      entry: {
+        addedCaps: request.requested,
+        source: "cli",
+        delegationCid: "bafy-granted-request",
+        expiry: "2099-01-01T00:00:00.000Z",
+      },
+    });
   });
 
   test("imports the minimal public node-sdk auth request artifact", async () => {

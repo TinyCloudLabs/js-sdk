@@ -2,4 +2,4 @@
 "@tinycloud/cli": patch
 ---
 
-`tc delegation revoke <cid>` now acquires `tinycloud.delegation/revoke` when the active session does not already have it. The ability is requested only for the explicit revoke operation; default owner login permissions remain unchanged.
+`tc auth grant` records the issued delegation CID and target capabilities locally. `tc delegation revoke <cid>` resolves the target space from grant history (or delegation metadata), then acquires `tinycloud.delegation/revoke` for that exact space when needed. The ability is requested only for the explicit revoke operation; default owner login permissions remain unchanged.

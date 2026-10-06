@@ -208,6 +208,29 @@ Expiration Time: 2999-01-01T00:00:00.000Z`;
   return node;
 }
 
+function seedRuntimeRevocationGrants(
+  node: TinyCloudNode,
+  grants: Array<{
+    spaceId: string;
+    token: string;
+    caveats?: Record<string, unknown>[];
+  }>,
+): void {
+  (node as any).runtimePermissionGrants = grants.map((grant) => ({
+    provenance: "runtime",
+    session: { delegationHeader: { Authorization: grant.token } },
+    delegation: {},
+    operations: [{
+      spaceId: grant.spaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/revoke",
+      ...(grant.caveats === undefined ? {} : { caveats: grant.caveats }),
+    }],
+    expiresAt: new Date(Date.now() + 60_000),
+  }));
+}
+
 async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = mock(async () =>
@@ -1518,7 +1541,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     const invocation = node as unknown as {
       invokeAnyWithRuntimePermissions: (
         session: NonNullable<TinyCloudNode["restorableSession"]>,
-        entries: Array<{ resource: string; service: string; path: string; action: string }>,
+        entries: Array<{ spaceId?: string; resource: string; service: string; path: string; action: string }>,
         facts: Record<string, unknown>[],
       ) => unknown;
       wasmBindings: {
@@ -1528,6 +1551,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       };
     };
     invocation.invokeAnyWithRuntimePermissions(fallback, [{
+      spaceId,
       resource: "urn:cid:bafkreirevocationtarget",
       service: "delegation",
       path: "",
@@ -1542,6 +1566,80 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     expect(invocation.wasmBindings.invokeAny.mock.calls[0]?.[0]?.delegationHeader.Authorization).toBe("runtime-token");
     expect(invocation.wasmBindings.invokeAny.mock.calls[1]?.[0]?.delegationHeader.Authorization).toBe("base-token");
+  });
+
+  test("selects the revoke grant for the target space, not the first principal", () => {
+    const invoke = mock(() => ({})) as any;
+    const node = makeNode(invoke);
+    const spaceA = "tinycloud:pkh:eip155:1:0xissuer-a:default";
+    const spaceB = "tinycloud:pkh:eip155:1:0xissuer-b:default";
+    seedRuntimeRevocationGrants(node, [
+      { spaceId: spaceB, token: "runtime-token-b" },
+      { spaceId: spaceA, token: "runtime-token-a" },
+    ]);
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      (node as any).auth.tinyCloudSession,
+      [{
+        spaceId: spaceA,
+        resource: "urn:cid:bafkreirevocationtarget",
+        service: "delegation",
+        path: "",
+        action: "tinycloud.delegation/revoke",
+      }],
+      [{}],
+    );
+
+    const call = (node as any).wasmBindings.invokeAny.mock.calls[0];
+    expect(call[0].delegationHeader.Authorization).toBe("runtime-token-a");
+  });
+
+  test("preserves a revoke grant caveat when the caller omits it", () => {
+    const invoke = mock(() => ({})) as any;
+    const node = makeNode(invoke);
+    const spaceId = "tinycloud:pkh:eip155:1:0xissuer-a:default";
+    const caveats = [{ "tinycloud.delegation/revoke": { reason: "approved" } }];
+    seedRuntimeRevocationGrants(node, [{ spaceId, token: "runtime-token-a", caveats }]);
+
+    (node as any).invokeAnyWithRuntimePermissions(
+      (node as any).auth.tinyCloudSession,
+      [{
+        spaceId,
+        resource: "urn:cid:bafkreirevocationtarget",
+        service: "delegation",
+        path: "",
+        action: "tinycloud.delegation/revoke",
+      }],
+      [{}],
+    );
+
+    const call = (node as any).wasmBindings.invokeAny.mock.calls[0];
+    expect(call[1][0].caveats).toEqual(caveats);
+  });
+
+  test("rejects caller caveats that conflict with the revoke grant", () => {
+    const invoke = mock(() => ({})) as any;
+    const node = makeNode(invoke);
+    const spaceId = "tinycloud:pkh:eip155:1:0xissuer-a:default";
+    seedRuntimeRevocationGrants(node, [{
+      spaceId,
+      token: "runtime-token-a",
+      caveats: [{ "tinycloud.delegation/revoke": { reason: "approved" } }],
+    }]);
+
+    expect(() => (node as any).invokeAnyWithRuntimePermissions(
+      (node as any).auth.tinyCloudSession,
+      [{
+        spaceId,
+        resource: "urn:cid:bafkreirevocationtarget",
+        service: "delegation",
+        path: "",
+        action: "tinycloud.delegation/revoke",
+        caveats: [{ "tinycloud.delegation/revoke": { reason: "different" } }],
+      }],
+      [{}],
+    )).toThrow("Invocation caveats do not match signed ReCap authority.");
+    expect((node as any).wasmBindings.invokeAny.mock.calls).toHaveLength(0);
   });
   test("uses a single runtime SQL grant for migration-style schema and write batches", async () => {
     const invoke = mock((session: any) => ({

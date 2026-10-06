@@ -3,9 +3,10 @@ import { Command } from "commander";
 
 let hasRevokeAuthority = false;
 const authorityRequests: unknown[] = [];
-const revokeCalls: string[] = [];
+const revokeCalls: unknown[][] = [];
 const outputs: unknown[] = [];
 const errors: unknown[] = [];
+const targetSpaceId = "tinycloud:pkh:eip155:1:0xtarget:archive";
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
@@ -18,13 +19,23 @@ mock.module("../config/profiles.js", () => ({
     }),
   },
 }));
+mock.module("../lib/permissions.js", () => ({
+  readGrantHistory: async () => [{
+    ts: "2026-01-01T00:00:00.000Z",
+    profile: "owner",
+    source: "cli",
+    delegationCid: "bafy-device-grant",
+    addedCaps: [{ service: "tinycloud.kv", space: targetSpaceId, path: "", actions: ["tinycloud.kv/get"] }],
+  }],
+}));
 
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => ({
     hasRuntimePermissions: () => hasRevokeAuthority,
     delegationManager: {
-      revoke: async (cid: string) => {
-        revokeCalls.push(cid);
+      list: async () => ({ ok: true, data: [] }),
+      revoke: async (...args: unknown[]) => {
+        revokeCalls.push(args);
         return { ok: true, data: undefined };
       },
     },
@@ -74,14 +85,14 @@ describe("tc delegation revoke authority", () => {
       ctx: { profile: "owner", host: "https://node.example.test" },
       requested: [{
         service: "tinycloud.delegation",
-        space: "tinycloud:pkh:eip155:1:0xowner:default",
+        space: targetSpaceId,
         path: "",
         actions: ["tinycloud.delegation/revoke"],
       }],
       reason: "Revoke delegation bafy-device-grant",
       yes: true,
     });
-    expect(revokeCalls).toEqual(["bafy-device-grant"]);
+    expect(revokeCalls).toEqual([["bafy-device-grant", { targetSpaceId }]]);
     expect(outputs).toEqual([{ cid: "bafy-device-grant", revoked: true }]);
     expect(errors).toEqual([]);
   });
@@ -92,7 +103,7 @@ describe("tc delegation revoke authority", () => {
     await runRevoke();
 
     expect(authorityRequests).toEqual([]);
-    expect(revokeCalls).toEqual(["bafy-device-grant"]);
+    expect(revokeCalls).toEqual([["bafy-device-grant", { targetSpaceId }]]);
     expect(outputs).toEqual([{ cid: "bafy-device-grant", revoked: true }]);
     expect(errors).toEqual([]);
   });

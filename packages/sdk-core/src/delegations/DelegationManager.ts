@@ -281,7 +281,10 @@ export class DelegationManager {
    * }
    * ```
    */
-  async revoke(cid: string): Promise<Result<DelegationRevocationReceipt>> {
+  async revoke(
+    cid: string,
+    options?: { targetSpaceId?: string },
+  ): Promise<Result<DelegationRevocationReceipt>> {
     if (!cid) {
       return {
         ok: false,
@@ -307,6 +310,7 @@ export class DelegationManager {
         this.session,
         [{
           resource: `urn:cid:${cid}`,
+          ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
           service: "delegation",
           path: "",
           action: DelegationAction.REVOKE,
