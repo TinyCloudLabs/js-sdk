@@ -1,14 +1,13 @@
 import { Command } from "commander";
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { open, readdir, rename, rm, stat, unlink } from "node:fs/promises";
+import { open, readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  profileConfigPath,
+  ProfileDeletedError,
   profilePath,
   readAdditionalDelegations,
   readSession,
-  refuseWriteToDeletedProfile,
   withProfileLock,
 } from "@tinycloud/operations/state";
 import {
@@ -24,6 +23,7 @@ import {
   type GrantRecord,
   type KVSyncClient,
   type ParsedUcanGrant,
+  type ReplicaConfig,
   type ReplicaTransport,
   type ReplicaReadResult,
   type ReplicaStatus,
@@ -142,27 +142,39 @@ async function existingReplicaName(profile: string, option: string | undefined):
 }
 
 /**
- * Every filesystem mutation of a replica runs briefly under the profile lock
- * and refuses once the profile is deleted, so a sync never recreates a
- * deleted profile's directories. Never held across network calls.
+ * Every mutation of a replica (database write or file change) runs briefly
+ * under the profile lock, taken only while the profile exists: the lock
+ * never recreates a deleted profile, and nothing is written into one. Never
+ * held across network calls.
  */
-function profileGuard(profile: string): MutationGuard {
-  return (section) =>
-    withProfileLock(profile, async () => {
-      await refuseWriteToDeletedProfile(profile);
-      const present = await stat(profileConfigPath(profile)).then(
-        () => true,
-        () => false,
-      );
-      if (!present) {
-        throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted while this command ran; its replicas are gone.`);
+export function profileGuard(profile: string): MutationGuard {
+  return async (section) => {
+    try {
+      return await withProfileLock(profile, section, { requireProfile: true });
+    } catch (error) {
+      if (error instanceof ProfileDeletedError) {
+        throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted; its replicas are gone and nothing was written.`);
       }
-      return section();
-    });
+      throw error;
+    }
+  };
 }
 
 async function openReplica(profile: string, name: string): Promise<SqliteReplicaStore> {
   return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
+}
+
+/**
+ * Create a replica (or open the one a concurrent sync just created) inside
+ * the profile guard: a profile deleted before or during this gets nothing.
+ */
+export async function createReplica(profile: string, config: ReplicaConfig): Promise<SqliteReplicaStore> {
+  const guard = profileGuard(profile);
+  return guard(async () => {
+    const store = await SqliteReplicaStore.open(join(replicasRoot(profile), config.name), { create: true, guard });
+    if ((await store.open()) === null) await store.init(config);
+    return store;
+  });
 }
 
 /** The compact JWTs this profile holds: its session and every imported delegation. */
@@ -306,6 +318,7 @@ function describeStatus(status: ReplicaStatus): string {
     formatField("Size", formatBytes(status.bytes)),
     formatField("Grant", status.device.delegationCid),
     formatField("Last error", status.lastError ? `${status.lastError.code}: ${status.lastError.message}` : null),
+    formatField("Purge", status.purgePending ? "incomplete: content files remain; the next tc replica command retries" : null),
   ].join("\n");
 }
 
@@ -416,24 +429,16 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           if (!host) throw new CLIError("USAGE_ERROR", "Pass --host: the profile has no host to pin.", ExitCode.USAGE_ERROR);
           // Choose the grant before writing anything, so a missing grant leaves no replica behind.
           chooseGrant(grants, deviceDid, space, prefix);
-          const dir = join(replicasRoot(profile), name);
-          store = await withProfileLock(profile, async () => {
-            await refuseWriteToDeletedProfile(profile);
-            const created = await SqliteReplicaStore.open(dir, { create: true, guard: profileGuard(profile) });
-            if ((await created.open()) === null) {
-              await created.init({
-                name,
-                replicaId: randomBytes(16).toString("hex"),
-                host,
-                space,
-                prefix,
-                deviceDid,
-                allowSecrets: options.allowSecrets === true,
-                localReadPolicy: "whileGrantValid",
-                retentionGrantCid: null,
-              });
-            }
-            return created;
+          store = await createReplica(profile, {
+            name,
+            replicaId: randomBytes(16).toString("hex"),
+            host,
+            space,
+            prefix,
+            deviceDid,
+            allowSecrets: options.allowSecrets === true,
+            localReadPolicy: "whileGrantValid",
+            retentionGrantCid: null,
           });
         }
 
@@ -586,11 +591,12 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const store = await openReplica(profile, name);
         try {
           if (options.purge) {
-            // Take (and keep) the lease so no sync writes while the directory goes
-            // away. This also removes a revoked replica, which refuses a reset.
+            // The removal is fenced by this lease and the database identity
+            // this store opened, so it never removes a replica another process
+            // took over or recreated. A revoked replica is removed too.
             const lease = await store.acquireSyncLease(60_000);
             if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
-            await profileGuard(profile)(() => rm(join(replicasRoot(profile), name), { recursive: true, force: true }));
+            await store.destroy(lease);
           } else {
             await new Replica({ store }).reset("manual");
           }

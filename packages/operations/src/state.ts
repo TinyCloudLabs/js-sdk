@@ -84,6 +84,13 @@ export interface ProfileLockOptions {
   timeoutMs?: number;
   retryMs?: number;
   staleAfterMs?: number;
+  /**
+   * Lock only a profile that exists (its `profile.json` is present), and
+   * never create its directory: a missing or deleted profile is refused with
+   * ProfileDeletedError, before and after waiting for the lock. For writers
+   * of state that lives inside an existing profile (replicas).
+   */
+  requireProfile?: boolean;
 }
 
 export class ProfileLockTimeoutError extends Error {
@@ -507,7 +514,8 @@ async function acquireProfileLock(
   const turnDirectory = profileTurnLockPath(profile);
 
   const directory = profilePath(profile);
-  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  if (options.requireProfile && !(await exists(profileConfigPath(profile)))) throw new ProfileDeletedError(profile);
+  if (!options.requireProfile) await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   await mkdir(dirname(turnDirectory), { recursive: true, mode: PRIVATE_DIR_MODE });
   // Every store write takes this lock: tighten the tree older releases
   // created 0775 before writing sessions or delegations into it.
@@ -521,13 +529,20 @@ async function acquireProfileLock(
 
   const { turn, firstWaitedTurn } = await acquireTurn(profile, turnDirectory, deadline);
   try {
+    // Holding the turn, no deletion runs: a profile present now stays until release.
+    if (options.requireProfile && !(await exists(profileConfigPath(profile)))) {
+      // A deletion that finished while this waited could not remove the
+      // directory if a lock was held then; remove it if empty.
+      await rmdir(directory).catch(() => undefined);
+      throw new ProfileDeletedError(profile);
+    }
     // An unreadable deletion record is ignored rather than failing every
     // acquisition; it is written durably, so only damage makes it so.
     const deletion = await readJson<{ slot?: unknown }>(join(turnDirectory, "deleted.json")).catch(() => null);
     const deletedWhileWaiting = typeof deletion?.slot === "number" && deletion.slot >= firstWaitedTurn;
     while (true) {
       const token = randomUUID();
-      if (await publishProfileLock(profile, lockPath, token)) {
+      if (await publishProfileLock(profile, lockPath, token, options.requireProfile === true)) {
         return {
           deletedWhileWaiting,
           turnSlot: turn.slot,
@@ -991,12 +1006,14 @@ async function collectTurns(profile: string, turn: Turn): Promise<void> {
  * its holder's release or by recovery of an abandoned holder, so at most one
  * process holds the lock. Returns false when the lock is not acquired.
  */
-async function publishProfileLock(profile: string, lockPath: string, token: string): Promise<boolean> {
+async function publishProfileLock(profile: string, lockPath: string, token: string, requireProfile: boolean): Promise<boolean> {
   try {
     await mkdir(lockPath, { mode: PRIVATE_DIR_MODE });
   } catch (error) {
     if (isErrno(error, "EEXIST")) return false;
     if (!isErrno(error, "ENOENT")) throw error;
+    // With requireProfile only an older release's deletion (which takes no turn) gets here.
+    if (requireProfile) throw new ProfileDeletedError(profile);
     await mkdir(profilePath(profile), { recursive: true, mode: PRIVATE_DIR_MODE });
     return false;
   }
