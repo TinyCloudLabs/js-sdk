@@ -116,6 +116,14 @@ export type VerifiedPage = {
   /** Commit time (ISO-8601), recorded as the sync time. */
   at: string;
   /**
+   * The retention grant CID the sync request presented for this page. The
+   * store persists the attested `retainUntil` only when the stored
+   * `retentionGrantCid` still equals it at commit — a `setRetentionGrant`
+   * racing the in-flight page keeps `retainUntil` null instead of
+   * re-establishing the previous grant's window under a new CID.
+   */
+  retentionGrantCid: string | null;
+  /**
    * The effective authority window this page commits under. The store checks
    * it against its own clock inside the commit transaction; outside it
    * nothing commits.

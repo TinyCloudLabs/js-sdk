@@ -44,7 +44,10 @@ export type OpenResult = {
   deviceDid: string;
   /** The verification method (DID fragment form) the app delegates to. */
   verificationMethod: string;
+  /** Full replica state; null until this session presents the bound issuer's grant. */
   status: ReplicaStatus | null;
+  /** Whether this session may read: an issuer-bound replica hides its state until then. */
+  authorized: boolean;
   created: boolean;
 };
 
@@ -58,8 +61,10 @@ export type GetResult =
 export type ListResult = { entries: Array<{ key: string; etag: string; metadata: Record<string, string>; content: boolean }> };
 
 export type StatusResult = {
-  status: ReplicaStatus;
+  /** Full replica state; null until this session presents the bound issuer's grant. */
+  status: ReplicaStatus | null;
   persistence: { persisted: boolean | null; locksSupported: boolean };
+  authorized: boolean;
 };
 
 export type ReplicaEvent =

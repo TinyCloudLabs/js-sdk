@@ -240,12 +240,14 @@ export class BrowserReplica {
     if (this.#closed) return;
     this.#closed = true;
     this.#readyReject(new ReplicaError(ReplicaErrorCode.CLOSED, "The replica is closed."));
-    // Give the worker a moment to close its store handles, then terminate
-    // either way: a close that never replies must not hang, and every
-    // in-flight call rejects with a typed error.
+    // Shutdown starts now: every request already in flight rejects with
+    // REPLICA_CLOSED before the close handshake is even posted, so a reply
+    // arriving mid-close finds no entry and is ignored — never resolves with
+    // data. The handshake itself is registered only after that sweep.
+    this.#failAll(new ReplicaError(ReplicaErrorCode.CLOSED, "The replica is closed."));
     const id = this.#nextId++;
-    const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-    this.#pending.set(id, { resolve, reject });
+    const { promise, resolve } = Promise.withResolvers<unknown>();
+    this.#pending.set(id, { resolve, reject: resolve });
     this.#worker.postMessage({ id, op: "close" });
     const timeout = setTimeout(() => {
       this.#pending.delete(id);

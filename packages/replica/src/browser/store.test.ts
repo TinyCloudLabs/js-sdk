@@ -162,6 +162,7 @@ describe("fencing and revocation (indexeddb)", () => {
         window: { notBefore: null, expiresAt: null },
 
         complete: false,
+        retentionGrantCid: null,
         promoteGrant: null,
       }),
       ReplicaErrorCode.GRANT_REVOKED,
@@ -301,33 +302,110 @@ describe("engine commit notifications (indexeddb)", () => {
     expect((await replica.list()).entries.length).toBe(3);
     await store.close();
   });
+
+  test("onCommit also fires for a repair batch, not only feed pages", async () => {
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    node.put("notes/b", "two");
+    const store = await newIdbStore();
+    let commits = 0;
+    const replica = new Replica({ store, transport: node, onCommit: () => commits++ });
+    // A fetch answering under a *different* etag is stale, not an attack: the
+    // page commits the row as content-missing (one commit), nothing readable.
+    node.tamper.set("notes/b", { bytes: new TextEncoder().encode("v-next"), etag: etagOf(new TextEncoder().encode("v-next")) });
+    await replica.sync();
+    expect(commits).toBe(1);
+    expect((await replica.get("notes/b")).status).toBe("content_missing");
+    // The next sync's repair batch re-fetches and commits the bytes: the
+    // page commits, then the repair commits — two notifications.
+    node.tamper.delete("notes/b");
+    const before = commits;
+    const report = await replica.sync();
+    expect(report.repaired).toBe(1);
+    expect(commits - before).toBe(2);
+    expect((await replica.get("notes/b")).status).toBe("present");
+    await store.close();
+  });
 });
 
 describe("client lifecycle", () => {
-  test("close() terminates the worker and rejects pending and later calls", async () => {
+  function stubWorker(behavior: { deliverGetMidClose?: boolean; ackClose?: boolean } = {}) {
     type Handler = ((message: MessageEvent) => void) | null;
     let onmessage: Handler = null;
-    let terminated = false;
+    const state = { terminated: false, getId: -1, closeId: -1 };
     const worker = {
       postMessage(message: { id: number; op?: string }) {
-        if (message.op === "close" && onmessage !== null) {
-          onmessage({ data: { id: message.id, ok: true, result: { closed: true } } } as MessageEvent);
+        if (message.op === "close") {
+          state.closeId = message.id;
+          if (behavior.deliverGetMidClose === true && state.getId >= 0) {
+            // A get reply arriving after close() started but before the
+            // handshake acks must be ignored: it can never resolve with data.
+            onmessage?.({ data: { id: state.getId, ok: true, result: { status: "present" } } } as MessageEvent);
+          }
+          if (behavior.ackClose !== false) {
+            onmessage?.({ data: { id: message.id, ok: true, result: { closed: true } } } as MessageEvent);
+          }
+          return;
         }
+        state.getId = message.id;
       },
       terminate() {
-        terminated = true;
+        state.terminated = true;
       },
       set onmessage(handler: Handler) {
         onmessage = handler;
       },
       set onerror(_handler: unknown) {},
     } as unknown as Worker;
+    return { worker, state };
+  }
+
+  test("close() rejects in-flight calls even when their reply arrives mid-close", async () => {
+    const { worker, state } = stubWorker({ deliverGetMidClose: true });
     const client = new BrowserReplica(worker);
     const pending = client.get("notes/a");
     await client.close();
-    expect(terminated).toBe(true);
-    await rejectsWith(pending, ReplicaErrorCode.CLOSED);
+    expect(state.terminated).toBe(true);
+    // The reply was delivered between close() and the worker's ack; the call
+    // rejects REPLICA_CLOSED — it never resolves with the delivered data.
+    const error = await rejectsWith(pending, ReplicaErrorCode.CLOSED);
+    expect(error.code).toBe("REPLICA_CLOSED");
     await rejectsWith(client.status(), ReplicaErrorCode.CLOSED);
-    // The ready promise is left pending by the stub; nothing here awaits it.
+    // `ready` rejects too: a consumer awaiting startup learns the client died.
+    const readyError = (await client.ready.then(
+      () => null,
+      (e: unknown) => e,
+    )) as ReplicaError;
+    expect(readyError).toBeInstanceOf(ReplicaError);
+    expect(readyError.code).toBe(ReplicaErrorCode.CLOSED);
+  });
+
+  test("close() resolves on its timeout when the worker never acks", async () => {
+    const { worker, state } = stubWorker({ ackClose: false });
+    const client = new BrowserReplica(worker);
+    // Bounded wait: the 2 s in-code timeout must terminate the worker instead
+    // of hanging the shutdown.
+    await Promise.race([client.close(), Bun.sleep(10_000).then(() => Promise.reject(new Error("close() hung")))]);
+    expect(state.terminated).toBe(true);
+  }, 15_000);
+
+  test("concurrent first opens converge on one database", async () => {
+    const replicaId = nextId();
+    const open = () => IndexedDbReplicaStore.open(replicaId, { holder: `holder-${Math.random().toString(36).slice(2)}` });
+    const [a, b] = await Promise.all([open(), open()]);
+    try {
+      // Both see no replica; both init the identical config. The loser finds
+      // the winner's database instead of failing with REPLICA_CONFIG_MISMATCH.
+      const cfg = config({ replicaId });
+      await Promise.all([a.init(cfg), b.init(cfg)]);
+      const stateA = (await a.open())!;
+      const stateB = (await b.open())!;
+      expect(stateA.config.replicaId).toBe(replicaId);
+      expect(stateB.config.replicaId).toBe(replicaId);
+      // A genuinely different config still refuses.
+      await rejectsWith(a.init(config({ replicaId, prefix: "other/" })), ReplicaErrorCode.CONFIG_MISMATCH);
+    } finally {
+      await Promise.all([a.close(), b.close()]);
+    }
   });
 });

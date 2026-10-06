@@ -280,6 +280,22 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     await this.#writeTx([STORE_META], "Creating the replica", async (tx) => {
       const existing = await this.#meta(tx);
       if (existing !== undefined) {
+        // Concurrent first opens race here: an identical stored config is the
+        // winner's init — this init is a no-op. A real difference still
+        // refuses; the device key is compared by principal so equivalent
+        // DID forms agree.
+        const e = existing.config;
+        const same =
+          e.replicaId === c.replicaId &&
+          e.name === c.name &&
+          e.host === c.host &&
+          e.space === c.space &&
+          e.prefix === c.prefix &&
+          principalOf(e.deviceDid) === principalOf(c.deviceDid) &&
+          e.allowSecrets === c.allowSecrets &&
+          e.localReadPolicy === c.localReadPolicy &&
+          e.retentionGrantCid === c.retentionGrantCid;
+        if (same) return;
         throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, `Replica ${c.name} already exists.`);
       }
       this.#putMeta(tx, {
@@ -547,11 +563,18 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       state.serial += 1;
       if (p.authority !== null) {
         state.nodeDid = p.source.nodeDid;
-        state.authority = p.authority;
+        // The attested retainUntil belongs to the retention grant the request
+        // presented: if a setRetentionGrant raced the page, the stored CID no
+        // longer matches and retainUntil stays untouched (null after the CID
+        // change) instead of reviving the previous grant's window under a
+        // new CID.
+        const retainUntil =
+          state.config.retentionGrantCid === p.retentionGrantCid ? p.authority.retainUntil : state.authority?.retainUntil ?? null;
+        state.authority = { ...p.authority, retainUntil };
         state.lastSyncAt = p.at;
         // A node-attested retention under a new retain grant supersedes a
         // learned revocation of the old one.
-        if (p.authority.retainUntil !== null) state.retentionRevoked = null;
+        if (retainUntil !== null) state.retentionRevoked = null;
       }
       if (p.complete) {
         state.lastCompleteAt = p.at;

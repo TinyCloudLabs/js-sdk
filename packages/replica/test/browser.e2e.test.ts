@@ -108,7 +108,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
   async function openReplicaOnPage(
     target: Page,
     options: { grantSubject?: string; prefix?: string; defaultWorker?: boolean } = {},
-  ): Promise<{ replicaId: string; deviceDid: string; created: boolean }> {
+  ): Promise<{ replicaId: string; deviceDid: string; created: boolean; authorized: boolean; status: unknown }> {
     return target.evaluate(
       async (input) =>
         window.__replica.open({
@@ -120,6 +120,29 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
         }),
       { host, space, prefix: options.prefix, grantSubject: options.grantSubject, defaultWorker: options.defaultWorker },
     );
+  }
+
+  /** Mint (without installing) a grant for the page's replica device DID. */
+  async function mintOnPage(
+    target: Page,
+    options: { actions?: string[]; expiry?: string; path?: string } = {},
+  ): Promise<string> {
+    const deviceDid = await target.evaluate(() => window.__replica.deviceDid());
+    const requested = [
+      {
+        service: "tinycloud.kv",
+        space,
+        path: options.path ?? "notes/",
+        actions: options.actions ?? ["get", "list", "metadata", "sync"],
+      },
+    ];
+    await owner.grantRuntimePermissions(requested as never, { expiry: options.expiry ?? "30d" });
+    const minted = await owner.delegateTo(
+      deviceDid,
+      requested as never,
+      options.expiry === undefined ? {} : { expiry: options.expiry },
+    );
+    return minted.delegation.delegationHeader.Authorization;
   }
 
   /** Mint and install a grant for the page's replica device DID. */
@@ -544,6 +567,71 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     // The bound issuer's grant verifies the session; reads succeed.
     await pageB.evaluate((jwt) => window.__replica.installGrant(jwt), grantJwt);
     expect((await pageB.evaluate(() => window.__replica.get("bound/a"))).status).toBe("present");
+    await pageA.close();
+    await pageB.close();
+  }, 120_000);
+
+  test("a refused grant install never authorizes; unauthorized sessions see a restricted status", async () => {
+    // `denied/` is this test's own partition — the empty notes/ partition is
+    // already bound to the owner's subject in earlier tests.
+    await kvPut("denied/a", "denied data");
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    await pageA.goto(`${origin}/`);
+    await pageB.goto(`${origin}/`);
+    await pageA.waitForFunction(() => window.__replica !== undefined);
+    await pageB.waitForFunction(() => window.__replica !== undefined);
+
+    await openReplicaOnPage(pageA, { prefix: "denied/" });
+    const grantJwt = await grantOnPage(pageA, { path: "denied/" });
+    await pageA.evaluate(() => window.__replica.sync());
+    expect((await pageA.evaluate(() => window.__replica.get("denied/a"))).status).toBe("present");
+
+    // Before any grant, open() and status() expose only the restricted view:
+    // no replica state at all — key names, etags, counts and lastError stay
+    // hidden until the bound issuer's grant lands.
+    const openedB = await openReplicaOnPage(pageB, { prefix: "denied/" });
+    expect(openedB.authorized).toBe(false);
+    expect(openedB.status).toBeNull();
+    const statusB = await pageB.evaluate(() => window.__replica.status());
+    expect(statusB.authorized).toBe(false);
+    expect(statusB.status).toBeNull();
+    expect(statusB.persistence).not.toBeNull();
+
+    // The bound issuer's grant covering a *different* path installs nothing
+    // and authorizes nothing.
+    const wrongPath = await mintOnPage(pageB, { path: "elsewhere/" });
+    const notCovering = await pageB.evaluate(
+      (jwt) => window.__replica.installGrant(jwt).catch((error: Error) => ({ code: (error as { code?: string }).code })),
+      wrongPath,
+    );
+    expect((notCovering as { code?: string }).code).toBe("GRANT_NOT_COVERING");
+    const deniedRead = await pageB.evaluate(() =>
+      window.__replica.get("denied/a").catch((error: Error) => ({ code: (error as { code?: string }).code })),
+    );
+    expect((deniedRead as { code?: string }).code).toBe("GRANT_UNAUTHORIZED");
+
+    // A grant from the bound issuer that is already expired when presented
+    // fails its install and still authorizes nothing.
+    const shortJwt = await mintOnPage(pageB, { path: "denied/", expiry: "3s" });
+    await Bun.sleep(4_000);
+    const expired = await pageB.evaluate(
+      (jwt) => window.__replica.installGrant(jwt).catch((error: Error) => ({ code: (error as { code?: string }).code })),
+      shortJwt,
+    );
+    expect((expired as { code?: string }).code).toBe("GRANT_EXPIRED");
+    const stillDenied = await pageB.evaluate(() =>
+      window.__replica.get("denied/a").catch((error: Error) => ({ code: (error as { code?: string }).code })),
+    );
+    expect((stillDenied as { code?: string }).code).toBe("GRANT_UNAUTHORIZED");
+
+    // The bound issuer's own valid grant authorizes the session: full status
+    // and reads return.
+    await pageB.evaluate((jwt) => window.__replica.installGrant(jwt), grantJwt);
+    const authorizedStatus = await pageB.evaluate(() => window.__replica.status());
+    expect(authorizedStatus.authorized).toBe(true);
+    expect(authorizedStatus.status).not.toBeNull();
+    expect((await pageB.evaluate(() => window.__replica.get("denied/a"))).status).toBe("present");
     await pageA.close();
     await pageB.close();
   }, 120_000);

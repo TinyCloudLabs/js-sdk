@@ -31,7 +31,9 @@ const setStatus = (text: string) => {
   if (statusEl !== null) statusEl.textContent = text;
 };
 
-async function open(options: OpenOptions): Promise<{ replicaId: string; deviceDid: string; created: boolean }> {
+async function open(
+  options: OpenOptions,
+): Promise<{ replicaId: string; deviceDid: string; created: boolean; authorized: boolean; status: unknown }> {
   if (state.replica !== null) await state.replica.close().catch(() => undefined);
   state.committedSerials = [];
   const { defaultWorker, ...openOptions } = options;
@@ -40,7 +42,14 @@ async function open(options: OpenOptions): Promise<{ replicaId: string; deviceDi
     { onCommitted: (serial) => state.committedSerials.push(serial) },
   );
   state.replica = replica;
-  return { replicaId: replica.opened!.replicaId, deviceDid: replica.opened!.deviceDid, created: replica.opened!.created };
+  const opened = replica.opened!;
+  return {
+    replicaId: opened.replicaId,
+    deviceDid: opened.deviceDid,
+    created: opened.created,
+    authorized: opened.authorized,
+    status: opened.status,
+  };
 }
 
 function needReplica(): BrowserReplica {

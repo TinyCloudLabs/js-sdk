@@ -347,10 +347,13 @@ export class Replica {
     // The source pin survives an automatic reset; only an explicit reset clears it.
     let pinned = state.nodeDid;
     let coverage = state.coverage;
+    // The retention CID this request presents: captured once so every page
+    // commits under the same presented CID even if `setRetentionGrant` races.
+    const retentionGrantCid = config.retentionGrantCid;
 
     for (;;) {
       let page: SyncPage;
-      const retentionGrant = config.retentionGrantCid;
+      const retentionGrant = retentionGrantCid;
       try {
         page = await attempt.transport.syncPage({
           prefix: config.prefix,
@@ -389,6 +392,7 @@ export class Replica {
         authority: page.authority,
         coverage,
         at,
+        retentionGrantCid: retentionGrant,
         window,
         complete: !page.more,
         promoteGrant: attempt.promote,
@@ -408,8 +412,7 @@ export class Replica {
       await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
       if (!page.more) break;
     }
-
-    report.repaired = await this.#repair(attempt, cursor, pinned, coverage);
+    report.repaired = await this.#repair(attempt, cursor, pinned, coverage, retentionGrantCid);
     report.blobsCollected = await this.#store.collectGarbage(attempt.lease);
     report.coverage = coverage;
     report.contentMissing = (await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER)).length;
@@ -501,8 +504,7 @@ export class Replica {
     }
     return { changes, blobs, fetched };
   }
-
-  async #repair(attempt: Attempt, cursor: string | null, nodeDid: string | null, coverage: Coverage): Promise<number> {
+  async #repair(attempt: Attempt, cursor: string | null, nodeDid: string | null, coverage: Coverage, retentionGrantCid: string | null): Promise<number> {
     const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
     let repaired = 0;
     for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
@@ -530,6 +532,7 @@ export class Replica {
         authority: null,
         coverage,
         at: new Date(this.#now()).toISOString(),
+        retentionGrantCid,
         window: this.#syncWindow(state.authority, attempt.grant),
         complete: false,
         promoteGrant: null,

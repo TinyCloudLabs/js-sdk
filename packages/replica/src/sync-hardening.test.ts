@@ -145,6 +145,27 @@ describe("retention grant revocation", () => {
     advance(120_000);
     expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
   });
+
+  test("an in-flight page cannot restore the retainUntil a CID swap invalidated", async () => {
+    const { node, store, replica, advance } = await retained();
+    expect((await store.open())!.authority?.retainUntil).not.toBeNull();
+
+    // The next sync request is issued under `bafyretain`; mid-request a new
+    // CID lands. The page still commits — under the new CID — but its
+    // attested retainUntil belongs to the grant the request presented, so
+    // the store must not persist it.
+    node.onSyncPage = async () => {
+      node.onSyncPage = undefined;
+      await store.setRetentionGrant("bafyother");
+    };
+    await replica.sync();
+    const state = (await store.open())!;
+    expect(state.config.retentionGrantCid).toBe("bafyother");
+    expect(state.authority?.retainUntil).toBeNull();
+    // Post-expiry the read is a hard GRANT_EXPIRED, not a revived window.
+    advance(120_000);
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
 });
 
 describe("malformed authority bounds", () => {
@@ -393,6 +414,7 @@ function pageOf(blob?: Uint8Array) {
     at: new Date().toISOString(),
     window: { notBefore: null, expiresAt: null },
     complete: true,
+    retentionGrantCid: null,
     promoteGrant: null,
   };
 }

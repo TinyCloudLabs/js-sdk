@@ -123,6 +123,27 @@ describe("retention grant revocation (indexeddb)", () => {
     advance(120_000);
     expect((await replica.get("notes/a")).meta.authority).toBe("expired");
   });
+
+  test("an in-flight page cannot restore the retainUntil a CID swap invalidated (indexeddb)", async () => {
+    const { node, store, replica, advance } = await retained();
+    expect((await store.open())!.authority?.retainUntil).not.toBeNull();
+
+    // The next sync request is issued under `bafyretain`; mid-request a new
+    // CID lands. The page still commits — under the new CID — but its
+    // attested retainUntil belongs to the grant the request presented, so
+    // the store must not persist it.
+    node.onSyncPage = async () => {
+      node.onSyncPage = undefined;
+      await store.setRetentionGrant("bafyother");
+    };
+    await replica.sync();
+    const state = (await store.open())!;
+    expect(state.config.retentionGrantCid).toBe("bafyother");
+    expect(state.authority?.retainUntil).toBeNull();
+    // Post-expiry the read is a hard GRANT_EXPIRED, not a revived window.
+    advance(120_000);
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
 });
 
 describe("revocation learned while fetching content (indexeddb)", () => {
@@ -280,6 +301,7 @@ describe("authority at the commit boundary (indexeddb)", () => {
       window: { notBefore: "not-a-date", expiresAt: null },
 
       complete: true,
+      retentionGrantCid: null,
       promoteGrant: null,
     };
     expect(await codeOf(store.applyPage(lease, page))).toBe(ReplicaErrorCode.PROTOCOL_ERROR);
@@ -306,6 +328,7 @@ describe("revocation purge fencing (indexeddb)", () => {
       at: new Date().toISOString(),
       window: { notBefore: null, expiresAt: null },
       complete: true,
+      retentionGrantCid: null,
       promoteGrant: null,
     };
     expect(await codeOf(store.applyPage(writer, page))).toBe(ReplicaErrorCode.GRANT_REVOKED);
@@ -355,6 +378,7 @@ describe("lease and reader timing (indexeddb)", () => {
           at: new Date().toISOString(),
           window: { notBefore: null, expiresAt: null },
           complete: true,
+          retentionGrantCid: null,
           promoteGrant: null,
         }),
       ),
@@ -578,6 +602,7 @@ describe("replica removal — fenced destroy (indexeddb)", () => {
           at: new Date().toISOString(),
           window: { notBefore: null, expiresAt: null },
           complete: true,
+          retentionGrantCid: null,
           promoteGrant: null,
         }),
       ),

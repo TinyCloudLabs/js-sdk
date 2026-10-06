@@ -22,7 +22,7 @@ import { initialized, tinycloud, tcwSession } from "@tinycloud/web-sdk-wasm";
 
 import { Replica } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
-import { assertGrantInstallable, parseUcanGrant } from "./grant.js";
+import { assertGrantInstallable, grantCovers, parseUcanGrant } from "./grant.js";
 import { requiresSecretsOptIn } from "./scope.js";
 import { kvSyncTransport } from "./transport.js";
 import type { GrantRecord, ListOpts, ReplicaConfig, ReplicaState } from "./types.js";
@@ -212,13 +212,23 @@ async function closeSession(): Promise<void> {
  * diagnostics; everything touching entries, blobs or grants goes through this.
  */
 async function assertVerified(s: Session): Promise<void> {
-  const bound = await s.store.grantSubject();
-  if (bound !== null && s.verified !== bound) {
+  if (!(await isAuthorized(s))) {
+    const bound = await s.store.grantSubject();
     throw new ReplicaError(
       ReplicaErrorCode.GRANT_UNAUTHORIZED,
       `This replica belongs to ${bound}; install that principal's grant before reading or syncing.`,
     );
   }
+}
+
+/**
+ * Whether this session may see replica state: unbound databases are open to
+ * anyone; once a first grant binds an issuer, only a session verified by that
+ * principal's grant is authorized.
+ */
+async function isAuthorized(s: Session): Promise<boolean> {
+  const bound = await s.store.grantSubject();
+  return bound === null || s.verified === bound;
 }
 
 /** Latest commit serial → the sibling-worker BroadcastChannel. */
@@ -307,12 +317,16 @@ async function handleOpen(request: OpenRequest): Promise<OpenResult> {
     throw error;
   }
   const state = await store.open();
+  const authorized = session === null ? false : await isAuthorized(session);
 
   return {
     replicaId,
     deviceDid: principalOf(device.did),
     verificationMethod: device.did,
-    status: state === null ? null : await store.status(),
+    // Before the session proves it acts for the bound issuer, the open result
+    // carries no key names, etags, counts, grant CIDs or error text.
+    status: state === null || !authorized ? null : await store.status(),
+    authorized,
     created,
   };
 }
@@ -330,11 +344,26 @@ async function handleInstallGrant(delegation: string): Promise<{ cid: string; au
       `The grant was issued by ${grant.issuer}; this replica is partitioned for ${s.grantSubject}.`,
     );
   }
-  // Presenting a validly-signed UCAN addressed to this device proves the
-  // session acts for its issuer — even an expired or not-yet-valid grant —
-  // so mark the session verified before validity is checked; a refused
-  // install still throws below.
-  if (principalOf(grant.audience) === principalOf(state.config.deviceDid)) s.verified = principalOf(grant.issuer);
+  const bound = await s.store.grantSubject();
+  // A session is authorized only by a grant that would itself install — right
+  // audience, covering this replica's scope, issued by the bound principal
+  // and inside its validity window — or by re-presenting the grant the
+  // database already holds (same CID), so reads on an expired active grant
+  // report GRANT_EXPIRED instead of the gate. A refused install never
+  // authorizes: not on scope, not on issuer, not on time.
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const issuer = principalOf(grant.issuer);
+  const installable =
+    ["tinycloud.kv/sync", "tinycloud.kv/get"].every((ability) =>
+      grantCovers(grant, state.config.space, state.config.prefix, ability),
+    ) &&
+    (bound === null || bound === issuer) &&
+    (grant.notBefore === null || nowSeconds >= grant.notBefore) &&
+    (grant.expiresAt === null || nowSeconds < grant.expiresAt);
+  const held = grant.cid === state.grant?.cid || grant.cid === state.pendingGrant?.cid;
+  if (principalOf(grant.audience) === principalOf(state.config.deviceDid) && (held || installable)) {
+    s.verified = issuer;
+  }
   assertGrantInstallable(grant, {
     deviceDid: principalOf(state.config.deviceDid),
     space: state.config.space,
@@ -388,7 +417,14 @@ async function handleStatus(): Promise<StatusResult> {
   const s = needSession();
   const persisted =
     typeof navigator.storage?.persisted === "function" ? await navigator.storage.persisted().catch(() => null) : null;
-  return { status: await s.store.status(), persistence: { persisted, locksSupported: locks !== undefined } };
+  const authorized = await isAuthorized(s);
+  // A restricted status for unauthorized sessions: persistence diagnostics
+  // only — no key names, etags, counts, grant CIDs or lastError text.
+  return {
+    status: authorized ? await s.store.status() : null,
+    persistence: { persisted, locksSupported: locks !== undefined },
+    authorized,
+  };
 }
 
 async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
