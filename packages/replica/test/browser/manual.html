@@ -57,7 +57,7 @@
         throw new Error("missing host/space/principal");
       }
       const prefix = params.get("prefix") ?? "notes/";
-      const principal = params.get("principal")!;
+      const principal = params.get("principal");
 
       // The offline service worker must control the page before the replica
       // worker's fetch, or the worker asset is never cached for offline use.
