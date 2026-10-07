@@ -1835,7 +1835,7 @@ export class TinyCloudNode {
 
       const marker = await this.readBootstrapCompletionMarker();
       if (marker.ok) {
-        if (this.isAcceptedBootstrapCompletionMarker(marker.data.data)) {
+        if (this.isAcceptedBootstrapCompletionMarker(marker.data.data, steps.map((step) => step.id))) {
           return { action: "skip" };
         }
         return { action: "run", mode: "repair" };
@@ -1900,17 +1900,25 @@ export class TinyCloudNode {
       );
     }
   }
-
-  private isAcceptedBootstrapCompletionMarker(value: unknown): boolean {
+  /**
+   * A marker written before a canonical space was added triggers one bounded repair.
+   */
+  private isAcceptedBootstrapCompletionMarker(
+    value: unknown,
+    canonicalStepIds: readonly string[],
+  ): boolean {
     if (typeof value !== "object" || value === null) return false;
     const entries = Object.entries(value);
     const markerValue = (name: string): unknown =>
       entries.find(([key]) => key === name)?.[1];
     const version = markerValue("v");
+    const stepIds = markerValue("stepIds");
     return (
       typeof version === "number" &&
       Number.isInteger(version) &&
-      ACCEPTED_MARKER_VERSIONS.some((acceptedVersion) => acceptedVersion === version)
+      ACCEPTED_MARKER_VERSIONS.some((acceptedVersion) => acceptedVersion === version) &&
+      Array.isArray(stepIds) &&
+      canonicalStepIds.every((stepId) => stepIds.includes(stepId))
     );
   }
 

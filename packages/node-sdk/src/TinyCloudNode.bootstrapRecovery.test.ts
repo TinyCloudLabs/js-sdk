@@ -83,7 +83,7 @@ class FakeCloud {
       if (step.kind === "host") expect(this.hostedSpaces.has(step.spaceId)).toBe(true);
       if (step.kind === "activate") expect(this.activatedSpaces.has(step.spaceId)).toBe(true);
     }
-    expect(this.registry.size).toBe(5);
+    expect(this.registry.size).toBe(6);
     expect(this.appRecords.size).toBeGreaterThan(0);
     expect(this.schemasApplied.size).toBe(2);
     expect(this.networkCreated).toBe(true);
@@ -155,7 +155,7 @@ test("only an accepted marker version permits an already-provisioned skip", asyn
   Reflect.set(node, "hasRuntimePermissions", () => true);
   Reflect.set(node, "readBootstrapCompletionMarker", async () => ({
     ok: true,
-    data: { data: { v: BOOTSTRAP_COMPLETION_MARKER_VERSION } },
+    data: { data: { v: BOOTSTRAP_COMPLETION_MARKER_VERSION, stepIds: canonicalStepIds() } },
   }));
   const resolve = Reflect.get(node, "resolveBootstrapDecision");
 
@@ -318,7 +318,7 @@ function canonicalStepIds(): string[] {
   return bootstrapSteps(ADDRESS, 1).map((step) => step.id);
 }
 
-function bootstrapSpaceId(name: "default" | "applications" | "account" | "secrets" | "public"): string {
+function bootstrapSpaceId(name: "default" | "applications" | "account" | "secrets" | "public" | "agents"): string {
   const step = bootstrapSteps(ADDRESS, 1).find(
     (candidate) => candidate.kind === "host" && candidate.space === name,
   );
@@ -327,9 +327,9 @@ function bootstrapSpaceId(name: "default" | "applications" | "account" | "secret
 }
 
 const ceremonyFaultPoints = [
-  ...["default", "applications", "account", "secrets", "public"].map((space) => `session:${space}`),
-  ...["default", "applications", "account", "secrets", "public"].map((space) => `host:${space}`),
-  ...["default", "applications", "account", "secrets", "public"].map((space) => `activate:${space}`),
+  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `session:${space}`),
+  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `host:${space}`),
+  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `activate:${space}`),
   "account:index-schema",
   "account:seed-spaces",
   "account:seed-applications",
@@ -433,10 +433,36 @@ describe("TC-393 bootstrap recovery matrix", () => {
     expect(node.bootstrapStatus.reason).toBe("already-provisioned");
     expect(fake.ceremonyCallCount()).toBe(calls);
   });
+  test("repairs an old completion marker once to add agents", async () => {
+    const fake = new FakeCloud();
+    const node = makeRecoveryHarness(fake);
+    fake.hostedSpaces.add(bootstrapSpaceId("default"));
+    fake.kv.set(fake.markerKey, {
+      v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+      stepIds: canonicalStepIds().filter((stepId) => !stepId.includes("agents")),
+    });
+    installActivationTransport(fake);
+
+    await bootstrap(node);
+
+    expect(node.bootstrapStatus).toEqual({ skipped: false });
+    expect(fake.hostedSpaces.has(bootstrapSpaceId("agents"))).toBe(true);
+    expect(fake.registry.has(bootstrapSpaceId("agents"))).toBe(true);
+    expect(fake.kv.get(fake.markerKey)).toEqual(expect.objectContaining({
+      v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+      stepIds: canonicalStepIds(),
+    }));
+    fake.completeArtifacts(bootstrapSteps(ADDRESS, 1));
+
+    const callsBeforeSkip = fake.ceremonyCallCount();
+    await bootstrap(node);
+    expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
+    expect(fake.ceremonyCallCount()).toBe(callsBeforeSkip);
+  });
 });
 
 describe("TC-393 recovery decisions and convergence", () => {
-  test("pre-seed wedge is repaired even when all five spaces are already hosted", async () => {
+  test("pre-seed wedge is repaired even when all six spaces are already hosted", async () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     for (const step of bootstrapSteps(ADDRESS, 1)) {
@@ -518,15 +544,16 @@ describe("TC-393 recovery decisions and convergence", () => {
     expect([...fake.registry.entries()]).toEqual(first.registry);
     expect([...fake.appRecords.entries()]).toEqual(first.applications);
     expect([...fake.schemasApplied].sort()).toEqual(first.schemas);
-    expect(fake.registry.size).toBe(5);
+    expect(fake.registry.size).toBe(6);
     expect(fake.appRecords.size).toBe(first.applications.length);
     expect(fake.encryptionAssumeMissing).toEqual([true, false]);
   });
 
-  test("old, malformed, and foreign-step markers repair; only accepted v1 skips", async () => {
+  test("old, malformed, incomplete, and foreign-step markers repair; complete v1 skips", async () => {
     for (const marker of [
       { v: 0, stepIds: canonicalStepIds() },
       { v: 2, stepIds: canonicalStepIds() },
+      { v: 1 },
       { bad: true },
     ]) {
       const fake = new FakeCloud();
@@ -541,7 +568,7 @@ describe("TC-393 recovery decisions and convergence", () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     fake.hostedSpaces.add(bootstrapSpaceId("default"));
-    fake.kv.set(fake.markerKey, { v: 1, stepIds: ["future:renamed"] });
+    fake.kv.set(fake.markerKey, { v: 1, stepIds: [...canonicalStepIds(), "future:renamed"] });
     await bootstrap(node);
     expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
   });
