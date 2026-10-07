@@ -14,6 +14,7 @@ import {
   normalizeUnifiedPolicyCapability,
   parsePolicySessionUcan,
   parseCompactUcanAuthorization,
+  parseSignedCompactUcanAttenuation,
   policyDigestHex,
   policyIdForDigestHex,
   ROOT_REVOCATION_V1_DOMAIN,
@@ -393,6 +394,40 @@ describe("TC-405 unified policy contracts", () => {
       ...base,
       sign: async (bytes) => ed25519.sign(bytes, new Uint8Array(32).fill(10)),
     })).rejects.toThrow("signature is invalid");
+  });
+  test("verifies compact grant attenuation and CID for the exact signed bytes", () => {
+    const privateKey = new Uint8Array(32).fill(23);
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const issuerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...publicKey]))}`;
+    const header = Buffer.from(JSON.stringify({
+      alg: "EdDSA",
+      jwk: {
+        alg: "wallet-key",
+        crv: "Ed25519",
+        kty: "OKP",
+        x: Buffer.from(publicKey).toString("base64url"),
+        kid: "owner-session",
+      },
+      typ: "JWT",
+      ucv: "0.10.0",
+    })).toString("base64url");
+    const att = {
+      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default/kv/a": {
+        "tinycloud.kv/get": [{}],
+      },
+    };
+    const payload = Buffer.from(JSON.stringify({
+      att,
+      aud: "did:key:audience",
+      exp: 1_800_000_030,
+      iss: issuerDid,
+      prf: [],
+    })).toString("base64url");
+    const signingInput = `${header}.${payload}`;
+    const authorization = `${signingInput}.${Buffer.from(ed25519.sign(new TextEncoder().encode(signingInput), privateKey)).toString("base64url")}`;
+    const parsed = parseSignedCompactUcanAttenuation(authorization);
+    expect(parsed.payload.att).toEqual(att);
+    expect(() => parseSignedCompactUcanAttenuation(authorization, "bafywrong")).toThrow("CID does not match");
   });
 
   test("TC-531: accepts long-lived sessions up to the 31-day root bound", async () => {

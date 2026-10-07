@@ -7,20 +7,50 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { ensureDelegationAuthority } from "./auth.js";
 import { parseExpiry } from "../lib/duration.js";
-import { readGrantHistory } from "../lib/permissions.js";
+import { loadLocalGrantArtifacts, readGrantHistory } from "../lib/permissions.js";
+import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 function normalizeDid(input: string): string {
   const normalized = input.trim();
   const fragmentIndex = normalized.indexOf("#");
   return (fragmentIndex === -1 ? normalized : normalized.slice(0, fragmentIndex)).toLowerCase();
 }
-
 function didMatches(actual: string | undefined, expected: string): boolean {
   if (!actual) return false;
-  try {
-    return normalizeDid(actual) === normalizeDid(expected);
-  } catch {
-    return actual === expected;
+  return normalizeDid(actual) === normalizeDid(expected);
+}
+function ownerDidFromSpace(spaceId: string | undefined): string | undefined {
+  const owner = /^tinycloud:((?:did:)?pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40})(?::|\/|$)/.exec(spaceId ?? "")?.[1];
+  if (!owner) return undefined;
+  return owner.startsWith("did:") ? owner : `did:${owner}`;
+}
+
+
+async function resolveCidBoundTargetSpace(params: {
+  profileName: string;
+  ownerDid?: string;
+  cid: string;
+}): Promise<string | undefined> {
+  if (!params.ownerDid) return undefined;
+  const grants = await loadLocalGrantArtifacts(params.profileName);
+  for (const grant of grants) {
+    const delegation = grant.delegation;
+    if (grant.delegationCid !== params.cid || delegation.cid !== params.cid) continue;
+    try {
+      const authorization = delegation.delegationHeader.Authorization.replace(/^Bearer /i, "");
+      const signed = parseSignedCompactUcanAttenuation(authorization, params.cid);
+      for (const resource of Object.keys(signed.payload.att)) {
+        const space = /^(tinycloud:[^/]+)\/[^/]+\/.*$/.exec(resource)?.[1];
+        if (!space) continue;
+        const ownerMatch = /^tinycloud:((?:did:)?pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):/.exec(space);
+        const owner = ownerMatch?.[1];
+        const ownerDid = owner?.startsWith("did:") ? owner : owner ? `did:${owner}` : undefined;
+        if (ownerDid && normalizeDid(ownerDid) === normalizeDid(params.ownerDid)) return space;
+      }
+    } catch {
+      continue;
+    }
   }
+  return undefined;
 }
 
 export function registerDelegationCommand(program: Command): void {
@@ -135,114 +165,133 @@ export function registerDelegationCommand(program: Command): void {
   delegation
     .command("revoke <cid>")
     .description("Revoke a delegation")
-    .action(async (cid: string, _options, cmd) => {
+    .option("--yes", "Skip local-key TTY confirmation", false)
+    .action(async (cid: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
         const profile = await ProfileManager.getProfile(ctx.profile);
-        const grantHistory = await readGrantHistory(ctx.profile);
-        const recordedGrant = [...grantHistory].reverse().find((entry) => entry.delegationCid === cid);
-        const delegations = await node.delegationManager.list();
-        const listedTarget = delegations.ok
-          ? delegations.data.find((delegation) => delegation.cid === cid)
-          : undefined;
-        let queriedTarget;
-        let cursor: string | undefined;
-        if (!listedTarget) {
-          if (profile.spaceId) {
-            const listPermission: PermissionEntry = {
-              service: "tinycloud.delegation",
-              space: profile.spaceId,
-              path: "",
-              actions: ["tinycloud.delegation/list"],
-            };
-            if (!node.hasRuntimePermissions([listPermission])) {
-              await ensureDelegationAuthority({
-                ctx,
-                profile,
-                node,
-                requested: [listPermission],
-                expiryOption: undefined,
-                reason: `Look up delegation ${cid} before revoking`,
-                yes: true,
-              });
-            }
+
+        const boundSpace = await resolveCidBoundTargetSpace({
+          profileName: ctx.profile,
+          ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
+          cid,
+        });
+        let targetFound = false;
+        let targetSpaceSource: "node" | "local-grant-history" | "local-signed-grant-artifact";
+        if (boundSpace) {
+          targetSpaceSource = "local-signed-grant-artifact";
+        } else {
+          const accountSpaceId = node.accountSpaceId;
+          if (!accountSpaceId) {
+            throw new CLIError(
+              "DELEGATION_QUERY_AUTHORITY_UNAVAILABLE",
+              "Cannot determine the account space needed to query delegation records.",
+              ExitCode.AUTH_REQUIRED,
+            );
           }
+          let cursor: string | undefined;
           do {
             const query = await node.delegationManager.query({
               direction: "all",
               limit: 100,
               ...(cursor === undefined ? {} : { cursor }),
             });
-            if (!query.ok) break;
-            queriedTarget = query.data.items.find((delegation) => delegation.cid === cid);
-            cursor = queriedTarget ? undefined : query.data.nextCursor;
+            if (!query.ok) throw cliErrorFromService(query.error);
+            targetFound = query.data.items.some((delegation) => delegation.cid === cid);
+            cursor = targetFound ? undefined : query.data.nextCursor;
           } while (cursor !== undefined);
-        }
-        const targetDelegation = listedTarget
-          ? {
-            spaceId: listedTarget.spaceId,
-            delegatorDID: listedTarget.delegatorDID,
-            delegateDID: listedTarget.delegateDID,
-          }
-          : queriedTarget
-            ? {
-              spaceId: queriedTarget.resources
-                .map(({ resource }) => {
-                  const separator = resource.indexOf("/");
-                  return separator > 0 ? resource.slice(0, separator) : undefined;
-                })
-                .find((space): space is string => space !== undefined),
-              delegatorDID: queriedTarget.delegatorDid,
-              delegateDID: queriedTarget.delegateDid,
+
+          targetSpaceSource = "node";
+          if (!targetFound) {
+            const grantHistory = await readGrantHistory(ctx.profile);
+            const recordedGrant = [...grantHistory].reverse().find((entry) => entry.delegationCid === cid);
+            if (!recordedGrant) {
+              throw new CLIError(
+                "TARGET_NOT_FOUND",
+                `Delegation "${cid}" was not found by the node or local grant history.`,
+                ExitCode.NOT_FOUND,
+              );
             }
-            : undefined;
-        const targetSpaceId = targetDelegation?.spaceId ??
-          recordedGrant?.addedCaps.find((cap) => cap.space)?.space;
-        const targetSpaceSource = targetDelegation?.spaceId ? "node" : "local-grant-history";
-        if (targetSpaceId === undefined) {
-          throw new CLIError(
-            "TARGET_SPACE_UNKNOWN",
-            `Cannot resolve the target space for delegation "${cid}"`,
-            ExitCode.INVALID_ARGUMENT,
-          );
+            targetSpaceSource = "local-grant-history";
+          }
         }
+
         const revokePermission: PermissionEntry = {
           service: "tinycloud.delegation",
-          space: targetSpaceId,
+          space: `urn:cid:${cid}`,
           path: "",
           actions: ["tinycloud.delegation/revoke"],
         };
-
-        if (!node.hasRuntimePermissions([revokePermission])) {
+        let authorityScopeSource: "cid-resource" | "local-signed-grant-artifact" = "cid-resource";
+        let authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";
+        let fallbackSpaceId: string | undefined;
+        const rawAuthorityCovered = node.hasRuntimePermissions([revokePermission]);
+        const authorizeFallbackSpace = async (spaceId: string) => {
+          fallbackSpaceId = spaceId;
+          authorityScopeSource = "local-signed-grant-artifact";
+          authorityScopeReason =
+            "The WASM ReCap parser rejected urn:cid resources; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID.";
+          targetSpaceSource = "local-signed-grant-artifact";
           await ensureDelegationAuthority({
             ctx,
             profile,
             node,
-            requested: [revokePermission],
+            requested: [{
+              service: "tinycloud.delegation",
+              space: spaceId === node.accountSpaceId ? "default" : spaceId,
+              path: "",
+              actions: ["tinycloud.delegation/revoke"],
+            }],
             expiryOption: undefined,
-            reason: `Revoke delegation ${cid}`,
-            // Running this explicit command is consent to acquire its one
-            // required ability; no general session or manifest is widened.
-            yes: true,
+            reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant artifact`,
+            yes: options.yes,
+            persist: false,
           });
+        };
+        if (rawAuthorityCovered && boundSpace) {
+          await authorizeFallbackSpace(boundSpace);
+        } else if (!rawAuthorityCovered) {
+          try {
+            await ensureDelegationAuthority({
+              ctx,
+              profile,
+              node,
+              requested: [revokePermission],
+              expiryOption: undefined,
+              reason: `Revoke delegation ${cid}`,
+              yes: options.yes,
+              persist: false,
+            });
+          } catch (error) {
+            if (
+              error === null || typeof error !== "object" ||
+              !("code" in error) || error.code !== "RAW_RECAP_RESOURCE_UNSUPPORTED"
+            ) {
+              throw error;
+            }
+            fallbackSpaceId = boundSpace ?? await resolveCidBoundTargetSpace({
+              profileName: ctx.profile,
+              ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
+              cid,
+            });
+            if (!fallbackSpaceId) {
+              throw new CLIError(
+                "RAW_RECAP_RESOURCE_UNSUPPORTED",
+                `Cannot safely revoke "${cid}": raw CID ReCap resources are unavailable and no matching owner-signed local grant artifact binds its space to the CID.`,
+                ExitCode.PERMISSION_DENIED,
+              );
+            }
+            await authorizeFallbackSpace(fallbackSpaceId);
+          }
         }
 
-        const result = await node.delegationManager.revoke(cid, {
-          targetSpaceId,
-          ...(targetDelegation === undefined ? {} : {
-            targetDelegation: {
-              delegatorDID: targetDelegation.delegatorDID,
-              delegateDID: targetDelegation.delegateDID,
-            },
-          }),
-        });
-        if (!result.ok) {
-          throw cliErrorFromService(result.error);
-        }
-
-        outputJson({ cid, revoked: true, targetSpaceSource });
+        const result = fallbackSpaceId
+          ? await node.delegationManager.revoke(cid, { targetSpaceId: fallbackSpaceId })
+          : await node.revokeDelegation(cid);
+        if (!result.ok) throw cliErrorFromService(result.error);
+        outputJson({ cid, revoked: true, targetSpaceSource, authorityScopeSource, authorityScopeReason });
       } catch (error) {
         handleError(error);
       }

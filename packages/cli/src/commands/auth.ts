@@ -56,6 +56,7 @@ import {
   scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
+  isRawCidRevocationPermission,
   verifySignedSession,
   type RequestedExpiry,
   openKeyExpiryParam,
@@ -81,6 +82,7 @@ import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
 import { withSignInHint } from "../auth/session-expired.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
+  appendLocalGrantArtifact,
   appendAdditionalDelegation,
   appendAdditionalDelegations,
   appendPermissionRequestArtifact,
@@ -677,6 +679,7 @@ export function registerAuthCommand(program: Command): void {
         // programmatically; this command is a thin wrapper. The CLI request
         // artifact is a structural superset of AuthRequestArtifact.
         const grant = await grantAuthRequest(node, resolvedRequest);
+        await appendLocalGrantArtifact(ctx.profile, grant.delegation);
         await appendGrantHistory(ctx.profile, {
           addedCaps: grant.permissions,
           source: "cli",
@@ -1175,6 +1178,8 @@ export async function ensureDelegationAuthority(params: {
   expiryOption: string | number | undefined;
   reason: string;
   yes: boolean;
+  /** Keep command-scoped authority out of profile grant/history storage. */
+  persist?: boolean;
   force?: boolean;
   /**
    * Space a decrypt-only grant is requested in. OpenKey signs only a request
@@ -1205,6 +1210,39 @@ export async function ensureDelegationAuthority(params: {
       expiry: expiryCap,
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
+    if (params.persist === false) {
+      let delegationData: Awaited<ReturnType<OpenKeyAcquisition>>;
+      try {
+        delegationData = await acquireOpenKey(params.profile.did, {
+          jwk: key,
+          host: params.ctx.host,
+          permissions: params.requested,
+          reason: permissionGrantReason(params.reason, params.requested),
+          openkeyHost,
+          expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+        });
+      } catch (error) {
+        if (
+          params.requested.some(isRawCidRevocationPermission) &&
+          /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))
+        ) {
+          throw new CLIError(
+            "RAW_RECAP_RESOURCE_UNSUPPORTED",
+            "The OpenKey/WASM ReCap encoder does not support raw urn:cid revocation resources.",
+            ExitCode.PERMISSION_DENIED,
+          );
+        }
+        throw error;
+      }
+      const delegation = portableFromOpenKeyDelegation(
+        delegationData,
+        params.requested,
+        params.ctx.host,
+        proof,
+      );
+      await params.node.useRuntimeDelegation(delegation);
+      return;
+    }
     const grants: StagedOpenKeyGrant[] = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
       // capabilities/read is part of the request, so the signed proof may
@@ -1241,6 +1279,7 @@ export async function ensureDelegationAuthority(params: {
     params.requested,
     params.expiryOption !== undefined ? { expiry: params.expiryOption } : undefined,
   );
+  if (params.persist === false) return;
   for (const delegation of delegations) {
     const covering = permissionsFromDelegation(delegation);
     await appendAdditionalDelegation(
@@ -1380,7 +1419,7 @@ export function groupPermissionsBySpace(permissions: PermissionEntry[]): Permiss
   const groups = new Map<string, PermissionEntry[]>();
   const rawEntries: PermissionEntry[] = [];
   for (const permission of permissions) {
-    if (isRawEncryptionPermission(permission)) {
+    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) {
       rawEntries.push(permission);
       continue;
     }
@@ -1431,11 +1470,15 @@ export function portableFromOpenKeyDelegation(
   const effective = session.permissions;
   // The headline resource is a requested data entry, not the
   // capabilities/read every OpenKey grant carries or a raw network.
-  const spaced = effective.filter((permission) => !isRawEncryptionPermission(permission));
+  const spaced = effective.filter((permission) =>
+    !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+  );
   const primary = spaced.find((permission) => permission.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0]!;
   const resources = effective.map((permission) => ({
     service: permission.service.slice("tinycloud.".length),
-    space: isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
+    space: isRawCidRevocationPermission(permission)
+      ? permission.space!
+      : isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
     path: permission.path,
     actions: [...permission.actions],
     ...(permission.caveats === undefined ? {} : { caveats: structuredClone(permission.caveats) }),

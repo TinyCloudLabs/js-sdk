@@ -90,6 +90,11 @@ export interface GrantHistoryEntry {
   expiry?: string;
 }
 
+export interface LocalGrantArtifact {
+  delegationCid: string;
+  delegation: PortableDelegation;
+}
+
 export function additionalDelegationsPath(profile: string): string {
   // Sibling file keeps legacy session.json schema unchanged for existing readers.
   return sharedAdditionalDelegationsPath(profile);
@@ -101,6 +106,9 @@ export function permissionRequestsPath(profile: string): string {
 
 export function grantHistoryPath(profile: string): string {
   return join(PROFILES_DIR, profile, "auth-grants.jsonl");
+}
+export function localGrantArtifactsPath(profile: string): string {
+  return join(PROFILES_DIR, profile, "auth-grant-artifacts.json");
 }
 
 export function createPermissionRequestArtifact(params: {
@@ -138,6 +146,41 @@ export async function loadAdditionalDelegations(
   profile: string,
 ): Promise<StoredAdditionalDelegation[]> {
   return readAdditionalDelegations<StoredAdditionalDelegation>(profile);
+}
+
+export async function loadLocalGrantArtifacts(profile: string): Promise<LocalGrantArtifact[]> {
+  const path = localGrantArtifactsPath(profile);
+  if (!(await fileExists(path))) return [];
+  const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+  if (!Array.isArray(parsed)) throw new Error(`Invalid local grant artifact store for profile "${profile}".`);
+  return parsed.map((value) => {
+    if (
+      value === null || typeof value !== "object" ||
+      typeof (value as any).delegationCid !== "string" ||
+      (value as any).delegation === null || typeof (value as any).delegation !== "object" ||
+      (value as any).delegation.cid !== (value as any).delegationCid ||
+      typeof (value as any).delegation.delegationHeader?.Authorization !== "string"
+    ) {
+      throw new Error(`Invalid local grant artifact store for profile "${profile}".`);
+    }
+    return value as LocalGrantArtifact;
+  });
+}
+
+export async function appendLocalGrantArtifact(
+  profile: string,
+  delegation: PortableDelegation,
+): Promise<void> {
+  await ProfileManager.ensureProfileDir(profile);
+  await withProfileLock(profile, async () => {
+    await refuseWriteToDeletedProfile(profile);
+    const records = await loadLocalGrantArtifacts(profile);
+    if (records.some((record) => record.delegationCid === delegation.cid)) return;
+    await writeJsonAtomic(localGrantArtifactsPath(profile), [
+      ...records,
+      { delegationCid: delegation.cid, delegation },
+    ]);
+  });
 }
 
 /**

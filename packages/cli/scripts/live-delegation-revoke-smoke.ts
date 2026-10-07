@@ -16,6 +16,11 @@ type CommandResult = {
   stderr: string;
   args: string[];
 };
+function redact(text: string): string {
+  return text
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/\b(authorization|token|secret|password|private[_-]?key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
+}
 
 function parseJson(text: string, label: string): unknown {
   try {
@@ -138,17 +143,36 @@ try {
   );
   if (beforeData !== payload) throw new Error("Pre-revoke scoped read returned the wrong data.");
 
-  const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid]);
+  const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid, "--yes"]);
   requireSuccess(revoke, "Owner delegation revoke");
   const revokeValue = parseJson(revoke.stdout, "Owner delegation revoke");
   const revokedCid = requireStringProperty(revokeValue, "cid", "Owner delegation revoke");
   const revoked = property(revokeValue, "revoked") === true;
   const targetSpaceSource = requireStringProperty(revokeValue, "targetSpaceSource", "Owner delegation revoke");
-  if (revokedCid !== cid || !revoked || targetSpaceSource !== "node") {
+  const authorityScopeSource = requireStringProperty(revokeValue, "authorityScopeSource", "Owner delegation revoke");
+  const authorityScopeReason = requireStringProperty(revokeValue, "authorityScopeReason", "Owner delegation revoke");
+  const validScope = authorityScopeSource === "cid-resource"
+    ? targetSpaceSource === "node"
+    : authorityScopeSource === "local-signed-grant-artifact" &&
+      targetSpaceSource === "local-signed-grant-artifact";
+  if (revokedCid !== cid || !revoked || !validScope || authorityScopeReason.length === 0) {
     throw new Error(`Revoke returned an unexpected result: ${redact(revoke.stdout)}`);
   }
+  const ownerCaps = await run(cliEntry, ownerHome, HOST, ["auth", "caps"]);
+  requireSuccess(ownerCaps, "Owner capability inspection");
+  const capEntries = property(parseJson(ownerCaps.stdout, "Owner capability inspection"), "capabilities");
+  if (!Array.isArray(capEntries) || capEntries.some((entry) =>
+    property(entry, "space") === `urn:cid:${cid}` &&
+    Array.isArray(property(entry, "actions")) &&
+    (property(entry, "actions") as unknown[]).includes("tinycloud.delegation/revoke")
+  )) {
+    throw new Error(`Temporary revoke authority was persisted: ${redact(ownerCaps.stdout)}`);
+  }
+
 
   const afterRead = await run(cliEntry, deviceHome, HOST, scopedReadArgs);
+  // This expected nonzero child exercises the same redaction path as failures.
+  redact(afterRead.stderr);
   const afterValue = parseJson(afterRead.stderr, "Post-revoke scoped read");
   const afterError = property(afterValue, "error");
   const afterCode = property(afterError, "code");
@@ -176,6 +200,8 @@ try {
       cid: revokedCid,
       revoked,
       targetSpaceSource,
+      authorityScopeSource,
+      authorityScopeReason,
     },
     after: {
       command: ["tc", ...scopedReadArgs],

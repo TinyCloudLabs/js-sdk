@@ -22,6 +22,7 @@ import {
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+const revokeTargetCid = "bafkr4id4zlugcezsh7a5op53hdbepyi2buq5wx6s2czglg2xchvxeqqmn4";
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -215,6 +216,7 @@ function seedRuntimeRevocationGrants(
     token: string;
     principal?: string;
     ownerAddress?: string;
+    resource?: string;
     caveats?: Record<string, unknown>[];
   }>,
 ): void {
@@ -222,15 +224,18 @@ function seedRuntimeRevocationGrants(
     provenance: "runtime",
     session: {
       delegationHeader: { Authorization: grant.token },
-      verificationMethod: grant.principal,
+      spaceId: grant.spaceId,
+      verificationMethod: "did:key:default",
     },
     delegation: {
-      delegateDID: grant.principal,
+      delegateDID: "did:key:default",
+      delegatorDID: grant.principal,
+      spaceId: grant.spaceId,
       ownerAddress: grant.ownerAddress,
       chainId: 1,
     },
     operations: [{
-      spaceId: grant.spaceId,
+      resource: grant.resource ?? `urn:cid:${revokeTargetCid}`,
       service: "delegation",
       path: "",
       action: "tinycloud.delegation/revoke",
@@ -1533,7 +1538,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     await withActivatedDelegations(async () => {
       const [delegation] = await node.grantRuntimePermissions([{
         service: "tinycloud.delegation",
-        space: spaceId,
+        space: `urn:cid:${revokeTargetCid}`,
         path: "",
         actions: ["tinycloud.delegation/revoke"],
       }]);
@@ -1568,7 +1573,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     };
     invocation.invokeAnyWithRuntimePermissions(fallback, [{
       spaceId,
-      resource: "urn:cid:bafkreirevocationtarget",
+      resource: `urn:cid:${revokeTargetCid}`,
       service: "delegation",
       path: "",
       action: "tinycloud.delegation/revoke",
@@ -1599,7 +1604,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       (node as any).auth.tinyCloudSession,
       [{
         spaceId: spaceA,
-        resource: "urn:cid:bafkreirevocationtarget",
+        resource: `urn:cid:${revokeTargetCid}`,
         service: "delegation",
         path: "",
         action: "tinycloud.delegation/revoke",
@@ -1612,7 +1617,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(call[0].delegationHeader.Authorization).toBe("runtime-token-a");
   });
 
-  test("selects a same-space revoke grant whose principal may revoke the target", () => {
+  test("selects a same-space revoke proof whose delegator matches the target", () => {
     const node = makeNode(mock(() => ({})) as any);
     const spaceId = "tinycloud:pkh:eip155:1:0xissuer-a:default";
     seedRuntimeRevocationGrants(node, [
@@ -1624,8 +1629,8 @@ describe("TinyCloudNode runtime permission delegations", () => {
       },
       {
         spaceId,
-        token: "target-delegatee-token",
-        principal: "did:key:target-delegatee",
+        token: "target-delegator-token",
+        principal: "did:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
         ownerAddress: "0x0000000000000000000000000000000000000003",
       },
     ]);
@@ -1634,24 +1639,24 @@ describe("TinyCloudNode runtime permission delegations", () => {
       (node as any).auth.tinyCloudSession,
       [{
         spaceId,
-        resource: "urn:cid:bafkreirevocationtarget",
+        resource: `urn:cid:${revokeTargetCid}`,
         service: "delegation",
         path: "",
         action: "tinycloud.delegation/revoke",
         revocationTarget: {
           delegatorDID: "did:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
-          delegateDID: "did:key:target-delegatee",
+          delegateDID: "did:key:default",
         },
       }],
       [{}],
     );
 
     const call = (node as any).wasmBindings.invokeAny.mock.calls[0];
-    expect(call[0].delegationHeader.Authorization).toBe("target-delegatee-token");
+    expect(call[0].delegationHeader.Authorization).toBe("target-delegator-token");
     expect(call[1][0]).not.toHaveProperty("revocationTarget");
   });
 
-  test("fails with a typed error before signing when no revoke principal qualifies", () => {
+  test("rejects a recipient-only proof match before signing", () => {
     const node = makeNode(mock(() => ({})) as any);
     const spaceId = "tinycloud:pkh:eip155:1:0xissuer-a:default";
     seedRuntimeRevocationGrants(node, [{
@@ -1665,13 +1670,13 @@ describe("TinyCloudNode runtime permission delegations", () => {
       (node as any).auth.tinyCloudSession,
       [{
         spaceId,
-        resource: "urn:cid:bafkreirevocationtarget",
+        resource: `urn:cid:${revokeTargetCid}`,
         service: "delegation",
         path: "",
         action: "tinycloud.delegation/revoke",
         revocationTarget: {
-          delegatorDid: "did:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
-          delegateeDid: "did:key:target-delegatee",
+          delegatorDID: "did:pkh:eip155:1:0x9999999999999999999999999999999999999999",
+          delegateDID: "did:key:default",
         },
       }],
       [{}],
@@ -1695,7 +1700,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       (node as any).auth.tinyCloudSession,
       [{
         spaceId,
-        resource: "urn:cid:bafkreirevocationtarget",
+        resource: `urn:cid:${revokeTargetCid}`,
         service: "delegation",
         path: "",
         action: "tinycloud.delegation/revoke",
@@ -1723,7 +1728,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       (node as any).auth.tinyCloudSession,
       [{
         spaceId,
-        resource: "urn:cid:bafkreirevocationtarget",
+        resource: `urn:cid:${revokeTargetCid}`,
         service: "delegation",
         path: "",
         action: "tinycloud.delegation/revoke",
