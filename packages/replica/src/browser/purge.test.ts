@@ -235,6 +235,34 @@ describe("purge lifecycle — wipe in place (indexeddb)", () => {
     await late.close();
   });
 
+  test("finishPurgeIfPending refuses a tombstone from a foreign generation", async () => {
+    // A opened under G; a purge stamps the tombstone at G+1. The tombstone
+    // no-op must come after the generation check — otherwise A's open-time
+    // repair silently "succeeds" against a purge it did not perform.
+    const replicaId = nextId();
+    const storeA = await newStore(replicaId, "holder-a");
+    const purger = await IndexedDbReplicaStore.open(replicaId, { holder: "holder-purger" });
+    await purger.claimWriterLock();
+    await purger.destroy((await purger.acquireSyncLease(60_000))!);
+
+    await rejectsWith(storeA.finishPurgeIfPending(), ReplicaErrorCode.RESET_REQUIRED);
+
+    // The same-generation path still no-ops, as static open() needs: a
+    // fresh connection reading the tombstone resolves without touching it.
+    const fresh = await IndexedDbReplicaStore.open(replicaId, { holder: "holder-fresh" });
+    await fresh.finishPurgeIfPending();
+    const raw = await holdOpen(replicaDatabaseName(replicaId));
+    try {
+      const meta = await metaThrough(raw);
+      expect(meta?.purged).toBe(true);
+    } finally {
+      raw.close();
+    }
+    await fresh.close();
+    await storeA.close().catch(() => undefined);
+    await purger.close().catch(() => undefined);
+  });
+
   test("a never-closing sibling connection: purge resolves promptly, data gone, generation-fenced", async () => {
     // fake-indexeddb would let deleteDatabase queue forever behind this
     // connection — with wipe-in-place no delete exists at all. The blocker

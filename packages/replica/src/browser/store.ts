@@ -885,15 +885,17 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       "Finishing a revocation purge",
       async (tx, meta) => {
         const state = meta;
-        // skipFence covers the two fences inline: a foreign generation is
-        // still refused, and a tombstone is a no-op — its purge is done.
-        if (state === undefined || state.purged === true) return;
-        if (state.generation !== this.#generation) {
+        // skipFence covers the two fences inline, generation first: a
+        // foreign generation is refused even when the stored row is a
+        // tombstone — A opened under G must not sail through a purge that
+        // stamped G+1. Only *then* is a same-generation tombstone a no-op.
+        if (state !== undefined && state.generation !== this.#generation) {
           throw new ReplicaError(
             ReplicaErrorCode.RESET_REQUIRED,
             "The replica was purged or reopened; open it again to continue.",
           );
         }
+        if (state === undefined || state.purged === true) return;
         if (state.purgePending !== true) return;
         tx.objectStore(STORE_ENTRIES).clear();
         tx.objectStore(STORE_BLOBS).clear();
