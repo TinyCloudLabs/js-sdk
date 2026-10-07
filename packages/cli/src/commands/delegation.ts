@@ -317,11 +317,22 @@ export function registerDelegationCommand(program: Command): void {
             ? await node.revokeDelegation(cid)
             : await node.delegationManager.revoke(cid, { authorityCid: commandAuthorityCid });
         if (!result.ok) {
-          if (result.error.meta?.status === 403) {
+          if (
+            result.error.meta?.status === 403 &&
+            result.error.message.endsWith("403 - Unauthorized Revoker")
+          ) {
+            const profileDid = profile.ownerDid ??
+              ownerDidFromSpace(node.accountSpaceId) ??
+              ownerDidFromSpace(profile.spaceId) ??
+              "unknown";
             throw new CLIError(
               "REVOKE_UNAUTHORIZED",
-              "The node rejected this revocation request (403 Unauthorized Revoker).",
+              "The node rejected this revocation: Unauthorized Revoker.",
               ExitCode.PERMISSION_DENIED,
+              {
+                status: 403,
+                hint: `Only the delegation's grantor, its recipient, or the owner of a space it covers can revoke it. Run \`tc --profile ${ctx.profile} delegation revoke ${cid}\` from that profile (current profile: ${ctx.profile}, DID ${profileDid}).`,
+              },
             );
           }
           throw cliErrorFromService(result.error);

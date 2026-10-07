@@ -100,7 +100,12 @@ mock.module("../output/formatter.js", () => ({
 
 mock.module("../output/errors.js", () => ({
   CLIError: class CLIError extends Error {
-    constructor(public code: string, message: string, public exitCode: number) {
+    constructor(
+      public code: string,
+      message: string,
+      public exitCode: number,
+      public metadata?: Record<string, unknown>,
+    ) {
       super(message);
     }
   },
@@ -221,20 +226,56 @@ describe("tc delegation revoke authority", () => {
     expect(errors).toEqual([]);
   });
 
-  test("maps a 403 Unauthorized Revoker response to a typed CLI error", async () => {
+  test("maps only Unauthorized Revoker to an actionable typed CLI error", async () => {
     hasRevokeAuthority = true;
     revokeResult = {
       ok: false,
-      error: { code: "REVOCATION_FAILED", message: "Failed to revoke: 403 - Unauthorized Revoker", meta: { status: 403 } },
+      error: {
+        code: "REVOCATION_FAILED",
+        message: "Failed to revoke delegation: 403 - Unauthorized Revoker",
+        meta: { status: 403 },
+      },
     };
     await runRevoke();
 
     expect(errors[0]).toMatchObject({
       code: "REVOKE_UNAUTHORIZED",
       exitCode: 5,
-      message: expect.stringContaining("403 Unauthorized Revoker"),
+      message: "The node rejected this revocation: Unauthorized Revoker.",
+      metadata: { status: 403 },
     });
+    const unauthorizedError = errors[0] as {
+      metadata?: { hint?: string };
+    };
+    expect(typeof unauthorizedError.metadata?.hint).toBe("string");
+    expect(unauthorizedError.metadata?.hint).toContain(
+      "Only the delegation's grantor, its recipient, or the owner of a space it covers can revoke it.",
+    );
+    expect(unauthorizedError.metadata?.hint).toContain(
+      "current profile: owner, DID did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+    );
   });
+
+  test("preserves a different node 403 as the typed service error", async () => {
+    hasRevokeAuthority = true;
+    revokeResult = {
+      ok: false,
+      error: {
+        code: "REVOCATION_FAILED",
+        message: "Failed to revoke delegation: 403 - Space policy denied this request",
+        meta: { status: 403, cid: "bafy-device-grant" },
+      },
+    };
+    await runRevoke();
+
+    expect(errors[0]).toMatchObject({
+      code: "REVOCATION_FAILED",
+      message: "Failed to revoke delegation: 403 - Space policy denied this request",
+      meta: { status: 403, cid: "bafy-device-grant" },
+    });
+    expect(errors[0]).not.toMatchObject({ code: "REVOKE_UNAUTHORIZED" });
+  });
+
 
   test("reads local grant history only after a successful empty node query", async () => {
     delegationQueryResult = { ok: true, data: { items: [], nextCursor: undefined } };
@@ -306,7 +347,7 @@ describe("tc delegation revoke authority", () => {
     expect(errors[0]).toMatchObject({ code: "TARGET_NOT_FOUND" });
   });
 
-  test("routes no-options SDK revoke through the CID resource", async () => {
+  test("discovers target from the restored account-space session and revokes by CID", async () => {
     const targetCid = "bafy-device-grant";
     const requests: string[] = [];
     const signedOperations: Array<Array<{ resource?: string; spaceId?: string; action: string }>> = [];
@@ -333,14 +374,14 @@ describe("tc delegation revoke authority", () => {
             }],
           });
         }
-        if (path === "/invoke") return Response.json([]);
         if (path === "/revoke") return Response.json({ revoked: true, cid: targetCid });
         return new Response("not found", { status: 404 });
       },
     });
     const manager = new DelegationManager({
       hosts: [`http://127.0.0.1:${server.port}`],
-      session: { spaceId: targetSpaceId } as ServiceSession,
+      accountSpaceId: targetSpaceId,
+      session: { spaceId: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default" } as ServiceSession,
       invoke: () => ({ Authorization: "query" }),
       invokeAny: (_session, entries) => {
         signedOperations.push(entries.map((entry) => ({
@@ -357,12 +398,18 @@ describe("tc delegation revoke authority", () => {
     try {
       await runRevoke(targetCid);
       expect(requests).toEqual(["POST /delegation/query", "POST /revoke"]);
+      expect(signedOperations[0]).toEqual([{
+        resource: undefined,
+        spaceId: targetSpaceId,
+        action: "tinycloud.delegation/list",
+      }]);
       expect(signedOperations.at(-1)).toEqual([{
-        resource: `urn:cid:${targetCid}`,
+        resource: "urn:cid:bafy-device-grant",
         spaceId: undefined,
         action: "tinycloud.delegation/revoke",
       }]);
       expect(revokeCalls).toEqual([[targetCid]]);
+      expect(outputs[0]).toMatchObject({ targetSpaceSource: "node" });
       expect(errors).toEqual([]);
     } finally {
       server.stop(true);

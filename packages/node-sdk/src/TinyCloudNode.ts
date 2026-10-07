@@ -400,7 +400,6 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
   }
 }
 
-
 function clonePersistedSessionJwk(jwk: unknown): object {
   if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) {
     throw new Error("Persisted session has an invalid private Ed25519 session key.");
@@ -1241,7 +1240,7 @@ export class TinyCloudNode {
       ? explicitGrant.session
       : !grant || grant.provenance === "primary" ? session : grant.session;
     const caveatPreservingEntries = routedEntries.map(({ revokeAuthorityCid: _cid, ...entry }) => {
-      const requested = this.operationFromInvokeAnyEntry({ ...entry });
+      const requested = this.operationFromInvokeAnyEntry(entry);
       const granted = grant && requested && grant.operations.find((candidate) =>
         this.operationCovers(candidate, requested),
       );
@@ -2979,6 +2978,9 @@ export class TinyCloudNode {
       stagedSessionExpiry,
       stagedRecap,
     );
+    const stagedAccountSpaceId = stagedAddress
+      ? this.wasmBindings.makeSpaceId(stagedAddress, stagedChainId, ACCOUNT_REGISTRY_SPACE)
+      : undefined;
     const stagedGraph = this.stageRestoredServiceGraph({
       host: stagedHost,
       manager: stagedManager,
@@ -2987,6 +2989,7 @@ export class TinyCloudNode {
       nodeDid: stagedNodeDid,
       address: stagedAddress,
       chainId: stagedChainId,
+      accountSpaceId: stagedAccountSpaceId,
       tinyCloudSession: stagedTcSession,
       sessionExpiry: stagedSessionExpiry,
       recap: stagedRecap,
@@ -3096,6 +3099,7 @@ export class TinyCloudNode {
     nodeDid: string;
     address: string | undefined;
     chainId: number;
+    accountSpaceId: string | undefined;
     tinyCloudSession: TinyCloudSession | undefined;
     sessionExpiry: Date;
     recap: WasmRecapEntry[];
@@ -3199,6 +3203,7 @@ export class TinyCloudNode {
     }
     const delegationManager = new DelegationManager({
       hosts: [input.host],
+      accountSpaceId: input.accountSpaceId,
       session: input.serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
@@ -6683,8 +6688,6 @@ export class TinyCloudNode {
     return covering.find((grant) => grant.provenance === "primary") ?? covering[0];
   }
 
-
-
   private findGrantForOperation(
     operation: RuntimePermissionOperation,
     options?: { excludePrimary?: boolean },
@@ -6791,7 +6794,6 @@ export class TinyCloudNode {
     if (typeof entry.resource === "string") {
       return {
         resource: entry.resource,
-        ...(entry.spaceId === undefined ? {} : { spaceId: entry.spaceId }),
         service,
         path: entry.path,
         action: entry.action,

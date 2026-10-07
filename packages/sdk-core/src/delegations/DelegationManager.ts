@@ -493,7 +493,7 @@ export class DelegationManager {
         ),
       };
     }
-    const accountSpaceId = this.accountSpaceId ?? this.session.spaceId;
+    const accountSpaceId = this.accountSpaceId;
     if (!accountSpaceId) {
       return {
         ok: false,

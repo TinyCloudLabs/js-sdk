@@ -1335,6 +1335,23 @@ describe("TinyCloudNode runtime permission delegations", () => {
       wasmBindings: wasm,
     });
     await node.restoreSession(proof);
+    const bindings = (node as any).wasmBindings;
+    const originalInvokeAny = bindings.invokeAny;
+    const queryInvokeAny = mock((..._args: any[]) => ({ Authorization: "restored-query" }));
+    bindings.invokeAny = queryInvokeAny;
+    (node.delegationManager as any).fetchFn = mock(async () => new Response(JSON.stringify({
+      schemaVersion: 2,
+      items: [],
+    }), { headers: { "content-type": "application/json" } }));
+    const restoredQuery = await node.delegationManager.query();
+    expect(restoredQuery.ok).toBe(true);
+    expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
+      spaceId: node.accountSpaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/list",
+    }]);
+    bindings.invokeAny = originalInvokeAny;
     expect(node.getVerifiedSessionCapabilities()).toEqual([{
       service: "tinycloud.encryption",
       space: spaceId,

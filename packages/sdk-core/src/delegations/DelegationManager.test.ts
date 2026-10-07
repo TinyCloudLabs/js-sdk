@@ -148,32 +148,6 @@ describe("DelegationManager.revoke", () => {
 });
 
 describe("DelegationManager.query", () => {
-  test("uses the session space when account-space configuration is unavailable", async () => {
-    const session = { spaceId: "tinycloud:pkh:eip155:1:owner:default" } as ServiceSession;
-    const invokeAny = mock(() => ({ Authorization: "session-space" }));
-    const fetch = mock(async () => new Response(JSON.stringify({
-      schemaVersion: 2,
-      items: [],
-    }), { headers: { "content-type": "application/json" } }));
-    const manager = new DelegationManager({
-      hosts: ["https://node.tinycloud.xyz"],
-      session,
-      invoke: mock(() => ({ Authorization: "unused" })),
-      invokeAny,
-      fetch,
-    });
-
-    const result = await manager.query();
-
-    expect(result.ok).toBe(true);
-    expect(invokeAny).toHaveBeenCalledWith(session, [{
-      spaceId: session.spaceId,
-      service: "delegation",
-      path: "",
-      action: "tinycloud.delegation/list",
-    }]);
-    expect(fetch).toHaveBeenCalled();
-  });
   test("rejects invalid filters before signing or sending a request", async () => {
     const invokeAny = mock(() => ({ Authorization: "unused" }));
     const fetch = mock(async () => new Response(null, { status: 200 }));
