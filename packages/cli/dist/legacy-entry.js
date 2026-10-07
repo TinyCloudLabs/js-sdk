@@ -20418,6 +20418,8 @@ var ReplicaErrorCode = {
   CONFIG_MISMATCH: "REPLICA_CONFIG_MISMATCH",
   /** The runtime has no supported durable store (e.g. Node < 22.13). */
   RUNTIME_UNSUPPORTED: "RUNTIME_UNSUPPORTED",
+  /** A required open() argument is missing or malformed (e.g. `principal`). */
+  INVALID_ARGUMENT: "REPLICA_INVALID_ARGUMENT",
   /** The local store failed (I/O, corruption, schema). */
   STORAGE_ERROR: "STORAGE_ERROR",
   /** The local disk is full. */
@@ -20458,7 +20460,9 @@ var ReplicaErrorCode = {
   /** Fetched bytes do not hash to the ETag the node attested for them. */
   CONTENT_MISMATCH: "CONTENT_MISMATCH",
   /** A stored blob no longer hashes to its name. */
-  INTEGRITY_ERROR: "INTEGRITY_ERROR"
+  INTEGRITY_ERROR: "INTEGRITY_ERROR",
+  /** The replica handle was closed; in-flight calls settle with this code. */
+  CLOSED: "REPLICA_CLOSED"
 };
 var REPLICA_ERROR = /* @__PURE__ */ Symbol.for("tinycloud.replica.error");
 var ReplicaError = class extends Error {
@@ -20568,12 +20572,14 @@ var Replica = class {
   #transportFor;
   #now;
   #leaseTtlMs;
+  #onCommit;
   constructor(options) {
     this.#store = options.store;
     const transport = options.transport;
     this.#transportFor = options.transportFor ?? (transport === void 0 ? void 0 : () => transport);
     this.#now = options.now ?? Date.now;
     this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+    this.#onCommit = options.onCommit;
   }
   async #state() {
     const state = await this.#store.open();
@@ -20768,9 +20774,10 @@ var Replica = class {
     let cursor = state.cursor;
     let pinned = state.nodeDid;
     let coverage = state.coverage;
+    const retentionGrantCid = config.retentionGrantCid;
     for (; ; ) {
       let page;
-      const retentionGrant = config.retentionGrantCid;
+      const retentionGrant = retentionGrantCid;
       try {
         page = await attempt.transport.syncPage({
           prefix: config.prefix,
@@ -20806,6 +20813,7 @@ var Replica = class {
         authority: page.authority,
         coverage,
         at,
+        retentionGrantCid: retentionGrant,
         window,
         complete: !page.more,
         promoteGrant: attempt.promote
@@ -20815,6 +20823,7 @@ var Replica = class {
         attempt.promote = null;
       }
       report.pages += 1;
+      this.#onCommit?.();
       report.changes += page.changes.length;
       report.deleted += page.changes.filter((change) => change.deleted).length;
       report.fetched += verified.fetched;
@@ -20824,7 +20833,7 @@ var Replica = class {
       await this.#store.renewLease(attempt.lease, this.#leaseTtlMs);
       if (!page.more) break;
     }
-    report.repaired = await this.#repair(attempt, cursor, pinned, coverage);
+    report.repaired = await this.#repair(attempt, cursor, pinned, coverage, retentionGrantCid);
     report.blobsCollected = await this.#store.collectGarbage(attempt.lease);
     report.coverage = coverage;
     report.contentMissing = (await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER)).length;
@@ -20906,7 +20915,7 @@ var Replica = class {
     }
     return { changes, blobs, fetched: fetched2 };
   }
-  async #repair(attempt, cursor, nodeDid, coverage) {
+  async #repair(attempt, cursor, nodeDid, coverage, retentionGrantCid) {
     const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
     let repaired = 0;
     for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
@@ -20934,11 +20943,13 @@ var Replica = class {
         authority: null,
         coverage,
         at: new Date(this.#now()).toISOString(),
+        retentionGrantCid,
         window: this.#syncWindow(state.authority, attempt.grant),
         complete: false,
         promoteGrant: null
       });
       repaired += changes.length;
+      this.#onCommit?.();
     }
     return repaired;
   }
@@ -21286,6 +21297,8 @@ var ReplicaErrorCode2 = {
   CONFIG_MISMATCH: "REPLICA_CONFIG_MISMATCH",
   /** The runtime has no supported durable store (e.g. Node < 22.13). */
   RUNTIME_UNSUPPORTED: "RUNTIME_UNSUPPORTED",
+  /** A required open() argument is missing or malformed (e.g. `principal`). */
+  INVALID_ARGUMENT: "REPLICA_INVALID_ARGUMENT",
   /** The local store failed (I/O, corruption, schema). */
   STORAGE_ERROR: "STORAGE_ERROR",
   /** The local disk is full. */
@@ -21326,7 +21339,9 @@ var ReplicaErrorCode2 = {
   /** Fetched bytes do not hash to the ETag the node attested for them. */
   CONTENT_MISMATCH: "CONTENT_MISMATCH",
   /** A stored blob no longer hashes to its name. */
-  INTEGRITY_ERROR: "INTEGRITY_ERROR"
+  INTEGRITY_ERROR: "INTEGRITY_ERROR",
+  /** The replica handle was closed; in-flight calls settle with this code. */
+  CLOSED: "REPLICA_CLOSED"
 };
 var REPLICA_ERROR2 = /* @__PURE__ */ Symbol.for("tinycloud.replica.error");
 var ReplicaError2 = class extends Error {
@@ -21729,9 +21744,10 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
   async setRetentionGrant(cid) {
     await this.#guardedWrite("Updating the retention grant", () => {
       this.#db.run(
-        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ? WHERE id = 1",
+        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ?, retain_until = NULL WHERE id = 1 AND retention_grant_cid IS NOT ?",
         cid,
-        cid === null ? "whileGrantValid" : "retainAfterExpiry"
+        cid === null ? "whileGrantValid" : "retainAfterExpiry",
+        cid
       );
     });
   }
@@ -21934,9 +21950,13 @@ var SqliteReplicaStore = class _SqliteReplicaStore {
           const sets = ["cursor = ?", "coverage = ?"];
           const params = [p.cursor, p.coverage];
           if (p.authority !== null) {
-            sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "retain_until = ?", "last_sync_at = ?");
-            params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.authority.retainUntil, p.at);
-            if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
+            sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "last_sync_at = ?");
+            params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.at);
+            if (this.#row().retention_grant_cid === p.retentionGrantCid) {
+              sets.push("retain_until = ?");
+              params.push(p.authority.retainUntil);
+              if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
+            }
           }
           if (p.complete) {
             sets.push("last_complete_at = ?", "last_error = NULL");
