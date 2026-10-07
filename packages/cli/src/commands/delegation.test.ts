@@ -249,10 +249,13 @@ describe("tc delegation revoke authority", () => {
     };
     expect(typeof unauthorizedError.metadata?.hint).toBe("string");
     expect(unauthorizedError.metadata?.hint).toContain(
-      "Only the delegation's grantor, its recipient, or the owner of a space it covers can revoke it.",
+      "Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers",
     );
     expect(unauthorizedError.metadata?.hint).toContain(
-      "current profile: owner, DID did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+      'the rejected profile was "owner" (DID did:pkh:eip155:1:0x1111111111111111111111111111111111111111)',
+    );
+    expect(unauthorizedError.metadata?.hint).toContain(
+      "tc --profile <profile-name> delegation revoke bafy-device-grant",
     );
   });
 
@@ -271,6 +274,25 @@ describe("tc delegation revoke authority", () => {
     expect(errors[0]).toMatchObject({
       code: "REVOCATION_FAILED",
       message: "Failed to revoke delegation: 403 - Space policy denied this request",
+      meta: { status: 403, cid: "bafy-device-grant" },
+    });
+    expect(errors[0]).not.toMatchObject({ code: "REVOKE_UNAUTHORIZED" });
+  });
+  test("preserves a policy 403 whose message only ends with Unauthorized Revoker", async () => {
+    hasRevokeAuthority = true;
+    revokeResult = {
+      ok: false,
+      error: {
+        code: "REVOCATION_FAILED",
+        message: "Policy rejected request; upstream returned 403 - Unauthorized Revoker",
+        meta: { status: 403, cid: "bafy-device-grant" },
+      },
+    };
+    await runRevoke();
+
+    expect(errors[0]).toMatchObject({
+      code: "REVOCATION_FAILED",
+      message: "Policy rejected request; upstream returned 403 - Unauthorized Revoker",
       meta: { status: 403, cid: "bafy-device-grant" },
     });
     expect(errors[0]).not.toMatchObject({ code: "REVOKE_UNAUTHORIZED" });

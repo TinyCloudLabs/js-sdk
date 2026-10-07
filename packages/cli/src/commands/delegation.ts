@@ -319,7 +319,7 @@ export function registerDelegationCommand(program: Command): void {
         if (!result.ok) {
           if (
             result.error.meta?.status === 403 &&
-            result.error.message.endsWith("403 - Unauthorized Revoker")
+            result.error.message === "Failed to revoke delegation: 403 - Unauthorized Revoker"
           ) {
             const profileDid = profile.ownerDid ??
               ownerDidFromSpace(node.accountSpaceId) ??
@@ -331,7 +331,7 @@ export function registerDelegationCommand(program: Command): void {
               ExitCode.PERMISSION_DENIED,
               {
                 status: 403,
-                hint: `Only the delegation's grantor, its recipient, or the owner of a space it covers can revoke it. Run \`tc --profile ${ctx.profile} delegation revoke ${cid}\` from that profile (current profile: ${ctx.profile}, DID ${profileDid}).`,
+                hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`tc --profile <profile-name> delegation revoke ${cid}\`.`,
               },
             );
           }
