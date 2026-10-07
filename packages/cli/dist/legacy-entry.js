@@ -13804,6 +13804,9 @@ function permissionRequestsPath(profile) {
 function grantHistoryPath(profile) {
   return join4(PROFILES_DIR, profile, "auth-grants.jsonl");
 }
+function localGrantArtifactsPath(profile) {
+  return join4(PROFILES_DIR, profile, "auth-grant-artifacts.json");
+}
 function createPermissionRequestArtifact(params) {
   return buildPermissionRequestArtifact({
     profile: params.profileName,
@@ -13827,6 +13830,32 @@ function didWithoutFragment(did) {
 }
 async function loadAdditionalDelegations(profile) {
   return readAdditionalDelegations(profile);
+}
+async function loadLocalGrantArtifacts(profile) {
+  const path = localGrantArtifactsPath(profile);
+  if (!await fileExists(path)) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile2(path, "utf8"));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (value) => value !== null && typeof value === "object" && typeof value.delegationCid === "string" && value.delegation !== null && typeof value.delegation === "object" && value.delegation.cid === value.delegationCid && typeof value.delegation.delegationHeader?.Authorization === "string"
+  );
+}
+async function appendLocalGrantArtifact(profile, delegation) {
+  await ProfileManager.ensureProfileDir(profile);
+  await withProfileLock2(profile, async () => {
+    await refuseWriteToDeletedProfile2(profile);
+    const records = await loadLocalGrantArtifacts(profile);
+    if (records.some((record) => record.delegationCid === delegation.cid)) return;
+    await writeJsonAtomic(localGrantArtifactsPath(profile), [
+      ...records,
+      { delegationCid: delegation.cid, delegation }
+    ]);
+  });
 }
 async function appendAdditionalDelegations(profile, entries) {
   const { mergeDelegationsWithoutRequest } = await import("@tinycloud/operations/delegation-binding");
@@ -15246,11 +15275,15 @@ function ownerSpaceId(space, ownerDid) {
 function permissionTuples(permissions, ownerDid) {
   return new Set(permissions.flatMap((permission) => actionTuples(permission, ownerDid)));
 }
+function isRawCidRevocationPermission(permission) {
+  return permission.service === "tinycloud.delegation" && permission.space?.startsWith("urn:cid:") === true && permission.path === "" && permission.actions.includes("tinycloud.delegation/revoke");
+}
 function actionTuples(permission, ownerDid) {
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-  const raw = isVerifiedRawEncryptionPermission(permission);
-  const space = raw ? ENCRYPTION_MANIFEST_SPACE2 : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
-  const path = raw ? normalizePkhIdentifier(permission.path) : permission.path;
+  const rawEncryption = isVerifiedRawEncryptionPermission(permission);
+  const rawCidRevocation = isRawCidRevocationPermission(permission);
+  const space = rawEncryption ? ENCRYPTION_MANIFEST_SPACE2 : rawCidRevocation ? permission.space : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  const path = rawEncryption ? normalizePkhIdentifier(permission.path) : permission.path;
   return permission.actions.map((action) => JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
 }
 function isLegacyNestedDecrypt(permission, requested, ownerDid, spaceId) {
@@ -15321,7 +15354,7 @@ function declinedPermissions(requested, signed, ownerDid) {
   const missing = [...permissionTuples(requested, ownerDid)].filter((tuple) => !granted.has(tuple));
   const requestedScopes = /* @__PURE__ */ new Map();
   for (const entry of requested) {
-    const space = isVerifiedRawEncryptionPermission(entry) ? entry.space ?? ENCRYPTION_MANIFEST_SPACE2 : ownerSpaceId(entry.space ?? "", ownerDid);
+    const space = isVerifiedRawEncryptionPermission(entry) ? entry.space ?? ENCRYPTION_MANIFEST_SPACE2 : isRawCidRevocationPermission(entry) ? entry.space : ownerSpaceId(entry.space ?? "", ownerDid);
     for (const tuple of actionTuples(entry, ownerDid)) {
       requestedScopes.set(tuple, { space, path: entry.path });
     }
@@ -15344,7 +15377,10 @@ function scopedLoginPermissions(permissions) {
 }
 function grantRequestPermissions(group, anchorSpace) {
   const request = group.map((p) => isRawEncryptionPermission(p) ? { ...p, space: ENCRYPTION_MANIFEST_SPACE2, path: canonicalNetworkUrn(p.path) } : p);
-  return withCapabilitiesRead(request, request.find((p) => !isRawEncryptionPermission(p))?.space ?? anchorSpace);
+  const capabilitySpace = request.find(
+    (permission) => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+  )?.space ?? anchorSpace;
+  return withCapabilitiesRead(request, capabilitySpace);
 }
 function withCapabilitiesRead(permissions, space) {
   const hasRead = permissions.some((p) => p.service === "tinycloud.capabilities" && p.path === "" && p.actions.includes(CAPABILITIES_READ) && normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(space));
@@ -15378,7 +15414,10 @@ function verifySignedSession(data, key, sessionDid, expected = {}) {
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
       throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
     }
-    throw new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED);
+    throw Object.assign(
+      new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED),
+      { cause: error }
+    );
   }
   const signedExpiry = Date.parse(expiresAt);
   if (signedExpiry <= Date.now()) {
@@ -15395,10 +15434,23 @@ function verifySignedSession(data, key, sessionDid, expected = {}) {
 }
 function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
-  const signed = verifySignedSession(data, key, sessionDid, expected);
+  let signed;
+  try {
+    signed = verifySignedSession(data, key, sessionDid, expected);
+  } catch (error) {
+    const cause = error instanceof Error ? error.cause : void 0;
+    if (requested.some(isRawCidRevocationPermission) && /invalid ReCap resource URI/i.test(cause instanceof Error ? cause.message : String(cause ?? ""))) {
+      throw new CLIError(
+        "RAW_RECAP_RESOURCE_UNSUPPORTED",
+        "This WASM build cannot verify raw urn:cid ReCap resources.",
+        ExitCode.PERMISSION_DENIED
+      );
+    }
+    throw error;
+  }
   const spaceId = data.spaceId;
   for (const permission of requested) {
-    if (isRawEncryptionPermission(permission)) continue;
+    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
@@ -16439,6 +16491,13 @@ function registerAuthCommand(program) {
         yes: options.yes === true
       });
       const grant = await grantAuthRequest(node, resolvedRequest);
+      await appendLocalGrantArtifact(ctx.profile, grant.delegation);
+      await appendGrantHistory(ctx.profile, {
+        addedCaps: grant.permissions,
+        source: "cli",
+        delegationCid: grant.delegationCid,
+        expiry: grant.expiry
+      });
       outputJson(grant);
     } catch (error) {
       handleError(error);
@@ -16795,7 +16854,10 @@ async function activateAndStoreOpenKeyGrants(profileName2, host, node, grants, s
   });
 }
 async function ensureDelegationAuthority(params) {
-  if (!params.force && params.node.hasRuntimePermissions(params.requested)) return;
+  if (!params.force && params.node.hasRuntimePermissions(params.requested)) return void 0;
+  if (!params.consentAlreadyGiven && (params.persist === false || params.profile.authMethod !== "openkey")) {
+    await requirePermissionConsent(params.requested, params.yes);
+  }
   if (params.profile.authMethod === "openkey") {
     const key = await ProfileManager.getKey(params.ctx.profile);
     if (!key) {
@@ -16815,6 +16877,37 @@ async function ensureDelegationAuthority(params) {
       expiry: expiryCap
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
+    if (params.persist === false) {
+      const request = grantRequestPermissions(params.requested, anchorSpace);
+      let delegationData;
+      try {
+        delegationData = await acquireOpenKey(params.profile.did, {
+          jwk: key,
+          host: params.ctx.host,
+          permissions: request,
+          reason: permissionGrantReason(params.reason, request),
+          openkeyHost,
+          expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap)
+        });
+      } catch (error) {
+        if (params.requested.some(isRawCidRevocationPermission) && /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))) {
+          throw new CLIError(
+            "RAW_RECAP_RESOURCE_UNSUPPORTED",
+            "The OpenKey/WASM ReCap encoder does not support raw urn:cid revocation resources.",
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+        throw error;
+      }
+      const delegation = portableFromOpenKeyDelegation(
+        delegationData,
+        request,
+        params.ctx.host,
+        proof
+      );
+      await params.node.useRuntimeDelegation(delegation);
+      return delegation;
+    }
     const grants = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
       const request = grantRequestPermissions(group, anchorSpace);
@@ -16832,21 +16925,11 @@ async function ensureDelegationAuthority(params) {
     await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
     return;
   }
-  if (isInteractive()) {
-    if (!params.yes) {
-      await confirmPermissionRequest(params.requested);
-    }
-  } else if (!params.yes) {
-    throw new CLIError(
-      "CONFIRMATION_REQUIRED",
-      "Local-key auth grants in non-interactive mode require --yes.",
-      ExitCode.USAGE_ERROR
-    );
-  }
   const delegations = await params.node.grantRuntimePermissions(
     params.requested,
     params.expiryOption !== void 0 ? { expiry: params.expiryOption } : void 0
   );
+  if (params.persist === false) return delegations[0];
   for (const delegation of delegations) {
     const covering = permissionsFromDelegation(delegation);
     await appendAdditionalDelegation(
@@ -16924,6 +17007,17 @@ async function confirmPermissionRequest(permissions) {
     throw new CLIError("REQUEST_CANCELLED", "Permission request cancelled.", ExitCode.ERROR);
   }
 }
+async function requirePermissionConsent(permissions, yes) {
+  if (isInteractive()) {
+    if (!yes) await confirmPermissionRequest(permissions);
+  } else if (!yes) {
+    throw new CLIError(
+      "CONFIRMATION_REQUIRED",
+      "Permission grants in non-interactive mode require --yes.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+}
 function isDangerousPermission(permission) {
   if (permission.path === "" || permission.path === "/") return true;
   return permission.actions.some(
@@ -16952,7 +17046,7 @@ function groupPermissionsBySpace(permissions) {
   const groups = /* @__PURE__ */ new Map();
   const rawEntries = [];
   for (const permission of permissions) {
-    if (isRawEncryptionPermission(permission)) {
+    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) {
       rawEntries.push(permission);
       continue;
     }
@@ -16983,11 +17077,13 @@ function portableFromOpenKeyDelegation(data, requested, host, proof) {
   }
   const returnedSpace = data.spaceId;
   const effective = session.permissions;
-  const spaced = effective.filter((permission) => !isRawEncryptionPermission(permission));
+  const spaced = effective.filter(
+    (permission) => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+  );
   const primary = spaced.find((permission) => permission.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0];
   const resources = effective.map((permission) => ({
     service: permission.service.slice("tinycloud.".length),
-    space: isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
+    space: isRawCidRevocationPermission(permission) ? permission.space : isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
     path: permission.path,
     actions: [...permission.actions],
     ...permission.caveats === void 0 ? {} : { caveats: structuredClone(permission.caveats) }
@@ -17463,6 +17559,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
+import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 function normalizeDid(input) {
   const normalized = input.trim();
   const fragmentIndex = normalized.indexOf("#");
@@ -17470,11 +17567,35 @@ function normalizeDid(input) {
 }
 function didMatches(actual, expected) {
   if (!actual) return false;
-  try {
-    return normalizeDid(actual) === normalizeDid(expected);
-  } catch {
-    return actual === expected;
+  return normalizeDid(actual) === normalizeDid(expected);
+}
+function ownerDidFromSpace(spaceId) {
+  const owner = /^tinycloud:((?:did:)?pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40})(?::|\/|$)/.exec(spaceId ?? "")?.[1];
+  if (!owner) return void 0;
+  return owner.startsWith("did:") ? owner : `did:${owner}`;
+}
+async function resolveCidBoundTargetSpace(params) {
+  if (!params.ownerDid) return void 0;
+  const grants = await loadLocalGrantArtifacts(params.profileName);
+  for (const grant of grants) {
+    const delegation = grant.delegation;
+    if (grant.delegationCid !== params.cid || delegation.cid !== params.cid) continue;
+    try {
+      const authorization = delegation.delegationHeader.Authorization.replace(/^Bearer /i, "");
+      const signed = parseSignedCompactUcanAttenuation(authorization, params.cid);
+      for (const resource of Object.keys(signed.payload.att)) {
+        const space = /^(tinycloud:[^/]+)\/[^/]+\/.*$/.exec(resource)?.[1];
+        if (!space) continue;
+        const ownerMatch = /^tinycloud:((?:did:)?pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):/.exec(space);
+        const owner = ownerMatch?.[1];
+        const ownerDid = owner?.startsWith("did:") ? owner : owner ? `did:${owner}` : void 0;
+        if (ownerDid && normalizeDid(ownerDid) === normalizeDid(params.ownerDid)) return space;
+      }
+    } catch {
+      continue;
+    }
   }
+  return void 0;
 }
 function registerDelegationCommand(program) {
   const delegation = program.command("delegation").description("Manage delegations");
@@ -17554,16 +17675,158 @@ function registerDelegationCommand(program) {
       handleError(error);
     }
   });
-  delegation.command("revoke <cid>").description("Revoke a delegation").action(async (cid, _options, cmd) => {
+  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Skip local-key TTY confirmation", false).action(async (cid, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await node.delegationManager.revoke(cid);
+      const profile = await ProfileManager.getProfile(ctx.profile);
+      const revokePermission = {
+        service: "tinycloud.delegation",
+        space: `urn:cid:${cid}`,
+        path: "",
+        actions: ["tinycloud.delegation/revoke"]
+      };
+      const rawAuthorityCovered = node.hasRuntimePermissions([revokePermission]);
+      if (!rawAuthorityCovered) await requirePermissionConsent([revokePermission], options.yes);
+      let targetFound = false;
+      let targetSpaceSource;
+      let queryDenied = false;
+      let boundSpace;
+      const accountSpaceId = node.accountSpaceId;
+      if (!accountSpaceId) {
+        throw new CLIError(
+          "DELEGATION_QUERY_AUTHORITY_UNAVAILABLE",
+          "Cannot determine the account space needed to query delegation records.",
+          ExitCode.AUTH_REQUIRED
+        );
+      }
+      let cursor;
+      do {
+        const query = await node.delegationManager.query({
+          direction: "all",
+          limit: 100,
+          ...cursor === void 0 ? {} : { cursor }
+        });
+        if (!query.ok) {
+          if (query.error.meta?.status === 403) {
+            queryDenied = true;
+            break;
+          }
+          throw cliErrorFromService(query.error);
+        }
+        targetFound = query.data.items.some((delegation2) => delegation2.cid === cid);
+        cursor = targetFound ? void 0 : query.data.nextCursor;
+      } while (cursor !== void 0);
+      targetSpaceSource = "node";
+      if (!targetFound) {
+        const grantHistory = await readGrantHistory(ctx.profile);
+        const recordedGrant = [...grantHistory].reverse().find((entry) => entry.delegationCid === cid);
+        if (recordedGrant) {
+          targetSpaceSource = "local-grant-history";
+        } else if (queryDenied) {
+          boundSpace = await resolveCidBoundTargetSpace({
+            profileName: ctx.profile,
+            ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
+            cid
+          });
+          if (boundSpace) {
+            targetSpaceSource = "local-signed-grant-artifact";
+          } else {
+            throw new CLIError(
+              "TARGET_NOT_FOUND",
+              `Delegation "${cid}" was not found by the node or local grant sources.`,
+              ExitCode.NOT_FOUND
+            );
+          }
+        } else {
+          throw new CLIError(
+            "TARGET_NOT_FOUND",
+            `Delegation "${cid}" was not found by the node or local grant history.`,
+            ExitCode.NOT_FOUND
+          );
+        }
+      }
+      let authorityScopeSource = "cid-resource";
+      let authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";
+      let fallbackSpaceId;
+      let commandAuthorityCid;
+      const authorizeFallbackSpace = async (spaceId) => {
+        fallbackSpaceId = spaceId;
+        authorityScopeSource = "local-signed-grant-artifact";
+        authorityScopeReason = "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID.";
+        targetSpaceSource = "local-signed-grant-artifact";
+        const acquired = await ensureDelegationAuthority({
+          ctx,
+          profile,
+          node,
+          requested: [{
+            service: "tinycloud.delegation",
+            space: spaceId === node.accountSpaceId ? "default" : spaceId,
+            path: "",
+            actions: ["tinycloud.delegation/revoke"]
+          }],
+          expiryOption: void 0,
+          reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant artifact`,
+          yes: options.yes,
+          consentAlreadyGiven: true,
+          persist: false
+        });
+        commandAuthorityCid = acquired?.cid;
+      };
+      if (!rawAuthorityCovered) {
+        try {
+          const acquired = await ensureDelegationAuthority({
+            ctx,
+            profile,
+            node,
+            requested: [revokePermission],
+            expiryOption: void 0,
+            reason: `Revoke delegation ${cid}`,
+            yes: options.yes,
+            consentAlreadyGiven: true,
+            persist: false
+          });
+          commandAuthorityCid = acquired?.cid;
+        } catch (error) {
+          if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "RAW_RECAP_RESOURCE_UNSUPPORTED") {
+            throw error;
+          }
+          const fallbackSpace = boundSpace ?? await resolveCidBoundTargetSpace({
+            profileName: ctx.profile,
+            ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
+            cid
+          });
+          if (!fallbackSpace) {
+            throw new CLIError(
+              "RAW_RECAP_RESOURCE_UNSUPPORTED",
+              `Cannot safely revoke "${cid}": raw CID ReCap resources are unavailable and no matching owner-signed local grant artifact binds its space to the CID.`,
+              ExitCode.PERMISSION_DENIED
+            );
+          }
+          await authorizeFallbackSpace(fallbackSpace);
+        }
+      }
+      const result = fallbackSpaceId ? await node.delegationManager.revoke(cid, {
+        targetSpaceId: fallbackSpaceId,
+        ...commandAuthorityCid === void 0 ? {} : { authorityCid: commandAuthorityCid }
+      }) : commandAuthorityCid === void 0 ? await node.revokeDelegation(cid) : await node.delegationManager.revoke(cid, { authorityCid: commandAuthorityCid });
       if (!result.ok) {
+        if (result.error.meta?.status === 403 && result.error.message === "Failed to revoke delegation: 403 - Unauthorized Revoker") {
+          const profileDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId) ?? "unknown";
+          throw new CLIError(
+            "REVOKE_UNAUTHORIZED",
+            "The node rejected this revocation: Unauthorized Revoker.",
+            ExitCode.PERMISSION_DENIED,
+            {
+              status: 403,
+              hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`tc --profile <profile-name> delegation revoke ${cid}\`.`
+            }
+          );
+        }
         throw cliErrorFromService(result.error);
       }
-      outputJson({ cid, revoked: true });
+      outputJson({ cid, revoked: true, targetSpaceSource, authorityScopeSource, authorityScopeReason });
     } catch (error) {
       handleError(error);
     }

@@ -61,6 +61,8 @@
     "tc-649-secret-setup-link",
     "tc-682-cli-missing-profile",
     "tc-705-openkey-primary-key",
-    "tc-736-kv-change-feed"
+    "tc-736-kv-change-feed",
+    "tc-747-cli-owner-revoke",
+    "tc-747-revoke-target-space"
   ]
 }

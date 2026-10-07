@@ -1,5 +1,15 @@
 # @tinycloud/cli
 
+## 1.1.0-beta.19
+
+### Patch Changes
+
+- 2c703fc: `tc delegation revoke <cid>` tries authority scoped to that CID, falls back to a locally stored signed grant artifact only when the raw-CID encoder is unavailable, and keeps temporary authority out of profile storage. Noninteractive authority acquisition requires `--yes`; node-side 403 rejections are reported as typed CLI errors.
+- Updated dependencies [2c703fc]
+  - @tinycloud/sdk-core@3.1.0-beta.12
+  - @tinycloud/node-sdk@3.1.0-beta.12
+  - @tinycloud/operations@0.4.0-beta.16
+
 ## 1.1.0-beta.18
 
 ### Patch Changes

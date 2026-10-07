@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.1.0-beta.12
+
+### Patch Changes
+
+- 2c703fc: SDK Core carries an explicit target-space and command-scoped authority CID when signing CLI revocations. The node SDK preserves raw CID ReCap resources and maps root raw-CID activation failures to the CLI's CID-bound owner-space fallback; the no-options `revokeDelegation(cid)` API retains its existing behavior.
+- Updated dependencies [2c703fc]
+  - @tinycloud/sdk-core@3.1.0-beta.12
+
 ## 3.1.0-beta.11
 
 ### Minor Changes
