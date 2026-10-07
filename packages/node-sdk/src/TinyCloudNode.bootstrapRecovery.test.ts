@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  AccountService,
   ErrorCodes,
   KVService,
   authorizationVerdictOf,
@@ -51,6 +52,8 @@ class FakeCloud {
   readonly schemasApplied = new Set<string>();
   readonly encryptionAssumeMissing: boolean[] = [];
   networkCreated = false;
+  registerBatchCalls = 0;
+  registerMissingCalls = 0;
   readonly calls = new Map<string, number>();
   readonly boundaries: string[] = [];
   fault?: Fault;
@@ -83,7 +86,7 @@ class FakeCloud {
       if (step.kind === "host") expect(this.hostedSpaces.has(step.spaceId)).toBe(true);
       if (step.kind === "activate") expect(this.activatedSpaces.has(step.spaceId)).toBe(true);
     }
-    expect(this.registry.size).toBe(5);
+    expect(this.registry.size).toBe(6);
     expect(this.appRecords.size).toBeGreaterThan(0);
     expect(this.schemasApplied.size).toBe(2);
     expect(this.networkCreated).toBe(true);
@@ -155,7 +158,7 @@ test("only an accepted marker version permits an already-provisioned skip", asyn
   Reflect.set(node, "hasRuntimePermissions", () => true);
   Reflect.set(node, "readBootstrapCompletionMarker", async () => ({
     ok: true,
-    data: { data: { v: BOOTSTRAP_COMPLETION_MARKER_VERSION } },
+    data: { data: { v: BOOTSTRAP_COMPLETION_MARKER_VERSION, stepIds: canonicalStepIds() } },
   }));
   const resolve = Reflect.get(node, "resolveBootstrapDecision");
 
@@ -222,10 +225,20 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
     },
     spaces: {
       async registerBatch(spaces: readonly { spaceId: string; name: string }[]) {
+        fake.registerBatchCalls++;
         fake.at("account:seed-spaces", () => {
           for (const space of spaces) fake.registry.set(space.spaceId, { ...space });
         });
         return { ok: true, data: { spaces: [...spaces] } };
+      },
+      async registerMissing(spaces: readonly { spaceId: string; name: string }[]) {
+        fake.registerMissingCalls++;
+        fake.at("account:seed-spaces", () => {
+          for (const space of spaces) {
+            if (!fake.registry.has(space.spaceId)) fake.registry.set(space.spaceId, { ...space });
+          }
+        });
+        return { ok: true, data: spaces.map((space) => fake.registry.get(space.spaceId)) };
       },
       async register() {
         return { ok: true, data: undefined };
@@ -292,6 +305,116 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
   });
   return node;
 }
+function installRealAccount(node: TinyCloudNode, fake: FakeCloud): void {
+  const kv = {
+    async batchGet(keys: string[]) {
+      return {
+        ok: true as const,
+        data: {
+          results: keys.map((key) => fake.kv.has(key)
+            ? { key, result: { ok: true as const, data: { data: fake.kv.get(key), headers: {} } } }
+            : { key, result: err(serviceError(ErrorCodes.KV_NOT_FOUND, "Key not found", "kv")) }),
+          count: keys.length,
+        },
+      };
+    },
+    async get<T>(key: string) {
+      if (!fake.kv.has(key)) return err(serviceError(ErrorCodes.KV_NOT_FOUND, "Key not found", "kv"));
+      return { ok: true as const, data: { data: fake.kv.get(key) as T, headers: {} } };
+    },
+    async put(key: string, value: unknown, options?: { ifNoneMatch?: "*" }) {
+      if (options?.ifNoneMatch === "*" && fake.kv.has(key)) {
+        return err(serviceError(ErrorCodes.KV_PRECONDITION_FAILED, "Already exists", "kv"));
+      }
+      fake.at("account:seed-spaces", () => fake.kv.set(key, value));
+      return { ok: true as const, data: { data: undefined, headers: {} } };
+    },
+    async batchPut() {
+      throw new Error("repair must not batch-write account spaces");
+    },
+    async list() {
+      return { ok: true as const, data: { keys: [] } };
+    },
+    async delete() {
+      return { ok: true as const, data: undefined };
+    },
+  };
+  const db = {
+    migrations: {
+      async apply() {
+        fake.at("account:index-schema", () => {});
+        return {
+          ok: true as const,
+          data: { database: "account", namespace: "tinycloud.account.index", status: "already_current", applied: [], skipped: [] },
+        };
+      },
+    },
+    async batch() {
+      return { ok: true as const, data: { results: [] } };
+    },
+    async query() {
+      return { ok: true as const, data: { columns: [], rows: [], rowCount: 0 } };
+    },
+  };
+  const account = new AccountService({
+    getDid: () => node.did,
+    getHost: () => HOST,
+    getPrimarySpaceId: () => bootstrapSpaceId("default"),
+    getAccountSpaceId: () => bootstrapSpaceId("account"),
+    getSpaces: () => ({ get: () => ({ kv }) }) as never,
+    getAccountDb: () => db as never,
+  });
+  Reflect.set(node, "_account", account);
+}
+const OLD_SPACE_NAMES = ["default", "applications", "account", "secrets", "public"] as const;
+
+function accountSpaceFixture(name: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    space_id: bootstrapSpaceId(name),
+    name: `Custom ${name}`,
+    owner_did: `did:pkh:eip155:1:${ADDRESS}`,
+    type: "owned",
+    permissions: ["custom/read"],
+    status: "active",
+    registered_at: "2026-01-02T03:04:05.000Z",
+    updated_at: "2026-03-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function seedPopulatedAccount(fake: FakeCloud, withArchivedAgents = false): Map<string, Record<string, unknown>> {
+  const fixtures = new Map<string, Record<string, unknown>>();
+  for (const name of OLD_SPACE_NAMES) {
+    const fixture = accountSpaceFixture(name, name === "secrets" ? { status: "archived" } : {});
+    const key = `spaces/${bootstrapSpaceId(name)}`;
+    fixtures.set(key, fixture);
+    fake.kv.set(key, structuredClone(fixture));
+    fake.hostedSpaces.add(bootstrapSpaceId(name));
+  }
+  if (withArchivedAgents) {
+    const fixture = accountSpaceFixture("agents", {
+      name: "My agent archive",
+      status: "archived",
+      registered_at: "2026-01-02T03:04:05.000Z",
+      updated_at: "2026-03-01T00:00:00.000Z",
+      permissions: ["kv/get"],
+    });
+    const key = `spaces/${bootstrapSpaceId("agents")}`;
+    fixtures.set(key, fixture);
+    fake.kv.set(key, structuredClone(fixture));
+    fake.hostedSpaces.add(bootstrapSpaceId("agents"));
+  }
+  fake.kv.set(fake.markerKey, {
+    v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+    stepIds: canonicalStepIds().filter((stepId) => !stepId.includes("agents")),
+  });
+  return fixtures;
+}
+
+function installExistingAccountRepair(node: TinyCloudNode, fake: FakeCloud): void {
+  installActivationTransport(fake);
+  installRealAccount(node, fake);
+}
 
 async function bootstrap(node: TinyCloudNode): Promise<void> {
   const run = Reflect.get(node, "bootstrapAccountIfNeeded") as () => Promise<boolean>;
@@ -318,7 +441,7 @@ function canonicalStepIds(): string[] {
   return bootstrapSteps(ADDRESS, 1).map((step) => step.id);
 }
 
-function bootstrapSpaceId(name: "default" | "applications" | "account" | "secrets" | "public"): string {
+function bootstrapSpaceId(name: "default" | "applications" | "account" | "secrets" | "public" | "agents"): string {
   const step = bootstrapSteps(ADDRESS, 1).find(
     (candidate) => candidate.kind === "host" && candidate.space === name,
   );
@@ -327,9 +450,9 @@ function bootstrapSpaceId(name: "default" | "applications" | "account" | "secret
 }
 
 const ceremonyFaultPoints = [
-  ...["default", "applications", "account", "secrets", "public"].map((space) => `session:${space}`),
-  ...["default", "applications", "account", "secrets", "public"].map((space) => `host:${space}`),
-  ...["default", "applications", "account", "secrets", "public"].map((space) => `activate:${space}`),
+  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `session:${space}`),
+  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `host:${space}`),
+  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `activate:${space}`),
   "account:index-schema",
   "account:seed-spaces",
   "account:seed-applications",
@@ -433,10 +556,36 @@ describe("TC-393 bootstrap recovery matrix", () => {
     expect(node.bootstrapStatus.reason).toBe("already-provisioned");
     expect(fake.ceremonyCallCount()).toBe(calls);
   });
+  test("repairs an old completion marker once to add agents", async () => {
+    const fake = new FakeCloud();
+    const node = makeRecoveryHarness(fake);
+    fake.hostedSpaces.add(bootstrapSpaceId("default"));
+    fake.kv.set(fake.markerKey, {
+      v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+      stepIds: canonicalStepIds().filter((stepId) => !stepId.includes("agents")),
+    });
+    installActivationTransport(fake);
+
+    await bootstrap(node);
+
+    expect(node.bootstrapStatus).toEqual({ skipped: false });
+    expect(fake.hostedSpaces.has(bootstrapSpaceId("agents"))).toBe(true);
+    expect(fake.registry.has(bootstrapSpaceId("agents"))).toBe(true);
+    expect(fake.kv.get(fake.markerKey)).toEqual(expect.objectContaining({
+      v: BOOTSTRAP_COMPLETION_MARKER_VERSION,
+      stepIds: canonicalStepIds(),
+    }));
+    fake.completeArtifacts(bootstrapSteps(ADDRESS, 1));
+
+    const callsBeforeSkip = fake.ceremonyCallCount();
+    await bootstrap(node);
+    expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
+    expect(fake.ceremonyCallCount()).toBe(callsBeforeSkip);
+  });
 });
 
 describe("TC-393 recovery decisions and convergence", () => {
-  test("pre-seed wedge is repaired even when all five spaces are already hosted", async () => {
+  test("pre-seed wedge is repaired even when all six spaces are already hosted", async () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     for (const step of bootstrapSteps(ADDRESS, 1)) {
@@ -518,15 +667,16 @@ describe("TC-393 recovery decisions and convergence", () => {
     expect([...fake.registry.entries()]).toEqual(first.registry);
     expect([...fake.appRecords.entries()]).toEqual(first.applications);
     expect([...fake.schemasApplied].sort()).toEqual(first.schemas);
-    expect(fake.registry.size).toBe(5);
+    expect(fake.registry.size).toBe(6);
     expect(fake.appRecords.size).toBe(first.applications.length);
     expect(fake.encryptionAssumeMissing).toEqual([true, false]);
   });
 
-  test("old, malformed, and foreign-step markers repair; only accepted v1 skips", async () => {
+  test("old, malformed, incomplete, and foreign-step markers repair; complete v1 skips", async () => {
     for (const marker of [
       { v: 0, stepIds: canonicalStepIds() },
       { v: 2, stepIds: canonicalStepIds() },
+      { v: 1 },
       { bad: true },
     ]) {
       const fake = new FakeCloud();
@@ -541,7 +691,7 @@ describe("TC-393 recovery decisions and convergence", () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     fake.hostedSpaces.add(bootstrapSpaceId("default"));
-    fake.kv.set(fake.markerKey, { v: 1, stepIds: ["future:renamed"] });
+    fake.kv.set(fake.markerKey, { v: 1, stepIds: [...canonicalStepIds(), "future:renamed"] });
     await bootstrap(node);
     expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
   });
@@ -579,13 +729,18 @@ describe("TC-393 recovery decisions and convergence", () => {
     const fake = new FakeCloud();
     const node = makeRecoveryHarness(fake);
     const auth = Reflect.get(node, "auth") as { lastActivationSkippedSpaceIds: string[] };
-    auth.lastActivationSkippedSpaceIds = [bootstrapSpaceId("default")];
+    auth.lastActivationSkippedSpaceIds = [
+      bootstrapSpaceId("default"),
+      bootstrapSpaceId("account"),
+    ];
     installActivationTransport(fake);
 
     await bootstrap(node);
 
     expect(fake.callCount("marker:get")).toBe(0);
     expect(fake.callCount(MARKER_STEP)).toBe(1);
+    expect(fake.registerBatchCalls).toBe(1);
+    expect(fake.registerMissingCalls).toBe(0);
     for (const boundary of ceremonyFaultPoints) expect(fake.callCount(boundary)).toBe(1);
   });
 });
@@ -673,4 +828,71 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
     expect((error as Error).message).toContain("401 - session expired");
     expect(authorizationVerdictOf(error)).toBe("unauthenticated");
   }
+});
+describe("TC-800 repair preserves the account registry", () => {
+  test("adds missing agents to an old populated account and skips after repair", async () => {
+    const fake = new FakeCloud();
+    const fixtures = seedPopulatedAccount(fake);
+    const node = makeRecoveryHarness(fake);
+    installExistingAccountRepair(node, fake);
+
+    await bootstrap(node);
+
+    expect(node.bootstrapStatus).toEqual({ skipped: false });
+    for (const [key, fixture] of fixtures) expect(fake.kv.get(key)).toEqual(fixture);
+    expect(fake.kv.get(`spaces/${bootstrapSpaceId("agents")}`)).toMatchObject({
+      name: "agents",
+      status: "active",
+    });
+    expect(fake.kv.get(fake.markerKey)).toEqual(expect.objectContaining({
+      stepIds: canonicalStepIds(),
+    }));
+
+    const callsBeforeSkip = fake.ceremonyCallCount();
+    await bootstrap(node);
+    expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
+    expect(fake.ceremonyCallCount()).toBe(callsBeforeSkip);
+  });
+
+  test("keeps a customized archived agents record and every previous record", async () => {
+    const fake = new FakeCloud();
+    const fixtures = seedPopulatedAccount(fake, true);
+    const node = makeRecoveryHarness(fake);
+    installExistingAccountRepair(node, fake);
+
+    await bootstrap(node);
+
+    expect(node.bootstrapStatus).toEqual({ skipped: false });
+    for (const [key, fixture] of fixtures) expect(fake.kv.get(key)).toEqual(fixture);
+    expect(fake.kv.get(`spaces/${bootstrapSpaceId("agents")}`)).toEqual(
+      fixtures.get(`spaces/${bootstrapSpaceId("agents")}`),
+    );
+    expect(fake.kv.get(fake.markerKey)).toEqual(expect.objectContaining({
+      stepIds: canonicalStepIds(),
+    }));
+
+    const callsBeforeSkip = fake.ceremonyCallCount();
+    await bootstrap(node);
+    expect(node.bootstrapStatus).toEqual({ skipped: true, reason: "already-provisioned" });
+    expect(fake.ceremonyCallCount()).toBe(callsBeforeSkip);
+  });
+
+  test("a skipped agents activation selects repair rather than fresh seeding", async () => {
+    const fake = new FakeCloud();
+    const fixtures = seedPopulatedAccount(fake);
+    const node = makeRecoveryHarness(fake);
+    const auth = Reflect.get(node, "auth") as { lastActivationSkippedSpaceIds: string[] };
+    auth.lastActivationSkippedSpaceIds = [bootstrapSpaceId("agents")];
+    installExistingAccountRepair(node, fake);
+
+    await bootstrap(node);
+
+    expect(node.bootstrapStatus).toEqual({ skipped: false });
+    expect(fake.encryptionAssumeMissing).toEqual([false]);
+    for (const [key, fixture] of fixtures) expect(fake.kv.get(key)).toEqual(fixture);
+    expect(fake.kv.get(`spaces/${bootstrapSpaceId("agents")}`)).toMatchObject({
+      name: "agents",
+      status: "active",
+    });
+  });
 });

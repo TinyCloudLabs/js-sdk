@@ -7,6 +7,7 @@ import {
   BOOTSTRAP_SESSION_REQUESTS,
   BOOTSTRAP_SPACE_NAMES,
   ACCOUNT_MANIFEST_PERMISSIONS,
+  TINYCLOUD_AGENTS_SPACE_MANIFEST,
   TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
   bootstrapSteps,
   ACCOUNT_REGISTRY_SPACE,
@@ -15,8 +16,8 @@ import {
 } from "./index";
 
 test("@tinycloud/bootstrap re-exports the canonical bootstrap surface", () => {
-  expect(BOOTSTRAP_MANIFEST.spaces).toHaveLength(5);
-  expect(BOOTSTRAP_ALLOWLIST).toHaveLength(10);
+  expect(BOOTSTRAP_MANIFEST.spaces).toHaveLength(6);
+  expect(BOOTSTRAP_ALLOWLIST).toHaveLength(12);
   expect(bootstrapSteps("0x1234567890abcdef1234567890abcdef12345678", 1).length)
     .toBeGreaterThan(10);
 });
@@ -57,8 +58,8 @@ test("allowlist contains bootstrap session and host targets plus account network
     (entry) => entry.space === ACCOUNT_REGISTRY_SPACE,
   );
 
-  expect(sessionEntries).toHaveLength(5);
-  expect(hostEntries).toHaveLength(5);
+  expect(sessionEntries).toHaveLength(6);
+  expect(hostEntries).toHaveLength(6);
   expect(new Set(BOOTSTRAP_ALLOWLIST.map((entry) => entry.space))).toEqual(
     new Set(BOOTSTRAP_SPACE_NAMES),
   );
@@ -98,6 +99,7 @@ test("bootstrap steps include public in the seed set and only secrets as an app"
       ACCOUNT_REGISTRY_SPACE,
       SECRETS_SPACE,
       "public",
+      "agents",
     ]);
   }
 
@@ -113,4 +115,23 @@ test("bootstrap steps include public in the seed set and only secrets as an app"
       ["tinycloud.encryption/network.create"],
     ]);
   }
+});
+
+test("agents bootstrap manifest grants only whole-space KV access", () => {
+  expect(BOOTSTRAP_SPACE_NAMES.at(-1)).toBe("agents");
+  expect(TINYCLOUD_AGENTS_SPACE_MANIFEST).toMatchObject({
+    app_id: "xyz.tinycloud.agents",
+    name: "TinyCloud Agents Space",
+    space: "agents",
+    prefix: "",
+    defaults: false,
+    includePublicSpace: false,
+    permissions: [{
+      service: "tinycloud.kv",
+      space: "agents",
+      path: "",
+      actions: ["get", "put", "del", "list", "metadata"],
+    }],
+  });
+  expect(TINYCLOUD_AGENTS_SPACE_MANIFEST.permissions).toHaveLength(1);
 });

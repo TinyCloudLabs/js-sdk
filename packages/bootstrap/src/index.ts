@@ -66,6 +66,7 @@ export const ACCOUNT_REGISTRY_PATH = "applications/";
 export const SECRETS_SPACE = "secrets";
 export const BOOTSTRAP_DEFAULT_SPACE = "default";
 export const BOOTSTRAP_PUBLIC_SPACE = "public";
+export const AGENTS_SPACE = "agents";
 export const BOOTSTRAP_ENCRYPTION_NETWORK_NAME = "default";
 export const BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE =
   `urn:tinycloud:encryption:{ownerDid}:${BOOTSTRAP_ENCRYPTION_NETWORK_NAME}` as const;
@@ -82,6 +83,7 @@ export const BOOTSTRAP_SPACE_NAMES = [
   ACCOUNT_REGISTRY_SPACE,
   SECRETS_SPACE,
   BOOTSTRAP_PUBLIC_SPACE,
+  AGENTS_SPACE,
 ] as const;
 
 export type BootstrapSpaceName = (typeof BOOTSTRAP_SPACE_NAMES)[number];
@@ -230,12 +232,30 @@ export const TINYCLOUD_PUBLIC_SPACE_MANIFEST: Manifest = {
   ],
 };
 
+export const TINYCLOUD_AGENTS_SPACE_MANIFEST: Manifest = {
+  app_id: "xyz.tinycloud.agents",
+  name: "TinyCloud Agents Space",
+  space: AGENTS_SPACE,
+  prefix: "",
+  defaults: false,
+  includePublicSpace: false,
+  permissions: [
+    {
+      service: "tinycloud.kv",
+      space: AGENTS_SPACE,
+      path: "",
+      actions: ["get", "put", "del", "list", "metadata"],
+    },
+  ],
+};
+
 export const BOOTSTRAP_SPACE_MANIFESTS: Readonly<Record<BootstrapSpaceName, Manifest>> = {
   [BOOTSTRAP_DEFAULT_SPACE]: TINYCLOUD_DEFAULT_SPACE_MANIFEST,
   [DEFAULT_MANIFEST_SPACE]: TINYCLOUD_APPLICATIONS_SPACE_MANIFEST,
   [ACCOUNT_REGISTRY_SPACE]: TINYCLOUD_ACCOUNT_SPACE_MANIFEST,
   [SECRETS_SPACE]: TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
   [BOOTSTRAP_PUBLIC_SPACE]: TINYCLOUD_PUBLIC_SPACE_MANIFEST,
+  [AGENTS_SPACE]: TINYCLOUD_AGENTS_SPACE_MANIFEST,
 };
 
 export const BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS = [

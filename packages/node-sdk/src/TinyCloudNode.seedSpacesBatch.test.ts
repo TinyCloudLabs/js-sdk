@@ -1,6 +1,6 @@
 /**
- * TC-373: the account-bootstrap "seed-spaces" step must batch all 5 spaces
- * into ONE `account.spaces.registerBatch()` call instead of looping 5 times
+ * TC-373: the account-bootstrap "seed-spaces" step must batch all 6 spaces
+ * into ONE `account.spaces.registerBatch()` call instead of looping 6 times
  * over `account.spaces.register()`.
  *
  * This exercises `runAccountBootstrap` directly with a `steps` array
@@ -57,7 +57,7 @@ function makeNode() {
   return node;
 }
 
-const SPACE_NAMES = ["default", "applications", "account", "secrets", "public"] as const;
+const SPACE_NAMES = ["default", "applications", "account", "secrets", "public", "agents"] as const;
 
 function seedSpacesStep() {
   return {
@@ -70,8 +70,8 @@ function seedSpacesStep() {
   };
 }
 
-describe("seed-spaces bootstrap step batches all 5 spaces in ONE call (TC-373)", () => {
-  test("calls account.spaces.registerBatch once with all 5 spaces, never register()", async () => {
+describe("seed-spaces bootstrap step batches all 6 spaces in ONE call (TC-373)", () => {
+  test("calls account.spaces.registerBatch once with all 6 spaces, never register()", async () => {
     const node = makeNode();
 
     const registerBatch = mock(async (spaces: any[]) => ({
@@ -90,7 +90,7 @@ describe("seed-spaces bootstrap step batches all 5 spaces in ONE call (TC-373)",
     expect(markerWrite).not.toHaveBeenCalled();
 
     const [passedSpaces] = registerBatch.mock.calls[0] as [Array<{ spaceId: string; ownerDid: string }>];
-    expect(passedSpaces).toHaveLength(5);
+    expect(passedSpaces).toHaveLength(6);
     expect(passedSpaces.map((s) => s.spaceId).sort()).toEqual(
       SPACE_NAMES.map((name) => `tinycloud:pkh:eip155:1:${ADDRESS}:${name}`).sort(),
     );

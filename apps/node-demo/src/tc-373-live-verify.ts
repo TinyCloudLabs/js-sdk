@@ -103,7 +103,7 @@ const multipartBatch = invokeRequests.filter((r) => r.bodyKind.startsWith("multi
 const jsonBatchSql = invokeRequests.filter((r) => r.bodyKind.startsWith("json-batch"));
 
 console.log(`\n/invoke POST calls: ${invokeRequests.length}`);
-console.log(`  multipart KV batch writes: ${multipartBatch.length} (expect 1, covering all 5 spaces)`);
+console.log(`  multipart KV batch writes: ${multipartBatch.length} (expect 1, covering all 6 spaces)`);
 console.log(`  multi-statement SQL batch calls: ${jsonBatchSql.length}`);
 
 let failed = false;
@@ -112,7 +112,7 @@ function assert(name: string, cond: boolean, detail = "") {
   if (!cond) failed = true;
 }
 
-console.log("\n=== verifying all 5 seeded spaces ===");
+console.log("\n=== verifying all 6 seeded spaces ===");
 assert(
   "bootstrap did not skip",
   node.bootstrapSkipped === false,
@@ -125,13 +125,13 @@ assert(
 );
 if (multipartBatch.length === 1) {
   assert(
-    "batch write covers exactly 5 parts",
-    multipartBatch[0]!.bodyKind === "multipart(5 parts)",
+    "batch write covers exactly 6 parts",
+    multipartBatch[0]!.bodyKind === "multipart(6 parts)",
     multipartBatch[0]!.bodyKind,
   );
 }
 
-const expectedNames = ["default", "applications", "account", "secrets", "public"];
+const expectedNames = ["default", "applications", "account", "secrets", "public", "agents"];
 const spacesResult = await node.account.spaces.list();
 assert(
   "account.spaces.list() ok (canonical KV read, not the SQL index)",
@@ -140,8 +140,8 @@ assert(
 );
 if (spacesResult.ok) {
   assert(
-    "all 5 spaces present",
-    spacesResult.data.length === 5,
+    "all 6 spaces present",
+    spacesResult.data.length === 6,
     `got ${spacesResult.data.length}: ${spacesResult.data.map((s) => s.name).join(",")}`,
   );
   for (const name of expectedNames) {

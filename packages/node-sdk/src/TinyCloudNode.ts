@@ -1849,13 +1849,18 @@ export class TinyCloudNode {
     if (!auth) {
       throw new Error("Account bootstrap requires an active wallet session");
     }
+    const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
     const skipped = auth.lastActivationSkippedSpaceIds;
+    // Fresh blind-writes registry records; only an unhosted account space
+    // proves the registry is empty.
+    if (skipped.includes(accountSpaceId)) return { action: "run", mode: "fresh" };
+    // Another canonical space is unhosted on an existing account (e.g. one
+    // added after this account was bootstrapped): repair, never overwrite.
     if (skipped.some((spaceId) => enshrinedSpaceIds.has(spaceId))) {
-      return { action: "run", mode: "fresh" };
+      return { action: "run", mode: "repair" };
     }
 
     try {
-      const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
       const markerPermission: PermissionEntry = {
         service: "tinycloud.kv",
         space: accountSpaceId,
@@ -1869,7 +1874,7 @@ export class TinyCloudNode {
 
       const marker = await this.readBootstrapCompletionMarker();
       if (marker.ok) {
-        if (this.isAcceptedBootstrapCompletionMarker(marker.data.data)) {
+        if (this.isAcceptedBootstrapCompletionMarker(marker.data.data, steps.map((step) => step.id))) {
           return { action: "skip" };
         }
         return { action: "run", mode: "repair" };
@@ -1934,17 +1939,25 @@ export class TinyCloudNode {
       );
     }
   }
-
-  private isAcceptedBootstrapCompletionMarker(value: unknown): boolean {
+  /**
+   * A marker written before a canonical space was added triggers one bounded repair.
+   */
+  private isAcceptedBootstrapCompletionMarker(
+    value: unknown,
+    canonicalStepIds: readonly string[],
+  ): boolean {
     if (typeof value !== "object" || value === null) return false;
     const entries = Object.entries(value);
     const markerValue = (name: string): unknown =>
       entries.find(([key]) => key === name)?.[1];
     const version = markerValue("v");
+    const stepIds = markerValue("stepIds");
     return (
       typeof version === "number" &&
       Number.isInteger(version) &&
-      ACCEPTED_MARKER_VERSIONS.some((acceptedVersion) => acceptedVersion === version)
+      ACCEPTED_MARKER_VERSIONS.some((acceptedVersion) => acceptedVersion === version) &&
+      Array.isArray(stepIds) &&
+      canonicalStepIds.every((stepId) => stepIds.includes(stepId))
     );
   }
 
@@ -2052,32 +2065,41 @@ export class TinyCloudNode {
       }
 
       if (step.kind === "seed-spaces") {
-        // One batched KV write + one multi-row index write instead of 5
-        // sequential register() calls (TC-373).
-        const registered = await this.account.spaces.registerBatch(
-          step.spaces.map((space) => ({
-            spaceId: space.spaceId,
-            name: space.name,
-            ownerDid: this.did,
-            type: "owned",
-            permissions: ["*"],
-            status: "active",
-          })),
-        );
-        if (!registered.ok) {
-          throw Object.assign(
-            new Error(`Failed to seed account spaces: ${registered.error.message}`),
-            { cause: registered.error },
-          );
-        }
-        const batchError = registered.data.recoveredFromBatchError;
-        if (batchError) {
-          warnings.push({
-            stepId: step.id,
-            kind: "batch-write-reconciled",
-            code: batchError.code,
-            message: batchError.message,
-          });
+        const inputs = step.spaces.map((space) => ({
+          spaceId: space.spaceId,
+          name: space.name,
+          ownerDid: this.did,
+          type: "owned" as const,
+          permissions: ["*"],
+          status: "active" as const,
+        }));
+        if (mode === "fresh") {
+          // Fresh batches because the registry is provably empty. Repair
+          // preserves existing records and only creates missing spaces.
+          const registered = await this.account.spaces.registerBatch(inputs);
+          if (!registered.ok) {
+            throw Object.assign(
+              new Error(`Failed to seed account spaces: ${registered.error.message}`),
+              { cause: registered.error },
+            );
+          }
+          const batchError = registered.data.recoveredFromBatchError;
+          if (batchError) {
+            warnings.push({
+              stepId: step.id,
+              kind: "batch-write-reconciled",
+              code: batchError.code,
+              message: batchError.message,
+            });
+          }
+        } else {
+          const ensured = await this.account.spaces.registerMissing(inputs);
+          if (!ensured.ok) {
+            throw Object.assign(
+              new Error(`Failed to seed account spaces: ${ensured.error.message}`),
+              { cause: ensured.error },
+            );
+          }
         }
       }
 

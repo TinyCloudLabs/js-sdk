@@ -431,6 +431,65 @@ export class AccountService {
       await this.upsertSpacesIndexQuietly(registered);
       return ok({ spaces: registered, recoveredFromBatchError: batchResult.error });
     },
+    /**
+     * Register only spaces without a registry record (TC-800). Existing
+     * records, including renamed or archived ones, are kept byte-for-byte.
+     * Bootstrap repair uses this on populated accounts.
+     */
+    registerMissing: async (
+      spaces: readonly (SpaceInfo | AccountSpace)[],
+    ): Promise<Result<AccountSpace[]>> => {
+      if (spaces.length === 0) return ok([]);
+
+      await this.config.ensureAccountSpaceHosted?.();
+
+      const kvResult = this.accountKV();
+      if (!kvResult.ok) return kvResult;
+      const kv = kvResult.data;
+
+      const stored = spaces.map((space) => spaceRecordFromInput(space));
+      const keys = stored.map((record) => spaceKey(record.space_id));
+      const read = await kv.batchGet<StoredSpaceRecord>(keys);
+      if (!read.ok) return accountErr(read.error);
+
+      const byKey = new Map(read.data.results.map((result) => [result.key, result.result]));
+      const final: AccountSpace[] = new Array(keys.length);
+      const missing: Array<{ index: number; key: string; record: StoredSpaceRecord }> = [];
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i]!;
+        const result = byKey.get(key);
+        if (!result) {
+          return err(serviceError(
+            ErrorCodes.NETWORK_ERROR,
+            `KV batch read omitted requested key ${JSON.stringify(key)}`,
+            SERVICE_NAME,
+          ));
+        }
+        if (result.ok) {
+          final[i] = spaceFromRecord(key, result.data.data);
+        } else if (result.error.code === ErrorCodes.KV_NOT_FOUND) {
+          missing.push({ index: i, key, record: stored[i]! });
+        } else {
+          return accountErr(result.error);
+        }
+      }
+
+      const creates = await Promise.all(missing.map(async ({ index, key, record }) => {
+        const written = await kv.put(key, record, { ifNoneMatch: "*" });
+        if (written.ok) return { index, result: ok(spaceFromRecord(key, record)) };
+
+        const raced = await kv.get<StoredSpaceRecord>(key);
+        if (raced.ok) return { index, result: ok(spaceFromRecord(key, raced.data.data)) };
+        return { index, result: err(written.error) };
+      }));
+      for (const { index, result } of creates) {
+        if (!result.ok) return accountErr(result.error);
+        final[index] = result.data;
+      }
+
+      await this.upsertSpacesIndexQuietly(final);
+      return ok(final);
+    },
 
     syncAccessible: async (): Promise<Result<AccountSpace[]>> => {
       const synced = await this.syncAccessibleSpaces({ tolerateStorageFull: false });
