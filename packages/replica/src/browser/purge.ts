@@ -2,50 +2,53 @@
  * Purge orchestration for `reset({purge:true})` (TC-19): the Web Lock is the
  * cross-tab mutex and the durable lease is the storage fence — the lock is
  * taken first so a busy writer never leaves a leaked lease behind.
+ *
+ * Wipe in place (round 4): there is no `deleteDatabase` anywhere. Purge is
+ * one readwrite transaction that clears the replica and stamps the durable
+ * `purged` marker at `generation + 1`; every later transaction fences on
+ * the marker/generation, and `init` reinitializes the same database under
+ * the next generation. Nothing physical can hang, queue, or be lost.
  */
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
-import type { DeletionOutcome, IndexedDbReplicaStore } from "./store.js";
+import type { IndexedDbReplicaStore } from "./store.js";
 
 const PURGE_LEASE_TTL_MS = 60_000;
 
-/** The reset result: `deletion` reports the file delete's bounded outcome. */
-export type PurgeResult = { purged: true; deletion: DeletionOutcome };
+/** The reset result: the wipe commit is the whole purge — nothing follows. */
+export type PurgeResult = { purged: true };
 
 function busy(): ReplicaError {
   return new ReplicaError(ReplicaErrorCode.BUSY, "Another tab is syncing this replica.");
 }
 
 /**
- * Permanently delete the replica's database.
+ * Permanently erase the replica's contents in place.
  *
- * Order: Web Lock → claim → durable lease → one erase commit → broadcast →
- * bounded file deletion. The erase transaction (inside `store.destroy`) is
- * the point of no return: it clears the data, stamps the durable `purged`
- * marker and releases the lease, so after it commits the purge can never
- * report BUSY — `deletion` is reported truthfully instead, and a queued or
- * failed file delete is finished by the next open (`finishPurgeIfPending`)
- * or by the queued request itself. A BUSY or failure *before* that commit
- * leaves the replica untouched with nothing queued.
+ * Order: Web Lock → claim → durable lease → one erase commit → broadcast.
+ * `store.destroy` runs the commit: it clears the data, drops the grant and
+ * authority, releases the lease, and stamps `{purged, generation+1}` — the
+ * point of no return, after which the result is fixed `{ purged: true }` and
+ * a failure is impossible. `onPurged` runs after the commit so the caller
+ * can broadcast once; its own errors are swallowed inside `destroy`.
  *
- * `onPurged` runs between the commit and the delete so the caller can tell
- * siblings early — their `versionchange`/reset handling is what unblocks
- * the delete — and `onDeleteBlocked` fires if the delete still queues.
+ * A BUSY or failure *before* that commit leaves the replica untouched: the
+ * lease taken under the lock is released on the still-open connection, and
+ * a release failure surfaces (never swallowed) so a stranded lease is
+ * visible.
  */
 export async function purgeReplicaStore(
   store: IndexedDbReplicaStore,
   options: {
     locks: LockManager | undefined;
     replicaId: string;
-    /** Runs once the erase commit lands; the purge is irreversible then. */
+    /** Runs once, after the erase commit lands. */
     onPurged?: () => void;
-    /** Runs when the file delete queues behind another connection. */
-    onDeleteBlocked?: () => void;
   },
 ): Promise<PurgeResult> {
-  const { locks, replicaId, onPurged, onDeleteBlocked } = options;
-  const drive = async (lease: { token: number; holder: string }): Promise<DeletionOutcome> => {
+  const { locks, replicaId, onPurged } = options;
+  const drive = async (lease: { token: number; holder: string }): Promise<void> => {
     try {
-      return await store.destroy(lease, { onPurged, onDeleteBlocked });
+      await store.destroy(lease, { onPurged });
     } catch (error) {
       // destroy only fails before its erase commit — the marker path cannot
       // throw. The lease the purge took may therefore still be live; hand it
@@ -68,8 +71,8 @@ export async function purgeReplicaStore(
     // No cross-tab mutex exists: the durable lease alone orders purges.
     const lease = await store.acquireSyncLease(PURGE_LEASE_TTL_MS);
     if (lease === null) throw busy();
-    const deletion = await drive(lease);
-    return { purged: true, deletion };
+    await drive(lease);
+    return { purged: true };
   }
   let outcome: PurgeResult | { busy: true } = { busy: true };
   await locks.request(`tinycloud-replica:${replicaId}`, { ifAvailable: true }, async (lock) => {
@@ -79,8 +82,8 @@ export async function purgeReplicaStore(
     await store.claimWriterLock();
     const lease = await store.acquireSyncLease(PURGE_LEASE_TTL_MS);
     if (lease === null) throw busy();
-    const deletion = await drive(lease);
-    outcome = { purged: true, deletion };
+    await drive(lease);
+    outcome = { purged: true };
   });
   if ("busy" in outcome) throw busy();
   return outcome;

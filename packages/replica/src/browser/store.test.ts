@@ -12,7 +12,6 @@ import { BrowserReplica, openReplica } from "./index.js";
 import {
   DEVICE_DATABASE,
   IndexedDbReplicaStore,
-  deleteReplicaDatabase,
   deviceIdentity,
   replicaDatabaseName,
   type DeviceIdentity,
@@ -192,9 +191,14 @@ describe("store mechanics (indexeddb)", () => {
     expect((await store.open())!.cursor).toBeNull();
     await store.close();
 
-    await deleteReplicaDatabase(replicaId);
-    // The database name is derived, and deleting it makes a fresh open empty.
-    expect(replicaDatabaseName(replicaId)).toContain(replicaId);
+    // Wipe in place: purge erases the replica's contents but the database
+    // file is never deleted — the next open reinitializes it in place. The
+    // closed store's lease is stale: claimWriterLock clears it, exactly as
+    // the Web-Lock path does under the lock.
+    const forPurge = await IndexedDbReplicaStore.open(replicaId, { holder: "h-purge" });
+    await forPurge.claimWriterLock();
+    await forPurge.destroy((await forPurge.acquireSyncLease(60_000))!);
+    // A fresh open sees the wiped marker as not-created; init reuses the file.
     const fresh = await IndexedDbReplicaStore.open(replicaId, { holder: "h" });
     expect(await fresh.open()).toBeNull();
     await fresh.close();

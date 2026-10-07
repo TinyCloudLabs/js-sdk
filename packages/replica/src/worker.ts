@@ -31,7 +31,6 @@ import {
   IndexedDbReplicaStore,
   deviceIdentity,
   replicaDatabaseName,
-  type DeletionOutcome,
   type DeviceIdentity,
 } from "./browser/store.js";
 import { purgeReplicaStore } from "./browser/purge.js";
@@ -356,32 +355,39 @@ async function handleStatus(): Promise<StatusResult> {
   };
 }
 
-async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean; deletion?: DeletionOutcome }> {
+async function handleReset(purge: boolean): Promise<{ reset: true; purged: boolean }> {
   const s = needSession();
   if (purge) {
     // Lock first, then the durable lease: taking the lease before the lock
-    // leaked it when the Web Lock was busy. The store's fenced destroy makes
-    // the erase atomic — one commit clears the data, releases the lease and
-    // stamps the purged marker — then the file deletion runs bounded.
+    // leaked it when the Web Lock was busy. `destroy` wipes the database in
+    // place — one commit clears the data, releases the lease and stamps the
+    // durable `purged` marker, so the result is fixed the moment it lands.
     const tell = () => {
-      s.channel?.postMessage({ type: "reset", reason: "purge" });
+      try {
+        s.channel?.postMessage({ type: "reset", reason: "purge" });
+      } catch {
+        // A closing channel must never reject the finished purge.
+      }
       // BroadcastChannel does not echo: the purging tab's own client only
-      // sees the reset via postEvent.
-      postEvent("reset", { reason: "purge" });
+      // sees the reset via postEvent. Each side fires exactly once — here.
+      try {
+        postEvent("reset", { reason: "purge" });
+      } catch {
+        // A torn-down worker must never reject the finished purge.
+      }
     };
-    const result = await purgeReplicaStore(s.store, {
+    await purgeReplicaStore(s.store, {
       locks,
       replicaId: s.replicaId,
-      // The purge is committed: tell siblings and our own client now so their
-      // connections close before the file delete has to wait on them.
+      // The wipe is committed: tell siblings and our own client now — the
+      // generation fence does the rest, no connection has to close.
       onPurged: tell,
-      // A still-queued delete also deserves the nudge: a non-cooperative
-      // connection is what `onBlocked` reports.
-      onDeleteBlocked: tell,
     });
     s.channel?.close();
-    session = null;
-    return { reset: true, purged: true, deletion: result.deletion };
+    // Keep the session: the store's generation fence now throws
+    // RESET_REQUIRED on every later call — the purging client must see that
+    // (never NOT_FOUND) until it reopens, which swaps the session out.
+    return { reset: true, purged: true };
   }
   const run = async () => {
     await new Replica({ store: s.store }).reset("manual");

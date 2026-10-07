@@ -646,13 +646,13 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     await pageB.evaluate(() => window.__replica.sync());
     expect((await pageB.evaluate(() => window.__replica.get("notes/partition"))).status).toBe("present");
 
-    // Purging A deletes only its database — and reports the reset to its
-    // own client (BroadcastChannel never echoes to the sender).
+    // Purging A wipes its database in place — the file remains as a small
+    // empty database named by the hash — and reports the reset to its own
+    // client (BroadcastChannel never echoes to the sender).
     await pageA.evaluate(() => window.__replica.reset({ purge: true }));
-    expect(await pageA.evaluate(() => window.__replica.resetReasons())).toContain("purge");
+    expect(await pageA.evaluate(() => window.__replica.resetReasons().filter((r) => r === "purge").length)).toBe(1);
     const dump = await pageA.evaluate(() => window.__replica.dumpDatabases());
-    expect(dump.some((db) => db.name.includes(openedA.replicaId))).toBe(false);
-    // B keeps its data — get never touches the network.
+    expect(dump.some((db) => db.name.includes(openedA.replicaId))).toBe(true);
     const still = await pageB.evaluate(() => window.__replica.get("notes/partition"));
     expect(still.status === "present" && text(new Uint8Array(still.value))).toBe("shared across principals");
     await pageA.close();
