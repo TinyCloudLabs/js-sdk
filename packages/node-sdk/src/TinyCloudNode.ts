@@ -5684,7 +5684,14 @@ export class TinyCloudNode {
    * @returns Result indicating success or failure
    */
   async revokeDelegation(cid: string): Promise<DelegationResult<DelegationRevocationReceipt>> {
-    return this.delegationManager.revoke(cid);
+    // The no-options API targets authority in the current primary space.
+    // Callers that revoke on another space can use delegationManager.revoke
+    // with an explicit targetSpaceId; the host still validates the CID.
+    const targetSpaceId = this.currentTinyCloudSession()?.spaceId;
+    return this.delegationManager.revoke(
+      cid,
+      targetSpaceId === undefined ? undefined : { targetSpaceId },
+    );
   }
 
   /** Read node-confirmed lifecycle state for one delegation. */
