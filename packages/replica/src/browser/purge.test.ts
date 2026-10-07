@@ -212,10 +212,9 @@ describe("purge lifecycle — wipe in place (indexeddb)", () => {
       // entries and blobs empty — the erase commit ran.
       const meta = await metaThrough(blocker);
       expect(meta?.purged).toBe(true);
-      expect(meta?.leaseHolder).toBeNull();
+      expect(meta?.leaseHolder).toBeUndefined();
       expect(await countThrough(blocker, "entries")).toBe(0);
       expect(await countThrough(blocker, "blobs")).toBe(0);
-
       // The Web Lock is free again — ifAvailable would have to wait on it.
       const { locks, isHeld } = fakeLocks();
       let ran = false;
@@ -254,6 +253,77 @@ describe("purge lifecycle — wipe in place (indexeddb)", () => {
     }
   });
 
+  test("the tombstone keeps no user data: raw dump has no config, grant, CID or error text", async () => {
+    // The purge result is a minimal marker — only `purged`, `generation`,
+    // `writerEpoch` and `purgePending` may survive. Everything else in meta
+    // (config name/host/space/prefix, retention CID, grant, error text) is
+    // user data and must not be readable after the commit.
+    const replicaId = nextId();
+    const store = await IndexedDbReplicaStore.open(replicaId, { holder: "holder-secrets" });
+    await store.init(
+      config({
+        replicaId,
+        name: "Private project name",
+        host: "https://private-host.example",
+        space: "space-private-9f2c",
+        prefix: "notes-secret-fragile/",
+        retentionGrantCid: "bafyreigetentioncid000000000000000000000000000000000000aa",
+      }),
+    );
+    await store.installGrant(deviceGrant({ prefix: "notes-secret-fragile/" }));
+    const node = new FakeNode("notes-secret-fragile/");
+    node.space = "space-private-9f2c";
+    node.put("notes-secret-fragile/launch-codes", "hunter2-launch");
+    await new Replica({ store, transport: node }).sync();
+
+    // A learned refusal text that names a key: it must die with the purge.
+    await store.recordError({
+      at: "2026-10-07T00:00:00.000Z",
+      code: ReplicaErrorCode.STORAGE_ERROR,
+      message: "could not write the entry for the key notes-secret-fragile/launch-codes",
+    });
+
+    const result = await purgeReplicaStore(store, { locks: fakeLocks().locks, replicaId });
+    expect(result).toEqual({ purged: true });
+
+    // Raw dump of every object store through a fresh, direct connection.
+    const raw = await holdOpen(replicaDatabaseName(replicaId));
+    try {
+      const dumpAll = (storeName: string): Promise<unknown[]> =>
+        new Promise((resolve, reject) => {
+          const request = raw.transaction(storeName).objectStore(storeName).getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      const metaRows = await dumpAll("meta");
+      const entries = await dumpAll("entries");
+      const blobs = await dumpAll("blobs");
+      const whole = JSON.stringify({ metaRows, entries, blobs });
+      for (const forbidden of [
+        "Private project name",
+        "private-host.example",
+        "space-private-9f2c",
+        "notes-secret-fragile",
+        "launch-codes",
+        "bafyreigetentioncid000000000000000000000000000000000000aa",
+        "hunter2-launch",
+        "could not write",
+      ]) {
+        expect(whole).not.toContain(forbidden);
+      }
+      // The marker itself: exactly the fields the fence and reopen need.
+      expect(metaRows).toHaveLength(1);
+      const marker = metaRows[0] as Record<string, unknown>;
+      expect(marker.purged).toBe(true);
+      expect(typeof marker.generation).toBe("number");
+      expect(Object.keys(marker).sort()).toEqual(["generation", "purgePending", "purged", "writerEpoch"]);
+      expect(entries).toEqual([]);
+      expect(blobs).toEqual([]);
+    } finally {
+      raw.close();
+    }
+  });
+
   test("a post-commit broadcast failure cannot reject the purge", async () => {
     // `onPurged` runs after the erase commit; a throwing channel must be
     // swallowed — the result is already fixed.
@@ -271,7 +341,7 @@ describe("purge lifecycle — wipe in place (indexeddb)", () => {
     try {
       const meta = await metaThrough(probe);
       expect(meta?.purged).toBe(true);
-      expect(meta?.leaseHolder).toBeNull();
+      expect(meta?.leaseHolder).toBeUndefined();
     } finally {
       probe.close();
     }
@@ -289,47 +359,114 @@ describe("purge lifecycle — wipe in place (indexeddb)", () => {
     expect(notified).toBe(1);
   });
 
-  test("two racing reopens plus a fresh open lose no replica after a purge", async () => {
+  test("delayed recovery connections cannot overwrite or read a replica synced after the purge", async () => {
     const replicaId = nextId();
     const store = await newStore(replicaId, "holder-purger");
     await purgeReplicaStore(store, { locks: fakeLocks().locks, replicaId });
 
-    // Three connections race to reinitialize the marked database. Every one
-    // that loses the race must surface RESET_REQUIRED — never clobber the
-    // winner, never leave the replica half-created.
-    const outcomes = await Promise.all(
-      ["r1", "r2", "r3"].map(async (holder) => {
-        const s = await IndexedDbReplicaStore.open(replicaId, { holder });
-        try {
-          await s.init(config({ replicaId }));
-          return { s, ok: true as const };
-        } catch (error) {
-          return { s, ok: false as const, code: (error as ReplicaError).code };
-        }
-      }),
-    );
-    expect(outcomes.filter((o) => o.ok).length).toBeGreaterThanOrEqual(1);
-    for (const loser of outcomes.filter((o) => !o.ok)) {
-      expect(loser.code).toBe(ReplicaErrorCode.RESET_REQUIRED);
-    }
-    // The winner's replica is intact and usable.
-    const probe = await IndexedDbReplicaStore.open(replicaId, { holder: "probe" });
-    const state = await probe.open();
-    expect(state).not.toBeNull();
-    expect(state!.config.replicaId).toBe(replicaId);
-    for (const o of outcomes) await o.s.close().catch(() => undefined);
-    await probe.close();
+    // Two recovery connections open against the tombstone — generation G —
+    // then stall; the fresh open initializes and *syncs real data* at
+    // generation G+1 before they resume.
+    const delayed1 = await IndexedDbReplicaStore.open(replicaId, { holder: "r1" });
+    const delayed2 = await IndexedDbReplicaStore.open(replicaId, { holder: "r2" });
+    const winner = await IndexedDbReplicaStore.open(replicaId, { holder: "r3" });
+    await winner.init(config({ replicaId }));
+    await winner.installGrant(deviceGrant({ prefix: "notes/" }));
+    const node = new FakeNode();
+    node.put("notes/survivor", "post-purge bytes");
+    await new Replica({ store: winner, transport: node }).sync();
+    const won = (await winner.open())!;
+    const wonEntry = (await winner.get("notes/survivor"))!;
+    if (wonEntry.deleted) throw new Error("entry missing");
+    const wonHash = wonEntry.hash;
+
+    // The delayed connections resume: every path is fenced — init, reads,
+    // leases and writes all refuse with RESET_REQUIRED.
+    await rejectsWith(delayed1.init(config({ replicaId })), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(delayed2.init(config({ replicaId })), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(delayed1.get("notes/survivor"), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(delayed2.readContent(wonHash), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(delayed1.acquireSyncLease(60_000), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(delayed2.hasContent([wonHash]), ReplicaErrorCode.RESET_REQUIRED);
+    // Even the trivial short-circuits refuse: empty hasContent and a
+    // malformed readContent hash are fenced too.
+    await rejectsWith(delayed1.hasContent([]), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(delayed2.readContent("not-a-hash"), ReplicaErrorCode.RESET_REQUIRED);
+
+    // The winner's data, cursor and generation survived the resumed
+    // connections entirely intact.
+    const after = (await winner.open())!;
+    expect(after.generation).toBe(won.generation);
+    expect(after.cursor).toBe(won.cursor);
+    expect(text0(await winner.readContent(wonHash))).toBe("post-purge bytes");
+    await delayed1.close();
+    await delayed2.close();
+    await winner.close();
   });
 
-  test("the purging client's own calls all surface RESET_REQUIRED", async () => {
-    const replicaId = nextId();
-    const store = await newStore(replicaId, "holder-purger");
-    await purgeReplicaStore(store, { locks: fakeLocks().locks, replicaId });
-    await rejectsWith(store.status(), ReplicaErrorCode.RESET_REQUIRED);
-    await rejectsWith(store.list({}), ReplicaErrorCode.RESET_REQUIRED);
-    await rejectsWith(store.get("notes/a"), ReplicaErrorCode.RESET_REQUIRED);
-    await rejectsWith(store.acquireSyncLease(60_000), ReplicaErrorCode.RESET_REQUIRED);
-    await rejectsWith(store.installGrant(deviceGrant({ prefix: "notes/" })), ReplicaErrorCode.RESET_REQUIRED);
+  test("the purging client's own calls surface RESET_REQUIRED through the worker session", async () => {
+    // Drive the real worker module: `reset({purge:true})` must leave a
+    // *fenced* session behind so the client's next status/list/get return
+    // RESET_REQUIRED — never NOT_FOUND. Restoring the worker's old
+    // `session = null` makes this fail at the dispatch layer.
+    const replies: Array<{ id: number; ok: boolean; result?: unknown; err?: { code: string } }> = [];
+    const events: Array<{ event: string }> = [];
+    const scope = self as unknown as { postMessage?: (m: unknown) => void; onmessage: unknown };
+    const original = scope.postMessage;
+    scope.postMessage = (m: unknown) => {
+      const msg = m as { id?: number; ok?: boolean; result?: unknown; err?: { code: string }; event?: { event: string } };
+      if (typeof msg.id === "number") replies.push(msg as (typeof replies)[number]);
+      else if (msg.event !== undefined) events.push(msg.event);
+    };
+    try {
+      // Dynamic import is required: the worker's `void main()` runs at
+      // module evaluation and posts through self.postMessage, so the stub
+      // above must exist before the module loads — a static import would
+      // run main() before the test can install it.
+      await import("../worker.js");
+      // The worker signals readiness after its WASM init resolves.
+      for (let i = 0; i < 200 && !events.some((e) => e.event === "ready"); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(events.some((e) => e.event === "ready")).toBe(true);
+      const onmessage = scope.onmessage as (m: MessageEvent) => void;
+      const send = async (id: number, request: Record<string, unknown>) => {
+        onmessage({ data: { id, ...request } } as MessageEvent);
+        for (let i = 0; i < 200 && !replies.some((r) => r.id === id); i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        const reply = replies.find((r) => r.id === id);
+        if (reply === undefined) throw new Error(`no reply for op ${String(request.op)}`);
+        return reply;
+      };
+      const openReply = await send(1, {
+        op: "open",
+        host: "http://replica.test",
+        space: "space-worker",
+        prefix: "notes/",
+        principal: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+      });
+      expect(openReply.ok).toBe(true);
+
+      const reset = await send(2, { op: "reset", purge: true });
+      expect(reset.ok).toBe(true);
+      expect(reset.result).toEqual({ reset: true, purged: true });
+
+      // The kept-but-fenced session: every later call is RESET_REQUIRED.
+      // `session = null` would make needSession throw REPLICA_NOT_FOUND.
+      for (const [id, request] of [
+        [3, { op: "status" }],
+        [4, { op: "list" }],
+        [5, { op: "get", key: "notes/a" }],
+      ] as const) {
+        const reply = await send(id, request);
+        expect(reply.ok).toBe(false);
+        expect(reply.err?.code).toBe("RESET_REQUIRED");
+      }
+      await send(9, { op: "close" });
+    } finally {
+      scope.postMessage = original;
+    }
   });
 
   test("an open-time failure leaves no connection behind", async () => {

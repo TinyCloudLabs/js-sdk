@@ -50,7 +50,7 @@ export const DEVICE_DATABASE = "tinycloud-replica-device";
 export type DeviceIdentity = { jwk: object; did: string };
 
 /** The `meta` record: `ReplicaState` plus writer/lease fencing fields. */
-type MetaState = ReplicaState & {
+type LiveMetaState = ReplicaState & {
   leaseToken: number;
   leaseHolder: string | null;
   leaseExpiresAt: number | null;
@@ -60,15 +60,27 @@ type MetaState = ReplicaState & {
   serial: number;
   /** True while a revocation purge is recorded but unfinished. */
   purgePending: boolean;
-  /**
-   * True once a `reset --purge` commit has erased this database in place:
-   * entries and blobs are empty, grant and authority are gone, and the
-   * marker's `generation` fences every connection opened before it. The
-   * file is never deleted — a fresh `open()` sees the marker as not-created
-   * and `init` reinitializes this same database under `generation + 1`.
-   */
-  purged: boolean;
+  /** Live rows always carry `purged: false`. */
+  purged: false;
 };
+
+/**
+ * The row a `reset --purge` commit writes: deliberately minimal. A purge
+ * erases the replica's *contents* — the config (name, host, space, prefix,
+ * retention CID), grant, authority, timestamps and error text are user data
+ * and must not survive in the file. `generation` is the fence every older
+ * connection checks; `purged` is the marker `open()`/`init` reinitialize
+ * past; `writerEpoch` keeps the epoch monotonic for anything still holding
+ * a lease token; `purgePending` stays `false` — the erase already committed.
+ */
+type TombstoneMeta = {
+  purged: true;
+  generation: number;
+  writerEpoch: number;
+  purgePending: false;
+};
+
+type MetaState = LiveMetaState | TombstoneMeta;
 
 type EntryRecord =
   | { key: string; deleted: true }
@@ -276,7 +288,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     return requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get("state"));
   }
 
-  #requireMeta(state: MetaState | undefined): MetaState {
+  #requireMeta(state: MetaState | undefined): LiveMetaState {
     if (state === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
     // A `purged` marker with this store's generation still matching is the
     // tombstone case (`#assertLive` covers a generation that moved on):
@@ -378,7 +390,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   /** The initial `meta` row for `init` — fresh or reinitialized in place. */
-  #freshMeta(c: ReplicaConfig, generation: number): MetaState {
+  #freshMeta(c: ReplicaConfig, generation: number): LiveMetaState {
     return {
       config: c,
       grant: null,
@@ -483,7 +495,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * Revocation is checked first so fenced writes, GC and resets surface
    * GRANT_REVOKED rather than a stale BUSY.
    */
-  #checkFence(state: MetaState, t: LeaseToken, options: { allowRevoked?: boolean } = {}): void {
+  #checkFence(state: LiveMetaState, t: LeaseToken, options: { allowRevoked?: boolean } = {}): void {
     if (state.revoked !== null && options.allowRevoked !== true) {
       throw new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `The replica's grant was revoked: ${state.revoked}`);
     }
@@ -509,8 +521,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   async releaseLease(t: LeaseToken): Promise<void> {
     await this.#writeTx([STORE_META], "Releasing the sync lease", async (tx, meta) => {
-      const state = meta;
-      if (state === undefined || state.purged === true || state.leaseToken !== t.token || state.leaseHolder !== t.holder) return;
+      const state = meta === undefined ? undefined : this.#requireMeta(meta);
+      if (state === undefined || state.leaseToken !== t.token || state.leaseHolder !== t.holder) return;
       state.leaseHolder = null;
       state.leaseExpiresAt = null;
       this.#putMeta(tx, state);
@@ -539,7 +551,8 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   async hasContent(hashes: string[]): Promise<Set<string>> {
     const wanted = new Set(hashes);
-    if (wanted.size === 0) return wanted;
+    // Even an empty query must run the fence: a tombstoned or stale store
+    // refuses every call, including trivial ones.
     return this.#readTx([STORE_ENTRIES], (tx) => this.#hashesWithEntries(tx, wanted));
   }
 
@@ -658,7 +671,9 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   /** The serial of the last committed page (the worker broadcasts it). */
   async commitSerial(): Promise<number> {
-    const state = await this.#readTx([STORE_META], async (tx, meta) => meta);
+    const state = await this.#readTx([STORE_META], async (tx, meta) =>
+      meta === undefined ? undefined : this.#requireMeta(meta),
+    );
     return state?.serial ?? 0;
   }
 
@@ -727,18 +742,18 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       if (state.purged === true) return; // already wiped at this generation
       this.#checkFence(state, t, { allowRevoked: true });
       this.#eraseContents(tx, state);
-      // The marker carries the bumped generation: every connection that
-      // opened under `n` (this one included) is fenced out by the durable
-      // generation check, and `init` reinitializes in place past it.
-      state.generation += 1;
-      state.purged = true;
-      state.authority = null;
-      state.grant = null;
-      state.pendingGrant = null;
-      state.pendingGrantError = null;
-      state.nodeDid = null;
-      state.lastReset = { at: new Date(this.#now()).toISOString(), reason: "purge" };
-      this.#putMeta(tx, state);
+      // The tombstone is minimal on purpose: config, grant, authority,
+      // timestamps and error text are user data and must not survive the
+      // purge. `generation + 1` fences every connection that opened under
+      // `n` (this one included) by the durable generation check, and `init`
+      // reinitializes in place past it.
+      const tombstone: TombstoneMeta = {
+        purged: true,
+        generation: state.generation + 1,
+        writerEpoch: state.writerEpoch,
+        purgePending: false,
+      };
+      this.#putMeta(tx, tombstone);
     });
     try {
       options.onPurged?.();
@@ -754,7 +769,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * the lease and the epoch bump kills the writer identity, so an in-flight
    * commit, GC or reset aborts before touching a row.
    */
-  #eraseContents(tx: IDBTransaction, state: MetaState): void {
+  #eraseContents(tx: IDBTransaction, state: LiveMetaState): void {
     tx.objectStore(STORE_ENTRIES).clear();
     tx.objectStore(STORE_BLOBS).clear();
     state.cursor = null;
@@ -771,14 +786,16 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   /** Record a learned grant revocation: purge the content and fence every writer. */
   async markRevoked(detail: string): Promise<void> {
     await this.#writeTx(ALL_STORES, "Recording the revocation", async (tx, meta) => {
-      const state = meta;
-      if (state === undefined) {
+      if (meta === undefined) {
         // No replica row yet: purge the content anyway so a torn create
         // can't serve bytes whose grant was revoked.
         tx.objectStore(STORE_ENTRIES).clear();
         tx.objectStore(STORE_BLOBS).clear();
         return;
       }
+      // A tombstone is fenced like any mutation: the replica is already
+      // wiped, nothing further can be recorded.
+      const state = this.#requireMeta(meta);
       // The shared erase clears entries/blobs and resets cursor, coverage,
       // sync timestamps, writer epoch and lease — then the durable
       // revocation fields land in the same commit.
@@ -795,7 +812,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   /** The node revoked the pending grant: discard it without a purge — the active grant keeps serving. */
   async discardPendingGrant(cid: string, detail: string): Promise<void> {
     await this.#writeTx([STORE_META], "Discarding the revoked pending grant", async (tx, meta) => {
-      const state = meta;
+      const state = meta === undefined ? undefined : this.#requireMeta(meta);
       if (state === undefined || state.pendingGrant?.cid !== cid) return;
       state.pendingGrant = null;
       state.pendingGrantError = null;
@@ -811,7 +828,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   /** The node refused the pending grant (not a revocation): keep it pending, with the reason. */
   async recordPendingGrantError(cid: string, e: ReplicaLastError): Promise<void> {
     await this.#writeTx([STORE_META], "Recording the pending grant's refusal", async (tx, meta) => {
-      const state = meta;
+      const state = meta === undefined ? undefined : this.#requireMeta(meta);
       if (state === undefined || state.pendingGrant?.cid !== cid) return;
       state.pendingGrantError = e;
       this.#putMeta(tx, state);
@@ -826,7 +843,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    */
   async markRetentionRevoked(cid: string, detail: string): Promise<void> {
     await this.#writeTx([STORE_META], "Recording the retention grant's revocation", async (tx, meta) => {
-      const state = meta;
+      const state = meta === undefined ? undefined : this.#requireMeta(meta);
       if (state === undefined) return;
       if (state.config.retentionGrantCid === cid) {
         state.config = { ...state.config, retentionGrantCid: null, localReadPolicy: "whileGrantValid" };
@@ -862,7 +879,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
 
   async recordError(e: ReplicaLastError): Promise<void> {
     await this.#writeTx([STORE_META], "Recording the sync error", async (tx, meta) => {
-      const state = meta;
+      const state = meta === undefined ? undefined : this.#requireMeta(meta);
       if (state === undefined) return;
       state.lastError = e;
       this.#putMeta(tx, state);
@@ -912,9 +929,11 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   async readContent(hash: string): Promise<Uint8Array | undefined> {
-    if (!isHash(hash)) return undefined;
     try {
+      // The fence runs before the hash-shape check: a purged or stale store
+      // refuses with RESET_REQUIRED for every call, including trivial ones.
       return await this.#readTx([STORE_BLOBS], async (tx) => {
+        if (!isHash(hash)) return undefined;
         const record = await requestAsPromise<BlobRecord | undefined>(tx.objectStore(STORE_BLOBS).get(hash));
         return record?.bytes;
       });

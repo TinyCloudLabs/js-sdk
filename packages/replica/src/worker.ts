@@ -383,7 +383,13 @@ async function handleReset(purge: boolean): Promise<{ reset: true; purged: boole
       // generation fence does the rest, no connection has to close.
       onPurged: tell,
     });
-    s.channel?.close();
+    // Every post-commit step is guarded: a closing channel — like a dead
+    // postMessage — can never turn a committed purge into a rejection.
+    try {
+      s.channel?.close();
+    } catch {
+      // Channel already closed; the result is final.
+    }
     // Keep the session: the store's generation fence now throws
     // RESET_REQUIRED on every later call — the purging client must see that
     // (never NOT_FOUND) until it reopens, which swaps the session out.
