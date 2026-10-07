@@ -209,11 +209,15 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * The fence: the durable `meta` row must match the generation this store
    * opened with. Runs inside every transaction, so an old connection that
    * never saw `versionchange` still refuses — the check is durable, not
-   * cached. (`purged` is checked in `#requireMeta`/`open()` so `init` can
-   * reinitialize a marker that belongs to this generation.)
+   * cached. The tombstone case is fenced here too; `init` (skipFence) and
+   * the static open-time read are the only paths that may see it.
    */
   #assertLive(state: MetaState | undefined): void {
-    if (state !== undefined && state.generation !== this.#generation) {
+    // A tombstone refuses whatever the generation: a connection opened
+    // *after* a purge records the marker's own generation, so generation
+    // alone cannot fence it — only `init` and the static open-time read may
+    // see a tombstone.
+    if (state !== undefined && (state.generation !== this.#generation || state.purged === true)) {
       throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged or reopened; open it again to continue.");
     }
   }
@@ -306,13 +310,22 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   async open(): Promise<ReplicaState | null> {
-    // The fence runs inside the transaction: a purge or a reopen that moved
-    // the generation on throws RESET_REQUIRED before the body reads a row.
-    const state = await this.#readTx([STORE_META], async (tx, meta) => meta);
-    if (state === undefined) return null;
-    // A purge marker belonging to this generation is a wiped replica: report
-    // not-created so `init` reinitializes the database in place.
-    if (state.purged === true) return null;
+    // The generation fence still runs inside the transaction: a purge or a
+    // reopen that moved the generation on is RESET_REQUIRED — but the
+    // tombstone itself is read rather than fenced, because open()'s null is
+    // the not-created signal init needs to reinitialize the database.
+    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
+    let tx: IDBTransaction;
+    try {
+      tx = this.#db.transaction([STORE_META], "readonly");
+    } catch (error) {
+      throw idbError(error, "Reading the replica");
+    }
+    const state = await this.#meta(tx);
+    if (state !== undefined && state.generation !== this.#generation) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged or reopened; open it again to continue.");
+    }
+    if (state === undefined || state.purged === true) return null;
     return {
       config: state.config,
       grant: state.grant,
@@ -867,14 +880,28 @@ export class IndexedDbReplicaStore implements ReplicaStore {
    * `init` consumes it (reinitialize in place at the next generation).
    */
   async finishPurgeIfPending(): Promise<void> {
-    await this.#writeTx(ALL_STORES, "Finishing a revocation purge", async (tx, meta) => {
-      const state = meta;
-      if (state === undefined || state.purged === true || state.purgePending !== true) return;
-      tx.objectStore(STORE_ENTRIES).clear();
-      tx.objectStore(STORE_BLOBS).clear();
-      state.purgePending = false;
-      this.#putMeta(tx, state);
-    });
+    await this.#writeTx(
+      ALL_STORES,
+      "Finishing a revocation purge",
+      async (tx, meta) => {
+        const state = meta;
+        // skipFence covers the two fences inline: a foreign generation is
+        // still refused, and a tombstone is a no-op — its purge is done.
+        if (state === undefined || state.purged === true) return;
+        if (state.generation !== this.#generation) {
+          throw new ReplicaError(
+            ReplicaErrorCode.RESET_REQUIRED,
+            "The replica was purged or reopened; open it again to continue.",
+          );
+        }
+        if (state.purgePending !== true) return;
+        tx.objectStore(STORE_ENTRIES).clear();
+        tx.objectStore(STORE_BLOBS).clear();
+        state.purgePending = false;
+        this.#putMeta(tx, state);
+      },
+      { skipFence: true },
+    );
   }
 
   async recordError(e: ReplicaLastError): Promise<void> {

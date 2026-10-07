@@ -182,6 +182,59 @@ describe("purge lifecycle — wipe in place (indexeddb)", () => {
     await reopened.close();
   });
 
+  test("a connection opened after the purge is fenced until it initializes", async () => {
+    // The post-purge generation trap Sol found: a store opened *after* the
+    // purge records the tombstone's own generation, so generation equality
+    // alone cannot fence it — `purged` must be part of the fence. Before
+    // init, every read and every mutation is RESET_REQUIRED, including the
+    // trivial forms that short-circuit before touching rows.
+    const replicaId = nextId();
+    const store = await newStore(replicaId, "holder-purger");
+    await purgeReplicaStore(store, { locks: fakeLocks().locks, replicaId });
+
+    const late = await IndexedDbReplicaStore.open(replicaId, { holder: "holder-late" });
+    // open() alone may see the tombstone — its null is the not-created
+    // signal init needs to reinitialize in place.
+    expect(await late.open()).toBeNull();
+    await rejectsWith(late.hasContent([]), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.hasContent(["f".repeat(64)]), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.readContent("not-a-hash"), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.get("notes/a"), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.list({}), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.status(), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.pendingRepairs(10), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.commitSerial(), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.acquireSyncLease(60_000), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.claimWriterLock(), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.installGrant(deviceGrant({ prefix: "notes/" })), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.setRetentionGrant("bafyretain"), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(late.markRevoked("delegation-revoked: bafy"), ReplicaErrorCode.RESET_REQUIRED);
+    await rejectsWith(
+      late.recordError({ at: "2026-10-07T00:00:00.000Z", code: ReplicaErrorCode.STORAGE_ERROR, message: "x" }),
+      ReplicaErrorCode.RESET_REQUIRED,
+    );
+    await rejectsWith(
+      late.reset({ token: 1, holder: "holder-late" }, "manual"),
+      ReplicaErrorCode.RESET_REQUIRED,
+    );
+
+    // init at generation + 1 clears the marker; the same store then works.
+    const raw = await holdOpen(replicaDatabaseName(replicaId));
+    const tombstoneGeneration = (await metaThrough(raw))!.generation!;
+    raw.close();
+    await late.init(config({ replicaId }));
+    await late.installGrant(deviceGrant({ prefix: "notes/" }));
+    const node = new FakeNode();
+    node.put("notes/a", "restarted");
+    await new Replica({ store: late, transport: node }).sync();
+    const revived = (await late.open())!;
+    expect(revived.generation).toBe(tombstoneGeneration + 1);
+    const entry = await late.get("notes/a");
+    if (entry === undefined || entry.deleted) throw new Error("entry missing");
+    expect(text0(await late.readContent(entry.hash))).toBe("restarted");
+    await late.close();
+  });
+
   test("a never-closing sibling connection: purge resolves promptly, data gone, generation-fenced", async () => {
     // fake-indexeddb would let deleteDatabase queue forever behind this
     // connection — with wipe-in-place no delete exists at all. The blocker
