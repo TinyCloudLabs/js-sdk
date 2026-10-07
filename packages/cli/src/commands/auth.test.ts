@@ -96,6 +96,17 @@ const recorded = {
   generateKeyCalls: 0,
   grantedRequests: [] as Array<Record<string, unknown>>,
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
+  localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
+};
+
+const grantedDelegation = {
+  cid: "bafy-granted-request",
+  spaceId: "tinycloud:pkh:eip155:1:0xOwner:secrets",
+  path: "vault/secrets/ANTHROPIC_API_KEY",
+  actions: ["tinycloud.kv/get"],
+  delegateDID: "did:key:z6MkRequester",
+  delegationHeader: { Authorization: "Bearer signed-grant-artifact" },
+  expiry: "2099-01-01T00:00:00.000Z",
 };
 
 let activeProfile = "default";
@@ -123,6 +134,7 @@ function resetState(): void {
   recorded.spinners.length = 0;
   recorded.generateKeyCalls = 0;
   recorded.grantedRequests.length = 0;
+  recorded.localGrantArtifacts.length = 0;
   recorded.grantHistory.length = 0;
 
   activeProfile = "default";
@@ -272,7 +284,8 @@ mock.module("@tinycloud/node-sdk", () => ({
   grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
     recorded.grantedRequests.push(request);
     return {
-      delegationCid: "bafy-granted-request",
+      delegationCid: grantedDelegation.cid,
+      delegation: grantedDelegation,
       permissions: request.requested,
       expiry: "2099-01-01T00:00:00.000Z",
     };
@@ -364,6 +377,9 @@ mock.module("../lib/sdk.js", () => ({
 }));
 
 mock.module("../lib/permissions.js", () => ({
+  appendLocalGrantArtifact: async (profile: string, delegation: Record<string, unknown>) => {
+    recorded.localGrantArtifacts.push({ profile, delegation });
+  },
   appendAdditionalDelegation: async (
     _profile: string,
     entry: { delegation: { cid: string }; permissions: unknown[] },
@@ -1411,6 +1427,10 @@ describe("CLI auth import command", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
     expect(recorded.grantedRequests[0]).not.toHaveProperty("command");
+    expect(recorded.localGrantArtifacts).toEqual([{
+      profile: "default",
+      delegation: grantedDelegation,
+    }]);
     expect(recorded.grantHistory).toContainEqual({
       profile: "default",
       entry: {
