@@ -243,6 +243,7 @@ export {
   contentSourceDigestHex,
   normalizeUnifiedPolicyCapability,
   parseCompactUcanAuthorization,
+  parseSignedCompactUcanAttenuation,
   parsePolicySessionUcan,
   policyCidFromCanonicalBytes,
   policyDigestHex,

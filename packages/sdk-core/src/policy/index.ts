@@ -121,6 +121,7 @@ export {
   verifyPolicyRootStatusCheckpointV3,
   verifyPolicyRootRevocationV3,
   parseCompactUcanAuthorization,
+  parseSignedCompactUcanAttenuation,
   parsePolicySessionUcan,
   policyCidFromCanonicalBytes,
   policyDigestHex,

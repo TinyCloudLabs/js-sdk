@@ -75,7 +75,13 @@ const requested: PermissionEntry[] = [
   { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
 ];
 
-async function signedProof(options: { nested?: boolean; broad?: boolean; raw?: boolean; rawNetwork?: string } = {}): Promise<SignedCallback> {
+async function signedProof(options: {
+  nested?: boolean;
+  broad?: boolean;
+  raw?: boolean;
+  rawNetwork?: string;
+  capabilitiesRead?: boolean;
+} = {}): Promise<SignedCallback> {
   const now = Date.now();
   const prepared = wasm.prepareSession({
     abilities: {
@@ -83,9 +89,10 @@ async function signedProof(options: { nested?: boolean; broad?: boolean; raw?: b
         "vault/secrets/KEY": ["tinycloud.kv/get"],
         ...(options.broad ? { "vault/secrets/EXTRA": ["tinycloud.kv/get"] } : {}),
       },
+      ...(options.capabilitiesRead ? { capabilities: { "": ["tinycloud.capabilities/read"] } } : {}),
       ...(options.nested ? { encryption: { [network]: ["tinycloud.encryption/decrypt"] } } : {}),
     },
-    ...(options.nested || options.raw === false ? {} : { rawAbilities: {
+    ...((options.nested || options.raw === false) ? {} : { rawAbilities: {
       [options.rawNetwork ?? network]: ["tinycloud.encryption/decrypt"],
       ...(options.broad ? { [extraNetwork]: ["tinycloud.encryption/decrypt"] } : {}),
     } }),
@@ -400,5 +407,113 @@ describe("signed portable OpenKey grants", () => {
     });
     expect(activated).toHaveLength(1);
     expect(await loadAdditionalDelegations(profileName)).toHaveLength(1);
+  });
+
+  test("command-scoped OpenKey acquisition requests capabilities/read and returns its installed grant", async () => {
+    const proof = await signedProof({ capabilitiesRead: true });
+    let received: PermissionEntry[] = [];
+    const authority = await ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested,
+      expiryOption: undefined,
+      reason: "Revoke delegation",
+      yes: true,
+      persist: false,
+      openKeyAcquisition: async (_did, options) => {
+        received = options?.permissions ?? [];
+        return proof;
+      },
+    });
+    expect(received).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: spaceId,
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
+    expect(authority?.cid).toBe(proof.delegationCid);
+    expect(activated).toHaveLength(1);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("requires --yes before invoking OpenKey in noninteractive mode", async () => {
+    let called = false;
+    await expect(ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested,
+      expiryOption: undefined,
+      reason: "Revoke delegation",
+      yes: false,
+      persist: false,
+      openKeyAcquisition: async () => {
+        called = true;
+        return await signedProof();
+      },
+    })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+    expect(called).toBe(false);
+  });
+  test("reports unsupported raw CID ReCap encoding without persisting a grant", async () => {
+    const cid = wasm.computeCid(new TextEncoder().encode("revoke target"), 0x55n);
+    const permission: PermissionEntry = {
+      service: "tinycloud.delegation",
+      space: `urn:cid:${cid}`,
+      path: "",
+      actions: ["tinycloud.delegation/revoke"],
+    };
+    let openKeyPermissions: PermissionEntry[] = [];
+    await expect(ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested: [permission],
+      expiryOption: undefined,
+      reason: `Revoke delegation ${cid}`,
+      yes: true,
+      persist: false,
+      openKeyAcquisition: async (_did, options) => {
+        openKeyPermissions = options?.permissions ?? [];
+        throw new Error(`invalid ReCap resource URI urn:cid:${cid}: Incorrect Structure`);
+      },
+    })).rejects.toMatchObject({ code: "RAW_RECAP_RESOURCE_UNSUPPORTED" });
+
+    expect(openKeyPermissions).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: spaceId,
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
+
+    expect(activated).toEqual([]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("requires --yes for local-key authority acquisition in noninteractive mode", async () => {
+    const profile = await ProfileManager.getProfile(profileName);
+    await ProfileManager.setProfile(profileName, { ...profile, authMethod: "local" });
+    const permission: PermissionEntry = {
+      service: "tinycloud.delegation",
+      space: "urn:cid:bafy-revocation-target",
+      path: "",
+      actions: ["tinycloud.delegation/revoke"],
+    };
+    try {
+      await expect(ensureDelegationAuthority({
+        ctx: { profile: profileName, host },
+        profile: await ProfileManager.getProfile(profileName),
+        node,
+        requested: [permission],
+        expiryOption: undefined,
+        reason: "Revoke delegation bafy-revocation-target",
+        yes: false,
+        persist: false,
+      })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+    } finally {
+      await ProfileManager.setProfile(profileName, profile);
+    }
   });
 });

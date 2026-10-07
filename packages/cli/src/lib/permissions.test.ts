@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import type { LocalGrantArtifact } from "./permissions.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const OWNER_DID = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const OWNER_ADDRESS = "0xd559ccd9eb87c530a9a349262669386de93cf412";
@@ -70,6 +71,8 @@ mock.module("@tinycloud/sdk-services", () => {
 const {
   diffPermissions,
   isCompatiblePermissionRequestArtifact,
+  loadLocalGrantArtifacts,
+  localGrantArtifactsPath,
   loadManifestPermissions,
   resolvePermissionSpaces,
 } = await import("./permissions.js");
@@ -117,6 +120,25 @@ test("uses the public SDK capability-subset semantics for exact missing permissi
   );
 
   expect(missing).toEqual([]);
+});
+
+test("skips malformed records and tolerates a corrupt local grant artifact store", async () => {
+  const profile = `artifact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const path = localGrantArtifactsPath(profile);
+  await mkdir(dirname(path), { recursive: true });
+  const valid = {
+    delegationCid: "bafy-valid",
+    delegation: { cid: "bafy-valid", delegationHeader: { Authorization: "Bearer signed" } },
+  } as unknown as LocalGrantArtifact;
+  try {
+    await writeFile(path, JSON.stringify([null, { delegationCid: "mismatch", delegation: valid.delegation }, valid]));
+    expect(await loadLocalGrantArtifacts(profile)).toEqual([valid]);
+
+    await writeFile(path, "{");
+    expect(await loadLocalGrantArtifacts(profile)).toEqual([]);
+  } finally {
+    await rm(dirname(path), { recursive: true, force: true });
+  }
 });
 
 test("snapshots the shipped session, delegation, and request writer layouts", async () => {

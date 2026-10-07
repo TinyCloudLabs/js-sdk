@@ -1219,32 +1219,40 @@ export class TinyCloudNode {
     if (!this.wasmBindings.invokeAny) {
       throw new Error("WASM binding does not support invokeAny");
     }
-    const operations = entries.flatMap((entry) => {
+    const routedEntries = entries as Array<typeof entries[number] & {
+      revokeAuthorityCid?: string;
+    }>;
+    const operations = routedEntries.flatMap((entry) => {
       const operation = this.operationFromInvokeAnyEntry(entry);
       return operation ? [operation] : [];
     });
-    const grant = this.findGrantForOperations(operations);
-    // When the primary grant wins, invoke with the PASSED session (its scoped
-    // target `spaceId`), not the stored primary `ServiceSession` — see
-    // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
-    const invocationSession =
-      !grant || grant.provenance === "primary" ? session : grant.session;
-    const caveatPreservingEntries = grant
-      ? entries.map((entry) => {
-        const requested = this.operationFromInvokeAnyEntry(entry);
-        const granted = requested && grant.operations.find((candidate) =>
-          this.operationCovers(candidate, requested),
-        );
-        if (!granted?.caveats?.length) {
-          return entry;
-        }
-        if (entry.caveats !== undefined &&
-          !recapCaveatsEqual(entry.caveats, granted.caveats)) {
-          throw new Error("Invocation caveats do not match signed ReCap authority.");
-        }
-        return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
-      })
-      : entries;
+    const authorityCid = routedEntries.length === 1
+      ? routedEntries[0]?.revokeAuthorityCid
+      : undefined;
+    const explicitGrant = authorityCid === undefined
+      ? undefined
+      : this.runtimePermissionGrants.find((grant) => grant.delegation.cid === authorityCid);
+    if (authorityCid !== undefined && !explicitGrant) {
+      throw new Error(`Explicit revocation authority ${authorityCid} is not installed.`);
+    }
+    const grant = explicitGrant ?? this.findGrantForOperations(operations);
+    const invocationSession = explicitGrant
+      ? explicitGrant.session
+      : !grant || grant.provenance === "primary" ? session : grant.session;
+    const caveatPreservingEntries = routedEntries.map(({ revokeAuthorityCid: _cid, ...entry }) => {
+      const requested = this.operationFromInvokeAnyEntry(entry);
+      const granted = grant && requested && grant.operations.find((candidate) =>
+        this.operationCovers(candidate, requested),
+      );
+      if (!granted?.caveats?.length) {
+        return entry;
+      }
+      if (entry.caveats !== undefined &&
+        !recapCaveatsEqual(entry.caveats, granted.caveats)) {
+        throw new Error("Invocation caveats do not match signed ReCap authority.");
+      }
+      return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
+    });
     return this.wasmBindings.invokeAny(invocationSession, caveatPreservingEntries, facts);
   };
 
@@ -2970,6 +2978,9 @@ export class TinyCloudNode {
       stagedSessionExpiry,
       stagedRecap,
     );
+    const stagedAccountSpaceId = stagedAddress
+      ? this.wasmBindings.makeSpaceId(stagedAddress, stagedChainId, ACCOUNT_REGISTRY_SPACE)
+      : undefined;
     const stagedGraph = this.stageRestoredServiceGraph({
       host: stagedHost,
       manager: stagedManager,
@@ -2978,6 +2989,7 @@ export class TinyCloudNode {
       nodeDid: stagedNodeDid,
       address: stagedAddress,
       chainId: stagedChainId,
+      accountSpaceId: stagedAccountSpaceId,
       tinyCloudSession: stagedTcSession,
       sessionExpiry: stagedSessionExpiry,
       recap: stagedRecap,
@@ -3087,6 +3099,7 @@ export class TinyCloudNode {
     nodeDid: string;
     address: string | undefined;
     chainId: number;
+    accountSpaceId: string | undefined;
     tinyCloudSession: TinyCloudSession | undefined;
     sessionExpiry: Date;
     recap: WasmRecapEntry[];
@@ -3190,6 +3203,7 @@ export class TinyCloudNode {
     }
     const delegationManager = new DelegationManager({
       hosts: [input.host],
+      accountSpaceId: input.accountSpaceId,
       session: input.serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
@@ -5198,6 +5212,20 @@ export class TinyCloudNode {
       delegation.delegationHeader,
     );
     if (!activateResult.success) {
+      if (
+        this.operationsFromDelegation(delegation).some((operation) =>
+          operation.resource?.startsWith("urn:cid:") === true &&
+          operation.service === "delegation" &&
+          operation.action === "tinycloud.delegation/revoke"
+        ) &&
+        activateResult.status === 401 &&
+        /Cannot find parent delegation/i.test(activateResult.error ?? "")
+      ) {
+        throw Object.assign(
+          new Error("The host cannot activate a root raw-CID revoke authority without a parent delegation."),
+          { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: activateResult },
+        );
+      }
       throw Object.assign(
         new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
         { cause: activateResult },
@@ -5254,10 +5282,10 @@ export class TinyCloudNode {
     this.assertDelegationCaveatsPreservable(expanded);
 
     const rawEntries = expanded.filter((entry) =>
-      this.isEncryptionPermissionEntry(entry)
+      this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry)
     );
     const spaceEntries = expanded.filter((entry) =>
-      !this.isEncryptionPermissionEntry(entry)
+      !this.isEncryptionPermissionEntry(entry) && !this.isRawRevocationPermissionEntry(entry)
     );
 
     const bySpace = new Map<string, PermissionEntry[]>();
@@ -5287,19 +5315,34 @@ export class TinyCloudNode {
       }
       const delegatedEntries = [...entries, ...rawForDelegation];
       const abilities = this.permissionsToAbilities(entries);
-      const prepared = this.wasmBindings.prepareSession({
-        abilities,
-        ...(rawForDelegation.length > 0
-          ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
-          : {}),
-        address: this.wasmBindings.ensureEip55(session.address),
-        chainId: session.chainId,
-        domain: this.siweDomain,
-        issuedAt: now.toISOString(),
-        expirationTime: expiresAt.toISOString(),
-        spaceId,
-        jwk: session.jwk,
-      });
+      const prepared = (() => {
+        try {
+          return this.wasmBindings.prepareSession({
+            abilities,
+            ...(rawForDelegation.length > 0
+              ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
+              : {}),
+            address: this.wasmBindings.ensureEip55(session.address),
+            chainId: session.chainId,
+            domain: this.siweDomain,
+            issuedAt: now.toISOString(),
+            expirationTime: expiresAt.toISOString(),
+            spaceId,
+            jwk: session.jwk,
+          });
+        } catch (error) {
+          if (
+            rawForDelegation.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
+            /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))
+          ) {
+            throw Object.assign(
+              new Error("This WASM build cannot encode raw urn:cid ReCap resources."),
+              { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: error },
+            );
+          }
+          throw error;
+        }
+      })();
 
       const signature = await this.signer.signMessage(prepared.siwe);
       const delegatedSession = this.wasmBindings.completeSessionSetup({
@@ -5312,6 +5355,16 @@ export class TinyCloudNode {
         delegatedSession.delegationHeader,
       );
       if (!activateResult.success) {
+        if (
+          rawForDelegation.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
+          activateResult.status === 401 &&
+          /Cannot find parent delegation/i.test(activateResult.error ?? "")
+        ) {
+          throw Object.assign(
+            new Error("The host cannot activate a root raw-CID revoke authority without a parent delegation."),
+            { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: activateResult },
+          );
+        }
         throw Object.assign(
           new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
           { cause: activateResult },
@@ -6221,6 +6274,7 @@ export class TinyCloudNode {
   private permissionsToAbilities(entries: PermissionEntry[]): AbilitiesMap {
     const abilities: AbilitiesMap = {};
     for (const entry of entries) {
+      if (this.isRawRevocationPermissionEntry(entry)) continue;
       const service = this.shortServiceName(entry.service);
       abilities[service] ??= {};
       const existing = abilities[service][entry.path] ?? [];
@@ -6240,12 +6294,22 @@ export class TinyCloudNode {
     return entry.service === ENCRYPTION_PERMISSION_SERVICE &&
       this.isEncryptionNetworkOperation("encryption", entry.path, entry.space);
   }
+  private isRawRevocationPermissionEntry(entry: PermissionEntry): boolean {
+    return entry.service === "tinycloud.delegation" &&
+      entry.path === "" &&
+      entry.space?.startsWith("urn:cid:") === true &&
+      entry.actions.includes("tinycloud.delegation/revoke");
+  }
 
   private permissionsToRawAbilities(
     entries: PermissionEntry[],
   ): Record<string, string[]> {
     const rawAbilities: Record<string, string[]> = {};
     for (const entry of entries) {
+      if (this.isRawRevocationPermissionEntry(entry)) {
+        rawAbilities[entry.space!] = [...new Set(entry.actions)];
+        continue;
+      }
       if (!this.isEncryptionPermissionEntry(entry)) {
         continue;
       }
@@ -6269,9 +6333,11 @@ export class TinyCloudNode {
     return entries.flatMap((entry) => {
       const service = this.shortServiceName(entry.service);
       return entry.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, entry.path, entry.space)
-          ? { resource: entry.path }
-          : { spaceId }),
+        ...(this.isRawRevocationPermissionEntry(entry)
+          ? { resource: entry.space }
+          : this.isEncryptionNetworkOperation(service, entry.path, entry.space)
+            ? { resource: entry.path }
+            : { spaceId }),
         service,
         path: entry.path,
         action,
@@ -6285,12 +6351,17 @@ export class TinyCloudNode {
     requested: PermissionEntry[],
     granted: PermissionEntry[],
   ): { subset: boolean; missing: PermissionEntry[] } {
-    const rawGranted = granted.filter((entry) => this.isEncryptionPermissionEntry(entry))
-      .map((entry) => ({ ...entry, space: "encryption" }));
-    const spaceGranted = granted.filter((entry) => !this.isEncryptionPermissionEntry(entry));
+    const rawGranted = granted
+      .filter((entry) => this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry))
+      .map((entry) => this.isEncryptionPermissionEntry(entry) ? { ...entry, space: "encryption" } : entry);
+    const spaceGranted = granted.filter((entry) =>
+      !this.isEncryptionPermissionEntry(entry) && !this.isRawRevocationPermissionEntry(entry)
+    );
     const missing = requested.filter((entry) => {
-      const raw = this.isEncryptionPermissionEntry(entry);
-      const comparable = raw ? { ...entry, space: "encryption" } : entry;
+      const raw = this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry);
+      const comparable = raw && this.isEncryptionPermissionEntry(entry)
+        ? { ...entry, space: "encryption" }
+        : entry;
       return !isCapabilitySubset([comparable], raw ? rawGranted : spaceGranted).subset;
     });
     return { subset: missing.length === 0, missing };
@@ -6313,12 +6384,15 @@ export class TinyCloudNode {
     session: TinyCloudSession,
   ): RuntimePermissionOperation[] {
     return entries.flatMap((entry) => {
-      const spaceId = this.resolvePermissionSpace(entry.space, session);
+      const rawRevocation = this.isRawRevocationPermissionEntry(entry);
+      const spaceId = rawRevocation ? undefined : this.resolvePermissionSpace(entry.space, session);
       const service = this.shortServiceName(entry.service);
       return entry.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, entry.path, entry.space)
-          ? { resource: entry.path }
-          : { spaceId }),
+        ...(rawRevocation
+          ? { resource: entry.space }
+          : this.isEncryptionNetworkOperation(service, entry.path, entry.space)
+            ? { resource: entry.path }
+            : { spaceId }),
         service,
         path: entry.path,
         action,
@@ -6433,7 +6507,9 @@ export class TinyCloudNode {
   ): DelegatedResource[] {
     return entries.map((entry) => ({
       service: this.shortServiceName(entry.service),
-      space: this.isEncryptionPermissionEntry(entry) ? "encryption" : spaceId,
+      space: this.isRawRevocationPermissionEntry(entry)
+        ? entry.space!
+        : this.isEncryptionPermissionEntry(entry) ? "encryption" : spaceId,
       path: entry.path,
       actions: [...entry.actions],
       ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
@@ -6450,10 +6526,15 @@ export class TinyCloudNode {
 
     return resources.flatMap((resource) => {
       const service = this.invocationServiceName(resource.service);
+      const rawRevocation = service === "delegation" &&
+        resource.space.startsWith("urn:cid:") &&
+        resource.path === "";
       return resource.actions.map((action) => ({
-        ...(this.isEncryptionNetworkOperation(service, resource.path, resource.space)
-          ? { resource: resource.path }
-          : { spaceId: resource.space }),
+        ...(rawRevocation
+          ? { resource: resource.space }
+          : this.isEncryptionNetworkOperation(service, resource.path, resource.space)
+            ? { resource: resource.path }
+            : { spaceId: resource.space }),
         service,
         path: resource.path,
         action,
@@ -6529,6 +6610,11 @@ export class TinyCloudNode {
       if (this.isEncryptionNetworkOperation(service, resource.path, resource.space)) {
         rawAbilities[resource.path] ??= [];
         addActions(rawAbilities[resource.path], resource.actions);
+        continue;
+      }
+      if (service === "delegation" && resource.space.startsWith("urn:cid:") && resource.path === "") {
+        rawAbilities[resource.space] ??= [];
+        addActions(rawAbilities[resource.space], resource.actions);
         continue;
       }
 

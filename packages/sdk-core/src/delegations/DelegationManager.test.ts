@@ -38,6 +38,41 @@ describe("DelegationManager.revoke", () => {
     expect(result).toEqual({ ok: true, data: { revoked: true, cid: "bafy-child" } });
   });
 
+  test("includes target space and command-scoped authority when signing a CID revocation", async () => {
+    const session = { spaceId: "tinycloud:pkh:eip155:1:owner:source" } as ServiceSession;
+    const targetSpaceId = "tinycloud:pkh:eip155:1:owner:target";
+    const authorityCid = "bafy-command-authority";
+    let signedEntry: any;
+    const invokeAny = mock((...args: any[]) => {
+      signedEntry = args[1][0];
+      return { Authorization: "revocation" };
+    });
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny,
+      fetch: mock(async () => new Response(JSON.stringify({
+        revoked: true,
+        cid: "bafy-child",
+      }), { status: 200, headers: { "content-type": "application/json" } })),
+    });
+
+    const result = await manager.revoke("bafy-child", { targetSpaceId, authorityCid });
+
+    expect(result.ok).toBe(true);
+    expect(invokeAny).toHaveBeenCalledWith(session, [{
+      resource: "urn:cid:bafy-child",
+      spaceId: targetSpaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/revoke",
+    }]);
+    expect(signedEntry.revokeAuthorityCid).toBe(authorityCid);
+    expect(Object.keys(signedEntry)).not.toContain("revokeAuthorityCid");
+  });
+
+
   test("fails closed when raw-resource signing is unavailable", async () => {
     const fetch = mock(async () => new Response(null, { status: 200 }));
     const manager = new DelegationManager({
@@ -72,6 +107,43 @@ describe("DelegationManager.revoke", () => {
     });
 
     expect((await manager.revoke("bafy-child")).ok).toBe(false);
+  });
+
+
+  test("preserves an HTTP authorization rejection instead of reporting revocation success", async () => {
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny: mock(() => ({ Authorization: "fixture" })),
+      fetch: mock(async () => new Response("Unauthorized Revoker", { status: 403 })),
+    });
+
+    const result = await manager.revoke("bafy-child");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("A rejected revocation cannot succeed");
+    expect(result.error.code).toBe("REVOCATION_FAILED");
+    expect(result.error.message).toContain("403 - Unauthorized Revoker");
+    expect(result.error.meta).toEqual({ status: 403, cid: "bafy-child" });
+  });
+
+  test("reports an unknown target as not found", async () => {
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny: mock(() => ({ Authorization: "fixture" })),
+      fetch: mock(async () => new Response("MissingParents", { status: 404 })),
+    });
+
+    expect(await manager.revoke("bafy-unknown")).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: "NOT_FOUND",
+        message: "Delegation not found: bafy-unknown",
+      }),
+    });
   });
 });
 

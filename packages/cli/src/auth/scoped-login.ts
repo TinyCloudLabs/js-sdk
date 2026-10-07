@@ -130,13 +130,22 @@ export function permissionTuples(permissions: readonly PermissionEntry[], ownerD
   return new Set(permissions.flatMap((permission) => actionTuples(permission, ownerDid)));
 }
 
+export function isRawCidRevocationPermission(permission: PermissionEntry): boolean {
+  return permission.service === "tinycloud.delegation" &&
+    permission.space?.startsWith("urn:cid:") === true &&
+    permission.path === "" &&
+    permission.actions.includes("tinycloud.delegation/revoke");
+}
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
   // Only a top-level network entry is a raw grant. A legacy OpenKey signed
   // decrypt nested under the owner space must remain a distinct resource.
-  const raw = isVerifiedRawEncryptionPermission(permission);
-  const space = raw ? ENCRYPTION_MANIFEST_SPACE : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
-  const path = raw ? normalizePkhIdentifier(permission.path) : permission.path;
+  const rawEncryption = isVerifiedRawEncryptionPermission(permission);
+  const rawCidRevocation = isRawCidRevocationPermission(permission);
+  const space = rawEncryption
+    ? ENCRYPTION_MANIFEST_SPACE
+    : rawCidRevocation ? permission.space! : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
+  const path = rawEncryption ? normalizePkhIdentifier(permission.path) : permission.path;
   return permission.actions.map((action) =>
     JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
 }
@@ -253,7 +262,7 @@ export function declinedPermissions(requested: readonly PermissionEntry[], signe
   for (const entry of requested) {
     const space = isVerifiedRawEncryptionPermission(entry)
       ? entry.space ?? ENCRYPTION_MANIFEST_SPACE
-      : ownerSpaceId(entry.space ?? "", ownerDid);
+      : isRawCidRevocationPermission(entry) ? entry.space! : ownerSpaceId(entry.space ?? "", ownerDid);
     for (const tuple of actionTuples(entry, ownerDid)) {
       requestedScopes.set(tuple, { space, path: entry.path });
     }
@@ -305,7 +314,10 @@ export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: s
   const request = group.map((p) => isRawEncryptionPermission(p)
     ? { ...p, space: ENCRYPTION_MANIFEST_SPACE, path: canonicalNetworkUrn(p.path) }
     : p);
-  return withCapabilitiesRead(request, request.find((p) => !isRawEncryptionPermission(p))?.space ?? anchorSpace);
+  const capabilitySpace = request.find((permission) =>
+    !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+  )?.space ?? anchorSpace;
+  return withCapabilitiesRead(request, capabilitySpace);
 }
 
 function withCapabilitiesRead(permissions: PermissionEntry[], space: string): PermissionEntry[] {
@@ -379,7 +391,10 @@ export function verifySignedSession(
     if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
       throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
     }
-    throw new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED);
+    throw Object.assign(
+      new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED),
+      { cause: error },
+    );
   }
   const signedExpiry = Date.parse(expiresAt);
   if (signedExpiry <= Date.now()) {
@@ -404,10 +419,26 @@ export function verifyScopedLogin(
   expected: SignedSessionExpectations = {},
 ): { session: Record<string, unknown> & SignedSession; legacyNested: PermissionEntry[] } {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
-  const signed = verifySignedSession(data, key, sessionDid, expected);
+  let signed: SignedSession;
+  try {
+    signed = verifySignedSession(data, key, sessionDid, expected);
+  } catch (error) {
+    const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined;
+    if (
+      requested.some(isRawCidRevocationPermission) &&
+      /invalid ReCap resource URI/i.test(cause instanceof Error ? cause.message : String(cause ?? ""))
+    ) {
+      throw new CLIError(
+        "RAW_RECAP_RESOURCE_UNSUPPORTED",
+        "This WASM build cannot verify raw urn:cid ReCap resources.",
+        ExitCode.PERMISSION_DENIED,
+      );
+    }
+    throw error;
+  }
   const spaceId = data.spaceId as string;
   for (const permission of requested) {
-    if (isRawEncryptionPermission(permission)) continue;
+    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }

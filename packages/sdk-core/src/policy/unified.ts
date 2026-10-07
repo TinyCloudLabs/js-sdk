@@ -1276,6 +1276,44 @@ export function parseCompactUcanAuthorization(
   return { authorization: input, cid, header, payload };
 }
 
+const SignedCompactAttenuationSchema = z.record(z.record(z.array(z.unknown()).min(1)));
+/** Verify an issued UCAN's exact bytes while reading its signed attenuation. */
+export function parseSignedCompactUcanAttenuation(input: string, expectedCid?: string): {
+  cid: string;
+  payload: { att: z.infer<typeof SignedCompactAttenuationSchema> };
+} {
+  if (typeof input !== "string" || /\s/.test(input))
+    throw new Error("Authorization must be compact UCAN bytes");
+  const segments = input.split(".");
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0))
+    throw new Error("Authorization must have three compact segments");
+  const [headerSegment, payloadSegment, signatureSegment] = segments as [string, string, string];
+  const headerValue: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(headerSegment)));
+  const payloadValue: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(payloadSegment)));
+  if (!isRecordValue(headerValue) || !isRecordValue(headerValue.jwk) ||
+    headerValue.alg !== "EdDSA" || headerValue.typ !== "JWT" || headerValue.ucv !== "0.10.0" ||
+    headerValue.jwk.kty !== "OKP" || headerValue.jwk.crv !== "Ed25519" ||
+    !isRecordValue(payloadValue) || typeof payloadValue.iss !== "string")
+    throw new Error("Authorization has an invalid signed UCAN header or issuer");
+  const att = SignedCompactAttenuationSchema.parse(payloadValue.att);
+  const principal = payloadValue.iss.split("#", 1)[0]!;
+  const didMaterial = principal.startsWith("did:key:")
+    ? base58btc.decode(principal.slice("did:key:".length))
+    : new Uint8Array();
+  const publicKey = didMaterial.length === 34 && didMaterial[0] === 0xed && didMaterial[1] === 0x01
+    ? didMaterial.slice(2)
+    : new Uint8Array();
+  const jwkKey = typeof headerValue.jwk.x === "string" ? decodeBase64Url(headerValue.jwk.x) : new Uint8Array();
+  if (publicKey.length !== 32 || !equalBytes(publicKey, jwkKey))
+    throw new Error("compact UCAN JWK does not bind issuer");
+  const signature = decodeBase64Url(signatureSegment);
+  if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey))
+    throw new Error("compact UCAN signature is invalid");
+  const cid = CID.createV1(0x55, createDigest(0x1e, blake3(new TextEncoder().encode(input)))).toString();
+  if (expectedCid !== undefined && cid !== expectedCid) throw new Error("compact UCAN CID does not match exact Authorization bytes");
+  return { cid, payload: { att } };
+}
+
 export function parsePolicySessionUcan(
   authorization: string,
   expectedProofs?: readonly [string, string],

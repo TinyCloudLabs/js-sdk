@@ -22,6 +22,7 @@ import {
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+const revokeTargetCid = "bafkr4id4zlugcezsh7a5op53hdbepyi2buq5wx6s2czglg2xchvxeqqmn4";
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -207,6 +208,7 @@ Expiration Time: 2999-01-01T00:00:00.000Z`;
   };
   return node;
 }
+
 
 async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> {
   const originalFetch = globalThis.fetch;
@@ -1333,6 +1335,23 @@ describe("TinyCloudNode runtime permission delegations", () => {
       wasmBindings: wasm,
     });
     await node.restoreSession(proof);
+    const bindings = (node as any).wasmBindings;
+    const originalInvokeAny = bindings.invokeAny;
+    const queryInvokeAny = mock((..._args: any[]) => ({ Authorization: "restored-query" }));
+    bindings.invokeAny = queryInvokeAny;
+    (node.delegationManager as any).fetchFn = mock(async () => new Response(JSON.stringify({
+      schemaVersion: 2,
+      items: [],
+    }), { headers: { "content-type": "application/json" } }));
+    const restoredQuery = await node.delegationManager.query();
+    expect(restoredQuery.ok).toBe(true);
+    expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
+      spaceId: node.accountSpaceId,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/list",
+    }]);
+    bindings.invokeAny = originalInvokeAny;
     expect(node.getVerifiedSessionCapabilities()).toEqual([{
       service: "tinycloud.encryption",
       space: spaceId,
@@ -1488,6 +1507,94 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(invokeAny.mock.calls[0][0].delegationHeader.Authorization).toBe(
       "runtime-token",
     );
+  });
+
+
+
+  test("classifies a host missing-parent rejection for raw CID revoke authority", async () => {
+    const node = makeNode(mock(() => ({})) as any);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () =>
+      new Response("Cannot find parent delegation", { status: 401 })
+    ) as any;
+
+    try {
+      await expect(node.grantRuntimePermissions([{
+        service: "tinycloud.delegation",
+        space: `urn:cid:${revokeTargetCid}`,
+        path: "",
+        actions: ["tinycloud.delegation/revoke"],
+      }])).rejects.toMatchObject({ code: "RAW_RECAP_RESOURCE_UNSUPPORTED" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+  test("routes CID revoke control proofs through the activated runtime ability", async () => {
+    const invoke = mock((session: { delegationHeader: { Authorization: string } }) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as IWasmBindings["invoke"];
+    const node = makeNode(invoke);
+    const spaceId = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:default";
+
+    let authorityCid = "";
+    await withActivatedDelegations(async () => {
+      const [delegation] = await node.grantRuntimePermissions([{
+        service: "tinycloud.delegation",
+        space: `urn:cid:${revokeTargetCid}`,
+        path: "",
+        actions: ["tinycloud.delegation/revoke"],
+      }]);
+      await node.useRuntimeDelegation(delegation!);
+      authorityCid = delegation!.cid;
+    });
+
+    const fallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+    const invocation = node as unknown as {
+      invokeAnyWithRuntimePermissions: (
+        session: NonNullable<TinyCloudNode["restorableSession"]>,
+        entries: Array<{
+          spaceId?: string;
+          resource: string;
+          service: string;
+          path: string;
+          action: string;
+          revokeAuthorityCid?: string;
+        }>,
+        facts: Record<string, unknown>[],
+      ) => unknown;
+      wasmBindings: {
+        invokeAny: {
+          mock: { calls: Array<[NonNullable<TinyCloudNode["restorableSession"]>]> };
+        };
+      };
+    };
+    const revokeEntry = {
+      spaceId,
+      resource: `urn:cid:${revokeTargetCid}`,
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/revoke",
+    };
+    Object.defineProperty(revokeEntry, "revokeAuthorityCid", {
+      value: authorityCid,
+      enumerable: false,
+    });
+    invocation.invokeAnyWithRuntimePermissions(fallback, [revokeEntry], [{}]);
+    invocation.invokeAnyWithRuntimePermissions(fallback, [{
+      resource: "urn:cid:bafkreirevocationtarget",
+      service: "delegation",
+      path: "",
+      action: "tinycloud.delegation/status",
+    }], [{}]);
+
+    expect(invocation.wasmBindings.invokeAny.mock.calls[0]?.[0]?.delegationHeader.Authorization).toBe("runtime-token");
+    expect(invocation.wasmBindings.invokeAny.mock.calls[1]?.[0]?.delegationHeader.Authorization).toBe("base-token");
   });
 
   test("uses a single runtime SQL grant for migration-style schema and write batches", async () => {

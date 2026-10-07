@@ -281,7 +281,13 @@ export class DelegationManager {
    * }
    * ```
    */
-  async revoke(cid: string): Promise<Result<DelegationRevocationReceipt>> {
+  async revoke(
+    cid: string,
+    options?: {
+      targetSpaceId?: string;
+      authorityCid?: string;
+    },
+  ): Promise<Result<DelegationRevocationReceipt>> {
     if (!cid) {
       return {
         ok: false,
@@ -303,15 +309,20 @@ export class DelegationManager {
         };
       }
 
-      const headers = this.invokeAny(
-        this.session,
-        [{
-          resource: `urn:cid:${cid}`,
-          service: "delegation",
-          path: "",
-          action: DelegationAction.REVOKE,
-        }],
-      );
+      const entry = {
+        resource: `urn:cid:${cid}`,
+        ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
+        service: "delegation",
+        path: "",
+        action: DelegationAction.REVOKE,
+      } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
+      if (options?.authorityCid !== undefined) {
+        Object.defineProperty(entry, "revokeAuthorityCid", {
+          value: options.authorityCid,
+          enumerable: false,
+        });
+      }
+      const headers = this.invokeAny(this.session, [entry]);
       const response = await this.fetchFn(`${this.host}/revoke`, {
         method: "POST",
         headers,
@@ -482,7 +493,8 @@ export class DelegationManager {
         ),
       };
     }
-    if (!this.accountSpaceId) {
+    const accountSpaceId = this.accountSpaceId;
+    if (!accountSpaceId) {
       return {
         ok: false,
         error: createError(
@@ -493,7 +505,7 @@ export class DelegationManager {
     }
     try {
       const invocationHeaders = this.invokeAny(this.session, [{
-        spaceId: this.accountSpaceId,
+        spaceId: accountSpaceId,
         service: "delegation",
         path: "",
         action: DelegationAction.LIST,
