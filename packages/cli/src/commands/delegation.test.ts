@@ -18,6 +18,8 @@ let authorityError: (Error & { code: string }) | undefined;
 let delegationQueryResult: any;
 let readGrantHistoryCalls: number;
 let historyReadError: Error | undefined;
+let artifactReadError: Error | undefined;
+let artifactReadCalls: number;
 const parsedAuthorizationCalls: unknown[][] = [];
 
 mock.module("../config/profiles.js", () => ({
@@ -38,7 +40,11 @@ mock.module("../lib/permissions.js", () => ({
     if (historyReadError) throw historyReadError;
     return grantHistory;
   },
-  loadLocalGrantArtifacts: async () => storedDelegations.map(({ delegation }) => ({ delegationCid: delegation.cid, delegation })),
+  loadLocalGrantArtifacts: async () => {
+    artifactReadCalls++;
+    if (artifactReadError) throw artifactReadError;
+    return storedDelegations.map(({ delegation }) => ({ delegationCid: delegation.cid, delegation }));
+  },
 }));
 mock.module("@tinycloud/sdk-core", () => ({
   parseSignedCompactUcanAttenuation: (...args: unknown[]) => {
@@ -83,7 +89,9 @@ mock.module("./auth.js", () => ({
       throw authorityError;
     }
     hasRevokeAuthority = true;
+    return { cid: "bafy-command-authority" };
   },
+  requirePermissionConsent: async () => {},
 }));
 
 mock.module("../output/formatter.js", () => ({
@@ -91,7 +99,11 @@ mock.module("../output/formatter.js", () => ({
 }));
 
 mock.module("../output/errors.js", () => ({
-  CLIError: class CLIError extends Error {},
+  CLIError: class CLIError extends Error {
+    constructor(public code: string, message: string, public exitCode: number) {
+      super(message);
+    }
+  },
   cliErrorFromService: (error: unknown) => error,
   handleError: (error: unknown) => errors.push(error),
 }));
@@ -119,6 +131,8 @@ beforeEach(() => {
   readGrantHistoryCalls = 0;
   historyReadError = undefined;
   authorityError = undefined;
+  artifactReadError = undefined;
+  artifactReadCalls = 0;
   parsedAuthorizationCalls.length = 0;
   storedDelegations = [];
   grantHistory = [{
@@ -158,7 +172,7 @@ describe("tc delegation revoke authority", () => {
       yes: false,
       persist: false,
     });
-    expect(revokeCalls).toEqual([["bafy-device-grant"]]);
+    expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
     expect(outputs).toEqual([{
       cid: "bafy-device-grant",
       revoked: true,
@@ -173,7 +187,7 @@ describe("tc delegation revoke authority", () => {
     await runRevoke("bafy-device-grant", true);
 
     expect(authorityRequests[0]).toMatchObject({ yes: true, persist: false });
-    expect(revokeCalls).toEqual([["bafy-device-grant"]]);
+    expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
     expect(errors).toEqual([]);
   });
 
@@ -195,6 +209,31 @@ describe("tc delegation revoke authority", () => {
     expect(readGrantHistoryCalls).toBe(0);
     expect(revokeCalls).toEqual([["bafy-device-grant"]]);
     expect(errors).toEqual([]);
+  });
+
+  test("does not load local signed artifacts when the node identifies the target", async () => {
+    artifactReadError = new Error("corrupt artifact store");
+    hasRevokeAuthority = true;
+    await runRevoke();
+
+    expect(artifactReadCalls).toBe(0);
+    expect(revokeCalls).toEqual([["bafy-device-grant"]]);
+    expect(errors).toEqual([]);
+  });
+
+  test("maps a 403 Unauthorized Revoker response to a typed CLI error", async () => {
+    hasRevokeAuthority = true;
+    revokeResult = {
+      ok: false,
+      error: { code: "REVOCATION_FAILED", message: "Failed to revoke: 403 - Unauthorized Revoker", meta: { status: 403 } },
+    };
+    await runRevoke();
+
+    expect(errors[0]).toMatchObject({
+      code: "REVOKE_UNAUTHORIZED",
+      exitCode: 5,
+      message: expect.stringContaining("403 Unauthorized Revoker"),
+    });
   });
 
   test("reads local grant history only after a successful empty node query", async () => {
@@ -241,7 +280,10 @@ describe("tc delegation revoke authority", () => {
     ]);
     expect(authorityRequests.every((request) => (request as any).persist === false)).toBe(true);
     expect(parsedAuthorizationCalls).toEqual([["signed-target", "bafy-device-grant"]]);
-    expect(revokeCalls).toEqual([["bafy-device-grant", { targetSpaceId }]]);
+    expect(revokeCalls).toEqual([["bafy-device-grant", {
+      targetSpaceId,
+      authorityCid: "bafy-command-authority",
+    }]]);
     expect(outputs).toEqual([{
       cid: "bafy-device-grant",
       revoked: true,
@@ -261,7 +303,7 @@ describe("tc delegation revoke authority", () => {
 
     expect(readGrantHistoryCalls).toBe(1);
     expect(revokeCalls).toEqual([]);
-    expect(String(errors[0])).toContain("TARGET_NOT_FOUND");
+    expect(errors[0]).toMatchObject({ code: "TARGET_NOT_FOUND" });
   });
 
   test("routes no-options SDK revoke through the CID resource", async () => {

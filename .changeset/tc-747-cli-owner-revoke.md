@@ -2,4 +2,4 @@
 "@tinycloud/cli": patch
 ---
 
-`tc auth grant` saves the exact signed grant separately from runtime permissions. `tc delegation revoke <cid>` tries authority scoped to that CID, falls back to a locally stored signed grant artifact when the host cannot activate root raw-CID authority, and does not persist temporary permissions.
+`tc delegation revoke <cid>` tries authority scoped to that CID, falls back to a locally stored signed grant artifact only when the raw-CID encoder is unavailable, and keeps temporary authority out of profile storage. Noninteractive authority acquisition requires `--yes`; node-side 403 rejections are reported as typed CLI errors.

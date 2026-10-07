@@ -151,20 +151,20 @@ export async function loadAdditionalDelegations(
 export async function loadLocalGrantArtifacts(profile: string): Promise<LocalGrantArtifact[]> {
   const path = localGrantArtifactsPath(profile);
   if (!(await fileExists(path))) return [];
-  const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-  if (!Array.isArray(parsed)) throw new Error(`Invalid local grant artifact store for profile "${profile}".`);
-  return parsed.map((value) => {
-    if (
-      value === null || typeof value !== "object" ||
-      typeof (value as any).delegationCid !== "string" ||
-      (value as any).delegation === null || typeof (value as any).delegation !== "object" ||
-      (value as any).delegation.cid !== (value as any).delegationCid ||
-      typeof (value as any).delegation.delegationHeader?.Authorization !== "string"
-    ) {
-      throw new Error(`Invalid local grant artifact store for profile "${profile}".`);
-    }
-    return value as LocalGrantArtifact;
-  });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((value): value is LocalGrantArtifact =>
+    value !== null && typeof value === "object" &&
+    typeof (value as any).delegationCid === "string" &&
+    (value as any).delegation !== null && typeof (value as any).delegation === "object" &&
+    (value as any).delegation.cid === (value as any).delegationCid &&
+    typeof (value as any).delegation.delegationHeader?.Authorization === "string"
+  );
 }
 
 export async function appendLocalGrantArtifact(

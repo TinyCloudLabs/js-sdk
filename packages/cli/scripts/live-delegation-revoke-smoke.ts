@@ -143,6 +143,19 @@ try {
   );
   if (beforeData !== payload) throw new Error("Pre-revoke scoped read returned the wrong data.");
 
+  const unconfirmedRevoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid]);
+  const unconfirmedError = property(parseJson(unconfirmedRevoke.stderr, "Unconfirmed owner delegation revoke"), "error");
+  if (
+    unconfirmedRevoke.exitCode === 0 ||
+    property(unconfirmedError, "code") !== "CONFIRMATION_REQUIRED"
+  ) {
+    throw new Error(
+      `Noninteractive revoke without --yes did not require confirmation.\n` +
+      `Exit code: ${unconfirmedRevoke.exitCode}\nSTDERR:\n${redact(unconfirmedRevoke.stderr)}`,
+    );
+  }
+
+
   const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid, "--yes"]);
   requireSuccess(revoke, "Owner delegation revoke");
   const revokeValue = parseJson(revoke.stdout, "Owner delegation revoke");
@@ -151,11 +164,9 @@ try {
   const targetSpaceSource = requireStringProperty(revokeValue, "targetSpaceSource", "Owner delegation revoke");
   const authorityScopeSource = requireStringProperty(revokeValue, "authorityScopeSource", "Owner delegation revoke");
   const authorityScopeReason = requireStringProperty(revokeValue, "authorityScopeReason", "Owner delegation revoke");
-  const validScope = authorityScopeSource === "cid-resource"
-    ? targetSpaceSource === "node"
-    : authorityScopeSource === "local-signed-grant-artifact" &&
-      targetSpaceSource === "local-signed-grant-artifact";
-  if (revokedCid !== cid || !revoked || !validScope || authorityScopeReason.length === 0) {
+  const validTargetSource = ["node", "local-grant-history", "local-signed-grant-artifact"].includes(targetSpaceSource);
+  const validAuthorityScopeSource = ["cid-resource", "local-signed-grant-artifact"].includes(authorityScopeSource);
+  if (revokedCid !== cid || !revoked || !validTargetSource || !validAuthorityScopeSource || authorityScopeReason.length === 0) {
     throw new Error(`Revoke returned an unexpected result: ${redact(revoke.stdout)}`);
   }
   const ownerCaps = await run(cliEntry, ownerHome, HOST, ["auth", "caps"]);
@@ -192,6 +203,11 @@ try {
     key,
     cid,
     before: { command: ["tc", ...scopedReadArgs], exitCode: beforeRead.exitCode, data: beforeData },
+    unconfirmed: {
+      command: ["tc", "delegation", "revoke", cid],
+      exitCode: unconfirmedRevoke.exitCode,
+      code: property(unconfirmedError, "code"),
+    },
     revoke: {
       command: revoke.args,
       exitCode: revoke.exitCode,

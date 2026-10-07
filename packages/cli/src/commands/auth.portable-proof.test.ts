@@ -80,6 +80,7 @@ async function signedProof(options: {
   broad?: boolean;
   raw?: boolean;
   rawNetwork?: string;
+  capabilitiesRead?: boolean;
 } = {}): Promise<SignedCallback> {
   const now = Date.now();
   const prepared = wasm.prepareSession({
@@ -88,13 +89,12 @@ async function signedProof(options: {
         "vault/secrets/KEY": ["tinycloud.kv/get"],
         ...(options.broad ? { "vault/secrets/EXTRA": ["tinycloud.kv/get"] } : {}),
       },
+      ...(options.capabilitiesRead ? { capabilities: { "": ["tinycloud.capabilities/read"] } } : {}),
       ...(options.nested ? { encryption: { [network]: ["tinycloud.encryption/decrypt"] } } : {}),
     },
     ...((options.nested || options.raw === false) ? {} : { rawAbilities: {
-      ...(options.raw === false ? {} : {
-        [options.rawNetwork ?? network]: ["tinycloud.encryption/decrypt"],
-        ...(options.broad ? { [extraNetwork]: ["tinycloud.encryption/decrypt"] } : {}),
-      }),
+      [options.rawNetwork ?? network]: ["tinycloud.encryption/decrypt"],
+      ...(options.broad ? { [extraNetwork]: ["tinycloud.encryption/decrypt"] } : {}),
     } }),
     address, chainId: 1, domain: "cli.example.test", spaceId, jwk,
     issuedAt: new Date(now - 60_000).toISOString(),
@@ -408,6 +408,54 @@ describe("signed portable OpenKey grants", () => {
     expect(activated).toHaveLength(1);
     expect(await loadAdditionalDelegations(profileName)).toHaveLength(1);
   });
+
+  test("command-scoped OpenKey acquisition requests capabilities/read and returns its installed grant", async () => {
+    const proof = await signedProof({ capabilitiesRead: true });
+    let received: PermissionEntry[] = [];
+    const authority = await ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested,
+      expiryOption: undefined,
+      reason: "Revoke delegation",
+      yes: true,
+      persist: false,
+      openKeyAcquisition: async (_did, options) => {
+        received = options?.permissions ?? [];
+        return proof;
+      },
+    });
+    expect(received).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: spaceId,
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
+    expect(authority?.cid).toBe(proof.delegationCid);
+    expect(activated).toHaveLength(1);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("requires --yes before invoking OpenKey in noninteractive mode", async () => {
+    let called = false;
+    await expect(ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested,
+      expiryOption: undefined,
+      reason: "Revoke delegation",
+      yes: false,
+      persist: false,
+      openKeyAcquisition: async () => {
+        called = true;
+        return await signedProof();
+      },
+    })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+    expect(called).toBe(false);
+  });
   test("reports unsupported raw CID ReCap encoding without persisting a grant", async () => {
     const cid = wasm.computeCid(new TextEncoder().encode("revoke target"), 0x55n);
     const permission: PermissionEntry = {
@@ -416,6 +464,7 @@ describe("signed portable OpenKey grants", () => {
       path: "",
       actions: ["tinycloud.delegation/revoke"],
     };
+    let openKeyPermissions: PermissionEntry[] = [];
     await expect(ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
@@ -423,12 +472,20 @@ describe("signed portable OpenKey grants", () => {
       requested: [permission],
       expiryOption: undefined,
       reason: `Revoke delegation ${cid}`,
-      yes: false,
+      yes: true,
       persist: false,
-      openKeyAcquisition: async () => {
+      openKeyAcquisition: async (_did, options) => {
+        openKeyPermissions = options?.permissions ?? [];
         throw new Error(`invalid ReCap resource URI urn:cid:${cid}: Incorrect Structure`);
       },
     })).rejects.toMatchObject({ code: "RAW_RECAP_RESOURCE_UNSUPPORTED" });
+
+    expect(openKeyPermissions).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: spaceId,
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
 
     expect(activated).toEqual([]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);

@@ -400,11 +400,6 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
   }
 }
 
-function revocationAuthorityError(message: string): Error & { code: string } {
-  return Object.assign(new Error(message), {
-    code: "DELEGATION_REVOCATION_AUTHORITY_NOT_FOUND",
-  });
-}
 
 function clonePersistedSessionJwk(jwk: unknown): object {
   if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) {
@@ -895,8 +890,6 @@ interface RuntimePermissionOperation {
   action: string;
   /** Exact signed ReCap attenuation for this action, if any. */
   caveats?: Record<string, unknown>[];
-  /** Local-only hint; removed before the entry reaches WASM. */
-  revocationTarget?: { delegatorDID?: string; delegateDID?: string };
 }
 
 interface RuntimePermissionGrant {
@@ -1228,29 +1221,29 @@ export class TinyCloudNode {
       throw new Error("WASM binding does not support invokeAny");
     }
     const routedEntries = entries as Array<typeof entries[number] & {
-      revocationTarget?: { delegatorDID?: string; delegateDID?: string };
+      revokeAuthorityCid?: string;
     }>;
     const operations = routedEntries.flatMap((entry) => {
       const operation = this.operationFromInvokeAnyEntry(entry);
       return operation ? [operation] : [];
     });
-    const isRevocation = operations.length === 1 &&
-      operations[0]?.resource?.startsWith("urn:cid:") === true &&
-      operations[0]?.service === "delegation" &&
-      operations[0]?.action === "tinycloud.delegation/revoke";
-    const grant = isRevocation
-      ? this.findRuntimeRevocationGrant(operations)
-      : this.findGrantForOperations(operations);
-    // When the primary grant wins, invoke with the PASSED session (its scoped
-    // target `spaceId`), not the stored primary `ServiceSession` — see
-    // `selectInvocationSession` for the wrong-space rationale (TC-111 follow-up).
-    const invocationSession =
-      !grant || grant.provenance === "primary" ? session : grant.session;
-    const caveatPreservingEntries = routedEntries.map(({ revocationTarget: _target, ...entry }) => {
+    const authorityCid = routedEntries.length === 1
+      ? routedEntries[0]?.revokeAuthorityCid
+      : undefined;
+    const explicitGrant = authorityCid === undefined
+      ? undefined
+      : this.runtimePermissionGrants.find((grant) => grant.delegation.cid === authorityCid);
+    if (authorityCid !== undefined && !explicitGrant) {
+      throw new Error(`Explicit revocation authority ${authorityCid} is not installed.`);
+    }
+    const grant = explicitGrant ?? this.findGrantForOperations(operations);
+    const invocationSession = explicitGrant
+      ? explicitGrant.session
+      : !grant || grant.provenance === "primary" ? session : grant.session;
+    const caveatPreservingEntries = routedEntries.map(({ revokeAuthorityCid: _cid, ...entry }) => {
       const requested = this.operationFromInvokeAnyEntry({ ...entry });
       const granted = grant && requested && grant.operations.find((candidate) =>
-        this.operationCovers(candidate, requested) ||
-        this.revocationGrantOperationCovers(candidate, requested),
+        this.operationCovers(candidate, requested),
       );
       if (!granted?.caveats?.length) {
         return entry;
@@ -5684,14 +5677,7 @@ export class TinyCloudNode {
    * @returns Result indicating success or failure
    */
   async revokeDelegation(cid: string): Promise<DelegationResult<DelegationRevocationReceipt>> {
-    // The no-options API targets authority in the current primary space.
-    // Callers that revoke on another space can use delegationManager.revoke
-    // with an explicit targetSpaceId; the host still validates the CID.
-    const targetSpaceId = this.currentTinyCloudSession()?.spaceId;
-    return this.delegationManager.revoke(
-      cid,
-      targetSpaceId === undefined ? undefined : { targetSpaceId },
-    );
+    return this.delegationManager.revoke(cid);
   }
 
   /** Read node-confirmed lifecycle state for one delegation. */
@@ -6360,9 +6346,9 @@ export class TinyCloudNode {
     requested: PermissionEntry[],
     granted: PermissionEntry[],
   ): { subset: boolean; missing: PermissionEntry[] } {
-    const rawGranted = granted.filter((entry) =>
-      this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry)
-    );
+    const rawGranted = granted
+      .filter((entry) => this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry))
+      .map((entry) => this.isEncryptionPermissionEntry(entry) ? { ...entry, space: "encryption" } : entry);
     const spaceGranted = granted.filter((entry) =>
       !this.isEncryptionPermissionEntry(entry) && !this.isRawRevocationPermissionEntry(entry)
     );
@@ -6697,80 +6683,6 @@ export class TinyCloudNode {
     return covering.find((grant) => grant.provenance === "primary") ?? covering[0];
   }
 
-  /**
-   * A revoke proof is selected only by its exact CID-scoped capability.
-   * Target metadata is a hint for principal eligibility; the node remains the
-   * authority and rejects any proof the signer cannot use.
-   */
-  private findRuntimeRevocationGrant(
-    operations: RuntimePermissionOperation[],
-  ): RuntimePermissionGrant | undefined {
-    if (operations.length !== 1) return undefined;
-    const [requested] = operations;
-    if (
-      requested?.resource?.startsWith("urn:cid:") !== true ||
-      requested.service !== "delegation" ||
-      requested.action !== "tinycloud.delegation/revoke"
-    ) {
-      return undefined;
-    }
-    this.pruneExpiredRuntimePermissionGrants();
-    const matchingGrant = this.runtimePermissionGrants.find((grant) =>
-      (grant.provenance === "primary" || grant.provenance === "runtime" || grant.provenance === "delegated") &&
-      grant.operations.some((operation) =>
-        (operation.resource === requested.resource ||
-          (operation.resource === undefined &&
-            operation.spaceId !== undefined &&
-            requested.spaceId !== undefined &&
-            this.spaceIdsEqual(operation.spaceId, requested.spaceId))) &&
-        operation.service === requested.service &&
-        operation.action === requested.action &&
-        this.pathContains(operation.path, requested.path)
-      ) &&
-      this.runtimeGrantPrincipalCanRevoke(grant, requested)
-    );
-    if (!matchingGrant) {
-      throw revocationAuthorityError(
-        `No installed delegation revocation authority can revoke ${requested.resource}.`,
-      );
-    }
-    return matchingGrant;
-  }
-
-  private runtimeGrantPrincipalCanRevoke(
-    grant: RuntimePermissionGrant,
-    requested: RuntimePermissionOperation,
-  ): boolean {
-    const permittedPrincipals = [
-      requested.revocationTarget?.delegatorDID,
-      requested.revocationTarget?.delegateDID,
-      requested.spaceId === undefined ? this.ownerDidFromSpaceId(grant.session.spaceId) : this.ownerDidFromSpaceId(requested.spaceId),
-    ].filter((principal): principal is string => typeof principal === "string" && principal.length > 0);
-    const proofPrincipal = grant.delegation.delegatorDID ??
-      this.ownerDidFromSpaceId(grant.delegation.spaceId);
-    const proofDelegatee = grant.delegation.delegateDID;
-    return typeof proofPrincipal === "string" &&
-      typeof proofDelegatee === "string" &&
-      didPrincipalMatches(proofDelegatee, grant.session.verificationMethod) &&
-      permittedPrincipals.some((permitted) => didPrincipalMatches(proofPrincipal, permitted));
-  }
-  private revocationGrantOperationCovers(
-    granted: RuntimePermissionOperation,
-    requested: RuntimePermissionOperation,
-  ): boolean {
-    return requested.resource?.startsWith("urn:cid:") === true &&
-      requested.service === "delegation" &&
-      requested.action === "tinycloud.delegation/revoke" &&
-      (granted.resource === requested.resource ||
-        (granted.resource === undefined &&
-          granted.spaceId !== undefined &&
-          requested.spaceId !== undefined &&
-          this.spaceIdsEqual(granted.spaceId, requested.spaceId))) &&
-      granted.service === requested.service &&
-      granted.action === requested.action &&
-      this.pathContains(granted.path, requested.path);
-  }
-
 
 
   private findGrantForOperation(
@@ -6874,7 +6786,6 @@ export class TinyCloudNode {
     path: string;
     action: string;
     caveats?: Record<string, unknown>[];
-    revocationTarget?: { delegatorDID?: string; delegateDID?: string };
   }): RuntimePermissionOperation | undefined {
     const service = this.invocationServiceName(entry.service);
     if (typeof entry.resource === "string") {
@@ -6885,7 +6796,6 @@ export class TinyCloudNode {
         path: entry.path,
         action: entry.action,
         ...(entry.caveats === undefined ? {} : { caveats: cloneRecapCaveats(entry.caveats) }),
-        ...(entry.revocationTarget === undefined ? {} : { revocationTarget: entry.revocationTarget }),
       };
     }
     if (entry.spaceId === undefined && this.isEncryptionNetworkOperation(service, entry.path)) {

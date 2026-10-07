@@ -314,7 +314,10 @@ export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: s
   const request = group.map((p) => isRawEncryptionPermission(p)
     ? { ...p, space: ENCRYPTION_MANIFEST_SPACE, path: canonicalNetworkUrn(p.path) }
     : p);
-  return withCapabilitiesRead(request, request.find((p) => !isRawEncryptionPermission(p))?.space ?? anchorSpace);
+  const capabilitySpace = request.find((permission) =>
+    !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+  )?.space ?? anchorSpace;
+  return withCapabilitiesRead(request, capabilitySpace);
 }
 
 function withCapabilitiesRead(permissions: PermissionEntry[], space: string): PermissionEntry[] {

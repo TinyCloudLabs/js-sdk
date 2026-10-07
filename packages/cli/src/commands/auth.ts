@@ -1181,6 +1181,8 @@ export async function ensureDelegationAuthority(params: {
   /** Keep command-scoped authority out of profile grant/history storage. */
   persist?: boolean;
   force?: boolean;
+  /** The command already prompted before doing its target lookup. */
+  consentAlreadyGiven?: boolean;
   /**
    * Space a decrypt-only grant is requested in. OpenKey signs only a request
    * with one space; defaults to the profile's primary space.
@@ -1188,8 +1190,15 @@ export async function ensureDelegationAuthority(params: {
   anchorSpace?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
-}): Promise<void> {
-  if (!params.force && params.node.hasRuntimePermissions(params.requested)) return;
+}): Promise<PortableDelegation | undefined> {
+  if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
+
+  if (
+    !params.consentAlreadyGiven &&
+    (params.persist === false || params.profile.authMethod !== "openkey")
+  ) {
+    await requirePermissionConsent(params.requested, params.yes);
+  }
 
   if (params.profile.authMethod === "openkey") {
     const key = await ProfileManager.getKey(params.ctx.profile);
@@ -1211,13 +1220,14 @@ export async function ensureDelegationAuthority(params: {
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     if (params.persist === false) {
+      const request = grantRequestPermissions(params.requested, anchorSpace);
       let delegationData: Awaited<ReturnType<OpenKeyAcquisition>>;
       try {
         delegationData = await acquireOpenKey(params.profile.did, {
           jwk: key,
           host: params.ctx.host,
-          permissions: params.requested,
-          reason: permissionGrantReason(params.reason, params.requested),
+          permissions: request,
+          reason: permissionGrantReason(params.reason, request),
           openkeyHost,
           expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
         });
@@ -1236,12 +1246,12 @@ export async function ensureDelegationAuthority(params: {
       }
       const delegation = portableFromOpenKeyDelegation(
         delegationData,
-        params.requested,
+        request,
         params.ctx.host,
         proof,
       );
       await params.node.useRuntimeDelegation(delegation);
-      return;
+      return delegation;
     }
     const grants: StagedOpenKeyGrant[] = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
@@ -1263,23 +1273,11 @@ export async function ensureDelegationAuthority(params: {
     return;
   }
 
-  if (isInteractive()) {
-    if (!params.yes) {
-      await confirmPermissionRequest(params.requested);
-    }
-  } else if (!params.yes) {
-    throw new CLIError(
-      "CONFIRMATION_REQUIRED",
-      "Local-key auth grants in non-interactive mode require --yes.",
-      ExitCode.USAGE_ERROR,
-    );
-  }
-
   const delegations = await params.node.grantRuntimePermissions(
     params.requested,
     params.expiryOption !== undefined ? { expiry: params.expiryOption } : undefined,
   );
-  if (params.persist === false) return;
+  if (params.persist === false) return delegations[0];
   for (const delegation of delegations) {
     const covering = permissionsFromDelegation(delegation);
     await appendAdditionalDelegation(
@@ -1372,6 +1370,21 @@ async function confirmPermissionRequest(permissions: PermissionEntry[]): Promise
 
   if (!/^y(es)?$/i.test(answer.trim())) {
     throw new CLIError("REQUEST_CANCELLED", "Permission request cancelled.", ExitCode.ERROR);
+  }
+}
+
+export async function requirePermissionConsent(
+  permissions: PermissionEntry[],
+  yes: boolean,
+): Promise<void> {
+  if (isInteractive()) {
+    if (!yes) await confirmPermissionRequest(permissions);
+  } else if (!yes) {
+    throw new CLIError(
+      "CONFIRMATION_REQUIRED",
+      "Permission grants in non-interactive mode require --yes.",
+      ExitCode.USAGE_ERROR,
+    );
   }
 }
 

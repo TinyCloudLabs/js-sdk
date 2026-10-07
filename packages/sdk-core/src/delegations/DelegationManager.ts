@@ -285,7 +285,7 @@ export class DelegationManager {
     cid: string,
     options?: {
       targetSpaceId?: string;
-      targetDelegation?: { delegatorDID?: string; delegateDID: string };
+      authorityCid?: string;
     },
   ): Promise<Result<DelegationRevocationReceipt>> {
     if (!cid) {
@@ -315,12 +315,10 @@ export class DelegationManager {
         service: "delegation",
         path: "",
         action: DelegationAction.REVOKE,
-      } as Parameters<InvokeAnyFunction>[1][number] & {
-        revocationTarget?: { delegatorDID?: string; delegateDID: string };
-      };
-      if (options?.targetDelegation) {
-        Object.defineProperty(entry, "revocationTarget", {
-          value: options.targetDelegation,
+      } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
+      if (options?.authorityCid !== undefined) {
+        Object.defineProperty(entry, "revokeAuthorityCid", {
+          value: options.authorityCid,
           enumerable: false,
         });
       }
@@ -368,19 +366,6 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
-      if (
-        error instanceof Error &&
-        (error as Error & { code?: string }).code === "DELEGATION_REVOCATION_AUTHORITY_NOT_FOUND"
-      ) {
-        return {
-          ok: false,
-          error: createError(
-            "DELEGATION_REVOCATION_AUTHORITY_NOT_FOUND",
-            error.message,
-            error,
-          ),
-        };
-      }
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
