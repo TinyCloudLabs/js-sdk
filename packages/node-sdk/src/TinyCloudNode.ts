@@ -5214,6 +5214,20 @@ export class TinyCloudNode {
       delegation.delegationHeader,
     );
     if (!activateResult.success) {
+      if (
+        this.operationsFromDelegation(delegation).some((operation) =>
+          operation.resource?.startsWith("urn:cid:") === true &&
+          operation.service === "delegation" &&
+          operation.action === "tinycloud.delegation/revoke"
+        ) &&
+        activateResult.status === 401 &&
+        /Cannot find parent delegation/i.test(activateResult.error ?? "")
+      ) {
+        throw Object.assign(
+          new Error("The host cannot activate a root raw-CID revoke authority without a parent delegation."),
+          { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: activateResult },
+        );
+      }
       throw Object.assign(
         new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
         { cause: activateResult },
@@ -5343,6 +5357,16 @@ export class TinyCloudNode {
         delegatedSession.delegationHeader,
       );
       if (!activateResult.success) {
+        if (
+          rawForDelegation.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
+          activateResult.status === 401 &&
+          /Cannot find parent delegation/i.test(activateResult.error ?? "")
+        ) {
+          throw Object.assign(
+            new Error("The host cannot activate a root raw-CID revoke authority without a parent delegation."),
+            { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: activateResult },
+          );
+        }
         throw Object.assign(
           new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
           { cause: activateResult },

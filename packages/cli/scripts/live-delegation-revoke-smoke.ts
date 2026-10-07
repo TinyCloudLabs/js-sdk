@@ -160,12 +160,10 @@ try {
   }
   const ownerCaps = await run(cliEntry, ownerHome, HOST, ["auth", "caps"]);
   requireSuccess(ownerCaps, "Owner capability inspection");
-  const capEntries = property(parseJson(ownerCaps.stdout, "Owner capability inspection"), "capabilities");
-  if (!Array.isArray(capEntries) || capEntries.some((entry) =>
-    property(entry, "space") === `urn:cid:${cid}` &&
-    Array.isArray(property(entry, "actions")) &&
-    (property(entry, "actions") as unknown[]).includes("tinycloud.delegation/revoke")
-  )) {
+  const capOutput = parseJson(ownerCaps.stdout, "Owner capability inspection");
+  const capEntries = property(capOutput, "granted");
+  const appendedDelegations = property(capOutput, "appendedDelegations");
+  if (!Array.isArray(capEntries) || capEntries.length !== 0 || appendedDelegations !== 0) {
     throw new Error(`Temporary revoke authority was persisted: ${redact(ownerCaps.stdout)}`);
   }
 
@@ -202,6 +200,11 @@ try {
       targetSpaceSource,
       authorityScopeSource,
       authorityScopeReason,
+    },
+    caps: {
+      exitCode: ownerCaps.exitCode,
+      granted: capEntries,
+      appendedDelegations,
     },
     after: {
       command: ["tc", ...scopedReadArgs],

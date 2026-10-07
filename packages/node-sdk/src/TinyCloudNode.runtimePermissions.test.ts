@@ -1528,6 +1528,25 @@ describe("TinyCloudNode runtime permission delegations", () => {
   });
 
 
+
+  test("classifies a host missing-parent rejection for raw CID revoke authority", async () => {
+    const node = makeNode(mock(() => ({})) as any);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () =>
+      new Response("Cannot find parent delegation", { status: 401 })
+    ) as any;
+
+    try {
+      await expect(node.grantRuntimePermissions([{
+        service: "tinycloud.delegation",
+        space: `urn:cid:${revokeTargetCid}`,
+        path: "",
+        actions: ["tinycloud.delegation/revoke"],
+      }])).rejects.toMatchObject({ code: "RAW_RECAP_RESOURCE_UNSUPPORTED" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
   test("routes CID revoke control proofs through the activated runtime ability", async () => {
     const invoke = mock((session: { delegationHeader: { Authorization: string } }) => ({
       Authorization: session.delegationHeader.Authorization,

@@ -248,7 +248,7 @@ describe("tc delegation revoke authority", () => {
       targetSpaceSource: "local-signed-grant-artifact",
       authorityScopeSource: "local-signed-grant-artifact",
       authorityScopeReason:
-        "The WASM ReCap parser rejected urn:cid resources; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID.",
+        "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID.",
     }]);
     expect(errors).toEqual([]);
   });
