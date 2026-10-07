@@ -282,7 +282,10 @@
         "@noble/hashes": "^1.8.0",
       },
       "devDependencies": {
+        "@tinycloud/sdk-services": "workspace:*",
+        "@tinycloud/web-sdk-wasm": "workspace:*",
         "@types/node": "^20",
+        "fake-indexeddb": "^6.2.5",
         "tsup": "^8.0.0",
         "typescript": "^5.9.3",
       },
@@ -3126,6 +3129,8 @@
     "extension-port-stream": ["extension-port-stream@3.0.0", "", { "dependencies": { "readable-stream": "^3.6.2 || ^4.4.2", "webextension-polyfill": ">=0.10.0 <1.0" } }, "sha512-an2S5quJMiy5bnZKEf6AkfH/7r8CzHvhchU40gxN+OM6HPhe7Z9T1FUychcf2M9PpPOO0Hf7BAEfJkw2TDIBDw=="],
 
     "eyes": ["eyes@0.1.8", "", {}, "sha512-GipyPsXO1anza0AOZdy69Im7hGFCNB7Y/NGjDlZGJ3GJJLtwNSb2vrzYrTYJRrRloVx7pl+bhUaTB8yiccPvFQ=="],
+
+    "fake-indexeddb": ["fake-indexeddb@6.2.5", "", {}, "sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w=="],
 
     "family": ["family@0.1.6", "", { "peerDependencies": { "react": "17.x || 18.x || 19.x", "react-dom": "17.x || 18.x || 19.x", "viem": "2.x", "wagmi": "2.x" }, "optionalPeers": ["react", "react-dom", "viem", "wagmi"] }, "sha512-ulHRThfhz+glfmVfSPcU16N1hZ/uj0Y1D79vl0PeJ3yFfgXlkiBbVwXRJhDQuP8oizxBCl16KT2PrMleiYwrPw=="],
 

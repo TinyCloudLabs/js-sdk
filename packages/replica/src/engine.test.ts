@@ -331,6 +331,7 @@ describe("writer fencing", () => {
         at: new Date().toISOString(),
         complete: false,
         window: { notBefore: null, expiresAt: null },
+        retentionGrantCid: null,
         promoteGrant: null,
       }),
       ReplicaErrorCode.BUSY,

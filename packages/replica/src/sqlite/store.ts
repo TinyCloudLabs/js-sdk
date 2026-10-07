@@ -446,10 +446,14 @@ export class SqliteReplicaStore implements ReplicaStore {
   /** Update the retention opt-in; it takes effect at the next sync. */
   async setRetentionGrant(cid: string | null): Promise<void> {
     await this.#guardedWrite("Updating the retention grant", () => {
+      // Changing the CID invalidates the attested retainUntil: it was earned
+      // under the previous retain grant, so only a fresh sync under the new
+      // CID may re-establish it.
       this.#db.run(
-        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ? WHERE id = 1",
+        "UPDATE replica SET retention_grant_cid = ?, local_read_policy = ?, retain_until = NULL WHERE id = 1 AND retention_grant_cid IS NOT ?",
         cid,
         cid === null ? "whileGrantValid" : "retainAfterExpiry",
+        cid,
       );
     });
   }
@@ -668,10 +672,19 @@ export class SqliteReplicaStore implements ReplicaStore {
           const sets: string[] = ["cursor = ?", "coverage = ?"];
           const params: SqlValue[] = [p.cursor, p.coverage];
           if (p.authority !== null) {
-            sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "retain_until = ?", "last_sync_at = ?");
-            params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.authority.retainUntil, p.at);
-            // A node-attested retention under a new retain grant supersedes a learned revocation of the old one.
-            if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
+            sets.push("node_did = ?", "attested = 1", "not_before = ?", "expires_at = ?", "last_sync_at = ?");
+            params.push(p.source.nodeDid, p.authority.notBefore, p.authority.expiresAt, p.at);
+            // The attested retainUntil belongs to the retention grant the
+            // request presented: if a setRetentionGrant raced the page, the
+            // stored CID no longer matches and retain_until stays untouched
+            // (null after the CID change) instead of reviving the previous
+            // grant's window under a new CID.
+            if (this.#row()!.retention_grant_cid === p.retentionGrantCid) {
+              sets.push("retain_until = ?");
+              params.push(p.authority.retainUntil);
+              // A node-attested retention under a new retain grant supersedes a learned revocation of the old one.
+              if (p.authority.retainUntil !== null) sets.push("retention_revoked = NULL");
+            }
           }
           if (p.complete) {
             sets.push("last_complete_at = ?", "last_error = NULL");

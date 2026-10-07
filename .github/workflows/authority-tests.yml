@@ -38,6 +38,9 @@ jobs:
           bun run --cwd packages/sdk-core build
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
+          # @tinycloud/replica's worker entry imports @tinycloud/web-sdk-wasm.
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/replica build
 

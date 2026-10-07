@@ -118,8 +118,53 @@ describe("retention grant revocation", () => {
       "retainAfterExpiry",
       null,
     ]);
+    // The swap cleared the attested retainUntil: after the window the read
+    // is a hard GRANT_EXPIRED, not an "expired" status.
     advance(120_000);
-    expect((await replica.get("notes/a")).meta.authority).toBe("expired");
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
+
+  test("changing the retention CID drops the attested retainUntil until a new sync", async () => {
+    const { node, store, replica, advance } = await retained();
+    expect((await store.open())!.authority?.retainUntil).not.toBeNull();
+
+    // A different retain grant cannot inherit the old grant's attestation.
+    await store.setRetentionGrant("bafyother");
+    expect((await store.open())!.authority?.retainUntil).toBeNull();
+    // Re-setting the same CID is a no-op: the attestation stays cleared.
+    await store.setRetentionGrant("bafyother");
+    expect((await store.open())!.authority?.retainUntil).toBeNull();
+    // Clearing the opt-in also drops it.
+    await store.setRetentionGrant("bafyretain");
+    await replica.sync();
+    expect((await store.open())!.authority?.retainUntil).not.toBeNull();
+    await store.setRetentionGrant(null);
+    expect((await store.open())!.authority?.retainUntil).toBeNull();
+
+    // After the window lapses with no new attestation, reads fail.
+    advance(120_000);
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
+  });
+
+  test("an in-flight page cannot restore the retainUntil a CID swap invalidated", async () => {
+    const { node, store, replica, advance } = await retained();
+    expect((await store.open())!.authority?.retainUntil).not.toBeNull();
+
+    // The next sync request is issued under `bafyretain`; mid-request a new
+    // CID lands. The page still commits — under the new CID — but its
+    // attested retainUntil belongs to the grant the request presented, so
+    // the store must not persist it.
+    node.onSyncPage = async () => {
+      node.onSyncPage = undefined;
+      await store.setRetentionGrant("bafyother");
+    };
+    await replica.sync();
+    const state = (await store.open())!;
+    expect(state.config.retentionGrantCid).toBe("bafyother");
+    expect(state.authority?.retainUntil).toBeNull();
+    // Post-expiry the read is a hard GRANT_EXPIRED, not a revived window.
+    advance(120_000);
+    expect(await codeOf(replica.get("notes/a"))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
   });
 });
 
@@ -369,6 +414,7 @@ function pageOf(blob?: Uint8Array) {
     at: new Date().toISOString(),
     window: { notBefore: null, expiresAt: null },
     complete: true,
+    retentionGrantCid: null,
     promoteGrant: null,
   };
 }

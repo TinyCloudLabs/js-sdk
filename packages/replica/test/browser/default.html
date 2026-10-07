@@ -1,0 +1,60 @@
+<!doctype html>
+<!--
+  TC-19 default-worker fixture. Unlike /index.html (the Vite bundle), this
+  page has no worker asset at all: `openReplica` must resolve the package's
+  own `new URL("./replica.worker.js", import.meta.url)` — `/pkg/` is the raw
+  package directory, served verbatim. If the bundled URL regression ever
+  ships, the worker 404s and this test fails instead of being masked by a
+  bundler-emitted `/assets/replica.worker.js`.
+-->
+<html>
+  <body>
+    <div id="status">booting</div>
+    <script type="importmap">
+      { "imports": { "@tinycloud/replica/browser": "/pkg/dist/browser.js" } }
+    </script>
+    <script type="module">
+      const state = { replica: null, committedSerials: [], resetReasons: [] };
+      const module = await import("@tinycloud/replica/browser");
+      const api = {
+        async open(options) {
+          if (state.replica !== null) await state.replica.close().catch(() => undefined);
+          state.committedSerials = [];
+          state.resetReasons = [];
+          const { defaultWorker, ...openOptions } = options;
+          const replica = await module.openReplica(openOptions, {
+            onCommitted: (serial) => state.committedSerials.push(serial),
+            onReset: (reason) => state.resetReasons.push(reason),
+          });
+          state.replica = replica;
+          const opened = replica.opened;
+          return { replicaId: opened.replicaId, deviceDid: opened.deviceDid, created: opened.created, status: opened.status };
+        },
+        committedSerials: () => state.committedSerials.slice(),
+        resetReasons: () => state.resetReasons.slice(),
+        deviceDid: () => state.replica.deviceDid,
+        installGrant: (delegation) => state.replica.installGrant(delegation),
+        sync: (options) => state.replica.sync(options),
+        get: async (key) => {
+          const result = await state.replica.get(key);
+          if (result.status === "present") {
+            const raw = result.value;
+            const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+            return { ...result, value: Array.from(bytes) };
+          }
+          return result;
+        },
+        list: (options) => state.replica.list(options),
+        status: () => state.replica.status(),
+        reset: (options) => state.replica.reset(options),
+        serviceWorkerReady: async () => {
+          if (!("serviceWorker" in navigator)) return false;
+          await navigator.serviceWorker.ready;
+          return navigator.serviceWorker.controller !== null;
+        },
+      };
+      window.__replica = api;
+      document.getElementById("status").textContent = "ready";
+    </script>
+  </body>
+</html>

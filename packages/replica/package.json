@@ -19,6 +19,13 @@
       "import": "./dist/sqlite.js",
       "require": "./dist/sqlite.cjs"
     },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    },
+    "./worker": {
+      "import": "./dist/replica.worker.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
@@ -39,7 +46,10 @@
     "@noble/hashes": "^1.8.0"
   },
   "devDependencies": {
+    "@tinycloud/sdk-services": "workspace:*",
+    "@tinycloud/web-sdk-wasm": "workspace:*",
     "@types/node": "^20",
+    "fake-indexeddb": "^6.2.5",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },

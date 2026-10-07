@@ -1,0 +1,100 @@
+<!doctype html>
+<!--
+  TC-19 manual fixture page. Served by serve-fixture.ts next to the Vite-built
+  bundle (/assets/index.js installs window.__replica and the offline service
+  worker). Bootstrap: the hash carries `host`/`space`/`principal` (and
+  optionally `prefix`, `grant`). Without a grant the page asks
+  /admin/grant for one (minted for this origin's device DID), puts it in the
+  hash and reloads — the printed URL is self-completing.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>tinycloud replica — manual fixture</title>
+    <style>
+      body { font: 14px/1.45 system-ui, sans-serif; max-width: 760px; margin: 2em auto; padding: 0 1em; }
+      button { margin: 0 .4em .4em 0; }
+      input[type="text"] { width: 22em; }
+      pre { background: #f4f4f4; padding: .8em; overflow: auto; max-height: 40vh; }
+      #status { font-weight: 600; }
+      .row { margin: .6em 0; }
+    </style>
+  </head>
+  <body>
+    <h1>TinyCloud replica — manual fixture (TC-19)</h1>
+    <div class="row">status: <span id="status">loading</span></div>
+    <div class="row">device: <code id="device">…</code></div>
+    <div class="row">
+      <button id="sync">Sync</button>
+      <input id="getkey" type="text" value="notes/a" />
+      <button id="get">Get</button>
+      <button id="list">List</button>
+      <button id="statusBtn">Status</button>
+      <button id="dump">Dump IDB</button>
+      <button id="reset">Reset</button>
+      <button id="purge">Reset --purge</button>
+    </div>
+    <pre id="out">—</pre>
+    <script type="module">
+      import "./assets/index.js";
+
+      const out = document.getElementById("out");
+      const show = (value) => {
+        out.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      };
+      const setStatus = (text) => {
+        document.getElementById("status").textContent = text;
+      };
+      const run = (promise) =>
+        promise
+          .then(show)
+          .catch((error) => show({ error: error?.message ?? String(error), code: error?.code }));
+      const params = new URLSearchParams(location.hash.slice(1));
+      const host = params.get("host");
+      const space = params.get("space");
+      if (host === null || space === null || params.get("principal") === null) {
+        setStatus("missing host/space/principal hash params — start from the URL serve-fixture.ts printed");
+        throw new Error("missing host/space/principal");
+      }
+      const prefix = params.get("prefix") ?? "notes/";
+      const principal = params.get("principal");
+
+      // The offline service worker must control the page before the replica
+      // worker's fetch, or the worker asset is never cached for offline use.
+      await window.__replica.serviceWorkerReady();
+      const opened = await window.__replica.open({
+        host,
+        space,
+        prefix,
+        principal,
+      });
+      document.getElementById("device").textContent = opened.deviceDid;
+
+      if (!params.has("grant")) {
+        setStatus("minting grant");
+        const response = await fetch("/admin/grant", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ did: opened.deviceDid }),
+        });
+        const { jwt } = await response.json();
+        params.set("grant", jwt);
+        location.hash = params.toString();
+        location.reload();
+        // Wait for the reload instead of wiring the UI on a grant-less replica.
+        await new Promise(() => {});
+      }
+      await window.__replica.installGrant(params.get("grant"));
+      setStatus("ready");
+
+      document.getElementById("sync").onclick = () => run(window.__replica.sync());
+      document.getElementById("get").onclick = () =>
+        run(window.__replica.get(document.getElementById("getkey").value));
+      document.getElementById("list").onclick = () => run(window.__replica.list());
+      document.getElementById("statusBtn").onclick = () => run(window.__replica.status());
+      document.getElementById("dump").onclick = () => run(window.__replica.dumpDatabases());
+      document.getElementById("reset").onclick = () => run(window.__replica.reset());
+      document.getElementById("purge").onclick = () => run(window.__replica.reset({ purge: true }));
+    </script>
+  </body>
+</html>

@@ -11,6 +11,8 @@ export const ReplicaErrorCode = {
   CONFIG_MISMATCH: "REPLICA_CONFIG_MISMATCH",
   /** The runtime has no supported durable store (e.g. Node < 22.13). */
   RUNTIME_UNSUPPORTED: "RUNTIME_UNSUPPORTED",
+  /** A required open() argument is missing or malformed (e.g. `principal`). */
+  INVALID_ARGUMENT: "REPLICA_INVALID_ARGUMENT",
   /** The local store failed (I/O, corruption, schema). */
   STORAGE_ERROR: "STORAGE_ERROR",
   /** The local disk is full. */
@@ -52,6 +54,8 @@ export const ReplicaErrorCode = {
   CONTENT_MISMATCH: "CONTENT_MISMATCH",
   /** A stored blob no longer hashes to its name. */
   INTEGRITY_ERROR: "INTEGRITY_ERROR",
+  /** The replica handle was closed; in-flight calls settle with this code. */
+  CLOSED: "REPLICA_CLOSED",
 } as const;
 
 export type ReplicaErrorCode = (typeof ReplicaErrorCode)[keyof typeof ReplicaErrorCode];
