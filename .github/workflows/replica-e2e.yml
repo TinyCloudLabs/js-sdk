@@ -62,6 +62,9 @@ jobs:
         run: |
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
+          # @tinycloud/replica's worker entry imports @tinycloud/web-sdk-wasm.
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
           bun run --cwd packages/bootstrap build
           bun run --cwd packages/sdk-services build
           bun run --cwd packages/share-envelope build
@@ -138,6 +141,7 @@ jobs:
       - name: Build the packages the browser bundle needs
         run: |
           bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs build:wasm:web
           bun run --cwd packages/sdk-rs/packages/web build
           bun run --cwd packages/bootstrap build
           bun run --cwd packages/sdk-services build
