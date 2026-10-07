@@ -28,6 +28,7 @@
     "@tinycloud/replica": "0.0.0"
   },
   "changesets": [
+    "bright-agents-join",
     "sdk-services-request-timeout",
     "tc-18-kv-sync-revocation-body",
     "tc-18-profile-lock-require-profile",

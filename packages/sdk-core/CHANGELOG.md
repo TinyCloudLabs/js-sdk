@@ -1,5 +1,17 @@
 # @tinycloudlabs/sdk-core
 
+## 3.1.0-beta.11
+
+### Minor Changes
+
+- 02b6773: New canonical `agents` space; existing accounts run one bootstrap repair on next sign-in to add it. Bootstrap repair keeps existing account space records (renamed, archived, custom permissions) and only adds missing ones; new `AccountService.spaces.registerMissing()`. A sign-in that skips a non-account canonical space now repairs instead of re-seeding.
+
+### Patch Changes
+
+- Updated dependencies [02b6773]
+  - @tinycloud/bootstrap@2.8.0-beta.1
+  - @tinycloud/sdk-services@3.1.0-beta.11
+
 ## 3.1.0-beta.10
 
 ### Patch Changes
