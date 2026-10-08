@@ -7740,6 +7740,18 @@ var MAX_KV_BATCH_READ_ITEMS = 100;
 function isJsonObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+var pathByteEncoder = new TextEncoder();
+function comparePathsByBytes(a, b) {
+  const left = pathByteEncoder.encode(a);
+  const right = pathByteEncoder.encode(b);
+  const length4 = Math.min(left.length, right.length);
+  for (let index = 0; index < length4; index++) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+  return left.length - right.length;
+}
 var REVOKED_BODY = /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
 function revocationCodeOf(body) {
   const match = REVOKED_BODY.exec(body.trim());
@@ -7973,15 +7985,25 @@ var KVService = class extends BaseService {
     )?.[1];
     return contentType?.includes("application/json") ? JSON.parse(text) : text;
   }
+  /**
+   * Validate a batch read response and return its items in the caller's
+   * request order. The node flattens invocation abilities from a `BTreeMap`,
+   * so results arrive sorted by UTF-8 byte order of the path, not in request
+   * order. Items that carry their path in `key` are matched by path; if no
+   * item carries a key, items are assumed to be in the node's byte-sorted
+   * order and the request is aligned the same way. Any mix of keyed and
+   * keyless items, a missing requested path, an unrequested path, or a
+   * malformed item fails closed (returns undefined).
+   */
   normalizeBatchReadResponse(data, paths, requireData) {
     if (!data || typeof data !== "object") return void 0;
     const response = data;
-    if (!Array.isArray(response.results) || response.results.length !== paths.length) {
+    const items = response.results;
+    if (!Array.isArray(items) || items.length !== paths.length) {
       return void 0;
     }
-    for (let index = 0; index < response.results.length; index++) {
-      const item = response.results[index];
-      if (!item || typeof item !== "object" || item.key !== paths[index] || typeof item.ok !== "boolean") {
+    for (const item of items) {
+      if (!item || typeof item !== "object" || typeof item.ok !== "boolean") {
         return void 0;
       }
       if (item.ok && (!item.headers || typeof item.headers !== "object" || Object.values(item.headers).some((value) => typeof value !== "string") || requireData && typeof item.dataBase64 !== "string")) {
@@ -7991,7 +8013,24 @@ var KVService = class extends BaseService {
         return void 0;
       }
     }
-    return response;
+    if (items.every((item) => typeof item.key === "string")) {
+      const byPath = new Map(items.map((item) => [item.key, item]));
+      if (byPath.size !== items.length) return void 0;
+      const aligned2 = [];
+      for (const path of paths) {
+        const item = byPath.get(path);
+        if (!item) return void 0;
+        aligned2.push(item);
+      }
+      return aligned2;
+    }
+    if (items.some((item) => item.key !== void 0)) return void 0;
+    const requestOrder = paths.map((_, index) => index).sort((a, b) => comparePathsByBytes(paths[a], paths[b]));
+    const aligned = new Array(items.length);
+    for (let position = 0; position < requestOrder.length; position++) {
+      aligned[requestOrder[position]] = items[position];
+    }
+    return aligned;
   }
   async batchRead(keys, action, options) {
     if (!this.requireAuth()) return err(authRequiredError("kv"));
@@ -8084,19 +8123,19 @@ var KVService = class extends BaseService {
           { meta: { status: response.status, statusText: response.statusText } }
         ));
       }
-      const payload = this.normalizeBatchReadResponse(
+      const items = this.normalizeBatchReadResponse(
         await response.json(),
         paths,
         action === KVAction.GET
       );
-      if (!payload) {
+      if (!items) {
         return err(serviceError(
           ErrorCodes.NETWORK_ERROR,
           "KV batch read response did not match the requested keys",
           "kv"
         ));
       }
-      const results = payload.results.map((item, index) => {
+      const results = items.map((item, index) => {
         if (!item.ok) {
           return {
             key: keys[index],

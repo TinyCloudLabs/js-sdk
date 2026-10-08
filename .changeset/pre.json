@@ -62,6 +62,7 @@
     "tc-682-cli-missing-profile",
     "tc-705-openkey-primary-key",
     "tc-736-kv-change-feed",
+    "tc-738-batch-read-order",
     "tc-747-cli-owner-revoke",
     "tc-747-revoke-target-space",
     "tc-820-hooks-stream-recovery"
