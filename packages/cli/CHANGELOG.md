@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.1.0-beta.22
+
+### Patch Changes
+
+- cadda9a: Write `kv`, `vault`, `vars`, and `secrets` get outputs through a shared private atomic writer. `auth logout` now removes the profile's local replicas by default, with `--keep-replicas` to retain them and a warning that node grants remain valid until expiry. Sync warns when it replicates secret ciphertext (related to TC-755).
+
 ## 1.1.0-beta.21
 
 ### Patch Changes

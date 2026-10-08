@@ -65,6 +65,7 @@
     "tc-738-batch-read-order",
     "tc-747-cli-owner-revoke",
     "tc-747-revoke-target-space",
+    "tc-756-757-private-output-logout",
     "tc-820-hooks-stream-recovery",
     "tc-838-replica-readme"
   ]
