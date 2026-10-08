@@ -591,8 +591,8 @@ function canonicalizeAddress(address) {
   const trimmed = address.trim();
   return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
 }
-function normalizePkhIdentifier(identifier) {
-  return identifier.replace(
+function normalizePkhIdentifier(identifier2) {
+  return identifier2.replace(
     /(eip155:\d+:)(0x[0-9a-fA-F]{40})(?=[:#]|$)/,
     (_match, prefix, address) => prefix + address.toLowerCase()
   );
@@ -10000,7 +10000,7 @@ var AsyncQueue = class {
     }
     const waiter = this.waiters.shift();
     if (waiter) {
-      waiter({ value, done: false });
+      waiter.resolve({ value, done: false });
       return;
     }
     this.values.push(value);
@@ -10012,7 +10012,22 @@ var AsyncQueue = class {
     this.closed = true;
     while (this.waiters.length > 0) {
       const waiter = this.waiters.shift();
-      waiter?.({ value: void 0, done: true });
+      waiter?.resolve({ value: void 0, done: true });
+    }
+  }
+  /**
+   * Fail the queue: pending and future `next()` calls reject with `error`,
+   * so a `for await` consumer sees the iterator throw.
+   */
+  fail(error) {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.failure = error;
+    while (this.waiters.length > 0) {
+      const waiter = this.waiters.shift();
+      waiter?.reject(error);
     }
   }
   next() {
@@ -10020,20 +10035,26 @@ var AsyncQueue = class {
       const value = this.values.shift();
       return Promise.resolve({ value, done: false });
     }
+    if (this.failure !== void 0) {
+      return Promise.reject(this.failure);
+    }
     if (this.closed) {
       return Promise.resolve({ value: void 0, done: true });
     }
-    return new Promise((resolve5) => {
-      this.waiters.push(resolve5);
+    return new Promise((resolve5, reject) => {
+      this.waiters.push({ resolve: resolve5, reject });
     });
   }
 };
+var HOOK_STREAM_RETRY_BASE_DELAY_MS = 250;
+var HOOK_STREAM_RETRY_MAX_DELAY_MS = 3e4;
+var HOOK_STREAM_HEALTHY_MS = 5e3;
 var HooksService = class extends BaseService {
   constructor(config = {}) {
     super();
     this._subscribers = /* @__PURE__ */ new Set();
-    this._refreshChain = Promise.resolve();
-    this._activeSignature = "";
+    this._supervising = false;
+    this._sessionGeneration = 0;
     this._config = config;
   }
   get config() {
@@ -10049,35 +10070,32 @@ var HooksService = class extends BaseService {
     if (subscriptions.length === 0) {
       throw new Error("At least one hook subscription is required");
     }
-    const normalized = subscriptions.map(normalizeSubscription);
+    const requested = subscriptions.map(normalizeSubscription);
     const subscriber = {
-      requested: normalized,
+      requested,
+      signatures: requested.map(subscriptionSignature),
       ttlSeconds: options.ttlSeconds,
       queue: new AsyncQueue()
     };
-    this._subscribers.add(subscriber);
-    const abortHandler = () => {
+    const leave = () => {
       this._subscribers.delete(subscriber);
       subscriber.queue.close();
-      void this.scheduleSharedStreamRefresh();
+      this.wake();
     };
-    if (options.signal) {
-      if (options.signal.aborted) {
-        abortHandler();
-      } else {
-        options.signal.addEventListener("abort", abortHandler, { once: true });
-      }
+    const { signal } = options;
+    if (signal?.aborted) {
+      return;
     }
-    void this.scheduleSharedStreamRefresh();
+    signal?.addEventListener("abort", leave, { once: true });
+    this._subscribers.add(subscriber);
+    this.wake();
     try {
       for await (const event of subscriber.queue) {
         yield event;
       }
     } finally {
-      if (options.signal) {
-        options.signal.removeEventListener("abort", abortHandler);
-      }
-      abortHandler();
+      signal?.removeEventListener("abort", leave);
+      leave();
     }
   }
   async register(webhook) {
@@ -10218,146 +10236,292 @@ var HooksService = class extends BaseService {
       return err(wrapError2("hooks", error));
     }
   }
-  async scheduleSharedStreamRefresh() {
-    this._refreshChain = this._refreshChain.then(() => this.refreshSharedStream()).catch(() => void 0);
-    await this._refreshChain;
-  }
-  async refreshSharedStream() {
-    if (!this.requireAuth() || this._subscribers.size === 0) {
-      this.abortSharedStream();
-      this._activeSignature = "";
+  /**
+   * Called after anything that may change what the supervisor should do:
+   * subscribe, unsubscribe, session change, sign-out. Interrupts the running
+   * step if the plan moved away from it, and starts the supervisor if none
+   * runs. Touches only SDK-owned state, so it never throws into callers such
+   * as `ServiceContext.setSession`.
+   */
+  wake() {
+    const phase = this._phase;
+    if (phase && phase.key !== this.plan()?.key) {
+      phase.interrupt.abort();
+    }
+    if (this._supervising || this._subscribers.size === 0) {
       return;
     }
-    const state = this.collectSharedStreamState();
-    if (state.signature !== this._activeSignature) {
-      this._activeSignature = state.signature;
-      this.abortSharedStream();
-    }
-    if (!this._sharedStreamTask) {
-      this._sharedStreamTask = this.runSharedStream(state).catch((error) => {
-        if (!isAbortError(error)) {
-          throw error;
-        }
-      }).finally(() => {
-        this._sharedStreamTask = void 0;
-        this._sharedStreamAbort = void 0;
-        if (this._subscribers.size > 0) {
-          void this.scheduleSharedStreamRefresh();
-        }
-      });
+    this._supervising = true;
+    this.supervise().catch(() => this.collapse());
+  }
+  /**
+   * The only owner of the shared stream. Each iteration is one attempt
+   * (mint → open → drain), then a classification and, unless the attempt was
+   * superseded or released its subscribers, a backoff. Every await is a
+   * `phase` that wake() can interrupt; an interrupted phase yields
+   * `undefined`, so a superseded mint can never act. Outside `attempt` and
+   * `pause`, which each own one catch, the loop touches only SDK state.
+   */
+  async supervise() {
+    let streak = 0;
+    for (; ; ) {
+      const plan = this.plan();
+      if (!plan) {
+        this._supervising = false;
+        return;
+      }
+      const health = { openedAt: 0, delivered: false };
+      const outcome = await this.phase(
+        plan.key,
+        (signal) => this.attempt(plan, signal, health)
+      );
+      if (health.delivered || health.openedAt > 0 && performance.now() - health.openedAt >= HOOK_STREAM_HEALTHY_MS) {
+        streak = 0;
+      }
+      if (!outcome) {
+        continue;
+      }
+      if (this.plan()?.key !== plan.key) {
+        continue;
+      }
+      if (outcome.kind === "stopped") {
+        this.release();
+        continue;
+      }
+      if (outcome.kind === "refused" && outcome.terminal) {
+        this.release(outcome.error);
+        this.report(outcome.error);
+        continue;
+      }
+      if (outcome.kind !== "ended") {
+        this.report(outcome.error);
+      }
+      streak += 1;
+      await this.phase(
+        plan.key,
+        (signal) => this.pause(streak, signal)
+      );
     }
   }
-  collectSharedStreamState() {
-    const merged = /* @__PURE__ */ new Map();
-    const ttlCandidates = [];
-    for (const subscriber of this._subscribers) {
-      if (typeof subscriber.ttlSeconds === "number") {
-        ttlCandidates.push(subscriber.ttlSeconds);
+  /**
+   * Run one step under an interrupt that wake() fires when the plan key moves
+   * on. An interrupted step's result is discarded. The interrupt is also
+   * fired when the step returns, which releases whatever it left open: the
+   * request signal and its listeners, an unread response body, a timer.
+   */
+  async phase(key, step) {
+    const interrupt = new AbortController();
+    this._phase = { key, interrupt };
+    try {
+      if (this.plan()?.key !== key) {
+        interrupt.abort();
       }
-      for (const subscription of subscriber.requested) {
-        merged.set(subscriptionSignature(subscription), subscription);
+      const result = await step(interrupt.signal);
+      return interrupt.signal.aborted ? void 0 : result;
+    } finally {
+      this._phase = void 0;
+      interrupt.abort();
+    }
+  }
+  /**
+   * One mint → open → drain. The single catch site for everything the
+   * attempt touches that the SDK does not own: context accessors, invoke,
+   * fetch, response bodies, the SSE parser. Never rejects.
+   */
+  async attempt(plan, signal, health) {
+    let phase = "mint";
+    let request;
+    const owns = () => !signal.aborted && !request?.signal.aborted && this.plan()?.key === plan.key;
+    try {
+      const context = this.context;
+      const contextSignal = context.abortSignal;
+      this._lastContextSignal = contextSignal;
+      if (!context.isAuthenticated || contextSignal?.aborted) {
+        return { kind: "stopped" };
+      }
+      request = this.createRequestSignal(signal, 0);
+      const host = this.host;
+      const minted = await awaitOwned(
+        request.signal,
+        () => context.fetch(`${host}/hooks/tickets`, {
+          method: "POST",
+          headers: {
+            ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            subscriptions: plan.subscriptions,
+            ttlSeconds: plan.ttlSeconds
+          }),
+          signal: request.signal
+        })
+      );
+      if (!owns()) return { kind: "stopped" };
+      if (!minted.ok) {
+        const status = minted.status;
+        const error = await awaitOwned(
+          request.signal,
+          () => responseError("hooks", "failed to mint hook ticket", minted)
+        );
+        if (!owns()) return { kind: "stopped" };
+        return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
+      }
+      const body = await awaitOwned(request.signal, () => minted.json());
+      if (!owns()) return { kind: "stopped" };
+      const ticket = body !== null && typeof body === "object" && "ticket" in body ? body.ticket : void 0;
+      if (typeof ticket !== "string" || ticket.length === 0) {
+        throw new Error("Hook ticket response did not include a ticket");
+      }
+      phase = "open";
+      if (!owns()) return { kind: "stopped" };
+      const stream = await awaitOwned(
+        request.signal,
+        () => context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`, {
+          method: "GET",
+          headers: { accept: "text/event-stream" },
+          signal: request.signal
+        })
+      );
+      if (!owns()) return { kind: "stopped" };
+      if (!stream.ok) {
+        return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) };
+      }
+      health.openedAt = performance.now();
+      const iterator = parseSseStream(stream.body, request.signal)[Symbol.asyncIterator]();
+      try {
+        for (; ; ) {
+          const next = await awaitOwned(request.signal, () => iterator.next());
+          if (!owns()) return { kind: "stopped" };
+          if (next.done) break;
+          const message = next.value;
+          if (!message.data) continue;
+          const event = parseHookEvent(message);
+          if (!owns()) return { kind: "stopped" };
+          this.dispatch(event);
+          health.delivered = true;
+        }
+      } finally {
+        const closing = iterator.return?.();
+        if (closing) void Promise.resolve(closing).then(() => void 0, () => void 0);
+      }
+      return owns() ? { kind: "ended" } : { kind: "stopped" };
+    } catch (thrown) {
+      return request?.signal.aborted || thrown === SUPERSEDED ? { kind: "stopped" } : { kind: "failed", error: hookStreamFailure(phase, thrown) };
+    }
+  }
+  /**
+   * Back off before the next attempt. `config.streamRetry` overrides the
+   * delay and the clock; whatever they do, the pause ends by the delay or the
+   * interrupt, then yields one timer turn so an instant clock cannot starve
+   * due timers or the process.
+   */
+  async pause(attempt, signal) {
+    try {
+      this._lastContextSignal = this.context.abortSignal;
+    } catch {
+    }
+    const contextSignal = this._lastContextSignal;
+    const waits = [];
+    const aborts = [];
+    try {
+      const retry = this._config.streamRetry;
+      const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
+      waits.push((retry?.wait ?? sleep)(delayMs, attempt, signal));
+    } catch {
+      waits.push(Promise.resolve());
+    }
+    aborts.push(abortPromise(signal));
+    if (contextSignal) aborts.push(abortPromise(contextSignal));
+    try {
+      await Promise.race([...waits, ...aborts.map(({ promise }) => promise)]);
+    } catch {
+    } finally {
+      for (const abort of aborts) abort.dispose();
+    }
+    await new Promise((resolve5) => setTimeout(resolve5, 0));
+  }
+  /** The stream the current subscribers need, or undefined when none remain. */
+  plan() {
+    if (this._subscribers.size === 0) {
+      return void 0;
+    }
+    const merged = /* @__PURE__ */ new Map();
+    let ttlSeconds;
+    for (const subscriber of this._subscribers) {
+      subscriber.requested.forEach(
+        (subscription, index) => merged.set(subscriber.signatures[index], subscription)
+      );
+      if (typeof subscriber.ttlSeconds === "number") {
+        ttlSeconds = Math.min(subscriber.ttlSeconds, ttlSeconds ?? Infinity);
       }
     }
-    const subscriptions = [...merged.values()].sort(
-      (left, right) => subscriptionSignature(left).localeCompare(subscriptionSignature(right))
-    );
-    const ttlSeconds = ttlCandidates.length > 0 ? Math.min(...ttlCandidates) : void 0;
-    const signature = JSON.stringify({
-      subscriptions: subscriptions.map(subscriptionSignature),
-      ttlSeconds
-    });
+    const signatures = [...merged.keys()].sort();
     return {
-      subscriptions,
-      ttlSeconds,
-      signature
+      key: JSON.stringify([this._sessionGeneration, signatures, ttlSeconds ?? null]),
+      subscriptions: signatures.map((signature) => merged.get(signature)),
+      ttlSeconds
     };
   }
-  async runSharedStream(state) {
-    const abortController = new AbortController();
-    this._sharedStreamAbort = abortController;
-    try {
-      const host = this._config.host ?? this.context.hosts[0];
-      const ticketResponse = await this.mintHookTicket(
-        state.subscriptions,
-        state.ttlSeconds,
-        abortController.signal
-      );
-      const streamResponse = await this.openHookStream(
-        host,
-        ticketResponse.ticket,
-        abortController.signal
-      );
-      for await (const message of parseSseStream(
-        streamResponse.body,
-        abortController.signal
-      )) {
-        if (!message.data) {
-          continue;
-        }
-        const event = parseHookEvent(message);
-        for (const subscriber of this._subscribers) {
-          if (matchesAnySubscription(event, subscriber.requested)) {
-            subscriber.queue.push(event);
-          }
-        }
-      }
-    } finally {
-      if (this._sharedStreamAbort === abortController) {
-        this._sharedStreamAbort = void 0;
+  dispatch(event) {
+    for (const subscriber of this._subscribers) {
+      if (matchesAnySubscription(event, subscriber.requested)) {
+        subscriber.queue.push(event);
       }
     }
   }
-  abortSharedStream() {
-    this._sharedStreamAbort?.abort();
+  /**
+   * Detach every subscriber. With `error`, their iterators throw it after
+   * draining buffered events; without, they complete.
+   */
+  release(error) {
+    const subscribers = [...this._subscribers];
+    this._subscribers.clear();
+    for (const { queue } of subscribers) {
+      if (error) {
+        queue.fail(error);
+      } else {
+        queue.close();
+      }
+    }
+  }
+  report(error) {
+    if (error.meta && typeof error.meta === "object") {
+      Object.freeze(error.meta);
+    }
+    Object.freeze(error);
+    try {
+      this.emitError(error, "stream");
+    } catch {
+    }
+  }
+  /**
+   * Unreachable by construction. If the loop ever rejects anyway, fail its
+   * subscribers visibly instead of stranding them or crashing the process.
+   */
+  collapse() {
+    this._supervising = false;
+    this._phase?.interrupt.abort();
+    this._phase = void 0;
+    const error = serviceError(
+      ErrorCodes.NETWORK_ERROR,
+      "hook stream supervisor stopped unexpectedly",
+      "hooks"
+    );
+    this.report(error);
+    this.release(error);
+  }
+  onSessionChange(session) {
+    super.onSessionChange(session);
+    this._sessionGeneration += 1;
+    this.wake();
+  }
+  onSignOut() {
+    super.onSignOut();
+    this.release();
+    this.wake();
   }
   createHookHeaders(action, path) {
     return this.context.invoke(this.session, "hooks", path, action);
-  }
-  async mintHookTicket(subscriptions, ttlSeconds, signal) {
-    const host = this._config.host ?? this.context.hosts[0];
-    const headers = this.createInvokeHeaders(subscriptions);
-    const ticketResponse = await this.context.fetch(`${host}/hooks/tickets`, {
-      method: "POST",
-      headers: {
-        ...serviceHeadersToRecord(headers),
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        subscriptions,
-        ttlSeconds
-      }),
-      signal
-    });
-    if (!ticketResponse.ok) {
-      throw await responseError(
-        "hooks",
-        "failed to mint hook ticket",
-        ticketResponse
-      );
-    }
-    const ticketJson = await ticketResponse.json();
-    if (!ticketJson?.ticket) {
-      throw new Error("Hook ticket response did not include a ticket");
-    }
-    return ticketJson;
-  }
-  async openHookStream(host, ticket, signal) {
-    const streamResponse = await this.context.fetch(
-      `${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`,
-      {
-        method: "GET",
-        headers: { accept: "text/event-stream" },
-        signal
-      }
-    );
-    if (!streamResponse.ok) {
-      throw await responseError(
-        "hooks",
-        "failed to open hook stream",
-        streamResponse
-      );
-    }
-    return streamResponse;
   }
   createInvokeHeaders(subscriptions) {
     const entries = subscriptions.map((subscription) => ({
@@ -10388,11 +10552,168 @@ function buildScopePath(service, pathPrefix) {
   const normalized = normalizePathPrefix(pathPrefix);
   return normalized ? `${service}/${normalized}` : service;
 }
+function hookStreamRetryDelay(attempt) {
+  const cap = Math.min(
+    HOOK_STREAM_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
+    HOOK_STREAM_RETRY_MAX_DELAY_MS
+  );
+  return cap / 2 + Math.random() * (cap / 2);
+}
+function isTerminalMintRefusal(status) {
+  return typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+var SUPERSEDED = /* @__PURE__ */ Symbol("hooks attempt superseded");
+async function awaitOwned(signal, operation) {
+  if (signal.aborted) {
+    if (typeof operation !== "function") {
+      void operation.then(cancelLateResponse, () => void 0);
+    }
+    throw SUPERSEDED;
+  }
+  const promise = typeof operation === "function" ? operation() : operation;
+  return new Promise((resolve5, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(SUPERSEDED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) {
+          cancelLateResponse(value);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve5(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+function cancelLateResponse(value) {
+  if (!(value instanceof Response) || !value.body) return;
+  try {
+    const cancellation = value.body.cancel();
+    void cancellation.then(() => void 0, () => void 0);
+  } catch {
+  }
+}
+function hookStreamRefusal(status) {
+  const code3 = typeof status === "number" ? status : void 0;
+  return serviceError(
+    ErrorCodes.NETWORK_ERROR,
+    `hook stream open refused: ${code3 ?? "unknown status"}`,
+    "hooks",
+    { meta: { phase: "open", status: code3 } }
+  );
+}
+var STREAM_ERROR_NAMES = /* @__PURE__ */ new Set([
+  "Error",
+  "TypeError",
+  "AbortError",
+  "TimeoutError",
+  "SyntaxError",
+  "RangeError",
+  "NetworkError"
+]);
+function hookStreamFailure(phase, thrown) {
+  const candidateName = readProperty(thrown, "name");
+  const name = typeof candidateName === "string" && STREAM_ERROR_NAMES.has(candidateName) ? candidateName : "Error";
+  const code3 = identifier(readProperty(thrown, "code")) ?? identifier(readProperty(readProperty(thrown, "cause"), "code"));
+  return serviceError(
+    ErrorCodes.NETWORK_ERROR,
+    `hook stream ${phase} failed: ${name}${code3 ? ` (${code3})` : ""}`,
+    "hooks",
+    { meta: { phase, errorName: name, ...code3 ? { errorCode: code3 } : {} } }
+  );
+}
+var STREAM_ERROR_CODES = /* @__PURE__ */ new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EADDRNOTAVAIL",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CLOSED",
+  "UND_ERR_ABORTED",
+  "UND_ERR_RESPONSE_STATUS_CODE",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "ERR_SSL_WRONG_VERSION_NUMBER"
+]);
+function identifier(value) {
+  return typeof value === "string" && STREAM_ERROR_CODES.has(value) ? value : void 0;
+}
+function readProperty(value, key) {
+  if (value === null || typeof value !== "object" && typeof value !== "function") {
+    return void 0;
+  }
+  try {
+    return Reflect.get(value, key);
+  } catch {
+    return void 0;
+  }
+}
+function sleep(delayMs, _attempt, signal) {
+  return new Promise((resolve5) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", stop);
+      resolve5();
+    };
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    const stop = () => finish();
+    if (signal.aborted) {
+      finish();
+    } else {
+      signal.addEventListener("abort", stop, { once: true });
+    }
+  });
+}
+function abortPromise(signal) {
+  let resolve5;
+  const promise = new Promise((done) => {
+    resolve5 = done;
+  });
+  const onAbort = () => resolve5();
+  if (signal.aborted) {
+    resolve5();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    promise,
+    dispose: () => signal.removeEventListener("abort", onAbort)
+  };
+}
 function normalizeSubscription(subscription) {
   return {
     ...subscription,
     pathPrefix: normalizePathPrefix(subscription.pathPrefix),
-    abilities: subscription.abilities ?? []
+    abilities: subscription.abilities ? [...subscription.abilities] : []
   };
 }
 function subscriptionSignature(subscription) {
@@ -10458,9 +10779,6 @@ async function responseError(service, message, response) {
     meta: { ...error.meta, status: response.status, statusText: response.statusText }
   };
 }
-function isAbortError(error) {
-  return error instanceof DOMException && error.name === "AbortError";
-}
 async function* parseSseStream(body, signal) {
   if (!body) {
     throw new Error("Hook stream response does not expose a readable body");
@@ -10489,11 +10807,24 @@ async function* parseSseStream(body, signal) {
 async function* readBodyChunks(body, signal) {
   const asyncIterable = body;
   if (typeof asyncIterable?.[Symbol.asyncIterator] === "function") {
-    for await (const chunk of asyncIterable) {
-      if (signal?.aborted) {
-        break;
+    const iterator = asyncIterable[Symbol.asyncIterator]();
+    const cancel = () => {
+      try {
+        const closing = iterator.return?.();
+        if (closing) void Promise.resolve(closing).then(() => void 0, () => void 0);
+      } catch {
       }
-      yield chunk;
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      while (!signal?.aborted) {
+        const next = await iterator.next();
+        if (next.done) break;
+        yield next.value;
+      }
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      cancel();
     }
     return;
   }
@@ -10502,21 +10833,23 @@ async function* readBodyChunks(body, signal) {
     throw new Error("Unsupported hook stream body type");
   }
   const reader = stream.getReader();
+  const cancelReader = () => {
+    try {
+      const cancellation = reader.cancel?.();
+      if (cancellation) void cancellation.then(() => void 0, () => void 0);
+    } catch {
+    }
+  };
+  signal?.addEventListener("abort", cancelReader, { once: true });
   try {
     while (!signal?.aborted) {
       const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value) {
-        yield value;
-      }
+      if (done) break;
+      if (value) yield value;
     }
   } finally {
-    try {
-      await reader.cancel?.();
-    } catch {
-    }
+    signal?.removeEventListener("abort", cancelReader);
+    cancelReader();
     reader.releaseLock?.();
   }
 }
@@ -12897,10 +13230,10 @@ var EncryptionService = class extends BaseService {
   get crypto() {
     return this._config.crypto;
   }
-  async discoverNetwork(identifier, ownerDid) {
+  async discoverNetwork(identifier2, ownerDid) {
     this.assertActive();
     const result = await discoverNetwork({
-      identifier,
+      identifier: identifier2,
       ...ownerDid !== void 0 ? { ownerDid } : {},
       ...this._config.node !== void 0 ? { node: this._config.node } : {},
       ...this._config.wellKnown !== void 0 ? { wellKnown: this._config.wellKnown } : {}
@@ -30222,17 +30555,17 @@ function validRecipientDid(value) {
   if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
   const parts = value.split(":");
   if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
-  const identifier = parts.slice(2);
-  if (identifier.some((part) => part.length === 0)) return false;
+  const identifier2 = parts.slice(2);
+  if (identifier2.some((part) => part.length === 0)) return false;
   if (parts[1] === "web") {
-    const host = identifier[0] ?? "";
+    const host = identifier2[0] ?? "";
     if (host.length > 253 || host.split(".").some((label) => !label || label.length > 63 || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith("-") || label.endsWith("-"))) return false;
-    return identifier.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+    return identifier2.slice(1).every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
   }
-  if (parts[1] === "pkh") return identifier.length >= 3 && identifier.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
+  if (parts[1] === "pkh") return identifier2.length >= 3 && identifier2.every((part) => /^[A-Za-z0-9._%-]+$/.test(part));
   if (parts[1] === "key") {
     try {
-      const bytes3 = base58btc2.decode(identifier.join(":"));
+      const bytes3 = base58btc2.decode(identifier2.join(":"));
       return bytes3.length === 34 && bytes3[0] === 237 && bytes3[1] === 1;
     } catch {
       return false;
