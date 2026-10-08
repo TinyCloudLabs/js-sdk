@@ -1,5 +1,11 @@
 # @tinycloud/replica
 
+## 0.1.0-beta.2
+
+### Patch Changes
+
+- bfeb5bb: Add a package README (usage, requirements, security model) for the local replicas release candidate.
+
 ## 0.1.0-beta.1
 
 ### Minor Changes

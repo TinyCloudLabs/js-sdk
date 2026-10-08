@@ -42,7 +42,7 @@
     "siwe": "^3.0.0"
   },
   "devDependencies": {
-    "@tinycloud/replica": "0.1.0-beta.1",
+    "@tinycloud/replica": "0.1.0-beta.2",
     "@types/node": "^20",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
