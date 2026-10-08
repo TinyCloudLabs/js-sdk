@@ -1,4 +1,5 @@
 import { BaseService } from "../base/BaseService";
+import type { RequestSignal } from "../base/types";
 import type {
   FetchResponse,
   InvokeAnyEntry,
@@ -22,17 +23,36 @@ import type {
   HookWebhookUnregisterOptions,
 } from "./types";
 
-interface HookTicketResponse {
-  ticket: string;
-  expiresAt: string;
-}
-
 interface HookSubscriber {
   requested: HookSubscription[];
+  /** `subscriptionSignature` of each requested entry, fixed at subscribe time. */
+  signatures: string[];
   ttlSeconds?: number;
   queue: AsyncQueue<HookEvent>;
 }
 
+/** The one stream the current subscribers need. */
+interface StreamPlan {
+  /** Session generation + merged subscriptions + TTL; a change supersedes the running phase. */
+  key: string;
+  subscriptions: HookSubscription[];
+  ttlSeconds?: number;
+}
+
+type StreamPhase = "mint" | "open" | "read";
+
+/** How one attempt ended. Holds only SDK-built values. */
+type AttemptOutcome =
+  | { kind: "ended" }
+  | { kind: "stopped" }
+  | { kind: "refused"; terminal: boolean; error: ServiceError }
+  | { kind: "failed"; error: ServiceError };
+
+interface StreamHealth {
+  openedAt: number;
+  delivered: boolean;
+  contextSignal?: AbortSignal;
+}
 class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
   private readonly values: T[] = [];
   private readonly waiters: Array<{
@@ -109,19 +129,6 @@ class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
   }
 }
 
-/**
- * Marks a failure that came from minting the hook ticket, so the detached
- * stream task can distinguish mint refusals (terminal for this subscription
- * set when the node answers 4xx) from stream-open failures (recoverable by
- * re-minting). Never logged; the wrapped error is surfaced to subscribers.
- */
-class HookTicketMintError extends Error {
-  constructor(readonly cause: unknown) {
-    super("failed to mint hook ticket");
-    this.name = "HookTicketMintError";
-  }
-}
-
 /** First shared-stream retry delay: fast enough to ride out a ticket 401. */
 const HOOK_STREAM_RETRY_BASE_DELAY_MS = 250;
 /** Ceiling for shared-stream retry backoff. */
@@ -138,29 +145,13 @@ export class HooksService extends BaseService implements IHooksService {
 
   declare protected _config: HooksServiceConfig;
   private readonly _subscribers: Set<HookSubscriber> = new Set();
-  private _sharedStreamTask?: Promise<void>;
-  private _sharedStreamAbort?: AbortController;
-  private _refreshChain: Promise<void> = Promise.resolve();
-  private _activeSignature = "";
-  /** Retry attempt for the shared stream; reset once a stream proves healthy. */
-  private _streamRetryAttempt = 0;
-  /** Bumped whenever the session changes; scopes terminal failures. */
+  /** True while the one supervisor loop runs. Set only by wake(), cleared only at loop exit. */
+  private _supervising = false;
+  /** The supervisor's current step, interruptible by wake(). */
+  private _phase?: { key: string; interrupt: AbortController };
+  /** Bumped on every session change; part of the plan key. */
   private _sessionGeneration = 0;
-  /** Set on sign-out; cleared when a new session arrives. */
-  private _serviceStopped = false;
-  /**
-   * The last terminal failure, keyed by the subscription signature and
-   * session generation it came from. While a signature is terminal for the
-   * current generation, refreshes for it stop and every subscriber whose
-   * requested set matches it is failed with this error. Cleared when the
-   * subscriber set empties, on session change, and on sign-out — a fresh
-   * subscription after any of those mints again.
-   */
-  private _terminalStreamError?: {
-    signature: string;
-    generation: number;
-    error: unknown;
-  };
+
   constructor(config: HooksServiceConfig = {}) {
     super();
     this._config = config;
@@ -185,39 +176,33 @@ export class HooksService extends BaseService implements IHooksService {
       throw new Error("At least one hook subscription is required");
     }
 
-    const normalized = subscriptions.map(normalizeSubscription);
+    const requested = subscriptions.map(normalizeSubscription);
     const subscriber: HookSubscriber = {
-      requested: normalized,
+      requested,
+      signatures: requested.map(subscriptionSignature),
       ttlSeconds: options.ttlSeconds,
       queue: new AsyncQueue<HookEvent>(),
     };
-
-    this._subscribers.add(subscriber);
-    const abortHandler = () => {
+    const leave = (): void => {
       this._subscribers.delete(subscriber);
       subscriber.queue.close();
-      void this.scheduleSharedStreamRefresh();
+      this.wake();
     };
-
-    if (options.signal) {
-      if (options.signal.aborted) {
-        abortHandler();
-      } else {
-        options.signal.addEventListener("abort", abortHandler, { once: true });
-      }
+    const { signal } = options;
+    if (signal?.aborted) {
+      return;
     }
-
-    void this.scheduleSharedStreamRefresh();
+    signal?.addEventListener("abort", leave, { once: true });
+    this._subscribers.add(subscriber);
+    this.wake();
 
     try {
       for await (const event of subscriber.queue) {
         yield event;
       }
     } finally {
-      if (options.signal) {
-        options.signal.removeEventListener("abort", abortHandler);
-      }
-      abortHandler();
+      signal?.removeEventListener("abort", leave);
+      leave();
     }
   }
 
@@ -386,443 +371,327 @@ export class HooksService extends BaseService implements IHooksService {
     }
   }
 
-  private async scheduleSharedStreamRefresh(): Promise<void> {
-    this._refreshChain = this._refreshChain
-      .then(() => this.refreshSharedStream())
-      .catch(() => undefined);
-    await this._refreshChain;
-  }
-
-  private async refreshSharedStream(): Promise<void> {
-    if (
-      !this.requireAuth() ||
-      this.lifecycleAborted ||
-      this._subscribers.size === 0
-    ) {
-      this.abortSharedStream();
-      this._activeSignature = "";
-      if (this._subscribers.size === 0) {
-        // Once every subscriber that saw the terminal failure is gone, the
-        // next subscription mints fresh.
-        this._terminalStreamError = undefined;
-      }
+  /**
+   * Called after anything that may change what the supervisor should do:
+   * subscribe, unsubscribe, session change, sign-out. Interrupts the running
+   * step if the plan moved away from it, and starts the supervisor if none
+   * runs. Touches only SDK-owned state, so it never throws into callers such
+   * as `ServiceContext.setSession`.
+   */
+  private wake(): void {
+    const phase = this._phase;
+    if (phase && phase.key !== this.plan()?.key) {
+      phase.interrupt.abort();
+    }
+    if (this._supervising || this._subscribers.size === 0) {
       return;
     }
-
-    const state = this.collectSharedStreamState();
-    if (state.signature !== this._activeSignature) {
-      this._activeSignature = state.signature;
-      this.abortSharedStream();
-    }
-
-    const terminal = this._terminalStreamError;
-    if (
-      terminal &&
-      terminal.signature === state.signature &&
-      terminal.generation === this._sessionGeneration
-    ) {
-      // Retrying this exact subscription set already failed in a way
-      // retrying cannot fix (the node refused the ticket mint). Surface the
-      // failure to subscribers instead of minting again.
-      this.failSubscribers(terminal.error);
-      return;
-    }
-
-    if (!this._sharedStreamTask) {
-      const abortController = new AbortController();
-      this._sharedStreamAbort = abortController;
-      // The request signal lives for the whole task — including the backoff
-      // wait — so sign-out and context aborts cancel the backoff too.
-      const request = this.createRequestSignal(abortController.signal, 0);
-      this._sharedStreamTask = this.runSharedStream(state, request.signal)
-        .then(
-          () => this.settleSharedStreamRun(state.signature, request.signal),
-          (error: unknown) =>
-            this.settleSharedStreamRun(
-              state.signature,
-              request.signal,
-              error,
-            ),
-        )
-        .finally(() => {
-          request.dispose();
-          this._sharedStreamTask = undefined;
-          this._sharedStreamAbort = undefined;
-          if (this._subscribers.size > 0 && !this.lifecycleAborted) {
-            void this.scheduleSharedStreamRefresh();
-          }
-        })
-        // Terminal rejection boundary: nothing awaits this task, so every
-        // stray throw — in settlement, cleanup, or a reschedule — dies here
-        // instead of becoming an unhandled rejection that kills the
-        // consumer's process.
-        .then(undefined, () => undefined);
-    }
+    this._supervising = true;
+    this.supervise().catch(() => this.collapse());
   }
 
   /**
-   * Settle one shared-stream run without ever rejecting: nothing awaits the
-   * detached task, so a rethrow would surface as an unhandled rejection and,
-   * under Node's default --unhandled-rejections=throw, kill the process.
-   *
-   * Three outcomes:
-   * - aborted or superseded → discard the result; the .finally reschedule
-   *   acts on the newer signature (or stays quiet with no subscribers).
-   * - terminal mint refusal → record it and fail subscribers with the
-   *   mint's ServiceError.
-   * - recoverable — an error, or a stream that simply ended — → back off,
-   *   then let the .finally reschedule re-mint and reopen.
+   * The only owner of the shared stream. Each iteration is one attempt
+   * (mint → open → drain), then a classification and, unless the attempt was
+   * superseded or released its subscribers, a backoff. Every await is a
+   * `phase` that wake() can interrupt; an interrupted phase yields
+   * `undefined`, so a superseded mint can never act. Outside `attempt` and
+   * `pause`, which each own one catch, the loop touches only SDK state.
    */
-  private async settleSharedStreamRun(
-    signature: string,
-    signal: AbortSignal,
-    error?: unknown,
-  ): Promise<void> {
-    const mintError =
-      error instanceof HookTicketMintError ? error.cause : undefined;
-    if (signal.aborted || isAbortError(mintError ?? error)) {
-      return;
-    }
-
-    if (mintError !== undefined) {
-      const status = readErrorStatus(mintError);
-      const refused =
-        typeof status === "number" &&
-        status >= 400 &&
-        status < 500 &&
-        status !== 408 &&
-        status !== 429;
-      // Only a refusal from the run that is still the active subscription
-      // set is terminal. A stale or cancelled mint — the signature changed,
-      // or the abort raced the refusal — is discarded, never broadcast.
-      if (refused && signature === this._activeSignature) {
-        // The mint was refused rather than lost: 401/403 means the session
-        // lacks hooks authority, and any other 4xx means the node rejected
-        // the request itself — none heal by retrying (408/429 and 5xx stay
-        // recoverable).
-        this._terminalStreamError = {
-          signature,
-          generation: this._sessionGeneration,
-          error: mintError,
-        };
-        this.emitStreamError(mintError);
-        this.failSubscribers(mintError);
+  private async supervise(): Promise<void> {
+    let streak = 0;
+    for (;;) {
+      const plan = this.plan();
+      if (!plan) {
+        // Same synchronous turn as the emptiness check: a subscribe() that
+        // runs after this line starts a fresh supervisor.
+        this._supervising = false;
         return;
       }
-    }
-
-    // Recoverable: a network error, a 5xx, a 401/403 stream-open refusal
-    // (expired or rotated ticket — the next attempt re-mints), or a stream
-    // that ended on its own (a server-side EOF is worth retrying, not
-    // hot-looping). Back off before resolving so the .finally reschedule
-    // paces the reopen through the existing refresh chain.
-    if (error !== undefined) {
-      this.emitStreamError(mintError ?? error);
-    }
-    this._streamRetryAttempt += 1;
-    try {
-      await this.waitForHookStreamRetry(this._streamRetryAttempt, signal);
-    } catch {
-      // A custom `streamRetry.wait` may reject on abort; treat that
-      // like a completed wait so the task still resolves cleanly.
-    }
-  }
-
-  private collectSharedStreamState(): {
-    subscriptions: HookSubscription[];
-    ttlSeconds?: number;
-    signature: string;
-  } {
-    const merged = new Map<string, HookSubscription>();
-    const ttlCandidates: number[] = [];
-
-    for (const subscriber of this._subscribers) {
-      if (typeof subscriber.ttlSeconds === "number") {
-        ttlCandidates.push(subscriber.ttlSeconds);
-      }
-      for (const subscription of subscriber.requested) {
-        merged.set(subscriptionSignature(subscription), subscription);
-      }
-    }
-
-    const subscriptions = [...merged.values()].sort((left, right) =>
-      subscriptionSignature(left).localeCompare(subscriptionSignature(right)),
-    );
-    const ttlSeconds =
-      ttlCandidates.length > 0 ? Math.min(...ttlCandidates) : undefined;
-    const signature = JSON.stringify({
-      subscriptions: subscriptions.map(subscriptionSignature),
-      ttlSeconds,
-    });
-
-    return {
-      subscriptions,
-      ttlSeconds,
-      signature,
-    };
-  }
-
-  private async runSharedStream(
-    state: {
-      subscriptions: HookSubscription[];
-      ttlSeconds?: number;
-    },
-    signal: AbortSignal,
-  ): Promise<void> {
-    let openedAt: number | undefined;
-    let delivered = false;
-    const noteHealth = (): void => {
-      // A stream that delivered an event, or survived past the healthy
-      // window, proved the current setup works: the next failure retries
-      // from the base delay. An empty or instantly-dropped stream earns
-      // nothing and keeps backing off.
+      const health: StreamHealth = { openedAt: 0, delivered: false };
+      const outcome = await this.phase(plan.key, (signal) =>
+        this.attempt(plan, signal, health),
+      );
       if (
-        delivered ||
-        (openedAt !== undefined &&
-          Date.now() - openedAt >= HOOK_STREAM_HEALTHY_MS)
+        health.delivered ||
+        (health.openedAt > 0 &&
+          performance.now() - health.openedAt >= HOOK_STREAM_HEALTHY_MS)
       ) {
-        this._streamRetryAttempt = 0;
+        streak = 0;
       }
-    };
+      if (!outcome) {
+        continue;
+      }
+      if (outcome.kind === "stopped") {
+        this.release();
+        continue;
+      }
+      if (outcome.kind === "refused" && outcome.terminal) {
+        this.release(outcome.error);
+        this.report(outcome.error);
+        continue;
+      }
+      if (outcome.kind !== "ended") {
+        this.report(outcome.error);
+      }
+      streak += 1;
+      await this.phase(plan.key, (signal) =>
+        this.pause(streak, signal, health.contextSignal),
+      );
+  }
+  }
 
+  /**
+   * Run one step under an interrupt that wake() fires when the plan key moves
+   * on. An interrupted step's result is discarded. The interrupt is also
+   * fired when the step returns, which releases whatever it left open: the
+   * request signal and its listeners, an unread response body, a timer.
+   */
+  private async phase<T>(
+    key: string,
+    step: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T | undefined> {
+    const interrupt = new AbortController();
+    this._phase = { key, interrupt };
     try {
-      const host = this._config.host ?? this.context.hosts[0];
-      let ticketResponse: HookTicketResponse;
-      try {
-        ticketResponse = await this.mintHookTicket(
-          state.subscriptions,
-          state.ttlSeconds,
-          signal,
-        );
-      } catch (error) {
-        throw new HookTicketMintError(error);
+      if (this.plan()?.key !== key) {
+        // A wake between two phases found nothing to interrupt.
+        interrupt.abort();
       }
-      try {
-        const streamResponse = await this.openHookStream(
-          host,
-          ticketResponse.ticket,
-          signal,
-        );
-        openedAt = Date.now();
-
-        for await (const message of parseSseStream(
-          streamResponse.body,
-          signal,
-        )) {
-          if (!message.data) {
-            continue;
-          }
-          const event = parseHookEvent(message);
-          delivered = true;
-          for (const subscriber of this._subscribers) {
-            if (matchesAnySubscription(event, subscriber.requested)) {
-              subscriber.queue.push(event);
-            }
-          }
-        }
-
-        noteHealth();
-      } catch (error) {
-        // The ticket rides in the request URL, so a transport rejection or
-        // a mid-stream read error can carry it. Everything that leaves the
-        // run past the mint is sanitized — raw, percent-encoded and
-        // form-encoded forms, in message, cause and stack.
-        throw sanitizeStreamError(error, ticketResponse.ticket);
-      }
+      const result = await step(interrupt.signal);
+      return interrupt.signal.aborted ? undefined : result;
     } finally {
-      // Health applies whether the stream ended cleanly or errored while
-      // open; a failure before the open leaves the backoff streak intact.
-      noteHealth();
+      this._phase = undefined;
+      interrupt.abort();
     }
   }
 
   /**
-   * Wait out the backoff before the shared stream's next attempt.
-   * `config.streamRetry.wait` overrides the sleep (the injected clock in
-   * tests); the default is an abortable, unref'd `setTimeout` — the backoff
-   * never keeps a process alive. Either way, resolving or aborting just
-   * lets the task end so the refresh chain reschedules — there is no
-   * second scheduler.
+   * One mint → open → drain. The single catch site for everything the
+   * attempt touches that the SDK does not own: context accessors, invoke,
+   * fetch, response bodies, the SSE parser. Never rejects.
    */
-  private async waitForHookStreamRetry(
+  private async attempt(
+    plan: StreamPlan,
+    signal: AbortSignal,
+    health: StreamHealth,
+  ): Promise<AttemptOutcome> {
+    let phase: StreamPhase = "mint";
+    let request: RequestSignal | undefined;
+    try {
+      const context = this.context;
+      health.contextSignal = context.abortSignal;
+      if (!context.isAuthenticated || health.contextSignal?.aborted) {
+        return { kind: "stopped" };
+      }
+      // Aborts on the interrupt, sign-out, or context abort. Released by the
+      // interrupt that `phase` fires when this attempt returns.
+      request = this.createRequestSignal(signal, 0);
+      const host = this.host;
+      const minted = await context.fetch(`${host}/hooks/tickets`, {
+        method: "POST",
+        headers: {
+          ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          subscriptions: plan.subscriptions,
+          ttlSeconds: plan.ttlSeconds,
+        }),
+        signal: request.signal,
+      });
+      if (!minted.ok) {
+        // The mint request carries no ticket, so responseError's body is safe.
+        const status = minted.status;
+        const error = await responseError(
+          "hooks",
+          "failed to mint hook ticket",
+          minted,
+        );
+        return {
+          kind: "refused",
+          terminal: isTerminalMintRefusal(status),
+          error,
+        };
+      }
+      const body: unknown = await minted.json();
+      const ticket =
+        body !== null && typeof body === "object" && "ticket" in body
+          ? body.ticket
+          : undefined;
+      if (typeof ticket !== "string" || ticket.length === 0) {
+        throw new Error("Hook ticket response did not include a ticket");
+      }
+
+      phase = "open";
+      // The node reads the ticket only from the query (1.19.2).
+      const stream = await context.fetch(
+        `${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`,
+        {
+          method: "GET",
+          headers: { accept: "text/event-stream" },
+          signal: request.signal,
+        },
+      );
+      if (!stream.ok) {
+        // 401/403 here is an expired or rotated ticket: the next attempt re-mints.
+        return {
+          kind: "refused",
+          terminal: false,
+          error: hookStreamRefusal(stream.status),
+        };
+      }
+
+      health.openedAt = performance.now();
+      for await (const message of parseSseStream(stream.body, request.signal)) {
+        if (!message.data) {
+          continue;
+        }
+        this.dispatch(parseHookEvent(message));
+        health.delivered = true;
+      }
+      return request.signal.aborted ? { kind: "stopped" } : { kind: "ended" };
+    } catch (thrown) {
+      // An aborted request means the interrupt (discarded by `phase`) or the
+      // lifecycle ended; anything else is a failure, described by allow-list.
+      return request?.signal.aborted
+        ? { kind: "stopped" }
+        : { kind: "failed", error: hookStreamFailure(phase, thrown) };
+    }
+  }
+
+  /**
+   * Back off before the next attempt. `config.streamRetry` overrides the
+   * delay and the clock; whatever they do, the pause ends by the delay or the
+   * interrupt, and then yields one real event-loop turn so an instant clock
+   * cannot let a failing stream starve the process.
+   */
+  private async pause(
     attempt: number,
     signal: AbortSignal,
+    contextSignal?: AbortSignal,
   ): Promise<void> {
-    const retry = this._config.streamRetry;
-    const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
-    if (retry?.wait) {
-      const wait = retry.wait;
-      try {
-        // Promise.resolve().then(...) so a synchronous throw in a custom
-        // wait still lands here as a rejection rather than skipping the
-        // yield below.
-        await Promise.resolve().then(() => wait(delayMs, attempt, signal));
-      } finally {
-        // Whether the custom wait fulfilled, rejected or threw, it may have
-        // returned instantly (an injected clock), so yield one real
-        // event-loop turn — otherwise a persistently failing stream
-        // hot-loops on microtasks and starves every timer in the process.
-        // setImmediate shares the check phase with other pending work, so
-        // it yields fairly; fall back to a 0ms timer where it is absent.
-        const queueTurn = globalThis.setImmediate as
-          | ((callback: () => void) => unknown)
-          | undefined;
-        await new Promise<void>((resolve) => {
-          if (queueTurn) {
-            queueTurn(resolve);
-          } else {
-            setTimeout(resolve, 0);
-          }
-        });
-      }
-      return;
+    const waits: Promise<void>[] = [];
+    const aborts: Array<{ promise: Promise<void>; dispose: () => void }> = [];
+    try {
+      const retry = this._config.streamRetry;
+      const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
+      waits.push((retry?.wait ?? sleep)(delayMs, attempt, signal));
+    } catch {
+      // A throwing delay callback or wait counts as an elapsed delay.
+      waits.push(Promise.resolve());
+    }
+    aborts.push(abortPromise(signal));
+    if (contextSignal) aborts.push(abortPromise(contextSignal));
+    try {
+      await Promise.race([...waits, ...aborts.map(({ promise }) => promise)]);
+    } catch {
+      // A rejecting custom clock counts as an elapsed delay.
+    } finally {
+      for (const abort of aborts) abort.dispose();
     }
     await new Promise<void>((resolve) => {
-      const onAbort = (): void => {
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(() => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      }, delayMs);
-      // A parked backoff must never keep the consumer's process alive.
-      timer.unref?.();
-      if (signal.aborted) {
-        clearTimeout(timer);
-        resolve();
-        return;
+      if (typeof setImmediate === "function") {
+        setImmediate(resolve);
+      } else {
+        setTimeout(resolve, 0);
       }
-      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 
-  /**
-   * Emit a stream failure as telemetry so repeated retries are visible
-   * without logging ticket material. A non-ServiceError failure is wrapped
-   * first; emitter failures can never break the retry path.
-   */
-  private emitStreamError(error: unknown): void {
-    try {
-      this.emitError(
-        isServiceError(error) ? error : wrapError("hooks", error),
-        "stream",
+  /** The stream the current subscribers need, or undefined when none remain. */
+  private plan(): StreamPlan | undefined {
+    if (this._subscribers.size === 0) {
+      return undefined;
+    }
+    const merged = new Map<string, HookSubscription>();
+    let ttlSeconds: number | undefined;
+    for (const subscriber of this._subscribers) {
+      subscriber.requested.forEach((subscription, index) =>
+        merged.set(subscriber.signatures[index], subscription),
       );
-    } catch {
-      // Telemetry must never take down the stream.
+      if (typeof subscriber.ttlSeconds === "number") {
+        ttlSeconds = Math.min(subscriber.ttlSeconds, ttlSeconds ?? Infinity);
+      }
+    }
+    const signatures = [...merged.keys()].sort();
+    return {
+      key: JSON.stringify([this._sessionGeneration, signatures, ttlSeconds ?? null]),
+      subscriptions: signatures.map((signature) => merged.get(signature)!),
+      ttlSeconds,
+    };
+  }
+
+  private dispatch(event: HookEvent): void {
+    for (const subscriber of this._subscribers) {
+      if (matchesAnySubscription(event, subscriber.requested)) {
+        subscriber.queue.push(event);
+      }
     }
   }
 
   /**
-   * True when the service lifecycle ended: the context aborted, or the SDK
-   * signed out and no new session has arrived. Lifecycle aborts stop the
-   * stream entirely; they are not retried.
+   * Detach every subscriber. With `error`, their iterators throw it after
+   * draining buffered events; without, they complete.
    */
-  private get lifecycleAborted(): boolean {
-    return (
-      this._serviceStopped || (this.context?.abortSignal?.aborted ?? false)
+  private release(error?: ServiceError): void {
+    const subscribers = [...this._subscribers];
+    this._subscribers.clear();
+    for (const { queue } of subscribers) {
+      if (error) {
+        queue.fail(error);
+      } else {
+        queue.close();
+      }
+    }
+  }
+
+  private report(error: ServiceError): void {
+    if (error.meta && typeof error.meta === "object") {
+      Object.freeze(error.meta);
+    }
+    Object.freeze(error);
+    try {
+      this.emitError(error, "stream");
+    } catch {
+      // Telemetry never steers the stream.
+    }
+  }
+
+  /**
+   * Unreachable by construction. If the loop ever rejects anyway, fail its
+   * subscribers visibly instead of stranding them or crashing the process.
+   */
+  private collapse(): void {
+    this._supervising = false;
+    this._phase?.interrupt.abort();
+    this._phase = undefined;
+    const error = serviceError(
+      ErrorCodes.NETWORK_ERROR,
+      "hook stream supervisor stopped unexpectedly",
+      "hooks",
     );
+    this.report(error);
+    this.release(error);
   }
 
   override onSessionChange(session: ServiceSession | null): void {
     super.onSessionChange(session);
-    // New credentials: a new mint can succeed where the last refused, and
-    // the stream must reopen under the new session anyway.
+    // New credentials supersede the running attempt: it re-mints, or stops
+    // if the session is gone.
     this._sessionGeneration += 1;
-    this._serviceStopped = false;
-    this._terminalStreamError = undefined;
-    this.abortSharedStream();
-    void this.scheduleSharedStreamRefresh();
+    this.wake();
   }
 
   override onSignOut(): void {
     super.onSignOut();
-    this._serviceStopped = true;
-    this._terminalStreamError = undefined;
-    this.abortSharedStream();
-  }
-
-  /**
-   * Fail every subscriber's queue with `error`. `for await` consumers then
-   * see `subscribe()`'s iterator throw; their `finally` unsubscribes, which
-   * stops the retry chain once no subscribers remain.
-   */
-  private failSubscribers(error: unknown): void {
-    for (const subscriber of this._subscribers) {
-      subscriber.queue.fail(error);
-    }
-  }
-
-  private abortSharedStream(): void {
-    this._sharedStreamAbort?.abort();
+    // Sign-out ends every subscription; the empty plan stops the supervisor.
+    this.release();
+    this.wake();
   }
 
   private createHookHeaders(action: string, path: string): ServiceHeaders {
     return this.context.invoke(this.session, "hooks", path, action);
-  }
-
-  private async mintHookTicket(
-    subscriptions: HookSubscription[],
-    ttlSeconds: number | undefined,
-    signal?: AbortSignal,
-  ): Promise<HookTicketResponse> {
-    const host = this._config.host ?? this.context.hosts[0];
-    const headers = this.createInvokeHeaders(subscriptions);
-    const ticketResponse = await this.context.fetch(`${host}/hooks/tickets`, {
-      method: "POST",
-      headers: {
-        ...serviceHeadersToRecord(headers),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        subscriptions,
-        ttlSeconds,
-      }),
-      signal,
-    });
-
-    if (!ticketResponse.ok) {
-      throw await responseError(
-        "hooks",
-        "failed to mint hook ticket",
-        ticketResponse,
-      );
-    }
-
-    const ticketJson = (await ticketResponse.json()) as HookTicketResponse;
-    if (!ticketJson?.ticket) {
-      throw new Error("Hook ticket response did not include a ticket");
-    }
-
-    return ticketJson;
-  }
-
-  private async openHookStream(
-    host: string,
-    ticket: string,
-    signal?: AbortSignal,
-  ): Promise<FetchResponse> {
-    const streamResponse = await this.context.fetch(
-      `${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`,
-      {
-        method: "GET",
-        headers: { accept: "text/event-stream" },
-        signal,
-      },
-    );
-
-    if (!streamResponse.ok) {
-      throw redactTicketFromStreamError(
-        await responseError(
-          "hooks",
-          "failed to open hook stream",
-          streamResponse,
-        ),
-        ticket,
-      );
-    }
-
-    return streamResponse;
   }
 
   private createInvokeHeaders(
@@ -879,208 +748,120 @@ function hookStreamRetryDelay(attempt: number): number {
 }
 
 /**
- * Read a property off a possibly-hostile error object; a throwing accessor
- * must never take the settlement path down with it.
+ * A 4xx mint refusal is the node saying no for this session and scope set,
+ * so retrying cannot help. 408 and 429 mean "not now".
  */
-function readErrorProp(value: unknown, key: string): unknown {
+function isTerminalMintRefusal(status: unknown): boolean {
+  return (
+    typeof status === "number" &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429
+  );
+}
+
+/*
+ * Stream errors are built from an allow-list, never copied. Past the mint the
+ * ticket rides in the request URL, and a mint request carries invocation
+ * headers, so any foreign error text (message, cause, stack, meta, a
+ * response body) may hold a bearer credential. These builders keep the
+ * phase, a numeric HTTP status, and the thrown value's `name`/`code` when
+ * they are plain identifiers. Nothing else crosses into telemetry.
+ */
+function hookStreamRefusal(status: unknown): ServiceError {
+  const code = typeof status === "number" ? status : undefined;
+  return serviceError(
+    ErrorCodes.NETWORK_ERROR,
+    `hook stream open refused: ${code ?? "unknown status"}`,
+    "hooks",
+    { meta: { phase: "open", status: code } },
+  );
+}
+
+const STREAM_ERROR_NAMES: Record<string, true> = {
+  Error: true,
+  TypeError: true,
+  AbortError: true,
+  TimeoutError: true,
+  SyntaxError: true,
+  RangeError: true,
+  NetworkError: true,
+};
+
+function hookStreamFailure(phase: StreamPhase, thrown: unknown): ServiceError {
+  const candidateName = readProperty(thrown, "name");
+  const name =
+    typeof candidateName === "string" && STREAM_ERROR_NAMES[candidateName]
+      ? candidateName
+      : "Error";
+  const code =
+    identifier(readProperty(thrown, "code")) ??
+    identifier(readProperty(readProperty(thrown, "cause"), "code"));
+  return serviceError(
+    ErrorCodes.NETWORK_ERROR,
+    `hook stream ${phase} failed: ${name}${code ? ` (${code})` : ""}`,
+    "hooks",
+    { meta: { phase, errorName: name, ...(code ? { errorCode: code } : {}) } },
+  );
+}
+
+/** Accept only errno/undici-style codes, never arbitrary foreign identifiers. */
+function identifier(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,47}$/.test(value)
+    ? value
+    : undefined;
+}
+
+/** Read one property off a value the SDK does not own; a throwing getter or proxy trap reads as absent. */
+function readProperty(value: unknown, key: string): unknown {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return undefined;
+  }
   try {
-    return (value as Record<string, unknown>)[key];
+    return Reflect.get(value, key);
   } catch {
     return undefined;
   }
 }
 
-/**
- * Best-effort HTTP status extraction for mint-refusal classification. A
- * throwing `meta`/`status` getter simply makes the error non-terminal —
- * recoverable is always the safer classification than a throw inside
- * settlement.
- */
-function readErrorStatus(error: unknown): number | undefined {
-  try {
-    const meta = isServiceError(error) ? error.meta : undefined;
-    const status = meta?.status;
-    return typeof status === "number" ? status : undefined;
-  } catch {
-    return undefined;
-  }
+/** The default retry clock: abortable and unref'd, so a parked backoff never keeps the process alive. */
+function sleep(delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", stop);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    const stop = (): void => finish();
+    if (signal.aborted) {
+      finish();
+    } else {
+      signal.addEventListener("abort", stop, { once: true });
+    }
+  });
 }
 
-/**
- * Every textual form the ticket can appear in when it leaks through a
- * request URL: raw, percent-encoded, and `URLSearchParams` form encoding
- * (`+` for spaces).
- */
-function ticketForms(ticket: string): string[] {
-  return [
-    ticket,
-    encodeURIComponent(ticket),
-    new URLSearchParams({ ticket }).toString().slice("ticket=".length),
-  ];
-}
-
-function redactTicketForms(text: string, ticket: string): string {
-  let out = text;
-  for (const form of ticketForms(ticket)) {
-    if (form) {
-      out = out.split(form).join("[redacted]");
-    }
+function abortPromise(signal: AbortSignal): {
+  promise: Promise<void>;
+  dispose: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const onAbort = (): void => resolve();
+  if (signal.aborted) {
+    resolve();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
   }
-  return out;
-}
-
-/**
- * Copy a cause chain, sanitizing ticket material at every level without
- * mutating the (possibly third-party) originals. Depth-bounded so a cyclic
- * or pathological cause graph cannot recurse forever.
- */
-function sanitizeErrorCause(
-  cause: unknown,
-  ticket: string,
-  depth = 0,
-): unknown {
-  if (!ticket || depth > 4) {
-    return cause;
-  }
-  if (typeof cause === "string") {
-    return redactTicketForms(cause, ticket);
-  }
-  if (cause === null || typeof cause !== "object") {
-    return cause;
-  }
-  if (isServiceError(cause)) {
-    return redactTicketFromStreamError(cause, ticket);
-  }
-  if (cause instanceof Error) {
-    const message = readErrorProp(cause, "message");
-    const cloned = new Error(
-      typeof message === "string" ? redactTicketForms(message, ticket) : "",
-    );
-    const name = readErrorProp(cause, "name");
-    if (typeof name === "string") {
-      cloned.name = name;
-    }
-    const stack = readErrorProp(cause, "stack");
-    if (typeof stack === "string") {
-      cloned.stack = redactTicketForms(stack, ticket);
-    }
-    const inner = readErrorProp(cause, "cause");
-    if (inner !== undefined) {
-      cloned.cause = sanitizeErrorCause(inner, ticket, depth + 1);
-    }
-    return cloned;
-  }
-  // Any other object: shallow copy and sanitize the textual fields that can
-  // carry a URL.
-  const copy: Record<string, unknown> = { ...cause };
-  for (const key of ["message", "stack", "url", "href"]) {
-    if (typeof copy[key] === "string") {
-      copy[key] = redactTicketForms(copy[key] as string, ticket);
-    }
-  }
-  const inner = readErrorProp(cause, "cause");
-  if (inner !== undefined) {
-    copy.cause = sanitizeErrorCause(inner, ticket, depth + 1);
-  }
-  return copy;
-}
-
-function sanitizeMetaValues(
-  meta: Record<string, unknown>,
-  ticket: string,
-): Record<string, unknown> {
-  const clean: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(meta)) {
-    if (typeof value === "string") {
-      clean[key] = redactTicketForms(value, ticket);
-      continue;
-    }
-    try {
-      const serialized = JSON.stringify(value);
-      clean[key] =
-        serialized !== undefined &&
-        redactTicketForms(serialized, ticket) !== serialized
-          ? "[redacted]"
-          : value;
-    } catch {
-      clean[key] = value;
-    }
-  }
-  return clean;
-}
-
-/**
- * A refused `/hooks/events` response body may echo the request — including
- * the ticket query parameter — and so can a transport rejection
- * (`request to <URL>?ticket=… failed`). Ticket material is a bearer
- * credential, so every form it can appear in — raw, percent-encoded, or
- * form-encoded — is redacted from the message, the whole cause chain, the
- * stack, and meta. Returns a fresh ServiceError; the input is never
- * mutated.
- */
-function redactTicketFromStreamError(
-  error: ServiceError,
-  ticket: string,
-): ServiceError {
-  if (!ticket) {
-    return error;
-  }
-  const redacted: ServiceError = {
-    ...error,
-    message: redactTicketForms(error.message, ticket),
+  return {
+    promise,
+    dispose: () => signal.removeEventListener("abort", onAbort),
   };
-  const cause = readErrorProp(error, "cause");
-  if (cause !== undefined) {
-    Object.assign(redacted, {
-      cause: sanitizeErrorCause(cause, ticket),
-    });
-  }
-  if (error.meta) {
-    redacted.meta = sanitizeMetaValues(error.meta, ticket);
-  }
-  const stack = readErrorProp(error, "stack");
-  if (typeof stack === "string") {
-    Object.assign(redacted, { stack: redactTicketForms(stack, ticket) });
-  }
-  return redacted;
-}
-
-/**
- * Wrap whatever left the stream run — a transport rejection, an SSE read
- * failure, an arbitrary throw — as a ServiceError with the ticket scrubbed
- * from every reachable string. A hostile input that defeats even wrapError
- * degrades to a bare service error rather than leaking.
- */
-function sanitizeStreamError(error: unknown, ticket: string): ServiceError {
-  let base: ServiceError;
-  try {
-    base = isServiceError(error) ? error : wrapError("hooks", error);
-  } catch {
-    base = serviceError(
-      ErrorCodes.NETWORK_ERROR,
-      "hook stream failed",
-      "hooks",
-    );
-  }
-  return redactTicketFromStreamError(base, ticket);
-}
-
-/** Shape check for the errors services produce (typed `meta` accessible). */
-function isServiceError(error: unknown): error is ServiceError {
-  try {
-    return (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      typeof error.code === "string" &&
-      "message" in error &&
-      typeof error.message === "string" &&
-      "service" in error &&
-      typeof error.service === "string"
-    );
-  } catch {
-    return false;
-  }
 }
 
 function normalizeSubscription(
@@ -1089,7 +870,7 @@ function normalizeSubscription(
   return {
     ...subscription,
     pathPrefix: normalizePathPrefix(subscription.pathPrefix),
-    abilities: subscription.abilities ?? [],
+    abilities: subscription.abilities ? [...subscription.abilities] : [],
   };
 }
 
@@ -1180,18 +961,6 @@ async function responseError(
     ...error,
     meta: { ...error.meta, status: response.status, statusText: response.statusText },
   };
-}
-
-function isAbortError(error: unknown): boolean {
-  try {
-    return (
-      (error instanceof DOMException || error instanceof Error) &&
-      error.name === "AbortError"
-    );
-  } catch {
-    // A hostile error object whose `name` accessor throws is not an abort.
-    return false;
-  }
 }
 
 async function* parseSseStream(

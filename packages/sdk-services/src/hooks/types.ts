@@ -71,10 +71,11 @@ export interface HooksServiceConfig extends Record<string, unknown> {
  * Retry policy for the shared `/hooks/events` stream. When the stream fails
  * (network error, 5xx, or an expired/rotated ticket rejected with 401/403)
  * it is re-opened with exponential backoff: `HOOK_STREAM_RETRY_BASE_DELAY_MS`
- * (~250 ms) doubling to `HOOK_STREAM_RETRY_MAX_DELAY_MS` (~30 s) with jitter,
- * reset once a stream opens. Retries stop when no subscribers remain, when
- * the service is aborted, or when minting the hook ticket is refused
- * (the iterator throws that error instead).
+ * (~250 ms) doubling to `HOOK_STREAM_RETRY_MAX_DELAY_MS` (~30 s) with jitter.
+ * The retry streak resets after an event is received or a stream remains open
+ * for at least 5 seconds. Retries stop when no subscribers remain, when the
+ * service is aborted, or when minting the hook ticket is refused (the iterator
+ * throws that typed error instead).
  */
 export interface HookStreamRetryConfig {
   /**
