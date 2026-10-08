@@ -51,7 +51,6 @@ type AttemptOutcome =
 interface StreamHealth {
   openedAt: number;
   delivered: boolean;
-  contextSignal?: AbortSignal;
 }
 class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
   private readonly values: T[] = [];
@@ -152,6 +151,7 @@ export class HooksService extends BaseService implements IHooksService {
   /** Bumped on every session change; part of the plan key. */
   private _sessionGeneration = 0;
 
+  private _lastContextSignal?: AbortSignal;
   constructor(config: HooksServiceConfig = {}) {
     super();
     this._config = config;
@@ -422,6 +422,9 @@ export class HooksService extends BaseService implements IHooksService {
       if (!outcome) {
         continue;
       }
+      if (this.plan()?.key !== plan.key) {
+        continue;
+      }
       if (outcome.kind === "stopped") {
         this.release();
         continue;
@@ -436,9 +439,9 @@ export class HooksService extends BaseService implements IHooksService {
       }
       streak += 1;
       await this.phase(plan.key, (signal) =>
-        this.pause(streak, signal, health.contextSignal),
+        this.pause(streak, signal),
       );
-  }
+    }
   }
 
   /**
@@ -478,43 +481,42 @@ export class HooksService extends BaseService implements IHooksService {
   ): Promise<AttemptOutcome> {
     let phase: StreamPhase = "mint";
     let request: RequestSignal | undefined;
+    const owns = (): boolean =>
+      !signal.aborted && !request?.signal.aborted && this.plan()?.key === plan.key;
     try {
       const context = this.context;
-      health.contextSignal = context.abortSignal;
-      if (!context.isAuthenticated || health.contextSignal?.aborted) {
+      const contextSignal = context.abortSignal;
+      this._lastContextSignal = contextSignal;
+      if (!context.isAuthenticated || contextSignal?.aborted) {
         return { kind: "stopped" };
       }
-      // Aborts on the interrupt, sign-out, or context abort. Released by the
-      // interrupt that `phase` fires when this attempt returns.
       request = this.createRequestSignal(signal, 0);
       const host = this.host;
-      const minted = await context.fetch(`${host}/hooks/tickets`, {
-        method: "POST",
-        headers: {
-          ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          subscriptions: plan.subscriptions,
-          ttlSeconds: plan.ttlSeconds,
+      const minted = await awaitOwned(request!.signal, () =>
+        context.fetch(`${host}/hooks/tickets`, {
+          method: "POST",
+          headers: {
+            ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            subscriptions: plan.subscriptions,
+            ttlSeconds: plan.ttlSeconds,
+          }),
+          signal: request!.signal,
         }),
-        signal: request.signal,
-      });
+      );
+      if (!owns()) return { kind: "stopped" };
       if (!minted.ok) {
-        // The mint request carries no ticket, so responseError's body is safe.
         const status = minted.status;
-        const error = await responseError(
-          "hooks",
-          "failed to mint hook ticket",
-          minted,
+        const error = await awaitOwned(request!.signal, () =>
+          responseError("hooks", "failed to mint hook ticket", minted),
         );
-        return {
-          kind: "refused",
-          terminal: isTerminalMintRefusal(status),
-          error,
-        };
+        if (!owns()) return { kind: "stopped" };
+        return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
       }
-      const body: unknown = await minted.json();
+      const body: unknown = await awaitOwned(request!.signal, () => minted.json());
+      if (!owns()) return { kind: "stopped" };
       const ticket =
         body !== null && typeof body === "object" && "ticket" in body
           ? body.ticket
@@ -524,37 +526,40 @@ export class HooksService extends BaseService implements IHooksService {
       }
 
       phase = "open";
-      // The node reads the ticket only from the query (1.19.2).
-      const stream = await context.fetch(
-        `${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`,
-        {
+      if (!owns()) return { kind: "stopped" };
+      const stream = await awaitOwned(request!.signal, () =>
+        context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`, {
           method: "GET",
           headers: { accept: "text/event-stream" },
-          signal: request.signal,
-        },
+          signal: request!.signal,
+        }),
       );
+      if (!owns()) return { kind: "stopped" };
       if (!stream.ok) {
-        // 401/403 here is an expired or rotated ticket: the next attempt re-mints.
-        return {
-          kind: "refused",
-          terminal: false,
-          error: hookStreamRefusal(stream.status),
-        };
+        return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) };
       }
 
       health.openedAt = performance.now();
-      for await (const message of parseSseStream(stream.body, request.signal)) {
-        if (!message.data) {
-          continue;
+      const iterator = parseSseStream(stream.body, request.signal)[Symbol.asyncIterator]();
+      try {
+        for (;;) {
+          const next = await awaitOwned(request!.signal, () => iterator.next());
+          if (!owns()) return { kind: "stopped" };
+          if (next.done) break;
+          const message = next.value;
+          if (!message.data) continue;
+          const event = parseHookEvent(message);
+          if (!owns()) return { kind: "stopped" };
+          this.dispatch(event);
+          health.delivered = true;
         }
-        this.dispatch(parseHookEvent(message));
-        health.delivered = true;
+      } finally {
+        const closing = iterator.return?.();
+        if (closing) void Promise.resolve(closing).then(() => undefined, () => undefined);
       }
-      return request.signal.aborted ? { kind: "stopped" } : { kind: "ended" };
+      return owns() ? { kind: "ended" } : { kind: "stopped" };
     } catch (thrown) {
-      // An aborted request means the interrupt (discarded by `phase`) or the
-      // lifecycle ended; anything else is a failure, described by allow-list.
-      return request?.signal.aborted
+      return request?.signal.aborted || thrown === SUPERSEDED
         ? { kind: "stopped" }
         : { kind: "failed", error: hookStreamFailure(phase, thrown) };
     }
@@ -566,11 +571,13 @@ export class HooksService extends BaseService implements IHooksService {
    * interrupt, and then yields one real event-loop turn so an instant clock
    * cannot let a failing stream starve the process.
    */
-  private async pause(
-    attempt: number,
-    signal: AbortSignal,
-    contextSignal?: AbortSignal,
-  ): Promise<void> {
+  private async pause(attempt: number, signal: AbortSignal): Promise<void> {
+    try {
+      this._lastContextSignal = this.context.abortSignal;
+    } catch {
+      // A hostile context signal getter cannot prevent the next attempt.
+    }
+    const contextSignal = this._lastContextSignal;
     const waits: Promise<void>[] = [];
     const aborts: Array<{ promise: Promise<void>; dispose: () => void }> = [];
     try {
@@ -578,7 +585,6 @@ export class HooksService extends BaseService implements IHooksService {
       const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
       waits.push((retry?.wait ?? sleep)(delayMs, attempt, signal));
     } catch {
-      // A throwing delay callback or wait counts as an elapsed delay.
       waits.push(Promise.resolve());
     }
     aborts.push(abortPromise(signal));
@@ -591,11 +597,8 @@ export class HooksService extends BaseService implements IHooksService {
       for (const abort of aborts) abort.dispose();
     }
     await new Promise<void>((resolve) => {
-      if (typeof setImmediate === "function") {
-        setImmediate(resolve);
-      } else {
-        setTimeout(resolve, 0);
-      }
+      if (typeof setImmediate === "function") setImmediate(resolve);
+      else setTimeout(resolve, 0);
     });
   }
 
@@ -761,6 +764,60 @@ function isTerminalMintRefusal(status: unknown): boolean {
   );
 }
 
+const SUPERSEDED = Symbol("hooks attempt superseded");
+
+/** Race one foreign operation against the attempt interrupt and observe late results. */
+async function awaitOwned<T>(
+  signal: AbortSignal,
+  operation: Promise<T> | (() => Promise<T>),
+): Promise<T> {
+  if (signal.aborted) {
+    if (typeof operation !== "function") {
+      void operation.then(cancelLateResponse, () => undefined);
+    }
+    throw SUPERSEDED;
+  }
+  const promise = typeof operation === "function" ? operation() : operation;
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => signal.removeEventListener("abort", onAbort);
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(SUPERSEDED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) {
+          cancelLateResponse(value);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function cancelLateResponse(value: unknown): void {
+  if (!(value instanceof Response) || !value.body) return;
+  try {
+    const cancellation = value.body.cancel();
+    void cancellation.then(() => undefined, () => undefined);
+  } catch {
+    // A late body is best-effort cleanup.
+  }
+}
+
 /*
  * Stream errors are built from an allow-list, never copied. Past the mint the
  * ticket rides in the request URL, and a mint request carries invocation
@@ -779,20 +836,20 @@ function hookStreamRefusal(status: unknown): ServiceError {
   );
 }
 
-const STREAM_ERROR_NAMES: Record<string, true> = {
-  Error: true,
-  TypeError: true,
-  AbortError: true,
-  TimeoutError: true,
-  SyntaxError: true,
-  RangeError: true,
-  NetworkError: true,
-};
+const STREAM_ERROR_NAMES = new Set([
+  "Error",
+  "TypeError",
+  "AbortError",
+  "TimeoutError",
+  "SyntaxError",
+  "RangeError",
+  "NetworkError",
+]);
 
 function hookStreamFailure(phase: StreamPhase, thrown: unknown): ServiceError {
   const candidateName = readProperty(thrown, "name");
   const name =
-    typeof candidateName === "string" && STREAM_ERROR_NAMES[candidateName]
+    typeof candidateName === "string" && STREAM_ERROR_NAMES.has(candidateName)
       ? candidateName
       : "Error";
   const code =
@@ -806,9 +863,19 @@ function hookStreamFailure(phase: StreamPhase, thrown: unknown): ServiceError {
   );
 }
 
-/** Accept only errno/undici-style codes, never arbitrary foreign identifiers. */
+const STREAM_ERROR_CODES = new Set([
+  "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ETIMEDOUT", "EPIPE",
+  "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN",
+  "EADDRNOTAVAIL", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CLOSED",
+  "UND_ERR_ABORTED", "UND_ERR_RESPONSE_STATUS_CODE",
+  "ERR_TLS_CERT_ALTNAME_INVALID", "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN", "ERR_SSL_WRONG_VERSION_NUMBER",
+]);
+
 function identifier(value: unknown): string | undefined {
-  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,47}$/.test(value)
+  return typeof value === "string" && STREAM_ERROR_CODES.has(value)
     ? value
     : undefined;
 }
@@ -1002,15 +1069,28 @@ async function* readBodyChunks(
 ): AsyncIterable<Uint8Array> {
   const asyncIterable = body as AsyncIterable<Uint8Array>;
   if (typeof asyncIterable?.[Symbol.asyncIterator] === "function") {
-    for await (const chunk of asyncIterable) {
-      if (signal?.aborted) {
-        break;
+    const iterator = asyncIterable[Symbol.asyncIterator]();
+    const cancel = (): void => {
+      try {
+        const closing = iterator.return?.();
+        if (closing) void Promise.resolve(closing).then(() => undefined, () => undefined);
+      } catch {
+        // Cancellation must not mask the stream result.
       }
-      yield chunk;
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      while (!signal?.aborted) {
+        const next = await iterator.next();
+        if (next.done) break;
+        yield next.value;
+      }
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      cancel();
     }
     return;
   }
-
   const stream = body as {
     getReader?: () => {
       read: () => Promise<{ done: boolean; value?: Uint8Array }>;
@@ -1024,22 +1104,24 @@ async function* readBodyChunks(
   }
 
   const reader = stream.getReader();
+  const cancelReader = (): void => {
+    try {
+      const cancellation = reader.cancel?.();
+      if (cancellation) void cancellation.then(() => undefined, () => undefined);
+    } catch {
+      // Cancellation must not mask the stream result.
+    }
+  };
+  signal?.addEventListener("abort", cancelReader, { once: true });
   try {
     while (!signal?.aborted) {
       const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value) {
-        yield value;
-      }
+      if (done) break;
+      if (value) yield value;
     }
   } finally {
-    try {
-      await reader.cancel?.();
-    } catch {
-      // Ignore cancellation failures.
-    }
+    signal?.removeEventListener("abort", cancelReader);
+    cancelReader();
     reader.releaseLock?.();
   }
 }

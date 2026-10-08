@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { ServiceContext } from "../context";
 import { HooksService } from "./HooksService";
-import type { FetchResponse, IServiceContext } from "../types";
+import type { FetchRequestInit, FetchResponse, IServiceContext } from "../types";
 import type { HookEvent } from "./types";
 
 const TICKET = "tick et+/=";
@@ -70,7 +70,10 @@ const FAULTS: Record<string, { seam: string; act: () => unknown }> = {
   "open rejects with throwing name getter": { seam: "open", act: () => { const e = new Error(url(TICKET)); Object.defineProperty(e, "name", { get() { throw new Error(url(TICKET)); } }); throw e; } },
   "open rejects with revoked proxy": { seam: "open", act: () => { const { proxy, revoke } = Proxy.revocable({}, {}); revoke(); throw proxy; } },
   "open rejects with ticket as name": { seam: "open", act: () => { throw Object.assign(new Error("x"), { name: TICKET }); } },
-  "open 401 echoing ticket": { seam: "open", act: () => new Response(`bad ${url(TICKET)} ${TICKET}`, { status: 401 }) },
+  "open rejects with secret transport code": { seam: "open", act: () => { throw Object.assign(new Error("x"), { code: "TICKET_SECRET_42" }); } },
+  "open rejects with authorization code": { seam: "open", act: () => { throw Object.assign(new Error("x"), { code: INVOCATION }); } },
+  "open rejects with constructor name": { seam: "open", act: () => { throw Object.assign(new Error("x"), { name: "constructor" }); } },
+  "open rejects with proto name": { seam: "open", act: () => { throw Object.assign(new Error("x"), { name: "__proto__" }); } },
   "open 503": { seam: "open", act: () => new Response("down", { status: 503 }) },
   "read errors with URL": { seam: "read", act: () => "poison" },
   "read malformed event": { seam: "read", act: () => "malformed" },
@@ -195,6 +198,11 @@ describe("supervisor invariants under single faults", () => {
       const telemetry = serialize(emitted);
       for (const form of FORMS) expect(telemetry).not.toContain(form);
       expect(telemetry).not.toContain("invocation-secret");
+      expect(telemetry).not.toContain("TICKET_SECRET_42");
+      expect(telemetry).not.toContain(INVOCATION);
+      if (name.includes("constructor name") || name.includes("proto name")) {
+        expect(telemetry).toContain('"errorName":"Error"');
+      }
       // Exactly one stream / mint at a time.
       expect(stats.maxActive).toBeLessThanOrEqual(1);
       expect(stats.maxMintsInFlight).toBeLessThanOrEqual(1);
@@ -351,6 +359,7 @@ describe("gated lifecycle transitions", () => {
         let opens = 0;
         let gated = false;
         let readEntered = false;
+        let bodyCancelled = false;
         const emitted: unknown[] = [];
         const contextAbort = new AbortController();
         let contextSession = { delegationHeader: { Authorization: INVOCATION }, delegationCid: "c", spaceId: "space-123", verificationMethod: "did:key:t", jwk: {} };
@@ -387,21 +396,32 @@ describe("gated lifecycle transitions", () => {
             }
             if (phase === "read" && opens === 1) {
               gated = true;
-              return new Response(new ReadableStream<Uint8Array>({
-                start(controller) {
-                  init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")), { once: true });
+              return {
+                ok: true,
+                status: 200,
+                body: {
+                  [Symbol.asyncIterator]() {
+                    return {
+                      async next() {
+                        if (!readEntered) {
+                          readEntered = true;
+                          enterGate();
+                          await gate;
+                          return {
+                            done: false as const,
+                            value: new TextEncoder().encode(`data: ${JSON.stringify({ ...JSON.parse(EVENT), id: "stale-event" })}\n\n`),
+                          };
+                        }
+                        return { done: true as const, value: undefined };
+                      },
+                      return() {
+                        bodyCancelled = true;
+                        return Promise.resolve({ done: true as const, value: undefined });
+                      },
+                    };
+                  },
                 },
-                async pull(controller) {
-                  if (readEntered) return;
-                  readEntered = true;
-                  enterGate();
-                  await gate;
-                  if (!contextAbort.signal.aborted) {
-                    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ ...JSON.parse(EVENT), id: "stale-event" })}\n\n`));
-                    controller.close();
-                  }
-                },
-              }), { status: 200 });
+              } as FetchResponse;
             }
             if (phase === "backoff" && opens === 1) {
               return new Response("retry", { status: 503 });
@@ -458,7 +478,6 @@ describe("gated lifecycle transitions", () => {
           expect(await pendingB).toEqual({ value: undefined, done: true });
         }
 
-        releaseGate();
         if (transition === "last unsubscribe" || transition === "sign-out" || transition === "context abort") {
           expect(await pendingA).toEqual({ value: undefined, done: true });
         } else {
@@ -469,6 +488,8 @@ describe("gated lifecycle transitions", () => {
             expect((await pendingB)?.value?.id).toBe("evt-1");
           }
         }
+        if (phase === "read") expect(bodyCancelled).toBe(true);
+        releaseGate();
         for (let i = 0; i < 20; i += 1) await turn();
         expect(gated).toBe(true);
         expect(emitted).toHaveLength(phase === "backoff" ? 1 : 0);
@@ -596,6 +617,252 @@ describe("stale mint discard", () => {
     await first.return?.();
     await second.return?.();
   });
+});
+
+describe("attempt ownership checkpoints", () => {
+  test("late mint 403 after context abort completes without rejection", async () => {
+    let releaseMint!: (response: Response) => void;
+    let enteredMint!: () => void;
+    const mint = new Promise<Response>((resolve) => { releaseMint = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredMint = resolve; });
+    const base = harness();
+    const contextAbort = new AbortController();
+    const context = {
+      ...base.context,
+      abortSignal: contextAbort.signal,
+      fetch: async (requestUrl: string, init?: FetchRequestInit) => {
+        if (requestUrl.includes("/hooks/tickets")) {
+          enteredMint();
+          return mint as Promise<FetchResponse>;
+        }
+        return base.context.fetch(requestUrl, init);
+      },
+    } as IServiceContext;
+    const service = new HooksService({ streamRetry: { delay: () => 30_000 } });
+    service.initialize(context);
+    const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await entered;
+    contextAbort.abort();
+    expect(await pending).toEqual({ value: undefined, done: true });
+    releaseMint(new Response("late refusal", { status: 403 }));
+    await turn();
+    expect(base.emitted).toHaveLength(0);
+  });
+
+  test("late successful mint after a plan change never opens its ticket", async () => {
+    let releaseMint!: (response: Response) => void;
+    let enteredMint!: () => void;
+    let lateBodyCancelled = false;
+    const mint = new Promise<Response>((resolve) => { releaseMint = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredMint = resolve; });
+    const base = harness();
+    let mints = 0;
+    const context = {
+      ...base.context,
+      fetch: async (requestUrl: string, init?: FetchRequestInit) => {
+        if (requestUrl.includes("/hooks/tickets")) {
+          mints += 1;
+          if (mints === 1) {
+            enteredMint();
+            return mint as Promise<FetchResponse>;
+          }
+        }
+        return base.context.fetch(requestUrl, init);
+      },
+    } as IServiceContext;
+    const service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
+    service.initialize(context);
+    const first = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+    const firstPending = first.next();
+    await entered;
+    const second = service.subscribe(
+      [{ space: "space-123", service: "kv" }],
+      { ttlSeconds: 10 },
+    )[Symbol.asyncIterator]();
+    expect((await firstEvent(second))?.v?.value).toMatchObject({ id: "evt-1" });
+    const lateBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ ticket: "old-ticket" })));
+      },
+      cancel() { lateBodyCancelled = true; },
+    });
+    releaseMint(new Response(lateBody));
+    await turn();
+    expect(lateBodyCancelled).toBe(true);
+    expect((await firstPending).value?.id).toBe("evt-1");
+    expect(base.stats.opens).toBe(1);
+    expect(base.emitted).toHaveLength(0);
+    await first.return?.();
+    await second.return?.();
+  });
+
+  test("a session change during event parsing blocks dispatch from the old stream", async () => {
+    const session = {
+      delegationHeader: { Authorization: INVOCATION },
+      delegationCid: "c",
+      spaceId: "space-123",
+      verificationMethod: "did:key:t",
+      jwk: {},
+    };
+    let opens = 0;
+    let changed = false;
+    const context = new ServiceContext({
+      hosts: ["https://node.tinycloud.xyz"],
+      session,
+      invoke: () => ({ Authorization: INVOCATION }),
+      fetch: async (requestUrl) => {
+        if (requestUrl.includes("/hooks/tickets")) return new Response('{"ticket":"t"}');
+        opens += 1;
+        const id = opens === 1 ? "old-dispatch-event" : "new-dispatch-event";
+        return new Response(`data: ${JSON.stringify({ ...JSON.parse(EVENT), id })}\n\n`);
+      },
+    });
+    const service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
+    context.registerService("hooks", service);
+    service.initialize(context);
+    const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+    const originalParse = JSON.parse;
+    const json = JSON as unknown as { parse(text: string): unknown };
+    json.parse = (text: string): unknown => {
+      const parsed = originalParse(text);
+      if (!changed && text.includes('"id":"old-dispatch-event"')) {
+        changed = true;
+        context.setSession({ ...session, delegationCid: "new-session" });
+      }
+      return parsed;
+    };
+    let received: { v?: IteratorResult<unknown>; e?: unknown } | undefined;
+    try {
+      received = await firstEvent(iterator);
+    } finally {
+      json.parse = originalParse;
+    }
+    expect(changed).toBe(true);
+    expect(received?.v?.value).toMatchObject({ id: "new-dispatch-event" });
+    expect(received?.v?.value).not.toMatchObject({ id: "old-dispatch-event" });
+    expect(opens).toBe(2);
+    await iterator.return?.();
+  });
+
+  test("cleanup-time abort listener cannot fail a new scope with the old refusal", async () => {
+    const base = harness();
+    let mints = 0;
+    let cleanupListenerCalled = false;
+    let scopeB: AsyncIterator<HookEvent> | undefined;
+    let scopeBNext: Promise<IteratorResult<HookEvent>> | undefined;
+    let service: HooksService;
+    const context = {
+      ...base.context,
+      invokeAny: () => ({ Authorization: INVOCATION }),
+      fetch: async (requestUrl: string, init?: FetchRequestInit) => {
+        if (requestUrl.includes("/hooks/tickets")) {
+          mints += 1;
+          if (mints === 1) {
+            init?.signal?.addEventListener("abort", () => {
+              cleanupListenerCalled = true;
+              scopeB = service.subscribe([
+                { space: "space-123", service: "kv", abilities: ["tinycloud.kv/put"] },
+              ])[Symbol.asyncIterator]();
+              scopeBNext = scopeB.next();
+            }, { once: true });
+            return new Response("old refusal", { status: 403 });
+          }
+        }
+        return base.context.fetch(requestUrl, init);
+      },
+    } as IServiceContext;
+    service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
+    service.initialize(context);
+    const first = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+    const firstResult = await firstEvent(first, 500);
+    expect(cleanupListenerCalled).toBe(true);
+    expect(firstResult?.v?.value).toMatchObject({ id: "evt-1" });
+    expect((await scopeBNext)?.value?.id).toBe("evt-1");
+    expect(mints).toBe(2);
+    expect(base.emitted).toHaveLength(0);
+    await first.return?.();
+    await scopeB?.return?.();
+  });
+});
+
+describe("session stream ownership through ServiceContext", () => {
+  for (const transition of ["setSession", "signOut then setSession"] as const) {
+    test(`${transition} never dispatches an event from the old session`, async () => {
+      let releaseOld!: () => void;
+      let enterOld!: () => void;
+      const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+      const entered = new Promise<void>((resolve) => { enterOld = resolve; });
+      let opens = 0;
+      const session = {
+        delegationHeader: { Authorization: INVOCATION },
+        delegationCid: "c",
+        spaceId: "space-123",
+        verificationMethod: "did:key:t",
+        jwk: {},
+      };
+      const context = new ServiceContext({
+        hosts: ["https://node.tinycloud.xyz"],
+        session,
+        invoke: () => ({ Authorization: INVOCATION }),
+        fetch: async (requestUrl) => {
+          if (requestUrl.includes("/hooks/tickets")) return new Response('{"ticket":"t"}');
+          opens += 1;
+          if (opens === 1) {
+            return new Response(new ReadableStream<Uint8Array>({
+              async pull(controller) {
+                enterOld();
+                await oldGate;
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ ...JSON.parse(EVENT), id: "old-session-event" })}\n\n`));
+                controller.close();
+              },
+            }), { status: 200 });
+          }
+          return new Response(`data: ${JSON.stringify({ ...JSON.parse(EVENT), id: "new-session-event" })}\n\n`);
+        },
+      });
+      const service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
+      context.registerService("hooks", service);
+      service.initialize(context);
+      const oldIterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+      const oldPending = oldIterator.next();
+      await entered;
+      if (transition === "signOut then setSession") service.onSignOut();
+      context.setSession({ ...session, delegationCid: "new-session" });
+      const nextIterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+      const fresh = await firstEvent(nextIterator);
+      expect(fresh?.v?.value).toMatchObject({ id: "new-session-event" });
+      releaseOld();
+      const oldResult = await oldPending;
+      expect(oldResult.value?.id).not.toBe("old-session-event");
+      await oldIterator.return?.();
+      await nextIterator.return?.();
+    });
+  }
+});
+
+test("a one-shot abortSignal getter failure is retried before backoff", async () => {
+  const base = harness([
+    FAULTS["open 503"],
+    { seam: "wait", act: () => new Promise<void>(() => {}) },
+  ]);
+  let reads = 0;
+  const context = {
+    ...base.context,
+    get abortSignal() {
+      reads += 1;
+      if (reads === 1) throw new Error("first abortSignal read");
+      return base.context.abortSignal;
+    },
+  } as IServiceContext;
+  const service = new HooksService({ streamRetry: { delay: () => 30_000 } });
+  service.initialize(context);
+  const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
+  const pending = iterator.next();
+  for (let i = 0; i < 30; i += 1) await turn();
+  base.contextAbort.abort();
+  expect(await pending).toEqual({ value: undefined, done: true });
+  expect(reads).toBeGreaterThanOrEqual(2);
 });
 
 describe("real ServiceContext telemetry ownership", () => {
