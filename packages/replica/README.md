@@ -94,7 +94,7 @@ const store = await SqliteReplicaStore.open("./replica-data", { create: true });
 
 - A replica stores only the configured KV prefix. The grant may be broader, but keys and values outside the replica prefix are not stored.
 - Reads stop when the sync grant expires. A separate node-attested retention grant can allow already-synced reads for a bounded period after expiry; it does not authorize more syncs. A learned revocation blocks reads.
-- Replicating the secrets space or a `vault/` prefix requires explicit `allowSecrets: true` opt-in. This copies encrypted secret material; it does not grant decryption. Decrypt authority is network-wide, not limited to a secret name (TC-755).
+- Replicating the secrets space or a prefix overlapping the `vault` namespace (including bare `vault`) requires explicit `allowSecrets: true` opt-in. This copies encrypted secret material; it does not grant decryption. Decrypt authority is network-wide, not limited to a secret name (TC-755).
 - SQLite replica files are mode `0600`; replica data directories are mode `0700`. Browser storage is scoped to the origin; same-origin scripts can access that origin's IndexedDB.
 
 See the [full local replicas guide](https://docs.tinycloud.xyz/guides/local-replicas) for grant setup, CLI usage, retention, error handling, and limitations.
