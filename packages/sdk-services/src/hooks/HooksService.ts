@@ -568,8 +568,8 @@ export class HooksService extends BaseService implements IHooksService {
   /**
    * Back off before the next attempt. `config.streamRetry` overrides the
    * delay and the clock; whatever they do, the pause ends by the delay or the
-   * interrupt, and then yields one real event-loop turn so an instant clock
-   * cannot let a failing stream starve the process.
+   * interrupt, then yields one timer turn so an instant clock cannot starve
+   * due timers or the process.
    */
   private async pause(attempt: number, signal: AbortSignal): Promise<void> {
     try {
@@ -596,10 +596,9 @@ export class HooksService extends BaseService implements IHooksService {
     } finally {
       for (const abort of aborts) abort.dispose();
     }
-    await new Promise<void>((resolve) => {
-      if (typeof setImmediate === "function") setImmediate(resolve);
-      else setTimeout(resolve, 0);
-    });
+    // Use a referenced timer: due timers (including runner timeouts) must run
+    // before the supervisor starts another iteration, regardless of immediates.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 
   /** The stream the current subscribers need, or undefined when none remain. */

@@ -1023,12 +1023,14 @@ describe("default backoff bounds", () => {
 });
 
 describe("published child runtimes", () => {
-  test("Node 20 and 22 recover over HTTP and naturally exit after default backoff cancellation", async () => {
+  test("Node 22, Node 20, and configured extra runtimes recover over HTTP and naturally exit after default backoff cancellation", async () => {
     const dist = resolve(import.meta.dir, "../../dist/index.js");
     if (!existsSync(dist)) throw new Error(`missing built sdk-services dist: ${dist}`);
-    const node20 = "/tmp/node-v20.19.4-linux-x64/bin/node";
-    if (!existsSync(node20)) throw new Error(`missing required Node 20 runtime: ${node20}`);
-    const runtimes = ["node", node20];
+    // `node` is required; TC_HOOKS_EXTRA_NODE_RUNTIMES adds colon-separated absolute node binary paths.
+    const runtimes = ["node", ...(process.env.TC_HOOKS_EXTRA_NODE_RUNTIMES ?? "").split(":").filter(Boolean)];
+    for (const runtime of runtimes.slice(1)) {
+      if (!existsSync(runtime)) throw new Error(`missing extra Node runtime: ${runtime}`);
+    }
     const script = `
       import { createServer } from "node:http";
       import { HooksService } from ${JSON.stringify(`file://${dist}`)};
