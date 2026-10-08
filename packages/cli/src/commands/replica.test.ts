@@ -177,7 +177,8 @@ describe("profile replica removal", () => {
     await second.close();
 
     await expect(removeProfileReplicas(PROFILE)).rejects.toThrow("is syncing");
-    expect(await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).toEqual(["first", "second"]);
+    // readdir order is filesystem-defined (it differs on the CI runner), so compare as a set.
+    expect((await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).sort()).toEqual(["first", "second"]);
   });
 });
 describe("replica purge symlink safety", () => {
