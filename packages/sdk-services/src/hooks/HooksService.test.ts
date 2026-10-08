@@ -3,7 +3,10 @@ import { HooksService } from "./HooksService";
 import { ErrorCodes, type IServiceContext } from "../types";
 import type { HookWebhookRegistration } from "./types";
 
-function createContext(fetchImpl: IServiceContext["fetch"]): IServiceContext {
+function createContext(
+  fetchImpl: IServiceContext["fetch"],
+  overrides: Partial<IServiceContext> = {},
+): IServiceContext {
   return {
     session: {
       delegationHeader: { Authorization: "Bearer test" },
@@ -28,6 +31,7 @@ function createContext(fetchImpl: IServiceContext["fetch"]): IServiceContext {
       maxDelayMs: 10000,
       retryableErrors: [],
     },
+    ...overrides,
   };
 }
 

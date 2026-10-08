@@ -1,8 +1,11 @@
 import { BaseService } from "../base/BaseService";
+import type { RequestSignal } from "../base/types";
 import type {
   FetchResponse,
   InvokeAnyEntry,
+  ServiceError,
   ServiceHeaders,
+  ServiceSession,
   Result,
 } from "../types";
 import { ErrorCodes, err, ok, serviceError } from "../types";
@@ -20,21 +23,43 @@ import type {
   HookWebhookUnregisterOptions,
 } from "./types";
 
-interface HookTicketResponse {
-  ticket: string;
-  expiresAt: string;
-}
-
 interface HookSubscriber {
   requested: HookSubscription[];
+  /** `subscriptionSignature` of each requested entry, fixed at subscribe time. */
+  signatures: string[];
   ttlSeconds?: number;
   queue: AsyncQueue<HookEvent>;
 }
 
+/** The one stream the current subscribers need. */
+interface StreamPlan {
+  /** Session generation + merged subscriptions + TTL; a change supersedes the running phase. */
+  key: string;
+  subscriptions: HookSubscription[];
+  ttlSeconds?: number;
+}
+
+type StreamPhase = "mint" | "open" | "read";
+
+/** How one attempt ended. Holds only SDK-built values. */
+type AttemptOutcome =
+  | { kind: "ended" }
+  | { kind: "stopped" }
+  | { kind: "refused"; terminal: boolean; error: ServiceError }
+  | { kind: "failed"; error: ServiceError };
+
+interface StreamHealth {
+  openedAt: number;
+  delivered: boolean;
+}
 class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
   private readonly values: T[] = [];
-  private readonly waiters: Array<(result: IteratorResult<T>) => void> = [];
+  private readonly waiters: Array<{
+    resolve: (result: IteratorResult<T>) => void;
+    reject: (error: unknown) => void;
+  }> = [];
   private closed = false;
+  private failure?: unknown;
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return this;
@@ -47,7 +72,7 @@ class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
 
     const waiter = this.waiters.shift();
     if (waiter) {
-      waiter({ value, done: false });
+      waiter.resolve({ value, done: false });
       return;
     }
 
@@ -62,7 +87,24 @@ class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
     this.closed = true;
     while (this.waiters.length > 0) {
       const waiter = this.waiters.shift();
-      waiter?.({ value: undefined as never, done: true });
+      waiter?.resolve({ value: undefined as never, done: true });
+    }
+  }
+
+  /**
+   * Fail the queue: pending and future `next()` calls reject with `error`,
+   * so a `for await` consumer sees the iterator throw.
+   */
+  fail(error: unknown): void {
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+    this.failure = error;
+    while (this.waiters.length > 0) {
+      const waiter = this.waiters.shift();
+      waiter?.reject(error);
     }
   }
 
@@ -72,26 +114,44 @@ class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
       return Promise.resolve({ value, done: false });
     }
 
+    if (this.failure !== undefined) {
+      return Promise.reject(this.failure);
+    }
+
     if (this.closed) {
       return Promise.resolve({ value: undefined as never, done: true });
     }
 
-    return new Promise<IteratorResult<T>>((resolve) => {
-      this.waiters.push(resolve);
+    return new Promise<IteratorResult<T>>((resolve, reject) => {
+      this.waiters.push({ resolve, reject });
     });
   }
 }
+
+/** First shared-stream retry delay: fast enough to ride out a ticket 401. */
+const HOOK_STREAM_RETRY_BASE_DELAY_MS = 250;
+/** Ceiling for shared-stream retry backoff. */
+const HOOK_STREAM_RETRY_MAX_DELAY_MS = 30_000;
+/**
+ * A stream that stays open at least this long without erroring counts as
+ * healthy and resets the backoff streak. A stream that delivers an event
+ * resets it immediately.
+ */
+const HOOK_STREAM_HEALTHY_MS = 5_000;
 
 export class HooksService extends BaseService implements IHooksService {
   static readonly serviceName = "hooks";
 
   declare protected _config: HooksServiceConfig;
   private readonly _subscribers: Set<HookSubscriber> = new Set();
-  private _sharedStreamTask?: Promise<void>;
-  private _sharedStreamAbort?: AbortController;
-  private _refreshChain: Promise<void> = Promise.resolve();
-  private _activeSignature = "";
+  /** True while the one supervisor loop runs. Set only by wake(), cleared only at loop exit. */
+  private _supervising = false;
+  /** The supervisor's current step, interruptible by wake(). */
+  private _phase?: { key: string; interrupt: AbortController };
+  /** Bumped on every session change; part of the plan key. */
+  private _sessionGeneration = 0;
 
+  private _lastContextSignal?: AbortSignal;
   constructor(config: HooksServiceConfig = {}) {
     super();
     this._config = config;
@@ -116,39 +176,33 @@ export class HooksService extends BaseService implements IHooksService {
       throw new Error("At least one hook subscription is required");
     }
 
-    const normalized = subscriptions.map(normalizeSubscription);
+    const requested = subscriptions.map(normalizeSubscription);
     const subscriber: HookSubscriber = {
-      requested: normalized,
+      requested,
+      signatures: requested.map(subscriptionSignature),
       ttlSeconds: options.ttlSeconds,
       queue: new AsyncQueue<HookEvent>(),
     };
-
-    this._subscribers.add(subscriber);
-    const abortHandler = () => {
+    const leave = (): void => {
       this._subscribers.delete(subscriber);
       subscriber.queue.close();
-      void this.scheduleSharedStreamRefresh();
+      this.wake();
     };
-
-    if (options.signal) {
-      if (options.signal.aborted) {
-        abortHandler();
-      } else {
-        options.signal.addEventListener("abort", abortHandler, { once: true });
-      }
+    const { signal } = options;
+    if (signal?.aborted) {
+      return;
     }
-
-    void this.scheduleSharedStreamRefresh();
+    signal?.addEventListener("abort", leave, { once: true });
+    this._subscribers.add(subscriber);
+    this.wake();
 
     try {
       for await (const event of subscriber.queue) {
         yield event;
       }
     } finally {
-      if (options.signal) {
-        options.signal.removeEventListener("abort", abortHandler);
-      }
-      abortHandler();
+      signal?.removeEventListener("abort", leave);
+      leave();
     }
   }
 
@@ -317,185 +371,329 @@ export class HooksService extends BaseService implements IHooksService {
     }
   }
 
-  private async scheduleSharedStreamRefresh(): Promise<void> {
-    this._refreshChain = this._refreshChain
-      .then(() => this.refreshSharedStream())
-      .catch(() => undefined);
-    await this._refreshChain;
-  }
-
-  private async refreshSharedStream(): Promise<void> {
-    if (!this.requireAuth() || this._subscribers.size === 0) {
-      this.abortSharedStream();
-      this._activeSignature = "";
+  /**
+   * Called after anything that may change what the supervisor should do:
+   * subscribe, unsubscribe, session change, sign-out. Interrupts the running
+   * step if the plan moved away from it, and starts the supervisor if none
+   * runs. Touches only SDK-owned state, so it never throws into callers such
+   * as `ServiceContext.setSession`.
+   */
+  private wake(): void {
+    const phase = this._phase;
+    if (phase && phase.key !== this.plan()?.key) {
+      phase.interrupt.abort();
+    }
+    if (this._supervising || this._subscribers.size === 0) {
       return;
     }
+    this._supervising = true;
+    this.supervise().catch(() => this.collapse());
+  }
 
-    const state = this.collectSharedStreamState();
-    if (state.signature !== this._activeSignature) {
-      this._activeSignature = state.signature;
-      this.abortSharedStream();
-    }
-
-    if (!this._sharedStreamTask) {
-      this._sharedStreamTask = this.runSharedStream(state)
-        .catch((error: unknown) => {
-          if (!isAbortError(error)) {
-            throw error;
-          }
-        })
-        .finally(() => {
-          this._sharedStreamTask = undefined;
-          this._sharedStreamAbort = undefined;
-          if (this._subscribers.size > 0) {
-            void this.scheduleSharedStreamRefresh();
-          }
-        });
+  /**
+   * The only owner of the shared stream. Each iteration is one attempt
+   * (mint → open → drain), then a classification and, unless the attempt was
+   * superseded or released its subscribers, a backoff. Every await is a
+   * `phase` that wake() can interrupt; an interrupted phase yields
+   * `undefined`, so a superseded mint can never act. Outside `attempt` and
+   * `pause`, which each own one catch, the loop touches only SDK state.
+   */
+  private async supervise(): Promise<void> {
+    let streak = 0;
+    for (;;) {
+      const plan = this.plan();
+      if (!plan) {
+        // Same synchronous turn as the emptiness check: a subscribe() that
+        // runs after this line starts a fresh supervisor.
+        this._supervising = false;
+        return;
+      }
+      const health: StreamHealth = { openedAt: 0, delivered: false };
+      const outcome = await this.phase(plan.key, (signal) =>
+        this.attempt(plan, signal, health),
+      );
+      if (
+        health.delivered ||
+        (health.openedAt > 0 &&
+          performance.now() - health.openedAt >= HOOK_STREAM_HEALTHY_MS)
+      ) {
+        streak = 0;
+      }
+      if (!outcome) {
+        continue;
+      }
+      if (this.plan()?.key !== plan.key) {
+        continue;
+      }
+      if (outcome.kind === "stopped") {
+        this.release();
+        continue;
+      }
+      if (outcome.kind === "refused" && outcome.terminal) {
+        this.release(outcome.error);
+        this.report(outcome.error);
+        continue;
+      }
+      if (outcome.kind !== "ended") {
+        this.report(outcome.error);
+      }
+      streak += 1;
+      await this.phase(plan.key, (signal) =>
+        this.pause(streak, signal),
+      );
     }
   }
 
-  private collectSharedStreamState(): {
-    subscriptions: HookSubscription[];
-    ttlSeconds?: number;
-    signature: string;
-  } {
-    const merged = new Map<string, HookSubscription>();
-    const ttlCandidates: number[] = [];
-
-    for (const subscriber of this._subscribers) {
-      if (typeof subscriber.ttlSeconds === "number") {
-        ttlCandidates.push(subscriber.ttlSeconds);
+  /**
+   * Run one step under an interrupt that wake() fires when the plan key moves
+   * on. An interrupted step's result is discarded. The interrupt is also
+   * fired when the step returns, which releases whatever it left open: the
+   * request signal and its listeners, an unread response body, a timer.
+   */
+  private async phase<T>(
+    key: string,
+    step: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T | undefined> {
+    const interrupt = new AbortController();
+    this._phase = { key, interrupt };
+    try {
+      if (this.plan()?.key !== key) {
+        // A wake between two phases found nothing to interrupt.
+        interrupt.abort();
       }
-      for (const subscription of subscriber.requested) {
-        merged.set(subscriptionSignature(subscription), subscription);
+      const result = await step(interrupt.signal);
+      return interrupt.signal.aborted ? undefined : result;
+    } finally {
+      this._phase = undefined;
+      interrupt.abort();
+    }
+  }
+
+  /**
+   * One mint → open → drain. The single catch site for everything the
+   * attempt touches that the SDK does not own: context accessors, invoke,
+   * fetch, response bodies, the SSE parser. Never rejects.
+   */
+  private async attempt(
+    plan: StreamPlan,
+    signal: AbortSignal,
+    health: StreamHealth,
+  ): Promise<AttemptOutcome> {
+    let phase: StreamPhase = "mint";
+    let request: RequestSignal | undefined;
+    const owns = (): boolean =>
+      !signal.aborted && !request?.signal.aborted && this.plan()?.key === plan.key;
+    try {
+      const context = this.context;
+      const contextSignal = context.abortSignal;
+      this._lastContextSignal = contextSignal;
+      if (!context.isAuthenticated || contextSignal?.aborted) {
+        return { kind: "stopped" };
+      }
+      request = this.createRequestSignal(signal, 0);
+      const host = this.host;
+      const minted = await awaitOwned(request!.signal, () =>
+        context.fetch(`${host}/hooks/tickets`, {
+          method: "POST",
+          headers: {
+            ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            subscriptions: plan.subscriptions,
+            ttlSeconds: plan.ttlSeconds,
+          }),
+          signal: request!.signal,
+        }),
+      );
+      if (!owns()) return { kind: "stopped" };
+      if (!minted.ok) {
+        const status = minted.status;
+        const error = await awaitOwned(request!.signal, () =>
+          responseError("hooks", "failed to mint hook ticket", minted),
+        );
+        if (!owns()) return { kind: "stopped" };
+        return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
+      }
+      const body: unknown = await awaitOwned(request!.signal, () => minted.json());
+      if (!owns()) return { kind: "stopped" };
+      const ticket =
+        body !== null && typeof body === "object" && "ticket" in body
+          ? body.ticket
+          : undefined;
+      if (typeof ticket !== "string" || ticket.length === 0) {
+        throw new Error("Hook ticket response did not include a ticket");
+      }
+
+      phase = "open";
+      if (!owns()) return { kind: "stopped" };
+      const stream = await awaitOwned(request!.signal, () =>
+        context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`, {
+          method: "GET",
+          headers: { accept: "text/event-stream" },
+          signal: request!.signal,
+        }),
+      );
+      if (!owns()) return { kind: "stopped" };
+      if (!stream.ok) {
+        return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) };
+      }
+
+      health.openedAt = performance.now();
+      const iterator = parseSseStream(stream.body, request.signal)[Symbol.asyncIterator]();
+      try {
+        for (;;) {
+          const next = await awaitOwned(request!.signal, () => iterator.next());
+          if (!owns()) return { kind: "stopped" };
+          if (next.done) break;
+          const message = next.value;
+          if (!message.data) continue;
+          const event = parseHookEvent(message);
+          if (!owns()) return { kind: "stopped" };
+          this.dispatch(event);
+          health.delivered = true;
+        }
+      } finally {
+        const closing = iterator.return?.();
+        if (closing) void Promise.resolve(closing).then(() => undefined, () => undefined);
+      }
+      return owns() ? { kind: "ended" } : { kind: "stopped" };
+    } catch (thrown) {
+      return request?.signal.aborted || thrown === SUPERSEDED
+        ? { kind: "stopped" }
+        : { kind: "failed", error: hookStreamFailure(phase, thrown) };
+    }
+  }
+
+  /**
+   * Back off before the next attempt. `config.streamRetry` overrides the
+   * delay and the clock; whatever they do, the pause ends by the delay or the
+   * interrupt, then yields one timer turn so an instant clock cannot starve
+   * due timers or the process.
+   */
+  private async pause(attempt: number, signal: AbortSignal): Promise<void> {
+    try {
+      this._lastContextSignal = this.context.abortSignal;
+    } catch {
+      // A hostile context signal getter cannot prevent the next attempt.
+    }
+    const contextSignal = this._lastContextSignal;
+    const waits: Promise<void>[] = [];
+    const aborts: Array<{ promise: Promise<void>; dispose: () => void }> = [];
+    try {
+      const retry = this._config.streamRetry;
+      const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
+      waits.push((retry?.wait ?? sleep)(delayMs, attempt, signal));
+    } catch {
+      waits.push(Promise.resolve());
+    }
+    aborts.push(abortPromise(signal));
+    if (contextSignal) aborts.push(abortPromise(contextSignal));
+    try {
+      await Promise.race([...waits, ...aborts.map(({ promise }) => promise)]);
+    } catch {
+      // A rejecting custom clock counts as an elapsed delay.
+    } finally {
+      for (const abort of aborts) abort.dispose();
+    }
+    // Use a referenced timer: due timers (including runner timeouts) must run
+    // before the supervisor starts another iteration, regardless of immediates.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+
+  /** The stream the current subscribers need, or undefined when none remain. */
+  private plan(): StreamPlan | undefined {
+    if (this._subscribers.size === 0) {
+      return undefined;
+    }
+    const merged = new Map<string, HookSubscription>();
+    let ttlSeconds: number | undefined;
+    for (const subscriber of this._subscribers) {
+      subscriber.requested.forEach((subscription, index) =>
+        merged.set(subscriber.signatures[index], subscription),
+      );
+      if (typeof subscriber.ttlSeconds === "number") {
+        ttlSeconds = Math.min(subscriber.ttlSeconds, ttlSeconds ?? Infinity);
       }
     }
-
-    const subscriptions = [...merged.values()].sort((left, right) =>
-      subscriptionSignature(left).localeCompare(subscriptionSignature(right)),
-    );
-    const ttlSeconds =
-      ttlCandidates.length > 0 ? Math.min(...ttlCandidates) : undefined;
-    const signature = JSON.stringify({
-      subscriptions: subscriptions.map(subscriptionSignature),
-      ttlSeconds,
-    });
-
+    const signatures = [...merged.keys()].sort();
     return {
-      subscriptions,
+      key: JSON.stringify([this._sessionGeneration, signatures, ttlSeconds ?? null]),
+      subscriptions: signatures.map((signature) => merged.get(signature)!),
       ttlSeconds,
-      signature,
     };
   }
 
-  private async runSharedStream(state: {
-    subscriptions: HookSubscription[];
-    ttlSeconds?: number;
-  }): Promise<void> {
-    const abortController = new AbortController();
-    this._sharedStreamAbort = abortController;
-
-    try {
-      const host = this._config.host ?? this.context.hosts[0];
-      const ticketResponse = await this.mintHookTicket(
-        state.subscriptions,
-        state.ttlSeconds,
-        abortController.signal,
-      );
-      const streamResponse = await this.openHookStream(
-        host,
-        ticketResponse.ticket,
-        abortController.signal,
-      );
-
-      for await (const message of parseSseStream(
-        streamResponse.body,
-        abortController.signal,
-      )) {
-        if (!message.data) {
-          continue;
-        }
-        const event = parseHookEvent(message);
-        for (const subscriber of this._subscribers) {
-          if (matchesAnySubscription(event, subscriber.requested)) {
-            subscriber.queue.push(event);
-          }
-        }
-      }
-    } finally {
-      if (this._sharedStreamAbort === abortController) {
-        this._sharedStreamAbort = undefined;
+  private dispatch(event: HookEvent): void {
+    for (const subscriber of this._subscribers) {
+      if (matchesAnySubscription(event, subscriber.requested)) {
+        subscriber.queue.push(event);
       }
     }
   }
 
-  private abortSharedStream(): void {
-    this._sharedStreamAbort?.abort();
+  /**
+   * Detach every subscriber. With `error`, their iterators throw it after
+   * draining buffered events; without, they complete.
+   */
+  private release(error?: ServiceError): void {
+    const subscribers = [...this._subscribers];
+    this._subscribers.clear();
+    for (const { queue } of subscribers) {
+      if (error) {
+        queue.fail(error);
+      } else {
+        queue.close();
+      }
+    }
+  }
+
+  private report(error: ServiceError): void {
+    if (error.meta && typeof error.meta === "object") {
+      Object.freeze(error.meta);
+    }
+    Object.freeze(error);
+    try {
+      this.emitError(error, "stream");
+    } catch {
+      // Telemetry never steers the stream.
+    }
+  }
+
+  /**
+   * Unreachable by construction. If the loop ever rejects anyway, fail its
+   * subscribers visibly instead of stranding them or crashing the process.
+   */
+  private collapse(): void {
+    this._supervising = false;
+    this._phase?.interrupt.abort();
+    this._phase = undefined;
+    const error = serviceError(
+      ErrorCodes.NETWORK_ERROR,
+      "hook stream supervisor stopped unexpectedly",
+      "hooks",
+    );
+    this.report(error);
+    this.release(error);
+  }
+
+  override onSessionChange(session: ServiceSession | null): void {
+    super.onSessionChange(session);
+    // New credentials supersede the running attempt: it re-mints, or stops
+    // if the session is gone.
+    this._sessionGeneration += 1;
+    this.wake();
+  }
+
+  override onSignOut(): void {
+    super.onSignOut();
+    // Sign-out ends every subscription; the empty plan stops the supervisor.
+    this.release();
+    this.wake();
   }
 
   private createHookHeaders(action: string, path: string): ServiceHeaders {
     return this.context.invoke(this.session, "hooks", path, action);
-  }
-
-  private async mintHookTicket(
-    subscriptions: HookSubscription[],
-    ttlSeconds: number | undefined,
-    signal?: AbortSignal,
-  ): Promise<HookTicketResponse> {
-    const host = this._config.host ?? this.context.hosts[0];
-    const headers = this.createInvokeHeaders(subscriptions);
-    const ticketResponse = await this.context.fetch(`${host}/hooks/tickets`, {
-      method: "POST",
-      headers: {
-        ...serviceHeadersToRecord(headers),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        subscriptions,
-        ttlSeconds,
-      }),
-      signal,
-    });
-
-    if (!ticketResponse.ok) {
-      throw await responseError(
-        "hooks",
-        "failed to mint hook ticket",
-        ticketResponse,
-      );
-    }
-
-    const ticketJson = (await ticketResponse.json()) as HookTicketResponse;
-    if (!ticketJson?.ticket) {
-      throw new Error("Hook ticket response did not include a ticket");
-    }
-
-    return ticketJson;
-  }
-
-  private async openHookStream(
-    host: string,
-    ticket: string,
-    signal?: AbortSignal,
-  ): Promise<FetchResponse> {
-    const streamResponse = await this.context.fetch(
-      `${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`,
-      {
-        method: "GET",
-        headers: { accept: "text/event-stream" },
-        signal,
-      },
-    );
-
-    if (!streamResponse.ok) {
-      throw await responseError(
-        "hooks",
-        "failed to open hook stream",
-        streamResponse,
-      );
-    }
-
-    return streamResponse;
   }
 
   private createInvokeHeaders(
@@ -538,13 +736,207 @@ function buildScopePath(
   return normalized ? `${service}/${normalized}` : service;
 }
 
+/**
+ * Exponential backoff for the shared hook stream, with equal jitter: each
+ * delay lands in [cap/2, cap] where cap doubles per attempt, so retries are
+ * never zero-delay and never exceed HOOK_STREAM_RETRY_MAX_DELAY_MS.
+ */
+function hookStreamRetryDelay(attempt: number): number {
+  const cap = Math.min(
+    HOOK_STREAM_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
+    HOOK_STREAM_RETRY_MAX_DELAY_MS,
+  );
+  return cap / 2 + Math.random() * (cap / 2);
+}
+
+/**
+ * A 4xx mint refusal is the node saying no for this session and scope set,
+ * so retrying cannot help. 408 and 429 mean "not now".
+ */
+function isTerminalMintRefusal(status: unknown): boolean {
+  return (
+    typeof status === "number" &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429
+  );
+}
+
+const SUPERSEDED = Symbol("hooks attempt superseded");
+
+/** Race one foreign operation against the attempt interrupt and observe late results. */
+async function awaitOwned<T>(
+  signal: AbortSignal,
+  operation: Promise<T> | (() => Promise<T>),
+): Promise<T> {
+  if (signal.aborted) {
+    if (typeof operation !== "function") {
+      void operation.then(cancelLateResponse, () => undefined);
+    }
+    throw SUPERSEDED;
+  }
+  const promise = typeof operation === "function" ? operation() : operation;
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => signal.removeEventListener("abort", onAbort);
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(SUPERSEDED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) {
+          cancelLateResponse(value);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function cancelLateResponse(value: unknown): void {
+  if (!(value instanceof Response) || !value.body) return;
+  try {
+    const cancellation = value.body.cancel();
+    void cancellation.then(() => undefined, () => undefined);
+  } catch {
+    // A late body is best-effort cleanup.
+  }
+}
+
+/*
+ * Stream errors are built from an allow-list, never copied. Past the mint the
+ * ticket rides in the request URL, and a mint request carries invocation
+ * headers, so any foreign error text (message, cause, stack, meta, a
+ * response body) may hold a bearer credential. These builders keep the
+ * phase, a numeric HTTP status, and the thrown value's `name`/`code` when
+ * they are plain identifiers. Nothing else crosses into telemetry.
+ */
+function hookStreamRefusal(status: unknown): ServiceError {
+  const code = typeof status === "number" ? status : undefined;
+  return serviceError(
+    ErrorCodes.NETWORK_ERROR,
+    `hook stream open refused: ${code ?? "unknown status"}`,
+    "hooks",
+    { meta: { phase: "open", status: code } },
+  );
+}
+
+const STREAM_ERROR_NAMES = new Set([
+  "Error",
+  "TypeError",
+  "AbortError",
+  "TimeoutError",
+  "SyntaxError",
+  "RangeError",
+  "NetworkError",
+]);
+
+function hookStreamFailure(phase: StreamPhase, thrown: unknown): ServiceError {
+  const candidateName = readProperty(thrown, "name");
+  const name =
+    typeof candidateName === "string" && STREAM_ERROR_NAMES.has(candidateName)
+      ? candidateName
+      : "Error";
+  const code =
+    identifier(readProperty(thrown, "code")) ??
+    identifier(readProperty(readProperty(thrown, "cause"), "code"));
+  return serviceError(
+    ErrorCodes.NETWORK_ERROR,
+    `hook stream ${phase} failed: ${name}${code ? ` (${code})` : ""}`,
+    "hooks",
+    { meta: { phase, errorName: name, ...(code ? { errorCode: code } : {}) } },
+  );
+}
+
+const STREAM_ERROR_CODES = new Set([
+  "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ETIMEDOUT", "EPIPE",
+  "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN",
+  "EADDRNOTAVAIL", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CLOSED",
+  "UND_ERR_ABORTED", "UND_ERR_RESPONSE_STATUS_CODE",
+  "ERR_TLS_CERT_ALTNAME_INVALID", "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN", "ERR_SSL_WRONG_VERSION_NUMBER",
+]);
+
+function identifier(value: unknown): string | undefined {
+  return typeof value === "string" && STREAM_ERROR_CODES.has(value)
+    ? value
+    : undefined;
+}
+
+/** Read one property off a value the SDK does not own; a throwing getter or proxy trap reads as absent. */
+function readProperty(value: unknown, key: string): unknown {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return undefined;
+  }
+  try {
+    return Reflect.get(value, key);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The default retry clock: abortable and unref'd, so a parked backoff never keeps the process alive. */
+function sleep(delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", stop);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    const stop = (): void => finish();
+    if (signal.aborted) {
+      finish();
+    } else {
+      signal.addEventListener("abort", stop, { once: true });
+    }
+  });
+}
+
+function abortPromise(signal: AbortSignal): {
+  promise: Promise<void>;
+  dispose: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const onAbort = (): void => resolve();
+  if (signal.aborted) {
+    resolve();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    promise,
+    dispose: () => signal.removeEventListener("abort", onAbort),
+  };
+}
+
 function normalizeSubscription(
   subscription: HookSubscription,
 ): HookSubscription {
   return {
     ...subscription,
     pathPrefix: normalizePathPrefix(subscription.pathPrefix),
-    abilities: subscription.abilities ?? [],
+    abilities: subscription.abilities ? [...subscription.abilities] : [],
   };
 }
 
@@ -637,10 +1029,6 @@ async function responseError(
   };
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
 async function* parseSseStream(
   body: unknown,
   signal?: AbortSignal,
@@ -680,15 +1068,28 @@ async function* readBodyChunks(
 ): AsyncIterable<Uint8Array> {
   const asyncIterable = body as AsyncIterable<Uint8Array>;
   if (typeof asyncIterable?.[Symbol.asyncIterator] === "function") {
-    for await (const chunk of asyncIterable) {
-      if (signal?.aborted) {
-        break;
+    const iterator = asyncIterable[Symbol.asyncIterator]();
+    const cancel = (): void => {
+      try {
+        const closing = iterator.return?.();
+        if (closing) void Promise.resolve(closing).then(() => undefined, () => undefined);
+      } catch {
+        // Cancellation must not mask the stream result.
       }
-      yield chunk;
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      while (!signal?.aborted) {
+        const next = await iterator.next();
+        if (next.done) break;
+        yield next.value;
+      }
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      cancel();
     }
     return;
   }
-
   const stream = body as {
     getReader?: () => {
       read: () => Promise<{ done: boolean; value?: Uint8Array }>;
@@ -702,22 +1103,24 @@ async function* readBodyChunks(
   }
 
   const reader = stream.getReader();
+  const cancelReader = (): void => {
+    try {
+      const cancellation = reader.cancel?.();
+      if (cancellation) void cancellation.then(() => undefined, () => undefined);
+    } catch {
+      // Cancellation must not mask the stream result.
+    }
+  };
+  signal?.addEventListener("abort", cancelReader, { once: true });
   try {
     while (!signal?.aborted) {
       const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value) {
-        yield value;
-      }
+      if (done) break;
+      if (value) yield value;
     }
   } finally {
-    try {
-      await reader.cancel?.();
-    } catch {
-      // Ignore cancellation failures.
-    }
+    signal?.removeEventListener("abort", cancelReader);
+    cancelReader();
     reader.releaseLock?.();
   }
 }

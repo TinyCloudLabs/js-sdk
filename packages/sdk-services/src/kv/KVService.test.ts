@@ -1618,41 +1618,31 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
   describe("an error body that never completes", () => {
     /**
      * Error headers arrive, then the body stalls until the request is
-     * cancelled. `cancel` runs in a microtask after the body read starts, so
-     * it lands after `changes()` would already have disposed its signal had
-     * it stopped waiting for the error mapping. If the cancellation no longer
-     * reaches the request signal, the read fails with a plain error instead of
-     * hanging, so the test fails on the error code.
+     * cancelled. The optional callback simulates a caller abort after the body
+     * read starts; without it, the body remains pending until the request
+     * timeout aborts the signal.
      */
-    function stalledError(status: number, cancel: () => void): IServiceContext["fetch"] {
+    function stalledError(status: number, cancel?: () => void): IServiceContext["fetch"] {
       return async (_url, init) => {
         const stalled = response(false, status, "");
         stalled.text = () => new Promise<string>((_resolve, reject) => {
           const signal = init?.signal;
           if (signal?.aborted) return reject(signal.reason);
           signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-          queueMicrotask(() => {
-            cancel();
-            if (!signal?.aborted) reject(new Error("cancellation no longer reaches the body read"));
-          });
+          if (cancel) queueMicrotask(cancel);
         });
         return stalled;
       };
     }
 
     test.each([401, 410, 500])("%i ends with TIMEOUT when the timeout elapses", async (status) => {
-      jest.useFakeTimers();
-      try {
-        const service = new KVService({});
-        service.initialize(createContext(stalledError(status, () => jest.advanceTimersByTime(20))));
+      const service = new KVService({});
+      service.initialize(createContext(stalledError(status)));
 
-        const result = await service.changes({ prefix: "notes/", timeout: 20 });
-        expect(result.ok).toBe(false);
-        if (result.ok) return;
-        expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
-      } finally {
-        jest.useRealTimers();
-      }
+      const result = await service.changes({ prefix: "notes/", timeout: 20 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe(ErrorCodes.TIMEOUT);
     });
 
     test.each([401, 410, 500])("%i ends with ABORTED when the caller aborts", async (status) => {
