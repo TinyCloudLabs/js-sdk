@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
-import { writeFile } from "node:fs/promises";
+import { writePrivateOutput } from "../lib/private-output.js";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes, formatTimeAgo } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
@@ -113,7 +113,7 @@ export function registerKvCommand(program: Command): void {
 
         if (options.output) {
           // Write raw bytes to file (data is a Uint8Array when wantBytes).
-          await writeFile(options.output, data as Uint8Array);
+          await writePrivateOutput(options.output, data as Uint8Array);
           outputJson({ key, written: options.output });
           return;
         }

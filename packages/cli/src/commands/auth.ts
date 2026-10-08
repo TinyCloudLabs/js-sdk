@@ -8,6 +8,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
+import { removeProfileReplicas } from "../lib/profile-replicas.js";
 import { ProfileManager } from "../config/profiles.js";
 import {
   outputJson,
@@ -253,15 +254,23 @@ export function registerAuthCommand(program: Command): void {
 
   auth
     .command("logout")
-    .description("Clear session (keep key)")
-    .action(async (_options, cmd) => {
+    .description("Clear the local session and remove local replicas. Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.")
+    .option("--keep-replicas", "Keep this profile's local replicas")
+    .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
         await ProfileManager.clearSession(ctx.profile);
-        outputJson({ profile: ctx.profile, authenticated: false });
+        const replicasRemoved = options.keepReplicas ? [] : await removeProfileReplicas(ctx.profile);
+        outputJson({
+          profile: ctx.profile,
+          authenticated: false,
+          replicasRemoved,
+          replicasKept: options.keepReplicas === true,
+          warning: "Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.",
+        });
       } catch (error) {
         handleError(error);
       }

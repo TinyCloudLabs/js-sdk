@@ -4,7 +4,7 @@
  * nothing is written into it.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
@@ -24,7 +24,8 @@ const home = await mkdtemp(join(tmpdir(), "tc-replica-guard-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
-const { createReplica, profileGuard } = await import("./replica.js");
+const { createReplica, profileGuard, replicaSecretsWarning } = await import("./replica.js");
+const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
 
 const PROFILE = "doomed";
 const NOT_FOUND = { code: ReplicaErrorCode.NOT_FOUND };
@@ -43,9 +44,9 @@ const config: ReplicaConfig = {
 
 const exists = (path: string) => stat(path).then(() => true, () => false);
 
-async function createProfile(): Promise<void> {
-  await ProfileManager.setProfile(PROFILE, {
-    name: PROFILE,
+async function createProfile(name = PROFILE): Promise<void> {
+  await ProfileManager.setProfile(name, {
+    name,
     host: config.host,
     did: "did:key:zDoomed",
     chainId: 1,
@@ -157,7 +158,76 @@ describe("replica writes and profile deletion", () => {
     expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
   });
 });
+describe("profile replica removal", () => {
+  test("removes all replicas through the store and is clean when none exist", async () => {
+    const store = await createReplica(PROFILE, { ...config, name: "notes" });
+    await store.close();
 
+    expect(await removeProfileReplicas(PROFILE)).toEqual(["notes"]);
+    expect(await readdir(join(PROFILES_DIR, PROFILE, "replicas")).catch(() => [])).toEqual([]);
+    expect(await removeProfileReplicas(PROFILE)).toEqual([]);
+  });
+
+  test("a sync lease refuses logout purge before any replica is removed", async () => {
+    const first = await createReplica(PROFILE, { ...config, name: "first" });
+    const second = await createReplica(PROFILE, { ...config, name: "second" });
+    const lease = await second.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await first.close();
+    await second.close();
+
+    await expect(removeProfileReplicas(PROFILE)).rejects.toThrow("is syncing");
+    // readdir order is filesystem-defined (it differs on the CI runner), so compare as a set.
+    expect((await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).sort()).toEqual(["first", "second"]);
+  });
+});
+describe("replica purge symlink safety", () => {
+  test("refuses a symlinked replicas root and leaves the target profile untouched", async () => {
+    await createProfile("victim");
+    const victimStore = await createReplica("victim", config);
+    await victimStore.close();
+    await symlink(
+      join(PROFILES_DIR, "victim", "replicas"),
+      join(PROFILES_DIR, PROFILE, "replicas"),
+    );
+
+    await expect(removeProfileReplicas(PROFILE)).rejects.toMatchObject({
+      code: "REPLICA_PURGE_FAILED",
+      exitCode: 1,
+      message: expect.stringContaining("replicas directory"),
+    });
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses a symlinked replica entry without touching its target", async () => {
+    await createProfile("victim");
+    const ownStore = await createReplica(PROFILE, config);
+    const victimStore = await createReplica("victim", { ...config, name: "victim-replica" });
+    await ownStore.close();
+    await victimStore.close();
+    await symlink(
+      join(PROFILES_DIR, "victim", "replicas", "victim-replica"),
+      join(PROFILES_DIR, PROFILE, "replicas", "escape"),
+    );
+
+    await expect(removeProfileReplicas(PROFILE)).rejects.toMatchObject({
+      code: "REPLICA_PURGE_FAILED",
+      exitCode: 1,
+      message: expect.stringContaining("symlink"),
+    });
+    expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "victim-replica", "replica.db"))).toBe(true);
+  });
+});
+
+describe("replica ciphertext warning", () => {
+  test("warns for an allowed secrets prefix and omits the warning on a normal prefix", () => {
+    const warning = replicaSecretsWarning(config.space, "vault/secrets/", true);
+    expect(warning).toContain("stores the ciphertext of every secret under");
+    expect(warning).toContain("tinycloud.encryption/decrypt grant covers the whole encryption network");
+    expect(replicaSecretsWarning(config.space, "notes/", true)).toBeUndefined();
+  });
+});
 describe("a replica over the SDK's kv/sync", () => {
   test("an ordinary 401 for a prefix named like a revocation fails the sync and keeps the replica", async () => {
     const prefix = "notes/delegation-revoked/";

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import * as fsPromises from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type PutCall = { handle: string; key: string; value: unknown };
 type DeleteCall = { handle: string; key: string };
@@ -307,19 +309,23 @@ describe("CLI kv get binary output", () => {
     expect(recorded.fileWrites).toEqual([]);
   });
 
-  test("-o requests binary mode and writes exact bytes to the file", async () => {
-    await runKv(["get", "img.png", "-o", "out.png"]);
+  test("-o requests binary mode and writes exact bytes to a 0600 file", async () => {
+    const dir = await fsPromises.mkdtemp(join(tmpdir(), "tc-kv-output-"));
+    const path = join(dir, "out.png");
+    try {
+      await runKv(["get", "img.png", "-o", path]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(recorded.gets).toEqual([
-      { handle: "primary", key: "img.png", options: { binary: true } },
-    ]);
-    expect(recorded.fileWrites).toEqual([
-      { path: "out.png", data: GET_BYTES },
-    ]);
-    // No raw bytes leaked to stdout on the -o path (only the JSON status line,
-    // which goes through outputJson, not process.stdout.write here).
-    expect(recorded.stdoutWrites).toEqual([]);
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.gets).toEqual([
+        { handle: "primary", key: "img.png", options: { binary: true } },
+      ]);
+      expect([...await Bun.file(path).bytes()]).toEqual([...GET_BYTES]);
+      expect((await fsPromises.stat(path)).mode & 0o777).toBe(0o600);
+      // No raw bytes leaked to stdout on the -o path.
+      expect(recorded.stdoutWrites).toEqual([]);
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("default get (no --raw/-o) does NOT request binary mode", async () => {
