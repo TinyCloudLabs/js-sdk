@@ -242,8 +242,204 @@ describe("KVService batch reads", () => {
     );
     const result = await service.batchGet(["same", "same"]);
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.INVALID_INPUT);
+    }
     expect(invokeAnyCalls).toHaveLength(0);
     expect(fetches).toBe(0);
+  });
+
+  test("matches unsorted batchGet results by response key in caller order", async () => {
+    const service = new KVService({ prefix: "app" });
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, {
+          // The node returns results in byte-sorted path order.
+          results: ["a", "b"].map((key) => ({
+            key: `app/${key}`,
+            ok: true,
+            dataBase64: btoa(`value-${key}`),
+            headers: { "content-type": "text/plain" },
+          })),
+        }), [], [])
+    );
+
+    const result = await service.batchGet<string>(["b", "a"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.results.map((item) => item.key)).toEqual(["b", "a"]);
+      expect(
+        result.data.results.map((item) =>
+          item.result.ok ? item.result.data.data : "failed"
+        )
+      ).toEqual(["value-b", "value-a"]);
+    }
+  });
+
+  test("matches unsorted batchHead results by response key in caller order", async () => {
+    const service = new KVService({ prefix: "app" });
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, {
+          results: ["beta", "delta"].map((key) => ({
+            key: `app/${key}`,
+            ok: true,
+            headers: { "content-type": "text/plain", "content-length": "3" },
+          })),
+        }), [], [])
+    );
+
+    const result = await service.batchHead(["delta", "beta"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.results.map((item) => item.key)).toEqual(["delta", "beta"]);
+      expect(result.data.results.every((item) => item.result.ok)).toBe(true);
+    }
+  });
+
+  test("keeps absent keys as per-item failures for unsorted requests", async () => {
+    const service = new KVService({ prefix: "app" });
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, {
+          results: [
+            {
+              key: "app/a",
+              ok: true,
+              dataBase64: btoa("va"),
+              headers: { "content-type": "text/plain" },
+            },
+            {
+              key: "app/c",
+              ok: true,
+              dataBase64: btoa("vc"),
+              headers: { "content-type": "text/plain" },
+            },
+            {
+              key: "app/missing",
+              ok: false,
+              error: {
+                code: ErrorCodes.KV_NOT_FOUND,
+                message: "Key not found: app/missing",
+              },
+            },
+          ],
+        }), [], [])
+    );
+
+    const result = await service.batchGet<string>(["missing", "c", "a"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.results.map((item) => item.key)).toEqual([
+        "missing",
+        "c",
+        "a",
+      ]);
+      expect(result.data.results[0]!.result).toMatchObject({
+        ok: false,
+        error: { code: ErrorCodes.KV_NOT_FOUND },
+      });
+      expect(result.data.results[1]!.result).toMatchObject({
+        ok: true,
+        data: { data: "vc" },
+      });
+      expect(result.data.results[2]!.result).toMatchObject({
+        ok: true,
+        data: { data: "va" },
+      });
+    }
+  });
+
+  test("aligns keyless batch results by the node's byte-sorted path order", async () => {
+    const service = new KVService({ prefix: "app" });
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, {
+          results: [
+            {
+              ok: true,
+              dataBase64: btoa("va"),
+              headers: { "content-type": "text/plain" },
+            },
+            {
+              ok: true,
+              dataBase64: btoa("vb"),
+              headers: { "content-type": "text/plain" },
+            },
+          ],
+        }), [], [])
+    );
+
+    const result = await service.batchGet<string>(["b", "a"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.results.map((item) => item.key)).toEqual(["b", "a"]);
+      expect(
+        result.data.results.map((item) =>
+          item.result.ok ? item.result.data.data : "failed"
+        )
+      ).toEqual(["vb", "va"]);
+    }
+  });
+
+  test("fails closed when the response carries an unrequested key", async () => {
+    const service = new KVService({ prefix: "app" });
+    service.initialize(
+      createContext(async () =>
+        response(true, 200, {
+          results: [
+            {
+              key: "app/a",
+              ok: true,
+              dataBase64: btoa("va"),
+              headers: { "content-type": "text/plain" },
+            },
+            {
+              key: "app/other",
+              ok: true,
+              dataBase64: btoa("vo"),
+              headers: { "content-type": "text/plain" },
+            },
+          ],
+        }), [], [])
+    );
+
+    const result = await service.batchGet(["a", "b"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+    }
+  });
+
+  test("fails closed when response count or keying is inconsistent", async () => {
+    const service = new KVService({ prefix: "app" });
+    const item = {
+      ok: true,
+      dataBase64: btoa("va"),
+      headers: { "content-type": "text/plain" },
+    };
+    let call = 0;
+    service.initialize(
+      createContext(async () => {
+        call++;
+        // 1: fewer results than requested. 2: mixed keyed/keyless items.
+        return response(true, 200, {
+          results:
+            call === 1
+              ? [{ ...item, key: "app/a" }]
+              : [{ ...item, key: "app/a" }, { ...item }],
+        });
+      }, [], [])
+    );
+
+    for (const keys of [["a", "b"], ["a", "b"]] as const) {
+      const result = await service.batchGet([...keys]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCodes.NETWORK_ERROR);
+      }
+    }
+    expect(call).toBe(2);
   });
 });
 
