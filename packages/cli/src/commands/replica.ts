@@ -348,6 +348,10 @@ function jsonValue(bytes: Uint8Array): { value: string; encoding: "utf8" | "base
     return { value: Buffer.from(bytes).toString("base64"), encoding: "base64" };
   }
 }
+export function replicaSecretsWarning(space: string, prefix: string, secretsAllowed: boolean): string | undefined {
+  if (!secretsAllowed || !requiresSecretsOptIn(space, prefix)) return undefined;
+  return `This replica stores the ciphertext of every secret under "${prefix}". A tinycloud.encryption/decrypt grant covers the whole encryption network, not one secret (TC-755), so whoever holds decrypt can open every replicated secret.`;
+}
 
 export function registerReplicaCommand(program: Command): void {
   const replica = program
@@ -374,7 +378,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)")
     .option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires")
     .option("--limit <n>", "Feed page size (1-1000)", (value) => Number.parseInt(value, 10))
-    .option("--allow-secrets", "Allow replicating the secrets space or the vault namespace")
+    .option("--allow-secrets", "Opt in to copying ciphertext under a secrets prefix; replica grants do not include decrypt")
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
@@ -461,10 +465,12 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           }
           const current = (await store.open())!;
           const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+          const warning = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state.config.allowSecrets);
+          if (warning !== undefined) process.stderr.write(`Warning: ${warning}\n`);
           const report = await new Replica({ store, transportFor }).sync(options.limit === undefined ? {} : { limit: options.limit });
           const status = await store.status();
           if (shouldOutputJson()) {
-            outputJson({ replica: current.config.name, sync: report, status });
+            outputJson({ replica: current.config.name, sync: report, status, ...(warning === undefined ? {} : { warning }) });
           } else {
             process.stdout.write(
               `${theme.success("✓")} Synced ${report.changes} change(s) in ${report.pages} page(s), fetched ${report.fetched} value(s).\n${describeStatus(status)}\n`,

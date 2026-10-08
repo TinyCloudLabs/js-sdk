@@ -24,7 +24,8 @@ const home = await mkdtemp(join(tmpdir(), "tc-replica-guard-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
-const { createReplica, profileGuard } = await import("./replica.js");
+const { createReplica, profileGuard, replicaSecretsWarning } = await import("./replica.js");
+const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
 
 const PROFILE = "doomed";
 const NOT_FOUND = { code: ReplicaErrorCode.NOT_FOUND };
@@ -157,7 +158,37 @@ describe("replica writes and profile deletion", () => {
     expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
   });
 });
+describe("profile replica removal", () => {
+  test("removes all replicas through the store and is clean when none exist", async () => {
+    const store = await createReplica(PROFILE, { ...config, name: "notes" });
+    await store.close();
 
+    expect(await removeProfileReplicas(PROFILE)).toEqual(["notes"]);
+    expect(await readdir(join(PROFILES_DIR, PROFILE, "replicas")).catch(() => [])).toEqual([]);
+    expect(await removeProfileReplicas(PROFILE)).toEqual([]);
+  });
+
+  test("a sync lease refuses logout purge before any replica is removed", async () => {
+    const first = await createReplica(PROFILE, { ...config, name: "first" });
+    const second = await createReplica(PROFILE, { ...config, name: "second" });
+    const lease = await second.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await first.close();
+    await second.close();
+
+    await expect(removeProfileReplicas(PROFILE)).rejects.toThrow("is syncing");
+    expect(await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).toEqual(["first", "second"]);
+  });
+});
+
+describe("replica ciphertext warning", () => {
+  test("warns for an allowed secrets prefix and omits the warning on a normal prefix", () => {
+    const warning = replicaSecretsWarning(config.space, "vault/secrets/", true);
+    expect(warning).toContain("stores the ciphertext of every secret under");
+    expect(warning).toContain("tinycloud.encryption/decrypt grant covers the whole encryption network");
+    expect(replicaSecretsWarning(config.space, "notes/", true)).toBeUndefined();
+  });
+});
 describe("a replica over the SDK's kv/sync", () => {
   test("an ordinary 401 for a prefix named like a revocation fails the sync and keeps the replica", async () => {
     const prefix = "notes/delegation-revoked/";

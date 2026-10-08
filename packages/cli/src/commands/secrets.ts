@@ -1,7 +1,6 @@
 import { Command } from "commander";
-import { randomUUID } from "node:crypto";
-import { lstat, open, readFile, rename, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import {
   type PermissionEntry,
@@ -27,7 +26,7 @@ import {
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
-import { PRIVATE_FILE_MODE } from "../config/storage.js";
+import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { withSignInHint } from "../auth/session-expired.js";
 import { resolveSpaceUri } from "../lib/space.js";
@@ -326,66 +325,6 @@ function scopedSecretLoginHint(profileName: string): string {
   return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
 
-/** Refuse non-regular outputs and invalid parents before fetching any secret bytes. */
-async function validateSecretOutput(path: string): Promise<void> {
-  try {
-    const destination = await lstat(path);
-    if (!destination.isFile()) {
-      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
-    }
-  } catch (error) {
-    if (!isMissingFileError(error)) throw error;
-  }
-  try {
-    const parent = await lstat(dirname(path));
-    if (!parent.isDirectory()) {
-      throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
-    }
-  } catch (error) {
-    if (!isMissingFileError(error)) throw error;
-    throw new CLIError("INVALID_ARGUMENT", `Secret output "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
-  }
-}
-
-/** Replace only regular destination files with a fresh owner-only inode. */
-async function writeSecretFile(path: string, value: string): Promise<void> {
-  await validateSecretOutput(path);
-  const parentPath = dirname(path);
-  const temp = join(parentPath, `.${basename(path)}.${randomUUID()}.tmp`);
-  let created = false;
-  try {
-    const handle = await open(temp, "wx", PRIVATE_FILE_MODE);
-    created = true;
-    try {
-      await handle.writeFile(value);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rename(temp, path);
-  } catch (error) {
-    if (created) {
-      await rm(temp, { force: true }).catch(() => undefined);
-    }
-    const code = error instanceof Error && "code" in error && typeof error.code === "string"
-      ? ` (${error.code})`
-      : "";
-    throw new CLIError("ERROR", `Could not write secret output "${path}"${code}.`, ExitCode.ERROR);
-  }
-
-  // The destination is already replaced. Directory fsync is not supported on
-  // every filesystem, so a failure here must not report that the write failed.
-  try {
-    const parent = await open(parentPath, "r");
-    try {
-      await parent.sync();
-    } finally {
-      await parent.close();
-    }
-  } catch {
-    // Best effort only after a successful atomic rename.
-  }
-}
 
 async function runSecretOperationAttempt<T>(
   label: string,
@@ -616,10 +555,6 @@ function thrownPermissionError<T>(error: unknown): SecretResult<T> | null {
   };
 }
 
-function isMissingFileError(error: unknown): boolean {
-  const typed = error as NodeJS.ErrnoException | null;
-  return typed?.code === "ENOENT";
-}
 
 function hasPermissionAction(actions: string[], action: string): boolean {
   return actions.some(
@@ -791,7 +726,7 @@ async function loadDelegationCandidates(source: string): Promise<DelegationCandi
     const raw = JSON.parse(await readFile(source, "utf8")) as unknown;
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
-    if (!isMissingFileError(error)) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") {
       if (error instanceof SyntaxError) {
         throw new CLIError(
           "INVALID_DELEGATION_SOURCE",
@@ -812,7 +747,7 @@ async function loadDelegationCandidates(source: string): Promise<DelegationCandi
     const raw = JSON.parse(await readFile(importedPath, "utf8")) as unknown;
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
       return [];
     }
     if (error instanceof SyntaxError) {
@@ -1345,7 +1280,7 @@ export function registerSecretsCommand(
         const scopeOptions = resolveSecretScope(options);
         const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
-        if (options.output) await validateSecretOutput(options.output);
+        if (options.output) await validatePrivateOutput(options.output, "Secret output");
 
         if (options.delegation) {
           const delegated = await resolveDelegatedSecretSource(
@@ -1370,7 +1305,7 @@ export function registerSecretsCommand(
           );
 
           if (options.output) {
-            await writeSecretFile(options.output, value);
+            await writePrivateOutput(options.output, value, "Secret output");
             outputJson({ name, written: options.output });
             return;
           }
@@ -1416,7 +1351,7 @@ export function registerSecretsCommand(
         const value = result.output.value;
         try {
           if (options.output) {
-            await writeSecretFile(options.output, value);
+            await writePrivateOutput(options.output, value, "Secret output");
             outputJson({ name, written: options.output });
           } else if (options.raw || options.valueOnly) {
             process.stdout.write(value);

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
-import { writeFile } from "node:fs/promises";
+import { writePrivateOutput } from "../lib/private-output.js";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
@@ -111,7 +111,7 @@ export function registerVarsCommand(program: Command): void {
         }
 
         if (options.output) {
-          await writeFile(options.output, value);
+          await writePrivateOutput(options.output, value);
           outputJson({ name, written: options.output });
           return;
         }

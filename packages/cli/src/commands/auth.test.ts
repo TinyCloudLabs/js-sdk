@@ -97,6 +97,7 @@ const recorded = {
   grantedRequests: [] as Array<Record<string, unknown>>,
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
+  removedReplicaProfiles: [] as string[],
 };
 
 const grantedDelegation = {
@@ -135,6 +136,7 @@ function resetState(): void {
   recorded.generateKeyCalls = 0;
   recorded.grantedRequests.length = 0;
   recorded.localGrantArtifacts.length = 0;
+  recorded.removedReplicaProfiles.length = 0;
   recorded.grantHistory.length = 0;
 
   activeProfile = "default";
@@ -233,6 +235,12 @@ mock.module("../config/profiles.js", () => ({
       sessions.delete(name);
       recorded.clearSessions.push(name);
     },
+  },
+}));
+mock.module("../lib/profile-replicas.js", () => ({
+  removeProfileReplicas: async (profile: string) => {
+    recorded.removedReplicaProfiles.push(profile);
+    return ["notes"];
   },
 }));
 
@@ -759,7 +767,28 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.clearSessions).toEqual(["owner"]);
     expect(keys.get("owner")).toBe(key);
-    expect(recorded.outputs).toEqual([{ profile: "owner", authenticated: false }]);
+    expect(recorded.removedReplicaProfiles).toEqual(["owner"]);
+    expect(recorded.outputs).toEqual([{
+      profile: "owner",
+      authenticated: false,
+      replicasRemoved: ["notes"],
+      replicasKept: false,
+      warning: expect.stringContaining("delegations and grants on the node stay valid until they expire"),
+    }]);
+  });
+  test("logout --keep-replicas leaves replicas and reports the choice", async () => {
+    profiles.set("owner", makeProfile({ name: "owner" }));
+
+    await runAuthCommand(["auth", "logout", "--keep-replicas"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.clearSessions).toEqual(["owner"]);
+    expect(recorded.removedReplicaProfiles).toEqual([]);
+    expect(recorded.outputs).toEqual([expect.objectContaining({
+      replicasRemoved: [],
+      replicasKept: true,
+      warning: expect.stringContaining("tc delegation revoke <cid>"),
+    })]);
   });
 
   test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
