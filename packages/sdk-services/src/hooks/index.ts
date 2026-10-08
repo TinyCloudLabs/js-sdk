@@ -12,4 +12,5 @@ export type {
   HookWebhookUnregisterOptions,
   SubscribeOptions,
   HooksServiceConfig,
+  HookStreamRetryConfig,
 } from "./types";
