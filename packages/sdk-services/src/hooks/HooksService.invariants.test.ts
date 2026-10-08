@@ -1,5 +1,5 @@
 // Hooks stream liveness, lifecycle, and confidentiality invariants.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { ServiceContext } from "../context";
@@ -25,7 +25,19 @@ const EVENT = JSON.stringify({
   eventIndex: 1,
   timestamp: "t",
 });
-const turn = () => new Promise<void>((r) => setImmediate(r));
+const turn = () => new Promise<void>((r) => setTimeout(r, 0));
+const activeServices = new Set<HooksService>();
+function initialize(service: HooksService, context: IServiceContext): void {
+  service.initialize(context);
+  activeServices.add(service);
+}
+
+// Bun runs afterEach even when an assertion fails, so a leaked stream cannot
+// keep its supervisor alive or interfere with the next invariant.
+afterEach(() => {
+  for (const service of activeServices) service.onSignOut();
+  activeServices.clear();
+});
 const url = (t: string) => `https://node.tinycloud.xyz/hooks/events?ticket=${t}`;
 
 /** One SSE body: an event, then open until the request aborts. */
@@ -154,7 +166,7 @@ function harness(spec?: FaultSpec | FaultSpec[], emitThrows = false) {
       },
     },
   });
-  service.initialize(context);
+  initialize(service, context);
   return { service, stats, emitted, context, contextAbort };
 }
 
@@ -441,7 +453,7 @@ describe("gated lifecycle transitions", () => {
             },
           },
         });
-        service.initialize(context);
+        initialize(service, context);
         const stopA = new AbortController();
         const iteratorA = service.subscribe(
           [{ space: "space-123", service: "kv" }],
@@ -543,7 +555,7 @@ describe("pacing invariants", () => {
         },
       },
     });
-    service.initialize(context);
+    initialize(service, context);
     const timer = new Promise<void>((resolve) => {
       setTimeout(() => {
         timerFired = true;
@@ -599,7 +611,7 @@ describe("stale mint discard", () => {
       },
     };
     const service = new HooksService({ streamRetry: { delay: () => 0, wait: async () => turn() } });
-    service.initialize(context);
+    initialize(service, context);
     const first = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
     const firstPending = first.next();
     await entered;
@@ -639,7 +651,7 @@ describe("attempt ownership checkpoints", () => {
       },
     } as IServiceContext;
     const service = new HooksService({ streamRetry: { delay: () => 30_000 } });
-    service.initialize(context);
+    initialize(service, context);
     const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
     const pending = iterator.next();
     await entered;
@@ -672,7 +684,7 @@ describe("attempt ownership checkpoints", () => {
       },
     } as IServiceContext;
     const service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
-    service.initialize(context);
+    initialize(service, context);
     const first = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
     const firstPending = first.next();
     await entered;
@@ -720,7 +732,7 @@ describe("attempt ownership checkpoints", () => {
     });
     const service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
     context.registerService("hooks", service);
-    service.initialize(context);
+    initialize(service, context);
     const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
     const originalParse = JSON.parse;
     const json = JSON as unknown as { parse(text: string): unknown };
@@ -773,7 +785,7 @@ describe("attempt ownership checkpoints", () => {
       },
     } as IServiceContext;
     service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
-    service.initialize(context);
+    initialize(service, context);
     const first = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
     const firstResult = await firstEvent(first, 500);
     expect(cleanupListenerCalled).toBe(true);
@@ -823,7 +835,7 @@ describe("session stream ownership through ServiceContext", () => {
       });
       const service = new HooksService({ streamRetry: { delay: () => 0, wait: () => turn() } });
       context.registerService("hooks", service);
-      service.initialize(context);
+      initialize(service, context);
       const oldIterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
       const oldPending = oldIterator.next();
       await entered;
@@ -856,7 +868,7 @@ test("a one-shot abortSignal getter failure is retried before backoff", async ()
     },
   } as IServiceContext;
   const service = new HooksService({ streamRetry: { delay: () => 30_000 } });
-  service.initialize(context);
+  initialize(service, context);
   const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
   const pending = iterator.next();
   for (let i = 0; i < 30; i += 1) await turn();
@@ -890,7 +902,7 @@ describe("real ServiceContext telemetry ownership", () => {
     });
     const service = new HooksService();
     context.registerService("hooks", service);
-    service.initialize(context);
+    initialize(service, context);
     let reentrant: AsyncIterator<HookEvent> | undefined;
     let reentrantNext: Promise<IteratorResult<HookEvent>> | undefined;
     context.on("service.error", (data) => {
@@ -951,7 +963,7 @@ describe("healthy-stream reset", () => {
         wait: async () => undefined,
       },
     });
-    service.initialize(context);
+    initialize(service, context);
     const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
     expect((await iterator.next()).value?.id).toBe("evt-1");
     await new Promise((resolve) => setTimeout(resolve, 5_100));
@@ -999,7 +1011,7 @@ describe("default backoff bounds", () => {
     }) as typeof setTimeout;
     const service = new HooksService();
     try {
-      service.initialize(context);
+      initialize(service, context);
       const iterator = service.subscribe([{ space: "space-123", service: "kv" }])[Symbol.asyncIterator]();
       const pending = iterator.next();
       for (let i = 0; i < 100 && waits.length < 10; i += 1) {
