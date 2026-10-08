@@ -4,7 +4,7 @@
  * nothing is written into it.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
@@ -44,9 +44,9 @@ const config: ReplicaConfig = {
 
 const exists = (path: string) => stat(path).then(() => true, () => false);
 
-async function createProfile(): Promise<void> {
-  await ProfileManager.setProfile(PROFILE, {
-    name: PROFILE,
+async function createProfile(name = PROFILE): Promise<void> {
+  await ProfileManager.setProfile(name, {
+    name,
     host: config.host,
     did: "did:key:zDoomed",
     chainId: 1,
@@ -178,6 +178,44 @@ describe("profile replica removal", () => {
 
     await expect(removeProfileReplicas(PROFILE)).rejects.toThrow("is syncing");
     expect(await readdir(join(PROFILES_DIR, PROFILE, "replicas"))).toEqual(["first", "second"]);
+  });
+});
+describe("replica purge symlink safety", () => {
+  test("refuses a symlinked replicas root and leaves the target profile untouched", async () => {
+    await createProfile("victim");
+    const victimStore = await createReplica("victim", config);
+    await victimStore.close();
+    await symlink(
+      join(PROFILES_DIR, "victim", "replicas"),
+      join(PROFILES_DIR, PROFILE, "replicas"),
+    );
+
+    await expect(removeProfileReplicas(PROFILE)).rejects.toMatchObject({
+      code: "REPLICA_PURGE_FAILED",
+      exitCode: 1,
+      message: expect.stringContaining("replicas directory"),
+    });
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses a symlinked replica entry without touching its target", async () => {
+    await createProfile("victim");
+    const ownStore = await createReplica(PROFILE, config);
+    const victimStore = await createReplica("victim", { ...config, name: "victim-replica" });
+    await ownStore.close();
+    await victimStore.close();
+    await symlink(
+      join(PROFILES_DIR, "victim", "replicas", "victim-replica"),
+      join(PROFILES_DIR, PROFILE, "replicas", "escape"),
+    );
+
+    await expect(removeProfileReplicas(PROFILE)).rejects.toMatchObject({
+      code: "REPLICA_PURGE_FAILED",
+      exitCode: 1,
+      message: expect.stringContaining("symlink"),
+    });
+    expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "victim-replica", "replica.db"))).toBe(true);
   });
 });
 
