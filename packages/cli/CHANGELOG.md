@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.1.0-beta.23
+
+### Patch Changes
+
+- b5b8161: Mark `tc replica` as a beta feature in help text.
+
 ## 1.1.0-beta.22
 
 ### Patch Changes

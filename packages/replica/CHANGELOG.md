@@ -1,5 +1,11 @@
 # @tinycloud/replica
 
+## 0.1.0-beta.3
+
+### Patch Changes
+
+- b5b8161: Mark local replicas as a beta feature in the README for the stable release; fix the install instructions.
+
 ## 0.1.0-beta.2
 
 ### Patch Changes

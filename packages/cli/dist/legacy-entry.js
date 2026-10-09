@@ -23353,9 +23353,11 @@ function replicaSecretsWarning(space, prefix, secretsAllowed) {
   return `This replica stores the ciphertext of every secret under "${prefix}". A tinycloud.encryption/decrypt grant covers the whole encryption network, not one secret (TC-755), so whoever holds decrypt can open every replicated secret.`;
 }
 function registerReplicaCommand(program) {
-  const replica = program.command("replica").description("Durable read-only local replicas of a KV prefix (sync online, read offline)").addHelpText(
+  const replica = program.command("replica").description("Durable read-only local replicas of a KV prefix (sync online, read offline) [beta]").addHelpText(
     "after",
     `
+Local replicas are a beta feature: commands, output and on-disk format may change in a minor release.
+
 A replica keeps the latest state of one KV prefix on this device. \`sync\` pulls
 the tinycloud.kv/sync feed from the replica's pinned host under a device grant;
 \`get\`, \`list\`, \`status\` and \`reset\` never touch the network.
