@@ -13,8 +13,8 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, open as openFile, readFile, rename, rm, stat, type FileHandle } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { chmod, mkdir, open as openFile, readFile, realpath, rename, rm, stat, type FileHandle } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 
 import { KVService, ServiceContext } from "@tinycloud/sdk-core";
@@ -348,17 +348,22 @@ async function ensurePartitionIdentity(
 
 /**
  * In-process serialization of pending.json read-modify-writes, keyed by the
- * canonical file path and shared by every `FilePendingWriteStore` instance —
- * two stores on one partition (or two `update` calls on one store) can never
- * interleave reads and writes. Entries delete themselves once their section
- * is the chain tail, so the map stays bounded by in-flight updates.
+ * canonical (realpath) file path and shared by every `FilePendingWriteStore`
+ * instance — two stores on one partition (or two `update` calls on one
+ * store) can never interleave reads and writes, even when they reach the
+ * partition through different paths (a symlink and its target agree on one
+ * chain). Entries delete themselves once their section is the chain tail,
+ * so the map stays bounded by in-flight updates.
+ *
+ * PRECONDITION: `file` MUST already be the canonical real path of the
+ * target — this function does not resolve symlinks itself (path.resolve is
+ * lexical and would split the chain exactly like the bug it replaced).
  */
 const PENDING_WRITE_LOCKS = new Map<string, Promise<unknown>>();
 
 /** Run `section` after every queued section for `file`; the chain tail never rejects. */
 function serializePendingWrite<T>(file: string, section: () => Promise<T>): Promise<T> {
-  const key = resolve(file);
-  const tail = PENDING_WRITE_LOCKS.get(key) ?? Promise.resolve();
+  const tail = PENDING_WRITE_LOCKS.get(file) ?? Promise.resolve();
   const entered = tail.then(section);
   // The tail swallows each section's outcome; the caller still gets it via
   // `entered`.
@@ -366,9 +371,9 @@ function serializePendingWrite<T>(file: string, section: () => Promise<T>): Prom
     () => undefined,
     () => undefined,
   );
-  PENDING_WRITE_LOCKS.set(key, next);
+  PENDING_WRITE_LOCKS.set(file, next);
   void next.then(() => {
-    if (PENDING_WRITE_LOCKS.get(key) === next) PENDING_WRITE_LOCKS.delete(key);
+    if (PENDING_WRITE_LOCKS.get(file) === next) PENDING_WRITE_LOCKS.delete(file);
   });
   return entered;
 }
@@ -379,7 +384,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
   readonly #dir: string;
   readonly #guard: MutationGuard;
   readonly #dirSync?: DirSync;
-  #ensured: Promise<void> | undefined;
+  #file: Promise<string> | undefined;
 
   constructor(identity: ReplicationIdentity, dir: string, guard: MutationGuard, dirSync?: DirSync) {
     this.identity = identity;
@@ -393,15 +398,29 @@ export class FilePendingWriteStore implements PendingWriteStore {
    * verify the recorded identity still matches this store's (§6.3: a file
    * whose identity differs is STORAGE_ERROR, never silently shared). The
    * identity file is written once, atomically, so verification needs no lock.
+   *
+   * Returns the CANONICAL `pending.json` path — `realpath(dirname)` +
+   * basename — computed once (the partition exists by then) and memoized.
+   * A realpath failure is STORAGE_ERROR, never an unresolved path: the lock
+   * key and every read/write/rename share this path, so a store opened
+   * through a symlink and one opened through the real path serialize on one
+   * chain and update one file.
    */
-  async #ensurePartition(): Promise<void> {
-    this.#ensured ??= ensurePartitionIdentity(this.#dir, this.identity, this.#dirSync);
-    return this.#ensured;
+  async #canonicalFile(): Promise<string> {
+    this.#file ??= (async () => {
+      await ensurePartitionIdentity(this.#dir, this.identity, this.#dirSync);
+      const file = join(this.#dir, "pending.json");
+      try {
+        return join(await realpath(dirname(file)), basename(file));
+      } catch (error) {
+        throw storageError("STORAGE_ERROR", `Resolving ${file}`, error);
+      }
+    })();
+    return this.#file;
   }
 
   async read(): Promise<PendingWriteState> {
-    await this.#ensurePartition();
-    const file = join(this.#dir, "pending.json");
+    const file = await this.#canonicalFile();
     let text: string;
     try {
       text = await readFile(file, "utf8");
@@ -446,10 +465,13 @@ export class FilePendingWriteStore implements PendingWriteStore {
   }
 
   async update<T>(mutate: (state: PendingWriteState) => T): Promise<T> {
-    const file = join(this.#dir, "pending.json");
+    const file = await this.#canonicalFile();
     // In-process serialization first (review), then the optional
     // cross-process guard — never the reverse, so the profile lock can never
     // be held while waiting on this file's chain.
+    // Binding B-int constraint: NEVER call update() while already holding
+    // the profile lock — the chain-first ordering is safe only if no caller
+    // holds the profile lock outside update().
     return serializePendingWrite(file, () =>
       this.#guard(async () => {
         const state = await this.read();

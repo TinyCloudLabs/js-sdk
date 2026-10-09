@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -350,6 +350,40 @@ describe("FilePendingWriteStore (§6.3)", () => {
       ),
     );
     const state = await first.read();
+    expect(state.seq).toBe(N);
+    expect(state.records).toHaveLength(N);
+    expect(state.records.map((record) => record.seq)).toEqual(
+      Array.from({ length: N }, (_, i) => i + 1),
+    );
+  });
+
+  test("concurrent updates across a symlinked root and its real path all survive — canonical lock key", async () => {
+    const dir = await makeDir();
+    const alias = join(await makeDir(), "alias");
+    await symlink(dir, alias, "dir");
+    // The regression (Sol P2): lock keyed by resolve() is lexical — a store
+    // through the symlink and one through the real path ran independent
+    // read-modify-write chains on one file and lost records (80 → 60).
+    const real = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    const linked = createSqliteReplicaStorage({ dir: alias }).pendingWrites!(identity());
+    const N = 80;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        (i % 2 === 0 ? real : linked).update((state) => {
+          state.records.push({
+            opId: `op-${i}`,
+            seq: ++state.seq,
+            key: `notes/${i}`,
+            op: "put",
+            state: "in_flight",
+            epoch: null,
+            at: new Date().toISOString(),
+            settledAt: null,
+          });
+        }),
+      ),
+    );
+    const state = await real.read();
     expect(state.seq).toBe(N);
     expect(state.records).toHaveLength(N);
     expect(state.records.map((record) => record.seq)).toEqual(
