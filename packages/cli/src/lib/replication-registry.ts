@@ -61,31 +61,42 @@ export function registeredReplications(): ReadonlyMap<string, ReplicationControl
   return state.controls;
 }
 
-/** Drain registered controllers; a stalled controller cannot delay CLI exit beyond three seconds per drain. */
+/** Drain registered controllers; all generations share one three-second shutdown budget. */
 export function closeReplication(schedule: ReplicationCloseScheduler = scheduleTimeout): Promise<boolean> {
   if (state.closing) return state.closing;
   removeSignalHandlers();
   state.closing = (async () => {
     let timedOut = false;
-    while (state.allControls.size > 0) {
-      const generation = state.generation;
-      const pending = [...state.allControls];
-      state.controls.clear();
-      state.allControls.clear();
-      let timeout: NodeJS.Timeout;
-      const bounded = new Promise<boolean>((resolve) => {
-        timeout = schedule(() => resolve(true), CLOSE_TIMEOUT_MS);
-      });
-      const drained = Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close())))
-        .then(() => false);
-      const batchTimedOut = await Promise.race([drained, bounded]);
-      clearTimeout(timeout!);
-      timedOut ||= batchTimedOut;
-      if (state.generation === generation) break;
+    let timeout!: NodeJS.Timeout;
+    const bounded = new Promise<boolean>((resolve) => {
+      timeout = schedule(() => resolve(true), CLOSE_TIMEOUT_MS);
+    });
+    try {
+      while (state.allControls.size > 0) {
+        const generation = state.generation;
+        const pending = [...state.allControls];
+        state.controls.clear();
+        state.allControls.clear();
+        const drained = Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close())))
+          .then(() => false);
+        timedOut ||= await Promise.race([drained, bounded]);
+        if (timedOut) {
+          // Keep closing registrations made during the drain, but never wait beyond the shared deadline.
+          for (const control of state.allControls) void Promise.resolve().then(() => control.close()).catch(() => undefined);
+          state.controls.clear();
+          state.allControls.clear();
+          break;
+        }
+        // A registration in the drain's settlement microtask is another generation and must be drained.
+        if (state.generation === generation && state.allControls.size === 0) break;
+      }
+      return timedOut;
+    } finally {
+      clearTimeout(timeout);
     }
-    return timedOut;
   })().finally(() => {
     state.closing = undefined;
+    if (state.allControls.size === 0) removeSignalHandlers();
   });
   return state.closing;
 }

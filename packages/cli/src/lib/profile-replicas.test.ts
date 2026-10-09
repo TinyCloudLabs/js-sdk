@@ -84,6 +84,48 @@ describe("flag-owned logout cleanup", () => {
       await busy.close();
     }
   });
+  test("reports the surviving flag inventory after legacy deletion fails with EACCES", async () => {
+    const createStore = async (path: string, name: string) => {
+      const store = await SqliteReplicaStore.open(path, { create: true });
+      await store.init({
+        name,
+        replicaId: path.split("/").at(-1)!,
+        host: "https://node.example.test",
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+        prefix: "notes/",
+        deviceDid: "did:key:device",
+        allowSecrets: false,
+        localReadPolicy: "whileGrantValid",
+        retentionGrantCid: null,
+      });
+      await store.close();
+    };
+    const firstLegacy = join(profilePath("dogfood"), "replicas", "a-first");
+    const failingLegacy = join(profilePath("dogfood"), "replicas", "b-failing");
+    const flagReplica = join(profilePath("dogfood"), "replication", "c".repeat(26), "replicas", "d".repeat(26));
+    await createStore(firstLegacy, "a-first");
+    await createStore(failingLegacy, "b-failing");
+    await createStore(flagReplica, "flag");
+
+    const originalDestroy = SqliteReplicaStore.prototype.destroy;
+    let destroyCalls = 0;
+    SqliteReplicaStore.prototype.destroy = async function (lease) {
+      destroyCalls += 1;
+      if (destroyCalls === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      return originalDestroy.call(this, lease);
+    };
+    try {
+      await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toMatchObject({
+        code: "REPLICA_PURGE_FAILED",
+        metadata: {
+          replicasRemoved: ["a-first"],
+          replicasRemaining: ["b-failing", `replication/${"c".repeat(26)}/${"d".repeat(26)}`],
+        },
+      });
+    } finally {
+      SqliteReplicaStore.prototype.destroy = originalDestroy;
+    }
+  });
   test("a competing store writer waits for the complete logout lock turn", async () => {
     const legacyPath = join(profilePath("dogfood"), "replicas", "legacy");
     const initialize = async (path: string, name: string) => {

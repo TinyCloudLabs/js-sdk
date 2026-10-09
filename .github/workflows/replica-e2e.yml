@@ -14,18 +14,20 @@ on:
     paths:
       - "packages/replica/**"
       - "packages/cli/**"
-      - "packages/sdk-services/src/kv/**"
+      - "packages/node-sdk/**"
+      - "packages/sdk-core/**"
+      - "packages/sdk-services/src/**"
+      - "packages/web-sdk/scripts/**"
       - "packages/operations/src/state.ts"
       - ".github/workflows/replica-e2e.yml"
+  schedule:
+    - cron: "17 4 * * 1"
   push:
     branches: [master]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  packages: read
-
 env:
+  TC858_MODEL_FULL: ${{ github.event_name == 'schedule' && '1' || '0' }}
   TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:d7f511f
 
 jobs:
@@ -73,7 +75,18 @@ jobs:
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
+          bun run --cwd packages/node-sdk typecheck:replica-contract
           bun run --cwd packages/cli build
+
+      - name: Build web-sdk for the Phase 1 dist acceptance
+        run: bun run --cwd packages/web-sdk build
+
+      - name: Check Phase 1 web-sdk dist
+        run: bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
+
+      - name: Run replication model
+        run: bun test packages/sdk-services/src/kv/replication/pendingWrites.model.test.ts
+
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -112,6 +125,11 @@ jobs:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts
+      - name: Replication flag against the node
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
+        run: bun test packages/cli/test/replication-flag.e2e.test.ts
 
   browser-e2e:
     name: Replica (Chromium, browser worker + IndexedDB)

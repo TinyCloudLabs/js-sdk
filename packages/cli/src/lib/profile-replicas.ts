@@ -361,26 +361,23 @@ export async function removeProfileReplicasAndReplication(profile: string): Prom
       const replication = await removeProfileReplication(profile, heldLeases);
       return [...legacyRemoved, ...replication];
     } catch (error) {
-      if (legacyRemoved.length > 0) {
-        const flagRemoved = error instanceof CLIError && Array.isArray(error.metadata?.replicasRemoved)
-          ? error.metadata.replicasRemoved.filter((name): name is string => typeof name === "string")
-          : [];
-        const removed = [...legacyRemoved, ...flagRemoved];
-        const removedSet = new Set(removed);
-        const remaining = acquired
-          .map(({ path }) => {
-            const name = relative(profilePath(profile), path).split(sep).join("/");
-            return name.startsWith("replication/") ? name.replace("/replicas/", "/") : name.split("/").at(-1)!;
-          })
-          .filter((name) => !removedSet.has(name));
-        throw new CLIError(
-          error instanceof CLIError ? error.code : "REPLICA_PURGE_FAILED",
-          `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ")}. Not removed: ${remaining.join(", ") || "none"}.`,
-          error instanceof CLIError ? error.exitCode : ExitCode.ERROR,
-          { replicasRemoved: removed, replicasRemaining: remaining },
-        );
-      }
-      throw error;
+      const partialRemoved = error instanceof CLIError && Array.isArray(error.metadata?.replicasRemoved)
+        ? error.metadata.replicasRemoved.filter((name): name is string => typeof name === "string")
+        : [];
+      const removed = [...new Set([...legacyRemoved, ...partialRemoved])];
+      const removedSet = new Set(removed);
+      const remaining = acquired
+        .map(({ path }) => {
+          const name = relative(profilePath(profile), path).split(sep).join("/");
+          return name.startsWith("replication/") ? name.replace("/replicas/", "/") : name.split("/").at(-1)!;
+        })
+        .filter((name) => !removedSet.has(name));
+      throw new CLIError(
+        error instanceof CLIError ? error.code : "REPLICA_PURGE_FAILED",
+        `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}.`,
+        error instanceof CLIError ? error.exitCode : ExitCode.ERROR,
+        { replicasRemoved: removed, replicasRemaining: remaining },
+      );
     } finally {
       await Promise.all(acquired.map(async ({ store, lease }) => {
         await store.releaseLease(lease).catch(() => undefined);
