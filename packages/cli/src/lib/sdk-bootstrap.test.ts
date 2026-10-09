@@ -19,6 +19,11 @@ mock.module("@tinycloud/node-sdk", () => ({
       if (restoreFailure) throw restoreFailure;
     }
   },
+  // sdk.ts's replication-config dependency resolves this export even when
+  // replication is disabled in these bootstrap tests.
+  sqliteReplicaStorage: () => {
+    throw new Error("sqliteReplicaStorage should not be used by bootstrap tests");
+  },
 }));
 mock.module("./permissions.js", () => ({
   replayAdditionalDelegations: async () => {},
