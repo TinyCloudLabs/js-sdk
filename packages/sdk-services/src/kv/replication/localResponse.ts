@@ -7,8 +7,9 @@ export type LocalGetResponse<T> = { ok: true; data: KVResponse<T> } | { ok: fals
 export function parseLocalValue<T>(bytes: Uint8Array, contentType: string | undefined, raw: boolean | undefined, binary: boolean | undefined): T {
   if (binary) return bytes as T;
   const text = new TextDecoder().decode(bytes);
-  if (raw || contentType?.startsWith("text/")) return text as T;
+  if (raw) return text as T;
   if (contentType?.includes("application/json")) return JSON.parse(text) as T;
+  if (contentType?.startsWith("text/")) return text as T;
   if (!text) return undefined as T;
   try { return JSON.parse(text) as T; } catch { return text as T; }
 }

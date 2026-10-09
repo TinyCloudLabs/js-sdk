@@ -32,6 +32,7 @@ describe("local KV value parsing matches KVService", () => {
   const cases: Array<[string | undefined, string, { raw?: boolean; binary?: boolean }, unknown]> = [
     ["application/json", "{\"ok\":true}", {}, { ok: true }],
     ["text/plain", "{\"ok\":true}", {}, "{\"ok\":true}"],
+    ["text/plain; profile=\"application/json\"", "{\"ok\":true}", {}, { ok: true }],
     [undefined, "{\"ok\":true}", {}, { ok: true }],
     [undefined, "not-json", {}, "not-json"],
     [undefined, "", {}, undefined],

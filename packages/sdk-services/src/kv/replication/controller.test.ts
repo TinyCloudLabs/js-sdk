@@ -7,12 +7,13 @@ import { createKVReplication } from "./controller";
 import { encodeTcr1 } from "./listLocal";
 import { createMemoryPendingStore } from "./memoryPendingStore";
 import type { KVListPage, KVReplicaHandle, KVReplicaStorage, LocalReplicaStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
+import { RequestTimeoutError } from "../../errors";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, setTimeoutImpl = () => () => undefined }: {
+function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, setTimeoutImpl = () => () => undefined }: {
   durable?: boolean;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -20,9 +21,10 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
   localGetStatus?: "present" | "absent" | "deleted" | "content_missing" | "throw";
   syncOutcome?: "synced" | "busy" | "network_error" | "node_error";
   mode?: "background" | "foreground";
-  purgeImpl?: () => Promise<void>;
+  purgeImpl?: (target: { sessionDeviceDid?: string }) => void | Promise<void>;
   verify?: boolean;
   openError?: string;
+  runtimeMint?: (signal: AbortSignal) => Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   setTimeoutImpl?: (fn: () => void, ms: number) => () => void;
 } = {}) {
   let now = 1_000_000;
@@ -56,8 +58,8 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
     },
     async status() { return localStatus; }, async close() {},
   } as unknown as KVReplicaHandle;
-  const storage: KVReplicaStorage = { kind: "sqlite", async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; }, async purge() { await purgeImpl?.(); }, pendingWrites() { return pending; } };
-  const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionGrant: () => ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => ({ refused: "NOT_COVERED" }), async mint() { throw new Error("unexpected mint"); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
+  const storage: KVReplicaStorage = { kind: "sqlite", async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; }, async purge(target) { await purgeImpl?.(target); }, pendingWrites() { return pending; } };
+  const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionGrant: () => runtimeMint ? { refused: "NOT_COVERED" } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => runtimeMint ? ({ path: "runtime", parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" }), async mint(_deviceDid, _prefix, signal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
   return { controller, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
@@ -377,5 +379,187 @@ describe("KVReplication controller catch-up fence", () => {
     expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 1 });
     const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
     expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
+  });
+});
+describe("A2 lifecycle review regressions", () => {
+  test("an unproven tcr1 continuation restarts after offline catch-up failure", async () => {
+    const env = setup({ durable: false, syncOutcome: "network_error" });
+    let networkCalls = 0;
+    const result = await env.controller.list({
+      space: identity.space,
+      listPath: "notes",
+      options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+      signal: new AbortController().signal,
+      network: async () => { networkCalls++; return ok({ keys: [], truncated: false }); },
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && [result.error.code, result.error.meta?.replication]).toEqual(["INVALID_INPUT", "cursor_restart"]);
+    expect(networkCalls).toBe(0);
+  });
+
+  test("purge includes the session device even before a prefix was opened", async () => {
+    let target: { sessionDeviceDid?: string } | undefined;
+    const env = setup({ purgeImpl: (value) => { target = value; } });
+    expect(await env.controller.purge()).toEqual({ purged: ["notes"], failed: [] });
+    await env.controller.get(readRequest(env.network));
+    expect(env.counters().opens).toBe(0);
+    expect(env.counters().networkCalls).toBe(1);
+
+    expect(target?.sessionDeviceDid).toBe(identity.principal);
+  });
+  test("RUNTIME_UNSUPPORTED is disabled while storage failures retry after injected-clock backoff", async () => {
+    const unsupported = setup({ openError: "RUNTIME_UNSUPPORTED" });
+    await unsupported.controller.get(readRequest(unsupported.network));
+    unsupported.setNow(1_000_000 + 600_000);
+    await unsupported.controller.get(readRequest(unsupported.network));
+    expect(unsupported.counters().opens).toBe(1);
+    expect(unsupported.events.filter((event) => event.type === "replication.read").at(-1)).toMatchObject({ reason: "runtime_unsupported", code: "RUNTIME_UNSUPPORTED" });
+
+    const unavailable = setup({ openError: "STORAGE_ERROR" });
+    await unavailable.controller.get(readRequest(unavailable.network));
+    await unavailable.controller.get(readRequest(unavailable.network));
+    expect(unavailable.counters().opens).toBe(1);
+    unavailable.setNow(1_005_000);
+    await unavailable.controller.get(readRequest(unavailable.network));
+    expect(unavailable.counters().opens).toBe(2);
+    expect(unavailable.events.filter((event) => event.type === "replication.read").at(-1)).toMatchObject({ reason: "replica_unavailable", code: "STORAGE_ERROR" });
+  });
+
+  test("foreground stale-read cancellation drains sync and preserves TIMEOUT or ABORTED", async () => {
+    for (const cancellation of [
+      { code: "TIMEOUT", abort: (controller: AbortController) => controller.abort(new RequestTimeoutError(20)) },
+      { code: "ABORTED", abort: (controller: AbortController) => controller.abort() },
+    ]) {
+      let finishSync!: () => void;
+      let started!: () => void;
+      const syncing = new Promise<void>((resolve) => { finishSync = resolve; });
+      const syncStarted = new Promise<void>((resolve) => { started = resolve; });
+      let settled = false;
+      const env = setup({ onSync: (_epoch, signal) => {
+        started();
+        return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+          settled = true;
+          finishSync();
+          reject(signal.reason);
+        }, { once: true }));
+      } });
+      env.setNow(1_200_001);
+      const requestAbort = new AbortController();
+      const resultPromise = env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal });
+      await syncStarted;
+      cancellation.abort(requestAbort);
+      const result = await resultPromise;
+      await syncing;
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.code).toBe(cancellation.code);
+      expect(settled).toBe(true);
+    }
+  });
+
+  test("concurrent sync callers share one job and close aborts that job", async () => {
+    let syncSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const syncStarted = new Promise<void>((resolve) => { started = resolve; });
+    const env = setup({ onSync: (_epoch, signal) => {
+      syncSignal = signal;
+      started();
+      return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } });
+    const first = env.controller.sync().catch(() => undefined);
+    const second = env.controller.sync().catch(() => undefined);
+    await syncStarted;
+    await env.controller.close();
+    await Promise.all([first, second]);
+    expect(env.counters().syncs).toBe(1);
+    expect(syncSignal?.aborted).toBe(true);
+  });
+
+  test("pending.read rejection removes the caller abort listener", async () => {
+    const env = setup();
+    let listeners = 0;
+    const signal = new AbortController().signal;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((...args: Parameters<typeof signal.addEventListener>) => {
+      if (args[0] === "abort") listeners++;
+      return add(...args);
+    }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((...args: Parameters<typeof signal.removeEventListener>) => {
+      if (args[0] === "abort") listeners--;
+      return remove(...args);
+    }) as typeof signal.removeEventListener;
+    env.pending.read = async () => { throw new Error("pending store failed"); };
+    await expect(env.controller.sync({ signal })).rejects.toThrow("pending store failed");
+    expect(listeners).toBe(0);
+  });
+
+  test("list cancellation returns TIMEOUT rather than a DOMException code", async () => {
+    let started!: () => void;
+    const syncStarted = new Promise<void>((resolve) => { started = resolve; });
+    const env = setup({ onSync: (_epoch, signal) => {
+      started();
+      return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } });
+    env.setNow(1_200_001);
+    const requestAbort = new AbortController();
+    const resultPromise = env.controller.list({
+      ...listRequest(undefined, async () => ok({ keys: [], truncated: false })),
+      signal: requestAbort.signal,
+    });
+    await syncStarted;
+    requestAbort.abort(new RequestTimeoutError(20));
+    const result = await resultPromise;
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("TIMEOUT");
+  });
+
+  test("list caller abort returns ABORTED rather than the DOMException numeric code", async () => {
+    let started!: () => void;
+    const syncStarted = new Promise<void>((resolve) => { started = resolve; });
+    const env = setup({ onSync: (_epoch, signal) => {
+      started();
+      return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } });
+    env.setNow(1_200_001);
+    const requestAbort = new AbortController();
+    const resultPromise = env.controller.list({
+      ...listRequest(undefined, async () => ok({ keys: [], truncated: false })),
+      signal: requestAbort.signal,
+    });
+    await syncStarted;
+    requestAbort.abort();
+    const result = await resultPromise;
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("ABORTED");
+  });
+
+  test("close aborts an in-flight authority mint and drains its open", async () => {
+    const { promise: mintStarted, resolve: markMintStarted } = Promise.withResolvers<void>();
+    let mintSignal: AbortSignal | undefined;
+    const env = setup({ runtimeMint: (signal) => {
+      mintSignal = signal;
+      markMintStarted();
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } });
+    const opening = env.controller.get(readRequest(env.network));
+    await mintStarted;
+    await env.controller.close();
+    await opening;
+    expect(mintSignal?.aborted).toBe(true);
+  });
+
+  test("purge aborts an in-flight authority mint", async () => {
+    const { promise: mintStarted, resolve: markMintStarted } = Promise.withResolvers<void>();
+    let mintSignal: AbortSignal | undefined;
+    const env = setup({ runtimeMint: (signal) => {
+      mintSignal = signal;
+      markMintStarted();
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } });
+    const opening = env.controller.get(readRequest(env.network));
+    await mintStarted;
+    expect(await env.controller.purge()).toEqual({ purged: ["notes"], failed: [] });
+    await opening;
+    expect(mintSignal?.aborted).toBe(true);
   });
 });

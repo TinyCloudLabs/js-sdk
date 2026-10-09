@@ -1,4 +1,5 @@
-import { err, ErrorCodes, ok, serviceError, type Result } from "../../types";
+import { wrapError } from "../../errors";
+import { ErrorCodes, err, ok, serviceError, type Result } from "../../types";
 import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
 import { kvPrefixCovers, requiresSecretsOptIn } from "./scope";
 import { classifyWriteOutcome } from "./outcome";
@@ -8,7 +9,7 @@ import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } fr
 import { emitEvent, type ReplicationEventInput } from "./events";
 import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 
-interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; abort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed" }
+interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean }
 const nowDate = (now: number) => new Date(now).toISOString();
 const errorCode = (e: unknown): string => typeof e === "object" && e !== null && "code" in e && typeof e.code === "string" ? e.code : "REPLICA_UNAVAILABLE";
 function raceSignal<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -40,6 +41,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (state?.opening) return state.opening;
     state ??= {};
     replicas.set(prefix, state);
+    if (state.unsupported) throw Object.assign(new Error("Replication runtime is unsupported"), { code: "RUNTIME_UNSUPPORTED" });
+    if (state.retryAt !== undefined && scheduler.now() < state.retryAt) throw Object.assign(new Error("Replica open is backing off"), { code: state.lastError ?? "REPLICA_UNAVAILABLE" });
     if (requiresSecretsOptIn(session.space, prefix) && !options.allowSecrets) {
       const firstRefusal = state.lastError !== "SECRETS_OPT_IN_REQUIRED";
       state.reason = "replica_unavailable";
@@ -66,10 +69,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       else if (!("refused" in plan)) {
         if (!installed || !installed.unconstrained || installed.parentCid !== plan.parentCid || (installed.expiresAt !== null && plan.expiresAt > installed.expiresAt + 300_000)) {
           try {
-            const minted = await authority.mint(handle.deviceDid, prefix, new AbortController().signal);
+            const mintAbort = new AbortController();
+            state!.mintAbort = mintAbort;
+            const minted = await authority.mint(handle.deviceDid, prefix, mintAbort.signal);
             installed = await handle.installGrant(minted.ucan);
             state!.strategy = "minted";
           } catch (error) { if (!installed?.unconstrained) throw error; }
+          finally { state!.mintAbort = undefined; }
         }
         if (installed?.unconstrained) { state!.strategy ??= "installed"; state!.reason = undefined; }
       }
@@ -88,7 +94,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       }
       return handle;
     })();
-    try { return await state.opening; } catch (error) { state.reason = "replica_unavailable"; state.lastError = errorCode(error); throw error; } finally { state.opening = undefined; }
+    try { return await state.opening; } catch (error) {
+      const code = errorCode(error);
+      state.reason = "replica_unavailable";
+      state.lastError = code;
+      state.failures = (state.failures ?? 0) + 1;
+      if (code === "RUNTIME_UNSUPPORTED") state.unsupported = true;
+      else if (code !== "REPLICA_CLOSED") state.retryAt = scheduler.now() + Math.min(300_000, 5_000 * 2 ** Math.min(state.failures - 1, 6));
+      state.handle?.close().catch(() => undefined);
+      state.handle = undefined;
+      throw error;
+    } finally { state.opening = undefined; }
   }
 
   function schedule(prefix: string): void {
@@ -109,9 +125,10 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const abortFromCaller = () => abort.abort(signal?.reason);
     signal?.addEventListener("abort", abortFromCaller, { once: true });
     const started = scheduler.now();
-    const syncStartEpoch = (await pending.read()).committedEpoch;
-    const job = (async () => {
+    let job!: Promise<LocalSyncResult>;
+    job = (async () => {
       try {
+        const syncStartEpoch = (await pending.read()).committedEpoch;
         const result = await handle.sync({ signal: abort.signal, syncStartEpoch });
         if (result.status === "busy") {
           emit({ type: "replication.sync", space: session.space, replica: prefix, trigger, outcome: "busy", durationMs: scheduler.now() - started, lagMs: null });
@@ -171,7 +188,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       cancelTimeout();
       cancelAbort();
       signal.removeEventListener("abort", abortFromCaller);
-      if ("callerAborted" in outcome) return { status: currentStatus, syncedBeforeRead: false, syncError: "ABORTED" };
+      if ("callerAborted" in outcome) {
+        if (syncController) {
+          syncController.abort(signal.reason);
+          await sync.catch(() => undefined);
+        }
+        return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
+      }
       if ("timeout" in outcome) {
         if (syncController) await sync.catch(() => undefined);
         return { status: currentStatus, syncedBeforeRead: false, syncError: "TIMEOUT" };
@@ -323,7 +346,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (replicas.get(prefix)?.reason === "grant_missing") { const value = await r.network(); readEvent("get", r.path, prefix, "network", "grant_missing", value.ok ? "found" : "error", started, { code: replicas.get(prefix)?.lastError }); return value; }
 
     let fresh: Awaited<ReturnType<typeof freshness>>;
-    try { fresh = await raceSignal(freshness(prefix, handle, r.signal), r.signal); }
+    try { fresh = await freshness(prefix, handle, r.signal); }
     catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
       const value = await r.network();
@@ -407,7 +430,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     }
     if (replicas.get(prefix)?.reason === "grant_missing") { if (cursor && decoded) return restart(); const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "grant_missing", result.ok ? "found" : "error", started); return result; }
     let fresh: Awaited<ReturnType<typeof freshness>>;
-    try { fresh = await raceSignal(freshness(prefix, handle, r.signal), r.signal); }
+    try { fresh = await freshness(prefix, handle, r.signal); }
     catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
       if (cursor && decoded) return restart();
@@ -427,7 +450,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     }
     const pendingRange = state.records.find((record) => kvPrefixCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
     const behind = fresh.status.syncedThroughEpoch < state.committedEpoch;
-    if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid")) return restart();
+    if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid" || (!pending.durable && !inProcessProof.has(prefix)))) return restart();
     if (fresh.failure) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "stale", result.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError }); return result; }
     if (pendingRange) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "pending_write", result.ok ? "found" : "error", started, { pendingState: pendingRange.state }); return result; }
     if (!pending.durable && !inProcessProof.has(prefix)) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_UNPROVEN_SINCE_START", result.ok ? "found" : "error", started); return result; }
@@ -512,7 +535,12 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
 
   function purge(o?: { timeoutMs?: number }): Promise<{ purged: string[]; failed: Array<{ prefix: string; code: string }> }> {
     purgeStarted = true;
-    for (const state of replicas.values()) { state.timer?.(); state.timer = undefined; state.abort?.abort(); }
+    for (const state of replicas.values()) {
+      state.timer?.();
+      state.timer = undefined;
+      state.abort?.abort();
+      state.mintAbort?.abort();
+    }
     return (async () => {
       const report = { purged: [] as string[], failed: [] as Array<{ prefix: string; code: string }> };
       const timeoutMs = o?.timeoutMs ?? 5_000;
@@ -533,8 +561,10 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       try { await withTimeout(drain); } catch (error) { drainCode = errorCode(error); }
       const jobs = options.prefixes.map(async (prefix) => {
         try {
-          await withTimeout(storage.purge({ identity, space: session.space, prefix }));
           if (drainCode) throw Object.assign(new Error("Replica cleanup did not settle before purge"), { code: drainCode });
+          const grant = authority.sessionGrant(prefix);
+          const sessionDeviceDid = replicas.get(prefix)?.handle?.deviceDid ?? ("refused" in grant ? undefined : grant.device.did);
+          await withTimeout(storage.purge({ identity, space: session.space, prefix, ...(sessionDeviceDid ? { sessionDeviceDid } : {}) }));
           await pending.update((s) => clearPrefix(s, prefix));
           report.purged.push(prefix);
           emit({ type: "replication.state", space: session.space, replica: prefix, state: "purged" });
@@ -555,20 +585,32 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     for (const [prefix, state] of replicas) {
       state.timer?.();
       state.timer = undefined;
+      state.mintAbort?.abort();
       state.abort?.abort();
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "closed" });
     }
-    await Promise.all([...replicas.values()].map(async (state) => {
+    const drain = Promise.all([...replicas.values()].map(async (state) => {
       await state.opening?.catch(() => undefined);
       await state.sync?.catch(() => undefined);
       await state.handle?.close().catch(() => undefined);
     }));
+    let cancel = () => {};
+    const timeout = new Promise<void>((resolve) => { cancel = scheduler.setTimeout(resolve, 3_000); });
+    try { await Promise.race([drain, timeout]); }
+    finally { cancel(); }
   }
 
   return { get, list, write, observeNetworkRequested, status, sync, purge, clearPending, close };
 }
 
+function cancellationCode(signal: AbortSignal): string {
+  return wrapError("kv", signal.reason).code === ErrorCodes.TIMEOUT ||
+    (typeof signal.reason === "object" && signal.reason !== null && "code" in signal.reason && signal.reason.code === ErrorCodes.TIMEOUT)
+    ? ErrorCodes.TIMEOUT
+    : ErrorCodes.ABORTED;
+}
+
 function abortedResult(signal: AbortSignal): Result<never> {
-  const code = signal.reason && typeof signal.reason === "object" && "code" in signal.reason ? String(signal.reason.code) : ErrorCodes.ABORTED;
+  const code = cancellationCode(signal);
   return err(serviceError(code, code === ErrorCodes.TIMEOUT ? "KV request timed out" : "KV request was aborted", "kv"));
 }
