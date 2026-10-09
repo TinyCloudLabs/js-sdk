@@ -177,6 +177,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(list.stderr).toContain("replica hit");
     const variable = await tc(["vars", "get", "flag", "--raw"], { profile: "owner", replication: "on" });
     expect(variable.stdout.toString()).toContain("one");
+    expect(variable.stderr).toContain("replica hit");
     const outside = await tc(["kv", "get", "other/x"], { profile: "owner", replication: "on" });
     expect(outside.stderr).toContain("not_covered");
 
@@ -241,10 +242,18 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const interrupted = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: interruptPreload, replication: "on" });
     expect(interrupted.code).toBe(130);
     expect((await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).not.toContain("busy");
-    // 8. Delegate-session profile uses the session device for the replica strategy.
+    // 8. A delegate-session device uses its signed session grant for the replica.
     await ok(["profile", "create", "delegate", "--posture", "delegate-session"]);
-    const delegate = await ok<{ strategy?: string }>(["auth", "login", "--method", "local", "--replication-prefix", "notes"], "delegate");
-    expect(delegate.strategy).toBe("session");
+    await ok(["auth", "request", "--cap", `tinycloud.kv:${space}:notes/:get,list,metadata,sync`, "--expiry", "30d", "--emit", "delegate-request.json"], "delegate");
+    const delegateGrant = await tc(["auth", "grant", "delegate-request.json", "--yes"], { profile: "owner" });
+    expect(delegateGrant.code).toBe(0);
+    await writeFile(join(home, "delegate-grant.json"), delegateGrant.stdout);
+    await ok(["auth", "import", "delegate-grant.json"], "delegate");
+    const delegatedHit = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", replication: "on" });
+    expect(delegatedHit.code).toBe(0);
+    expect(delegatedHit.stderr).toContain("replica hit");
+    const delegateReport = await ok<{ replicas: Array<{ strategy?: string }> }>(["replica", "report", "--json"], "delegate", { replication: "on" });
+    expect(delegateReport.replicas.some((replica) => replica.strategy === "session")).toBe(true);
 
     // 9. Refuse missing, unsupported-runtime, out-of-scope and caveated grants before local serving.
     await ok(["profile", "create", "no-prefix", "--posture", "delegate-session"]);
