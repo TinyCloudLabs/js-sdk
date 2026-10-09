@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 1 migrated registration(s).
 - 1 partially migrated registration(s).
-- 122 legacy registration(s) remain Commander-owned.
+- 123 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -25,6 +25,8 @@ This release has **Commander coverage tracked, not complete parity**:
 | `-q, --quiet` | Suppress non-essential output |
 | `--no-cache` | Disable caching |
 | `--json` | Force machine-readable output |
+| `--replication` / `--no-replication` | Enable/disable read-through replication for this invocation; `TC_REPLICATION=1` enables it by default, with command flags taking precedence |
+| `--replication-debug` | Write per-read, write and sync diagnostics to stderr |
 
 ## Context and Login
 
@@ -44,6 +46,8 @@ tc --profile publisher context --json
 | `--expiry <duration>` | Session lifetime (`1h`, `7d`, milliseconds; at least `1m`) counted from approval; ISO dates are refused because OpenKey signs approval time plus a lifetime. Enforced against the signed session on every login path. Device login: at most `30d`, default `30d` |
 | `--owner <did>` | Refuse approval by any identity other than this `did:pkh`; must agree with an owner the profile already recorded. OpenKey preselects that owner's key, so this is how to sign in with a key that is not the account's primary key; it works on a plain login without `--manifest` too. Also names the secrets owner for a manifest's `secrets` when the profile has no recorded owner |
 | `--replace-session` | Scoped or device login: replace a live session the new scope would narrow, change or shorten (otherwise `SESSION_IN_USE`); renewals and widenings that last at least as long need no flag |
+| `--replication-prefix <prefix>` | Repeatable login request; adds `get` + `sync` only when an unrestricted covering `get` is already requested. Saves prefixes on the profile and reapplies them on later logins and rotation |
+| `--replication-allow-secrets` | Explicitly allow prefixes in the `secrets` space or `vault` tree; replication stores ciphertext only |
 | `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
 | `--paste`, `--no-popup` | Browser flow without a local callback / without opening a browser. `--paste` reads the owner's code from stdin (newline-terminated; a final unterminated line is accepted); stdin ending without a code fails with `PASTE_CODE_MISSING` (exit 3) naming the approval URL |
 
@@ -175,6 +179,29 @@ tc --profile device replica reset [--purge]
 - `get` statuses: present; `KEY_DELETED`, `KEY_ABSENT` (only once the first sync completed), `CONTENT_MISSING` (known key whose bytes are not local yet; the next sync repairs it) and `COVERAGE_INCOMPLETE` exit 4; `NOT_COVERED` (outside the prefix) exits 2. `-o FILE` writes atomically with mode 0600; stored content is re-hashed on every read unless `--no-verify`.
 - Exit codes: 0 ok; 1 busy, runtime or storage error; 2 usage, `NOT_COVERED`, `SECRETS_OPT_IN_REQUIRED`; 3 grant missing; 4 key absent, deleted, content missing or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network; 7 node, protocol or integrity error (`SOURCE_CHANGED`, `SCOPE_VIOLATION`, `CONTENT_MISMATCH`); 10 storage full.
 - Store: `profiles/<profile>/replicas/<name>/` (honours `TC_HOME`): `replica.db` (SQLite WAL, `synchronous=FULL`; each feed page and its cursor commit in one transaction) and content-addressed `blobs/`, directories 0700 and files 0600. Only one process syncs a replica at a time (`REPLICA_BUSY`); a process whose sync lease expired or was taken over writes nothing more. `reset --purge` removes the replica only under a live lease on the database it opened, so it never removes a replica another process took over or recreated. A node answer `410 RESET_REQUIRED` resets the replica in place and re-bootstraps from the same source; `status.lastReset` records it. A feed from a different node is `SOURCE_CHANGED` until `tc replica reset` clears the pin. A profile deleted before or while any `tc replica` command runs ends it with `REPLICA_NOT_FOUND`; nothing is written into the profile and it is never recreated.
+
+## Read-through Replication Diagnostics
+
+`--replication` enables the read-through adapter for one command;
+`--no-replication` overrides `TC_REPLICATION=1`. It is off by default.
+`--replication-debug` (or `TC_REPLICATION_DEBUG=1`) writes per-read, write
+and sync details to stderr. The event log is
+`profiles/<profile>/replication/events.jsonl` under `TC_HOME`; it records
+operational metadata, not values.
+
+`tc replica report [--since 24h]` renders read source/reason counts, hit ratio,
+latency and staleness percentiles, sync/write outcomes, recent divergences,
+replica/grant status, and pinned keys. `--json` emits the aggregate as JSON.
+`--clear-pending` clears pending replica writes and prints a warning: commits
+that arrive later can be observed as stale until a subsequent sync.
+`auth logout` purges legacy and flag-owned replicas unless `--keep-replicas`
+is used.
+
+B-int release acceptance: test `tc auth request --grant` against a real
+OpenKey test account without production writes. Approve the request, confirm
+the grant is stored, start a fresh process, and verify saved prefixes are
+replayed and the covered read is served locally. If explicit `kv/get` plus
+`sync` is rejected, stop before release and resolve the protocol contract.
 
 ## Node Health
 

@@ -40,6 +40,7 @@
     { "command": "replica get <key>", "status": "legacy" },
     { "command": "replica list [prefix]", "status": "legacy" },
     { "command": "replica status", "status": "legacy" },
+    { "command": "replica report", "status": "legacy" },
     { "command": "replica reset", "status": "legacy" },
     { "command": "space", "status": "legacy" },
     { "command": "space list", "status": "legacy" },

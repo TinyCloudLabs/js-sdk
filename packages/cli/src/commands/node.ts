@@ -28,7 +28,7 @@ export function registerNodeCommand(program: Command): void {
         if (error instanceof TypeError && (error as Error).message.includes("fetch")) {
           outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals())).host, error: "Connection refused" });
         } else {
-          handleError(error);
+          return handleError(error);
         }
       }
     });
@@ -49,7 +49,7 @@ export function registerNodeCommand(program: Command): void {
         const data = await response.json() as Record<string, unknown>;
         outputJson({ ...data, host: ctx.host });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -84,7 +84,7 @@ export function registerNodeCommand(program: Command): void {
           ...versionData,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

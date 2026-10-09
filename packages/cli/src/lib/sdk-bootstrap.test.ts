@@ -33,7 +33,7 @@ const { bootstrapDelegatedSession } = await import("./sdk.js");
 const PROFILE = "delegate";
 const SESSION_DID = "did:key:zDelegate";
 const KEY = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-const ctx = { profile: PROFILE, host: "https://node.tinycloud.test", verbose: false, noCache: false, quiet: false };
+const ctx = { profile: PROFILE, host: "https://node.tinycloud.test", verbose: false, noCache: false, quiet: false, replication: false, replicationDebug: false };
 const delegation = {
   delegationHeader: { Authorization: "Bearer delegated" },
   cid: "bafy-bootstrap",

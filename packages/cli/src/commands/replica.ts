@@ -1,8 +1,11 @@
 import { Command } from "commander";
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { open, readdir, rename, stat, unlink } from "node:fs/promises";
+import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { replicationForProfile } from "../lib/replication-registry.js";
+import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
+import { parseDuration } from "../lib/duration.js";
 import {
   ProfileDeletedError,
   profilePath,
@@ -10,6 +13,7 @@ import {
   readSession,
   withProfileLock,
 } from "@tinycloud/operations/state";
+import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
 import {
   Replica,
   ReplicaError,
@@ -38,6 +42,8 @@ import { theme } from "../output/theme.js";
 
 /** Replica error → exit code. Mirrors `ExitCode`; see `tc replica --help`. */
 const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
+  [ReplicaErrorCode.INVALID_ARGUMENT]: ExitCode.USAGE_ERROR,
+  [ReplicaErrorCode.CLOSED]: ExitCode.ERROR,
   [ReplicaErrorCode.BUSY]: ExitCode.ERROR,
   [ReplicaErrorCode.RUNTIME_UNSUPPORTED]: ExitCode.ERROR,
   [ReplicaErrorCode.STORAGE_ERROR]: ExitCode.ERROR,
@@ -93,7 +99,7 @@ async function run(action: () => Promise<void>): Promise<void> {
     await loadSqlite();
     await action();
   } catch (error) {
-    handleError(toCliError(error));
+    return handleError(toCliError(error));
   }
 }
 
@@ -353,6 +359,53 @@ export function replicaSecretsWarning(space: string, prefix: string, secretsAllo
   return `This replica stores the ciphertext of every secret under "${prefix}". A tinycloud.encryption/decrypt grant covers the whole encryption network, not one secret (TC-755), so whoever holds decrypt can open every replicated secret.`;
 }
 
+async function readReplicationEvents(profile: string, sinceMs: number): Promise<ReplicationEvent[]> {
+  const root = join(profilePath(profile), "replication");
+  const events: ReplicationEvent[] = [];
+  for (const name of ["events.jsonl.1", "events.jsonl"]) {
+    const data = await readFile(join(root, name), "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+    for (const line of data.split("\n")) {
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as ReplicationEvent;
+        if (Number.isFinite(Date.parse(event.at)) && Date.parse(event.at) >= sinceMs) events.push(event);
+      } catch {
+        // A truncated final line is ignored; later appends remain usable.
+      }
+    }
+  }
+  return events;
+}
+
+async function replicationPartitions(profile: string): Promise<ReplicationPartitionSummary[]> {
+  const root = join(profilePath(profile), "replication");
+  const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  const partitions: ReplicationPartitionSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-z2-7]{26}$/.test(entry.name)) continue;
+    const directory = join(root, entry.name);
+    const info = await lstat(directory);
+    if (info.isSymbolicLink() || !info.isDirectory()) continue;
+    const identity = await readFile(join(directory, "identity.json"), "utf8").then((value) => JSON.parse(value) as { host?: unknown; space?: unknown })
+      .catch(() => null);
+    const pending = await readFile(join(directory, "pending.json"), "utf8").then((value) => JSON.parse(value) as { records?: Array<{ state?: string }> })
+      .catch(() => null);
+    const pinned = pending?.records?.filter((record) => record.state === "in_flight" || record.state === "ambiguous").length ?? 0;
+    partitions.push({
+      idHash: entry.name,
+      host: typeof identity?.host === "string" ? identity.host : null,
+      space: typeof identity?.space === "string" ? identity.space : null,
+      pinned,
+    });
+  }
+  return partitions.sort((left, right) => left.idHash.localeCompare(right.idHash));
+}
 export function registerReplicaCommand(program: Command): void {
   const replica = program
     .command("replica")
@@ -370,6 +423,52 @@ Exit codes: 0 ok; 1 busy, runtime or storage error; 2 usage, NOT_COVERED,
 SECRETS_OPT_IN_REQUIRED; 3 grant missing; 4 key absent, deleted, content missing
 or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
 7 node, protocol or integrity error; 10 storage full.`,
+    );
+  replica
+    .command("report")
+    .description("Report replication reads, syncs, pending writes and local identity partitions")
+    .option("--since <duration>", "Include events from the last duration (default: 24h)", "24h")
+    .option("--purge", "Purge configured replicas for the current identity")
+    .option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes")
+    .action((options, cmd: Command) =>
+      run(async () => {
+        const profile = await profileName(cmd);
+        let durationMs: number;
+        try {
+          durationMs = parseDuration(options.since);
+        } catch (error) {
+          throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+        }
+        const control: ReplicationControl | undefined = replicationForProfile(profile);
+        let cleared: number | undefined;
+        let purged: unknown;
+        let warning: string | undefined;
+        if (options.clearPending || options.purge) {
+          if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
+          warning = CLEAR_PENDING_WARNING;
+          process.stderr.write(`Warning: ${warning}\n`);
+          if (options.clearPending) cleared = await control.clearPending();
+          if (options.purge) purged = await control.purge();
+        }
+        const sinceMs = Date.now() - durationMs;
+        const [events, partitions, replicas] = await Promise.all([
+          readReplicationEvents(profile, sinceMs),
+          replicationPartitions(profile),
+          control ? control.status() : Promise.resolve([]),
+        ]);
+        const report = createReplicationReport(options.since, events, replicas, partitions, warning);
+        if (shouldOutputJson()) {
+          outputJson({
+            ...report,
+            ...(cleared === undefined ? {} : { cleared }),
+            ...(purged === undefined ? {} : { purged }),
+          });
+        } else {
+          process.stdout.write(`${renderReplicationReport(report)}\n`);
+          if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
+          if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
+        }
+      }),
     );
 
   replica

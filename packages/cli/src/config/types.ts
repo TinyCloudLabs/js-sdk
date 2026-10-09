@@ -96,6 +96,8 @@ export interface ProfileConfig {
    * re-pin (e.g. after intentionally re-keying a local node).
    */
   pinnedLocalNodeDids?: Record<string, string>;
+  /** Prefixes explicitly opted into the read-through replication flag at login. */
+  replication?: { prefixes: string[]; allowSecrets?: boolean };
 }
 
 export interface CLIContext {
@@ -104,4 +106,6 @@ export interface CLIContext {
   verbose: boolean;
   noCache: boolean;
   quiet: boolean;
+  replication: boolean;
+  replicationDebug: boolean;
 }

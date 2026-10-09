@@ -45,6 +45,7 @@ type ProfileLike = {
   authMethod?: "openkey" | "local";
   privateKey?: string;
   address?: string;
+  replication?: { prefixes: string[]; allowSecrets?: boolean };
   openkeyHost?: string;
 };
 
@@ -98,6 +99,7 @@ const recorded = {
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
   removedReplicaProfiles: [] as string[],
+  removedReplicationProfiles: [] as string[],
 };
 
 const grantedDelegation = {
@@ -137,6 +139,7 @@ function resetState(): void {
   recorded.grantedRequests.length = 0;
   recorded.localGrantArtifacts.length = 0;
   recorded.removedReplicaProfiles.length = 0;
+  recorded.removedReplicationProfiles.length = 0;
   recorded.grantHistory.length = 0;
 
   activeProfile = "default";
@@ -238,9 +241,10 @@ mock.module("../config/profiles.js", () => ({
   },
 }));
 mock.module("../lib/profile-replicas.js", () => ({
-  removeProfileReplicas: async (profile: string) => {
+  removeProfileReplicasAndReplication: async (profile: string) => {
     recorded.removedReplicaProfiles.push(profile);
-    return ["notes"];
+    recorded.removedReplicationProfiles.push(profile);
+    return ["notes", "replication/idHash/replicaHash"];
   },
 }));
 
@@ -555,6 +559,37 @@ describe("CLI auth rotate command", () => {
     ]);
   });
 
+  test("rotation replays the previously scoped permissions after clearing the session", async () => {
+    profiles.set("default", makeProfile({
+      replication: { prefixes: ["applications/apps/"] },
+    }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "old", d: "private" });
+    sessions.set("default", {
+      permissions: [{
+        service: "tinycloud.kv",
+        space: "applications",
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      }],
+    });
+    generatedKeys.push({
+      jwk: { kty: "OKP", crv: "Ed25519", x: "new", d: "new-private" },
+      did: "did:key:new-openkey",
+    });
+
+    await runAuthCommand(["auth", "rotate", "--paste"]);
+
+    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
+      space: "applications",
+      path: "applications/apps/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+    }));
+    expect(recorded.startAuthFlows[0]?.options.permissions).not.toContainEqual(expect.objectContaining({
+      space: "default",
+      path: "",
+    }));
+  });
+
   test("passes --no-popup through owner OpenKey rotation", async () => {
     const oldJwk = { kty: "OKP", crv: "Ed25519", x: "old-public", d: "old-private" };
     const newJwk = { kty: "OKP", crv: "Ed25519", x: "new-public", d: "new-private" };
@@ -670,9 +705,18 @@ describe("CLI auth login command", () => {
 
   test("non-interactive OpenKey login keeps the requested browser/paste flow instead of switching to device mode", async () => {
     const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-    profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+      replication: { prefixes: ["notes/"] },
+    }));
     keys.set("default", key);
-    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session" };
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      verificationMethod: "did:key:openkey-session",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+    };
 
     await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
 
@@ -680,6 +724,13 @@ describe("CLI auth login command", () => {
     expect(recorded.startAuthFlows).toEqual([
       { did: "did:key:openkey-session", options: expect.objectContaining({ noPopup: true, jwk: key }) },
     ]);
+    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual({
+      service: "tinycloud.kv",
+      space: "default",
+      path: "notes/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+    });
+    expect(recorded.setProfiles.at(-1)?.data.replication).toEqual({ prefixes: ["notes/"] });
     expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
   });
 
@@ -768,10 +819,11 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.clearSessions).toEqual(["owner"]);
     expect(keys.get("owner")).toBe(key);
     expect(recorded.removedReplicaProfiles).toEqual(["owner"]);
+    expect(recorded.removedReplicationProfiles).toEqual(["owner"]);
     expect(recorded.outputs).toEqual([{
       profile: "owner",
       authenticated: false,
-      replicasRemoved: ["notes"],
+      replicasRemoved: ["notes", "replication/idHash/replicaHash"],
       replicasKept: false,
       warning: expect.stringContaining("delegations and grants on the node stay valid until they expire"),
     }]);
@@ -784,6 +836,7 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.clearSessions).toEqual(["owner"]);
     expect(recorded.removedReplicaProfiles).toEqual([]);
+    expect(recorded.removedReplicationProfiles).toEqual([]);
     expect(recorded.outputs).toEqual([expect.objectContaining({
       replicasRemoved: [],
       replicasKept: true,
@@ -801,6 +854,18 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.startAuthFlows).toEqual([]);
     expect(recorded.outputs).toEqual([]);
     expect(profiles.has("owner")).toBe(false);
+  });
+  test("local login bootstraps a profile that does not yet exist", async () => {
+    generatedKeys.push({ jwk: { kty: "OKP", crv: "Ed25519", x: "local-session", d: "private" }, did: "did:key:local-session" });
+    await runAuthCommand(["auth", "login", "--method", "local"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(profiles.get("owner")).toEqual(expect.objectContaining({
+      name: "owner",
+      authMethod: "local",
+      posture: "local-owner-key",
+    }));
+    expect(recorded.outputs).toContainEqual(expect.objectContaining({ authenticated: true, profile: "owner" }));
   });
 
   test("OpenKey login on an existing profile without a key keeps NO_KEY with a hint for that profile", async () => {
