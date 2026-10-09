@@ -663,3 +663,131 @@ describe("TinyCloudNode.delegateTo", () => {
     expect(createDelegationSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TinyCloudNode.delegateTo onPrepared (session-key path)", () => {
+  const BOB_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
+  const futureExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "default",
+    path: "items/",
+    actions: ["tinycloud.kv/get"],
+  };
+
+  // Every event (hook call, fetch) lands here in order so tests can assert
+  // the hook runs before any activation request.
+  let events: string[];
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    events = [];
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      events.push(`fetch:${String(input)}`);
+      return new Response(JSON.stringify({ activated: [], skipped: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function makeDerivableNode(): { node: TinyCloudNode; wasm: IWasmBindings } {
+    const wasm = makeFakeWasmBindings({
+      parseRecapFromSiwe: mock(() => [
+        {
+          service: "kv",
+          space: "default",
+          path: "/",
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
+        },
+      ]),
+      createDelegation: mock(() => {
+        events.push("sign");
+        return {
+          delegation: "fake-ucan-delegation",
+          cid: "bafyprepared",
+          delegateDid: BOB_DID,
+          expiry: Math.floor((Date.now() + 3600_000) / 1000),
+          resources: [
+            {
+              service: "kv",
+              space: "space://test",
+              path: "items/",
+              actions: ["tinycloud.kv/get"],
+            },
+          ],
+        };
+      }),
+    });
+    const node = new TinyCloudNode({ wasmBindings: wasm });
+    installFakeSession(node, { siwe: buildSiwe(futureExpiry) });
+    return { node, wasm };
+  }
+
+  test("hook receives the returned delegation, CID included, before activation", async () => {
+    const { node } = makeDerivableNode();
+    let prepared: unknown;
+    let preparedCid: string | undefined;
+
+    const result = await node.delegateTo(BOB_DID, [permission], {
+      onPrepared: async (delegation) => {
+        events.push("hook");
+        prepared = delegation;
+        preparedCid = delegation.cid;
+      },
+    });
+
+    expect(prepared).toBe(result.delegation);
+    expect(preparedCid).toBe("bafyprepared");
+    expect(result.delegation.cid).toBe("bafyprepared");
+    expect(events).toHaveLength(3);
+    expect(events.slice(0, 2)).toEqual(["sign", "hook"]);
+    expect(events[2]).toMatch(/^fetch:.*\/delegate$/);
+  });
+
+  test("rejecting hook propagates the same error and sends no activation request", async () => {
+    const { node, wasm } = makeDerivableNode();
+    const failure = new Error("inventory write failed");
+
+    const outcome = node.delegateTo(BOB_DID, [permission], {
+      onPrepared: async () => {
+        events.push("hook");
+        throw failure;
+      },
+    });
+
+    await expect(outcome).rejects.toBe(failure);
+    expect(wasm.createDelegation).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["sign", "hook"]);
+  });
+
+  test("onPrepared with forceWalletSign throws before anything is signed", async () => {
+    const { node, wasm } = makeDerivableNode();
+    const signMessage = mock(async () => "0xfake");
+    // A wallet-capable node, so only the guard stands between the call and
+    // the wallet-signed path.
+    Object.assign(node, {
+      signer: {
+        signMessage,
+        getAddress: async () => "0x0000000000000000000000000000000000000001",
+        getChainId: async () => 1,
+      },
+    });
+    const onPrepared = mock(async () => {});
+
+    await expect(
+      node.delegateTo(BOB_DID, [permission], {
+        forceWalletSign: true,
+        onPrepared,
+      }),
+    ).rejects.toThrow(/onPrepared cannot be combined with forceWalletSign/);
+
+    expect(onPrepared).not.toHaveBeenCalled();
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(wasm.prepareSession).not.toHaveBeenCalled();
+    expect(wasm.createDelegation).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+  });
+});

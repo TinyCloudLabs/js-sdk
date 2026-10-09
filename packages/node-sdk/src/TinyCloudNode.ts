@@ -836,12 +836,25 @@ export interface TinyCloudNodeConfig {
  * delegation through the legacy wallet-signed SIWE path, which always
  * triggers a wallet prompt. Used for testing, for explicit wallet
  * confirmation flows, and by the legacy `createDelegation` fallback.
+ *
+ * `onPrepared` runs after the delegation is fully built and signed (CID
+ * included) and before it is activated with the host. It receives the same
+ * `PortableDelegation` object that `delegateTo` returns as
+ * `result.delegation`, so callers can durably record the grant before it
+ * goes live. If the hook rejects, the delegation is not activated and
+ * `delegateTo` rejects with the same error. It cannot be combined with
+ * `forceWalletSign`, whose wallet path activates as part of signing.
  */
 export interface DelegateToOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
   /** Force the wallet-signed SIWE path even if the caps are derivable. Default false. */
   forceWalletSign?: boolean;
+  /**
+   * Called with the prepared delegation before host activation. A rejection
+   * aborts activation and propagates from `delegateTo`.
+   */
+  onPrepared?: (prepared: PortableDelegation) => Promise<void>;
 }
 
 /**
@@ -5774,12 +5787,28 @@ export class TinyCloudNode {
    * @throws {@link PermissionNotInManifestError} when any requested
    *   entry is not a subset of the granted session capabilities and
    *   `forceWalletSign` is not set.
+   * @throws when `onPrepared` is combined with `forceWalletSign: true`,
+   *   before anything is signed.
+   * @throws the `onPrepared` rejection, unchanged, without activating the
+   *   delegation.
    */
   async delegateTo(
     did: string,
     permissions: PermissionEntry[],
     options?: DelegateToOptions,
   ): Promise<DelegateToResult> {
+    // 0. `onPrepared` needs a seam between signing and activation; the
+    //    legacy wallet path signs and activates in one step, so reject the
+    //    combination before any signing work.
+    const onPrepared = options?.onPrepared;
+    if (onPrepared && options?.forceWalletSign) {
+      throw new Error(
+        "delegateTo: onPrepared cannot be combined with forceWalletSign=true; " +
+          "the wallet-signed path activates the delegation before it could be " +
+          "handed to onPrepared.",
+      );
+    }
+
     // 1. Session validity check — fail fast with a clear error class so
     //    callers can catch and trigger a fresh sign-in.
     const session = this.currentTinyCloudSession();
@@ -5891,6 +5920,7 @@ export class TinyCloudNode {
           runtimeExpiration,
           runtimeGrant,
           runtimeOperations,
+          onPrepared,
         );
         return { delegation, prompted: false };
       }
@@ -5908,6 +5938,7 @@ export class TinyCloudNode {
       expandedEntries,
       effectiveExpiration,
       session,
+      onPrepared,
     );
     return { delegation, prompted: false };
   }
@@ -5974,6 +6005,7 @@ export class TinyCloudNode {
     entries: PermissionEntry[],
     expirationTime: Date,
     session: TinyCloudSession,
+    onPrepared?: DelegateToOptions["onPrepared"],
   ): Promise<PortableDelegation> {
     if (entries.length === 0) {
       throw new Error(
@@ -6072,6 +6104,27 @@ export class TinyCloudNode {
     // failure that surfaces as a 401 from the host.
     const delegationHeader = { Authorization: result.delegation };
 
+    const delegation: PortableDelegation = {
+      cid: result.cid,
+      delegationHeader,
+      spaceId,
+      path: primary.path,
+      actions: primary.actions,
+      resources: result.resources,
+      disableSubDelegation: false,
+      expiry: result.expiry,
+      delegateDID: did,
+      ownerAddress: session.address,
+      chainId: session.chainId,
+      host: this.config.host,
+    };
+
+    // Hand the caller the exact object we return before it goes live, so a
+    // lost activation response can't leave an unrecorded active grant.
+    if (onPrepared) {
+      await onPrepared(delegation);
+    }
+
     // Activate the delegation with the host so downstream consumers (e.g.
     // a backend calling useDelegation) can find it by CID when building
     // their invoker SIWE. The host validates the UCAN's parent chain
@@ -6087,20 +6140,7 @@ export class TinyCloudNode {
       );
     }
 
-    return {
-      cid: result.cid,
-      delegationHeader,
-      spaceId,
-      path: primary.path,
-      actions: primary.actions,
-      resources: result.resources,
-      disableSubDelegation: false,
-      expiry: result.expiry,
-      delegateDID: did,
-      ownerAddress: session.address,
-      chainId: session.chainId,
-      host: this.config.host,
-    };
+    return delegation;
   }
 
   private async createDelegationViaRuntimeGrant(
@@ -6109,6 +6149,7 @@ export class TinyCloudNode {
     expirationTime: Date,
     grant: RuntimePermissionGrant,
     requestedOperations: RuntimePermissionOperation[],
+    onPrepared?: DelegateToOptions["onPrepared"],
   ): Promise<PortableDelegation> {
     this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
@@ -6123,18 +6164,7 @@ export class TinyCloudNode {
     const primary = result.resources[0];
     const delegationHeader = { Authorization: result.delegation };
     const targetHost = grant.delegation.host ?? this.config.host!;
-    const activateResult = await activateSessionWithHost(
-      targetHost,
-      delegationHeader,
-    );
-    if (!activateResult.success) {
-      throw Object.assign(
-        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
-        { cause: activateResult },
-      );
-    }
-
-    return {
+    const delegation: PortableDelegation = {
       cid: result.cid,
       delegationHeader,
       spaceId: grant.session.spaceId,
@@ -6148,6 +6178,23 @@ export class TinyCloudNode {
       chainId: grant.delegation.chainId,
       host: targetHost,
     };
+
+    if (onPrepared) {
+      await onPrepared(delegation);
+    }
+
+    const activateResult = await activateSessionWithHost(
+      targetHost,
+      delegationHeader,
+    );
+    if (!activateResult.success) {
+      throw Object.assign(
+        new Error(`Failed to activate delegation with host: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
+    }
+
+    return delegation;
   }
 
   private resolvePermissionSpace(
