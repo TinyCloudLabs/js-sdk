@@ -1,5 +1,42 @@
 # @tinycloudlabs/web-sdk
 
+## 3.1.0
+
+### Minor Changes
+
+- a074fa5: TC-619: When the owner's storage is full, reads keep working and writes fail with one typed error.
+  - `db.migrations.apply()` reads the applied-migration list first. A database that is already up to date is opened with that one read and is never written, so an app that ensures its schema on open still loads on a full space or with a read-only session. The metadata table is created only when it is missing and a migration is pending. Before this, every call wrote a batch first, and a full space failed with `SQL batch failed: 402 - Storage quota exceeded…`.
+  - KV, SQL and DuckDB report a write rejected for storage with the same codes: `STORAGE_QUOTA_EXCEEDED` (HTTP 402, storage is full) or `STORAGE_LIMIT_REACHED` (HTTP 413, the write is larger than what is left). The message explains that nothing was saved, that reading still works, and what to do. `meta` carries `status`, `usedBytes` and `limitBytes`. A 413 without the node's storage text, such as a proxy's request-size limit, stays `KV_WRITE_FAILED`. Behaviour change: SQL and DuckDB previously reported a 402 as `NETWORK_ERROR`.
+  - Vault and secrets writes keep the storage code, message and byte counts. Behaviour change: they previously wrapped them in `STORAGE_ERROR`.
+  - New exports `isStorageFullError(error)`, `STORAGE_FULL_MESSAGE` and `STORAGE_WRITE_TOO_LARGE_MESSAGE` let an app detect "storage full" in one place and switch to a read-only view.
+  - `account.spaces.list({ preferIndex: true })` still lists accessible spaces when the account space is full. An explicit `account.spaces.syncAccessible()` still reports the failure.
+  - node-sdk's sign-in registry sync stops after the first storage-full rejection instead of retrying it three times.
+
+- 045c2d3: Share reads preserve the Node's HTTP status and bounded diagnostic text, even when reading the response body fails. A cached recipient session is re-admitted only after a typed 401/403 (or a legacy untyped error ending in `(401)` or `(403)`); a typed non-auth error retains the session even if its body mentions authorization.
+- 1f44a61: Add `DelegateToOptions.onPrepared` so callers can durably record a grant before it goes live (TC-839). `delegateTo` calls `onPrepared(delegation)` with the exact `PortableDelegation` it then returns as `result.delegation` (CID included), after signing and before host activation, on both the session-key and runtime-grant paths. If the hook rejects, no `/delegate` activation request is sent and `delegateTo` rejects with that same error. Passing `onPrepared` together with `forceWalletSign: true` throws before anything is signed, because the wallet path activates as part of signing. `TinyCloudWeb.delegateTo` passes the option through unchanged. Calls without `onPrepared` behave as before.
+
+### Patch Changes
+
+- Updated dependencies [02b6773]
+- Updated dependencies [0652195]
+- Updated dependencies [6de6688]
+- Updated dependencies [6484eba]
+- Updated dependencies [b7fd979]
+- Updated dependencies [dca972f]
+- Updated dependencies [dca972f]
+- Updated dependencies [a074fa5]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [b0972e5]
+- Updated dependencies [698654e]
+- Updated dependencies [2c703fc]
+- Updated dependencies [1f44a61]
+  - @tinycloud/sdk-core@3.1.0
+  - @tinycloud/node-sdk@3.1.0
+  - @tinycloud/share-envelope@1.1.0
+  - @tinycloud/share-sdk@1.1.0
+
 ## 3.1.0-beta.15
 
 ### Minor Changes

@@ -1,5 +1,38 @@
 # @tinycloud/server
 
+## 2.5.0
+
+### Minor Changes
+
+- 045c2d3: Delegated-secret KV read failures now retain the structured service error as their cause. Consumers can distinguish HTTP 401/403 authorization failures from other failures without parsing response text; the diagnostic message remains available.
+
+### Patch Changes
+
+- 0652195: Session refresh and account-registry retry now decide from the typed HTTP status instead of the error text.
+  - **Typed classification.** The new `authorizationVerdictOf(error)` reads a 4xx/5xx `status`, `statusCode` or `meta.status`, or the `AUTH_UNAUTHORIZED` code. It follows the `cause` chain from the outside in and skips success statuses. The outermost error status decides.
+  - **Session refresh.** `withSessionRefresh` signs in again only after a 401. A 403 never triggers a refresh, whatever its body says. To keep the typed status, throw the `ServiceError` or an `Error` with it as `cause`.
+  - **Untyped errors.** Message matching is now only a fallback. It drops double-quoted strings first (escape-aware), then takes the first 400-599 status in one of the SDK's diagnostic positions (`: 403` followed by whitespace or the end, `HTTP 401`, `returned 401`, `rejected (401)`, or a trailing `(403)`), and refreshes only if that status is 401. With no status, session wording on the original message decides. Numbers inside paths, ids, ports, byte counts or quoted keys no longer count.
+  - **KV messages.** KV 401/403 errors now read `<operation>: <status> - <server text>`. They keep the server text, and `meta` is unchanged. Keys in KV error messages are written with `JSON.stringify`, so a key containing quotes stays well-formed.
+  - **Hooks errors.** `HooksService` HTTP failures now carry `meta.status` (and `statusText`).
+  - **Account-registry sync.** The wrappers keep the service error or host result as `cause`. These wrappers are `applications.register`, `spaces.syncAccessible`, owned-space activation, owned-space hosting and post-create re-activation. A 401 or 403 therefore stops after one request, even when the body is `Forbidden` or empty, and every wrapper message carries the status.
+  - **Owner delegation import.** A failed activation during owner delegation import now keeps the activation result as `cause`.
+  - **New method.** `NodeUserAuthorization.hostOwnedSpaceResult()` returns the full `SpaceHostResult`. `hostOwnedSpace()` still returns `boolean`.
+
+- Updated dependencies [02b6773]
+- Updated dependencies [0652195]
+- Updated dependencies [6484eba]
+- Updated dependencies [b7fd979]
+- Updated dependencies [dca972f]
+- Updated dependencies [dca972f]
+- Updated dependencies [a074fa5]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [698654e]
+- Updated dependencies [2c703fc]
+- Updated dependencies [1f44a61]
+  - @tinycloud/sdk-core@3.1.0
+  - @tinycloud/node-sdk@3.1.0
+
 ## 2.5.0-beta.15
 
 ### Patch Changes
