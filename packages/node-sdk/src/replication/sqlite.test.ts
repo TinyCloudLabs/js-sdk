@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -279,10 +279,18 @@ describe("FilePendingWriteStore (§6.3)", () => {
     await expect(store.read()).rejects.toMatchObject({ code: "STORAGE_ERROR" });
   });
 
-  test("no guard → pendingWrites is omitted (in-memory runtime store instead)", async () => {
+  test("no guard → pendingWrites is still the durable file store, never memory", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage({ dir });
-    expect(storage.pendingWrites).toBeUndefined();
+    // Review: a missing guard must NEVER silently give the runtime volatile
+    // pending state — the file store is always present and durable.
+    const store = storage.pendingWrites?.(identity());
+    expect(store?.durable).toBe(true);
+    await store!.update((state) => {
+      state.committedEpoch = 3;
+    });
+    const reopened = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    expect((await reopened.read()).committedEpoch).toBe(3);
   });
 });
 
@@ -593,6 +601,78 @@ describe("purge across the device union (§10.2)", () => {
     expect(existsSync(join(dir, idDir!, "replicas", replicaDir!))).toBe(true);
     await foreign.releaseLease(lease!);
     await foreign.close();
+  });
+
+  test("a handle opened before purge is fenced: status, get and list reject RESET_REQUIRED", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const handle = await storage.open(spec());
+    await handle.installGrant(await mintUcan({ audience: DEVICE_DID }));
+    // The handle stays OPEN across the purge: generation fencing (the
+    // browser wipe contract) must invalidate it — never unlink under it.
+    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" });
+    await expect(handle.status()).rejects.toMatchObject({ code: "RESET_REQUIRED" });
+    await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "RESET_REQUIRED" });
+    await expect(handle.list({ prefix: "notes/" })).rejects.toMatchObject({
+      code: "RESET_REQUIRED",
+    });
+    await handle.close();
+    // A fresh handle on the same dir re-initializes cleanly.
+    const reopened = await storage.open(spec());
+    expect(await reopened.grant()).toBeNull();
+    await reopened.close();
+  });
+
+  test("a filesystem error that isn't ENOENT fails purge — pending protection stays", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const handle = await storage.open(spec());
+    await handle.close();
+    const [idDir] = await partitionDirs(dir);
+    const replicasDir = join(dir, idDir!, "replicas");
+    // EACCES on stat is not "absent": purge must fail, not remove.
+    await chmod(replicasDir, 0o000);
+    try {
+      await expect(
+        storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" }),
+      ).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    } finally {
+      await chmod(replicasDir, 0o700);
+    }
+    expect((await readdir(replicasDir)).length).toBe(1);
+  });
+
+  test("concurrent first opens of an identical spec both succeed", async () => {
+    const dir = await makeDir();
+    // Two unguarded storages — two "processes" racing the first init. The
+    // existence check inside init's guarded write serializes them; the
+    // unguarded pre-check raced and lost 9 times out of 10 (review).
+    const a = createSqliteReplicaStorage(storageOptions({ guard: undefined }));
+    const b = createSqliteReplicaStorage(storageOptions({ guard: undefined }));
+    const [ha, hb] = await Promise.all([a.open(spec()), b.open(spec())]);
+    expect(ha.deviceDid).toBe(DEVICE_DID);
+    expect(hb.deviceDid).toBe(DEVICE_DID);
+    await ha.close();
+    await hb.close();
+  });
+});
+
+describe("atomic-write durability", () => {
+  test("every pending-state write fsyncs the parent directory after the rename", async () => {
+    const dir = await makeDir();
+    const synced: string[] = [];
+    const dirSync = async (d: string): Promise<void> => {
+      synced.push(d);
+    };
+    const storage = createSqliteReplicaStorage(storageOptions({ dirSync }));
+    const store = storage.pendingWrites!(identity());
+    await store.update((state) => {
+      state.seq += 1;
+    });
+    // identity.json (partition) + pending.json each fsynced their parent.
+    expect(synced.length).toBeGreaterThanOrEqual(2);
+    expect(synced.some((d) => d.endsWith("pending.json") === false)).toBe(true);
+    expect((await store.read()).seq).toBe(1);
   });
 });
 

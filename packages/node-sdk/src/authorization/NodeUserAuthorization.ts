@@ -663,6 +663,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     return primaryActions;
   }
+  /**
+   * The abilities a `spacePrefix: "secrets"` plain session actually requests
+   * for its primary space: the vault-secrets subtree only — the
+   * `defaultActions` root `get` is REPLACED, not merged (sign-in installs
+   * this map under the primary space id). Shared between
+   * `resolveSignInCapabilities` and `signInPermissionInputs` so the
+   * replication augmentation measures coverage against the effective
+   * pre-replication request, never the uninstalled `primaryActions` (§4.1).
+   */
+  private secretsPrimaryAbilities(): AbilitiesMap {
+    return {
+      kv: {
+        "vault/secrets/": [
+          KV.GET,
+          KV.PUT,
+          KV.DEL,
+          KV.LIST,
+          KV.METADATA,
+        ],
+      },
+    };
+  }
+
 
   /**
    * The effective sign-in request as `PermissionEntry`s plus the resolved
@@ -678,7 +701,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
-      const kvPaths = this.primaryActionsForSignIn()["kv"] ?? {};
+      const effectivePrimary =
+        this.spacePrefix === "secrets"
+          ? this.secretsPrimaryAbilities()
+          : this.primaryActionsForSignIn();
+      const kvPaths = effectivePrimary["kv"] ?? {};
       return {
         primarySpaceId,
         entries: Object.entries(kvPaths).map(([path, actions]) => ({
@@ -788,17 +815,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const primaryActions = this.primaryActionsForSignIn();
       const spaceAbilities: Record<string, AbilitiesMap> = {
         [primarySpaceId]: primaryActions,
-        [secretsSpaceId]: {
-          kv: {
-            "vault/secrets/": [
-              KV.GET,
-              KV.PUT,
-              KV.DEL,
-              KV.LIST,
-              KV.METADATA,
-            ],
-          },
-        },
+        [secretsSpaceId]: this.secretsPrimaryAbilities(),
       };
       // Plain sessions receive the canonical account-manifest permissions in
       // the signer-derived account space. Do not duplicate the space object

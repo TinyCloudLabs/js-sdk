@@ -13,8 +13,9 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, open as openFile, readFile, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, mkdir, open as openFile, readFile, rename, rm, stat, type FileHandle } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
 
 import { KVService, ServiceContext } from "@tinycloud/sdk-core";
 import {
@@ -72,6 +73,7 @@ interface ReplicaRuntime {
     CONFIG_MISMATCH: ReplicaErrorCode;
     SECRETS_OPT_IN_REQUIRED: ReplicaErrorCode;
     GRANT_NOT_COVERING: ReplicaErrorCode;
+    RESET_REQUIRED: ReplicaErrorCode;
   };
   isReplicaError: typeof isReplicaError;
   parseUcanGrant: typeof parseUcanGrant;
@@ -120,12 +122,18 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
+/**
+ * Whether `path` exists. ONLY ENOENT means absent: every other `stat`
+ * failure (permissions, I/O) propagates so a purge can never turn a
+ * filesystem error into a successful wipe (review: pending protection).
+ */
 async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    throw storageError("STORAGE_ERROR", `Reading ${path}`, error);
   }
 }
 
@@ -167,16 +175,28 @@ function replicaHashOf(prefix: string, deviceDid: string): string {
   return sha256Base32(`${prefix}\n${principalOf(deviceDid)}`);
 }
 
-/** Write `value` as JSON via temp+fsync+rename: readers never see a partial file. */
-async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+/** Directory-fsync boundary: durable renames for the pending store (a test seam lets a unit test observe the code path). */
+export type DirSync = (dir: string) => Promise<void>;
+
+/** Write `value` as JSON via temp+fsync+rename+dir-fsync: readers never see a partial file, and the rename survives a crash. */
+async function writeJsonAtomic(
+  path: string,
+  value: unknown,
+  dirSync: DirSync = fsyncDir,
+): Promise<void> {
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+  let handle: FileHandle | undefined;
   try {
     handle = await openFile(tmp, "w", 0o600);
     await handle.writeFile(JSON.stringify(value), "utf8");
     await handle.sync();
     await handle.close();
     await rename(tmp, path);
+    // Crash durability (review): the rename is durable only once the
+    // PARENT DIRECTORY is fsynced — without it a power loss can resurrect
+    // the previous pending.json. Platforms that cannot fsync a directory
+    // skip this rather than failing the write.
+    await dirSync(dirname(path));
     await chmod(path, 0o600).catch(() => undefined);
   } catch (error) {
     try {
@@ -186,6 +206,38 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
     }
     await rm(tmp, { force: true }).catch(() => undefined);
     throw storageError("STORAGE_ERROR", `Writing ${path}`, error);
+  }
+}
+
+/** The errno codes of "this platform cannot fsync a directory". */
+const DIR_SYNC_UNSUPPORTED: Record<string, true> = {
+  ENOTSUP: true,
+  ENOSYS: true,
+  EINVAL: true,
+  EISDIR: true,
+  EPERM: true,
+};
+
+/**
+ * fsync a directory so renames inside it are crash-durable. Where the
+ * platform does not support directory fsync (Windows, some filesystems),
+ * this is a documented no-op — the write already happened; pretending the
+ * sync ran is the only option short of failing every write.
+ */
+async function fsyncDir(dir: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await openFile(dir, "r");
+    await handle.sync();
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : undefined;
+    if (typeof code === "string" && DIR_SYNC_UNSUPPORTED[code] === true) return;
+    throw storageError("STORAGE_ERROR", `Syncing ${dir}`, error);
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -257,6 +309,7 @@ function sameIdentity(a: ReplicationIdentity, b: ReplicationIdentity): boolean {
 async function ensurePartitionIdentity(
   dir: string,
   identity: ReplicationIdentity,
+  dirSync?: DirSync,
 ): Promise<void> {
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -267,7 +320,7 @@ async function ensurePartitionIdentity(
   const file = join(dir, "identity.json");
   const existing = await readJsonFile(file);
   if (existing === undefined) {
-    await writeJsonAtomic(file, { v: 1, ...canonicalReplicationIdentity(identity) });
+    await writeJsonAtomic(file, { v: 1, ...canonicalReplicationIdentity(identity) }, dirSync);
     return;
   }
   const record = identityRecordOf(existing);
@@ -293,12 +346,14 @@ export class FilePendingWriteStore implements PendingWriteStore {
   readonly identity: ReplicationIdentity;
   readonly #dir: string;
   readonly #guard: MutationGuard;
+  readonly #dirSync?: DirSync;
   #ensured: Promise<void> | undefined;
 
-  constructor(identity: ReplicationIdentity, dir: string, guard: MutationGuard) {
+  constructor(identity: ReplicationIdentity, dir: string, guard: MutationGuard, dirSync?: DirSync) {
     this.identity = identity;
     this.#dir = dir;
     this.#guard = guard;
+    this.#dirSync = dirSync;
   }
 
   /**
@@ -308,7 +363,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
    * identity file is written once, atomically, so verification needs no lock.
    */
   async #ensurePartition(): Promise<void> {
-    this.#ensured ??= ensurePartitionIdentity(this.#dir, this.identity);
+    this.#ensured ??= ensurePartitionIdentity(this.#dir, this.identity, this.#dirSync);
     return this.#ensured;
   }
 
@@ -362,7 +417,7 @@ export class FilePendingWriteStore implements PendingWriteStore {
     return this.#guard(async () => {
       const state = await this.read();
       const result = mutate(state);
-      await writeJsonAtomic(join(this.#dir, "pending.json"), state);
+      await writeJsonAtomic(join(this.#dir, "pending.json"), state, this.#dirSync);
       return result;
     });
   }
@@ -377,6 +432,7 @@ async function loadOrCreateDevice(
   idDir: string,
   guard: MutationGuard,
   createDevice: () => Promise<ReplicaDevice>,
+  dirSync?: DirSync,
 ): Promise<ReplicaDevice> {
   return guard(async () => {
     try {
@@ -398,7 +454,7 @@ async function loadOrCreateDevice(
       return device;
     }
     const device = await createDevice();
-    await writeJsonAtomic(file, { did: device.did, jwk: device.jwk });
+    await writeJsonAtomic(file, { did: device.did, jwk: device.jwk }, dirSync);
     return device;
   });
 }
@@ -424,9 +480,10 @@ export interface SqliteReplicaStorageOptions {
   /**
    * Serializes every durable mutation — pending-store updates, sqlite
    * commits, directory creates/removes. The CLI passes the profile lock
-   * (`{ timeoutMs: 35_000 }`, §3.3). Omitted: pending state stays in memory
-   * in the runtime (`pendingWrites` is absent) and replica mutations run
-   * unguarded — single-process use only.
+   * (`{ timeoutMs: 35_000 }`, §3.3). Without it the pending store still
+   * persists to `pending.json` on every update (never memory), but
+   * read-modify-write isn't serialized across processes — single-process
+   * use only.
    */
   guard?: MutationGuard;
   /**
@@ -444,6 +501,12 @@ export interface SqliteReplicaStorageOptions {
    * @internal
    */
   createDevice?: () => Promise<ReplicaDevice>;
+  /**
+   * Test seam: observe/replace the parent-directory fsync that makes each
+   * atomic JSON rename crash-durable. Defaults to `fsyncDir`.
+   * @internal
+   */
+  dirSync?: DirSync;
 }
 
 const SYNC_LEASE_TTL_MS = 120_000;
@@ -486,6 +549,11 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   readonly #replicaDir: string;
   readonly #replica: ReplicaRuntime;
   readonly #guard: MutationGuard;
+  readonly #dirSync?: DirSync;
+  /** The replica row generation this handle opened under — the durable fence a purge commits past (browser-parity wipe). */
+  readonly #generation: number;
+  /** The inode of `replica.db` at open — a directory recreated in place is a different replica. */
+  readonly #ino: number | undefined;
   readonly #transportOverride: SqliteReplicaStorageOptions["transportFor"];
   #closed = false;
   readonly #inFlight = new Set<{ promise: Promise<unknown>; abort: () => void }>();
@@ -499,6 +567,9 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     replica: ReplicaRuntime;
     guard: MutationGuard;
     transportFor?: SqliteReplicaStorageOptions["transportFor"];
+    dirSync?: DirSync;
+    generation: number;
+    ino: number | undefined;
   }) {
     this.spec = input.spec;
     this.#device = input.device;
@@ -508,6 +579,9 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     this.#replica = input.replica;
     this.#guard = input.guard;
     this.#transportOverride = input.transportFor;
+    this.#dirSync = input.dirSync;
+    this.#generation = input.generation;
+    this.#ino = input.ino;
   }
 
   #assertOpen(): void {
@@ -515,6 +589,43 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       throw new this.#replica.ReplicaError(
         this.#replica.ReplicaErrorCode.CLOSED,
         "The replica handle is closed.",
+      );
+    }
+  }
+
+  /**
+   * The purge fence (review): `purge()` bumps the replica row's generation
+   * before the directory is removed — the same wipe-then-tombstone contract
+   * the browser store's purge commits. A handle opened before the purge is
+   * fenced on its next call, in two durable ways: the live row's generation
+   * no longer matches the one this handle opened under, and once the
+   * directory is gone (or recreated under another inode) `stat` reports it.
+   * Only ENOENT means "purged"; other `stat` errors are STORAGE_ERROR.
+   */
+  async #assertLive(): Promise<void> {
+    this.#assertOpen();
+    try {
+      const stats = await stat(join(this.#replicaDir, "replica.db"));
+      if (this.#ino !== undefined && stats.ino !== this.#ino) {
+        throw new this.#replica.ReplicaError(
+          this.#replica.ReplicaErrorCode.RESET_REQUIRED,
+          "The replica was recreated; open it again to continue.",
+        );
+      }
+    } catch (error) {
+      if (isNotFound(error)) {
+        throw new this.#replica.ReplicaError(
+          this.#replica.ReplicaErrorCode.RESET_REQUIRED,
+          "The replica was purged; open it again to continue.",
+        );
+      }
+      throw error;
+    }
+    const state = await this.#store.open();
+    if (state !== null && state.generation !== this.#generation) {
+      throw new this.#replica.ReplicaError(
+        this.#replica.ReplicaErrorCode.RESET_REQUIRED,
+        "The replica was purged or reopened; open it again to continue.",
       );
     }
   }
@@ -563,7 +674,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 
   async get(key: string): Promise<LocalGetResult> {
-    this.#assertOpen();
+    await this.#assertLive();
     const result = await new this.#replica.Replica({ store: this.#store }).get(key);
     const meta: LocalReadMeta = {
       asOf: result.meta.asOf,
@@ -595,7 +706,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 
   async list(options: { prefix: string; after?: string; limit?: number }): Promise<LocalListResult> {
-    this.#assertOpen();
+    await this.#assertLive();
     const result = await new this.#replica.Replica({ store: this.#store }).list({
       prefix: options.prefix,
       ...(options.after === undefined ? {} : { after: options.after }),
@@ -620,7 +731,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
    * grant is still reported (unconstrained: false) and never reused.
    */
   async grant(): Promise<ReplicaGrantInfo | null> {
-    this.#assertOpen();
+    await this.#assertLive();
     const state = await this.#store.open();
     if (state === null) return null;
     return newestGrantInfo(
@@ -632,7 +743,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 
   async installGrant(ucan: string): Promise<ReplicaGrantInfo> {
-    this.#assertOpen();
+    await this.#assertLive();
     const parsed = this.#replica.parseUcanGrant(ucan);
     const state = await this.#store.open();
     if (state === null) {
@@ -661,7 +772,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 
   async sync(options: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult> {
-    this.#assertOpen();
+    await this.#assertLive();
     const transportFor = await this.#transports();
     const abort = new AbortController();
     options.signal.throwIfAborted();
@@ -679,10 +790,11 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       // The per-replica fence (amendment §1): the identity's committedEpoch
       // captured at this sync's start, persisted only on success, atomically.
       await this.#guard(() =>
-        writeJsonAtomic(join(this.#replicaDir, FENCE_FILE), {
-          v: 1,
-          syncedThroughEpoch: options.syncStartEpoch,
-        }),
+        writeJsonAtomic(
+          join(this.#replicaDir, FENCE_FILE),
+          { v: 1, syncedThroughEpoch: options.syncStartEpoch },
+          this.#dirSync,
+        ),
       );
       return {
         status: "synced",
@@ -706,7 +818,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 
   async status(): Promise<LocalReplicaStatus> {
-    this.#assertOpen();
+    await this.#assertLive();
     const engine = new this.#replica.Replica({ store: this.#store });
     const status = await engine.status();
     const syncedThroughEpoch = await readFence(this.#replicaDir);
@@ -766,20 +878,25 @@ export function createSqliteReplicaStorage(
     const idDir = partitionDirOf(root, spec.identity);
     // The partition's identity record is written/verified on every open,
     // pending store or not (§6.3). A mismatched file fails closed.
-    await ensurePartitionIdentity(idDir, spec.identity);
+    await ensurePartitionIdentity(idDir, spec.identity, options.dirSync);
     // Delegate posture (§2.1): a spec.device handle never reads or creates
     // the partition's own device key.
-    const device = spec.device ?? (await loadOrCreateDevice(idDir, guard, createDevice));
+    const device = spec.device ?? (await loadOrCreateDevice(idDir, guard, createDevice, options.dirSync));
     const replicaHash = replicaHashOf(spec.prefix, device.did);
     const replicaDir = join(idDir, "replicas", replicaHash);
     const store = await sqlite.SqliteReplicaStore.open(replicaDir, {
       create: true,
       guard,
     });
+    let generation: number;
     try {
-      if ((await store.open()) === null) {
-        // Deterministic config: a concurrent open initializes the identical
-        // row, so no lock is needed around the existence check.
+      // First-open race (review): the existence check must run INSIDE the
+      // store's guarded init, not in an unguarded read — two processes that
+      // both saw "no row" raced to init and one failed spuriously. init is
+      // deterministic, so a CONFIG_MISMATCH "already exists" from a
+      // concurrent identical init is benign; the config check below is the
+      // real mismatch gate.
+      try {
         await store.init({
           name: spec.prefix.replace(/\/+$/, "") || "replica",
           replicaId: replicaHash,
@@ -791,30 +908,47 @@ export function createSqliteReplicaStorage(
           localReadPolicy: "whileGrantValid",
           retentionGrantCid: null,
         });
+      } catch (error) {
+        if (!replica.isReplicaError(error, replica.ReplicaErrorCode.CONFIG_MISMATCH)) {
+          throw error;
+        }
       }
       const state = await store.open();
-      if (state !== null) {
-        const config = state.config;
-        if (
-          config.host !== spec.identity.host ||
-          config.space !== spec.space ||
-          config.prefix !== spec.prefix
-        ) {
-          throw new replica.ReplicaError(
-            replica.ReplicaErrorCode.CONFIG_MISMATCH,
-            `This replica follows ${config.host} ${config.space}/kv/${config.prefix}, not ${spec.identity.host} ${spec.space}/kv/${spec.prefix}.`,
-          );
-        }
-        if (principalOf(config.deviceDid) !== principalOf(device.did)) {
-          throw new replica.ReplicaError(
-            replica.ReplicaErrorCode.CONFIG_MISMATCH,
-            "The stored replica belongs to a different device key; purge the partition to rekey.",
-          );
-        }
+      if (state === null) {
+        throw new replica.ReplicaError(
+          replica.ReplicaErrorCode.NOT_FOUND,
+          "The replica row vanished during init.",
+        );
       }
+      const config = state.config;
+      if (
+        config.host !== spec.identity.host ||
+        config.space !== spec.space ||
+        config.prefix !== spec.prefix
+      ) {
+        throw new replica.ReplicaError(
+          replica.ReplicaErrorCode.CONFIG_MISMATCH,
+          `This replica follows ${config.host} ${config.space}/kv/${config.prefix}, not ${spec.identity.host} ${spec.space}/kv/${spec.prefix}.`,
+        );
+      }
+      if (principalOf(config.deviceDid) !== principalOf(device.did)) {
+        throw new replica.ReplicaError(
+          replica.ReplicaErrorCode.CONFIG_MISMATCH,
+          "The stored replica belongs to a different device key; purge the partition to rekey.",
+        );
+      }
+      generation = state.generation;
     } catch (error) {
       await store.close().catch(() => undefined);
       throw error;
+    }
+    // The inode at handle open: a replica dir recreated in place (or after
+    // a purge) is a different replica, so the handle fences on it (review).
+    let ino: number | undefined;
+    try {
+      ino = (await stat(join(replicaDir, "replica.db"))).ino;
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
     }
     return new SqliteReplicaHandle({
       spec,
@@ -824,6 +958,9 @@ export function createSqliteReplicaStorage(
       replica,
       guard,
       transportFor: options.transportFor,
+      dirSync: options.dirSync,
+      generation,
+      ino,
     });
   }
 
@@ -870,7 +1007,8 @@ export function createSqliteReplicaStorage(
           throw error;
         }
         try {
-          if ((await store.open()) === null) {
+          const state = await store.open();
+          if (state === null) {
             await store.close().catch(() => undefined);
             await guard(() => rm(replicaDir, { recursive: true, force: true }));
             continue;
@@ -883,8 +1021,17 @@ export function createSqliteReplicaStorage(
             );
           }
           try {
-            // Removes the whole replica directory (entries, blobs, grant,
-            // config, fence) under the guard, fenced by the lease.
+            // Generation fencing (review): wipe in place FIRST so the
+            // replica row's generation commits past every handle opened
+            // before this purge — the same contract the browser purge
+            // stamps. Skipped when the replica is already revoked:
+            // markRevoked bumped the generation itself, and reset refuses
+            // revoked replicas. Only then is the directory removed — an
+            // open handle never reads a live replica out of a directory
+            // that vanished under it.
+            if (state.revoked === null) {
+              await store.reset(lease, "purged");
+            }
             await store.destroy(lease);
           } finally {
             await store.releaseLease(lease).catch(() => undefined);
@@ -904,25 +1051,28 @@ export function createSqliteReplicaStorage(
     kind: "sqlite",
     open: openHandle,
     purge: purgePartition,
-    ...(options.guard === undefined
-      ? {}
-      : {
-          pendingWrites(identity: ReplicationIdentity): PendingWriteStore {
-            return new FilePendingWriteStore(
-              identity,
-              partitionDirOf(root, identity),
-              guard,
-            );
-          },
-        }),
+    // Always the durable partitioned file store (review): the runtime
+    // must never fall back to volatile in-memory pending state — a
+    // restart that lost ambiguous write records would serve stale data.
+    // Without a guard the file store still durably serializes each update;
+    // the guard only adds cross-process read-modify-write exclusion.
+    pendingWrites(identity: ReplicationIdentity): PendingWriteStore {
+      return new FilePendingWriteStore(
+        identity,
+        partitionDirOf(root, identity),
+        guard,
+        options.dirSync,
+      );
+    },
   };
 }
 
 /**
  * The public Node-entry adapter (§2.5): durable SQLite replicas partitioned
- * by canonical identity; durable pending state when `guard` serializes
- * mutations, memory otherwise (§3.1). Node ≥ 22.13 — older runtimes surface
- * `RUNTIME_UNSUPPORTED` from `open`/`purge`, never silently.
+ * by canonical identity, and ALWAYS the durable partitioned pending-write
+ * store — never a silent memory fallback (§3.1, review). Node ≥ 22.13 —
+ * older runtimes surface `RUNTIME_UNSUPPORTED` from `open`/`purge`, never
+ * silently.
  */
 export function sqliteReplicaStorage(options: {
   dir: string;

@@ -115,6 +115,25 @@ describe("hasUnrestrictedGetCoverage (§4.1 gate)", () => {
       ),
     ).toBe(false);
   });
+
+  test("an exact-path get never authorizes a child-prefix augmentation (review: signed-check semantics)", () => {
+    // `get(notes)` is an exact grant under `isCapabilitySubset`/`pathContains`:
+    // it must NOT cover `notes/private`. Only a trailing-slash prefix grant
+    // (`notes/`) does — the flag never adds a `get` the request lacked.
+    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes" })], SPACE, "notes/private")).toBe(
+      false,
+    );
+    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes/" })], SPACE, "notes/private")).toBe(
+      true,
+    );
+    // End to end: augmentation signs only the prefix the request covered.
+    const out = augmentSignInEntriesWithReplication({
+      entries: [kvEntry({ path: "notes" })],
+      primarySpaceId: SPACE,
+      replication: { prefixes: ["notes", "notes/private"] },
+    });
+    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
+  });
 });
 
 describe("augmentSignInEntriesWithReplication (§4.1)", () => {

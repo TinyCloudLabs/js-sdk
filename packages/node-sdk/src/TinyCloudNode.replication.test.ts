@@ -632,7 +632,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     }
   });
 
-  test("secrets-primary space: opt-in produces entries on the secrets space (§10.1)", () => {
+  test("secrets-primary space: coverage comes from the effective secrets request, not defaultActions (§10.1)", () => {
     const secretsSpaceId =
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets";
     const gated = new TinyCloudNode({
@@ -648,6 +648,9 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     );
     expect(gated.replicationSignInEntries()).toEqual([]);
 
+    // Opted in, `notes` still gains nothing: the effective secrets-primary
+    // request is exactly `get` on `vault/secrets/` — the defaultActions root
+    // get is never installed there, so nothing covers `notes` (review).
     const opted = new TinyCloudNode({
       wasmBindings: makeFakeWasmBindings(),
       signer: makeSigner(),
@@ -659,11 +662,29 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     (opted.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
       fakeSession({ spaceId: secretsSpaceId }),
     );
-    expect(opted.replicationSignInEntries()).toEqual([
+    expect(opted.replicationSignInEntries()).toEqual([]);
+
+    // A prefix INSIDE the vault-secrets subtree is covered by the secrets
+    // request's own trailing-slash `get` — the flag adds sync only there.
+    const scoped = new TinyCloudNode({
+      wasmBindings: makeFakeWasmBindings(),
+      signer: makeSigner(),
+      tinycloudHosts: ["https://tinycloud.test"],
+      sessionStorage: new MemorySessionStorage(),
+      prefix: "secrets",
+      replication: replicationConfig({
+        allowSecrets: true,
+        prefixes: ["vault/secrets/tokens"],
+      }),
+    });
+    (scoped.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
+      fakeSession({ spaceId: secretsSpaceId }),
+    );
+    expect(scoped.replicationSignInEntries()).toEqual([
       {
         service: "tinycloud.kv",
         space: secretsSpaceId,
-        path: "notes",
+        path: "vault/secrets/tokens",
         actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
       },
     ]);

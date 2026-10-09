@@ -17,9 +17,7 @@ import {
   KV,
   actionContains,
   canonicalizeRecapCaveats,
-  expandPermissionEntry,
   isCapabilitySubset,
-  recapCaveatsEqual,
   type PermissionEntry,
   type ReplicationOptions,
   type TinyCloudSession,
@@ -49,43 +47,32 @@ function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] 
   ];
 }
 
-/** A pkh space-id comparison that ignores only EIP-55 casing of the address segment. */
-export function samePkhSpaceId(a: string, b: string): boolean {
-  const normalize = (space: string): string => {
-    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
-    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
-  };
-  return normalize(a) === normalize(b);
-}
 
 /**
- * The unrestricted-get gate (§4.1): an entry grants `get` on `p` when it is a
- * `tinycloud.kv` entry for `spaceId` whose path covers `p`, whose expanded
- * actions include `get` (or `tinycloud.kv/*`), and whose caveats are
- * unconstrained — `undefined`, `[]` or `[{}]`. Short space names match the
- * space id's last segment, like the CLI's `sameLoginSpace`.
+ * The unrestricted-get gate (§4.1): the request may gain `sync` on `p` only
+ * where it already requests an unrestricted `get` on a path that covers `p`
+ * under the SAME subset semantics `signedCapabilitySubset` uses for the
+ * signed recap — `isCapabilitySubset`, whose `pathContains` requires a
+ * trailing-segment prefix (`notes/` covers `notes/x`; an exact `get(notes)`
+ * does NOT cover `notes/private`). A requested entry with no caveats covers
+ * only uncaveated grants, so a caveated covering `get` fails the gate.
  */
 export function hasUnrestrictedGetCoverage(
   entries: readonly PermissionEntry[],
   spaceId: string,
   prefix: string,
 ): boolean {
-  const shortName = spaceId.split(":").pop() ?? spaceId;
-  return entries.some((entry) => {
-    if (entry.service !== KV_SERVICE) return false;
-    const entrySpace = entry.space;
-    if (
-      entrySpace === undefined ||
-      (!samePkhSpaceId(entrySpace, spaceId) && entrySpace !== shortName)
-    ) {
-      return false;
-    }
-    if (!kvPrefixCovers(entry.path, prefix)) return false;
-    if (!recapCaveatsEqual(entry.caveats, undefined)) return false;
-    return expandPermissionEntry(entry).some((expanded) =>
-      expanded.actions.some((action) => actionContains(action, KV_GET)),
-    );
-  });
+  return isCapabilitySubset(
+    [
+      {
+        service: KV_SERVICE,
+        space: spaceId,
+        path: prefix,
+        actions: [KV_GET],
+      },
+    ],
+    [...entries],
+  ).subset;
 }
 
 /**
