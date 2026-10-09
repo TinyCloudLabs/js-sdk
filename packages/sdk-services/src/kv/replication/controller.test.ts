@@ -182,7 +182,8 @@ describe("KVReplication list parity and cursor rules", () => {
     expect(networkCalls).toBe(1);
     expect(env.listReads()).toBe(0);
     expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 0 });
-    expect(env.events.some((event) => event.type === "replication.read" && event.reason === "NETWORK_REQUESTED")).toBe(true);
+    const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
+    expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
   });
 
   test("a tcr1 cursor for another space restarts without local or network access", async () => {
@@ -374,6 +375,7 @@ describe("KVReplication controller catch-up fence", () => {
     const value = await env.controller.get({ ...readRequest(env.network), options: { source: "network" } });
     expect(value.ok).toBe(true);
     expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 1 });
-    expect(env.events.some((event) => event.type === "replication.read" && event.reason === "NETWORK_REQUESTED")).toBe(true);
+    const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
+    expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
   });
 });

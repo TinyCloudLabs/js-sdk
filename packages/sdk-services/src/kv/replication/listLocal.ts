@@ -18,7 +18,7 @@ export function encodeTcr1(space: string, path: string, last: string): string {
   const payload = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `tcr1.${payload}`;
 }
-export function decodeTcr1(cursor: string): { space: string; path: string; last: string } | null {
+export function decodeTcr1(cursor: string): { v: 1; space: string; path: string; last: string } | null {
   try {
     const encoded = cursor.slice(5).replace(/-/g, "+").replace(/_/g, "/");
     const binary = atob(encoded + "=".repeat((4 - encoded.length % 4) % 4));

@@ -302,8 +302,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   async function get<T>(r: { space: string; key: string; path: string; options: KVGetOptions | undefined; signal: AbortSignal; network: () => Promise<Result<KVResponse<T>>> }): Promise<Result<KVResponse<T>>> {
     const started = scheduler.now();
     const prefix = configuredPrefix(r.path);
+    if (r.options?.source === "network") {
+      let outcome: "found" | "not_found" | "error" = "error";
+      try {
+        const value = await r.network();
+        outcome = value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error";
+        return value;
+      } finally {
+        observeNetworkRequested({ op: "get", space: r.space, path: r.path, reason: "NETWORK_REQUESTED", outcome, latencyMs: scheduler.now() - started });
+      }
+    }
     if (!prefix) { const value = await r.network(); readEvent("get", r.path, null, "network", "not_covered", value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started); return value; }
-    if (r.options?.source === "network") { observeNetworkRequested({ op: "get", space: r.space, path: r.path, reason: "NETWORK_REQUESTED" }); const value = await r.network(); readEvent("get", r.path, prefix, "network", "NETWORK_REQUESTED", value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started); return value; }
     try { await raceSignal(reportExistingPins(), r.signal); } catch { if (r.signal.aborted) return abortedResult(r.signal); }
     let handle: KVReplicaHandle;
     try { handle = await raceSignal(open(prefix), r.signal); }
@@ -368,7 +377,16 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
 
   async function list(r: { space: string; listPath: string; options: KVListOptions | undefined; signal: AbortSignal; network: () => Promise<Result<KVListPage>> }): Promise<Result<KVListPage>> {
     const started = scheduler.now();
-    if (r.options?.source === "network") { observeNetworkRequested({ op: "list", space: r.space, path: r.listPath, reason: "NETWORK_REQUESTED" }); const result = await r.network(); readEvent("list", r.listPath, null, "network", "NETWORK_REQUESTED", result.ok ? "found" : "error", started); return result; }
+    if (r.options?.source === "network") {
+      let outcome: "found" | "not_found" | "error" = "error";
+      try {
+        const result = await r.network();
+        outcome = result.ok ? "found" : "error";
+        return result;
+      } finally {
+        observeNetworkRequested({ op: "list", space: r.space, path: r.listPath, reason: "NETWORK_REQUESTED", outcome, latencyMs: scheduler.now() - started });
+      }
+    }
     const cursor = r.options?.cursor;
     const decoded = cursor?.startsWith("tcr1.") ? decodeTcr1(cursor) : null;
     if (cursor && cursor.startsWith("tcr1.") && !decoded) { readEvent("list", r.listPath, null, "none", "cursor_restart", "error", started); return cursorRestart(); }
@@ -466,8 +484,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     return result;
   }
 
-  function observeNetworkRequested(r: { op: "get" | "list"; space: string; path: string; reason: "NETWORK_REQUESTED" }): void {
-    emit({ type: "replication.read", op: r.op, space: r.space, key: r.path, replica: null, source: "network", reason: "NETWORK_REQUESTED", outcome: "error", latencyMs: 0, stalenessMs: null, coverage: null, authority: null });
+  function observeNetworkRequested(r: { op: "get" | "list"; space: string; path: string; reason: "NETWORK_REQUESTED"; outcome: "found" | "not_found" | "error"; latencyMs: number }): void {
+    emit({ type: "replication.read", op: r.op, space: r.space, key: r.path, replica: null, source: "network", reason: "NETWORK_REQUESTED", outcome: r.outcome, latencyMs: r.latencyMs, stalenessMs: null, coverage: null, authority: null });
   }
 
   async function status(): Promise<ReplicaStatusEntry[]> {

@@ -33,6 +33,10 @@ type _ObservationReportsReason = Assert<
   Equal<NetworkObservation["reason"], "NETWORK_REQUESTED">
 >;
 type _ObservationReportsOperation = Assert<Equal<NetworkObservation["op"], "get" | "list">>;
+type _ObservationReportsOutcome = Assert<
+  Equal<NetworkObservation["outcome"], "found" | "not_found" | "error">
+>;
+type _ObservationReportsLatency = Assert<Equal<NetworkObservation["latencyMs"], number>>;
 type _PendingStoreDeclaresDurability = Assert<HasRequiredKey<PendingWriteStore, "durable">>;
 type _PendingStoreDurabilityIsBoolean = Assert<Equal<PendingWriteStore["durable"], boolean>>;
 type _UnprovenSinceStartIsAReason = Assert<

@@ -863,19 +863,28 @@ export class KVService extends BaseService implements IKVService {
       try {
         const network = () => this.getFromNetwork<T>(key, path, options, request.signal);
         if (options?.source === "network") {
-          if (this.readThrough !== null) {
+          const observer = this.readThrough;
+          if (observer === null) return await network();
+          let outcome: "found" | "not_found" | "error" = "error";
+          const startedAt = Date.now();
+          try {
+            const result = await network();
+            outcome = result.ok ? "found" : result.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error";
+            return result;
+          } finally {
             try {
-              this.readThrough.observeNetworkRequested({
+              observer.observeNetworkRequested({
                 op: "get",
                 space: this.context.session!.spaceId,
                 path,
                 reason: "NETWORK_REQUESTED",
+                outcome,
+                latencyMs: Date.now() - startedAt,
               });
             } catch {
               // Observation is best-effort and must not affect the network read.
             }
           }
-          return await network();
         }
         if (this.readThrough === null) return await network();
         return await this.readThrough.get({
@@ -1385,19 +1394,30 @@ export class KVService extends BaseService implements IKVService {
         const network = () => this.listFromNetwork(listPath, options, request.signal);
         let page: Result<KVListPage>;
         if (options?.source === "network") {
-          if (this.readThrough !== null) {
+          const observer = this.readThrough;
+          if (observer === null) {
+            page = await network();
+          } else {
+            let outcome: "found" | "not_found" | "error" = "error";
+            const startedAt = Date.now();
             try {
-              this.readThrough.observeNetworkRequested({
-                op: "list",
-                space: this.context.session!.spaceId,
-                path: listPath,
-                reason: "NETWORK_REQUESTED",
-              });
-            } catch {
-              // Observation is best-effort and must not affect the network read.
+              page = await network();
+              outcome = page.ok ? "found" : "error";
+            } finally {
+              try {
+                observer.observeNetworkRequested({
+                  op: "list",
+                  space: this.context.session!.spaceId,
+                  path: listPath,
+                  reason: "NETWORK_REQUESTED",
+                  outcome,
+                  latencyMs: Date.now() - startedAt,
+                });
+              } catch {
+                // Observation is best-effort and must not affect the network read.
+              }
             }
           }
-          page = await network();
         } else if (this.readThrough === null) {
           page = await network();
         } else {
