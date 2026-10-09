@@ -1866,3 +1866,54 @@ test("KVService uses its existing network path when read-through is unset", asyn
   expect(result).toMatchObject({ ok: true, data: { data: "network value" } });
   expect(fetchCount).toBe(1);
 });
+test("network-only reads observe the reason without reading the replica", async () => {
+  let fetchCount = 0;
+  let localReadCount = 0;
+  const observations: Array<{ op: string; space: string; path: string; reason: string }> = [];
+  const service = new KVService({});
+  service.initialize(createContext(async () => {
+    fetchCount += 1;
+    return fetchCount === 1
+      ? response(true, 200, "network value")
+      : response(true, 200, ["notes/a"]);
+  }));
+  service.setReadThrough({
+    get: async () => {
+      localReadCount += 1;
+      throw new Error("network-only get read the replica");
+    },
+    list: async () => {
+      localReadCount += 1;
+      throw new Error("network-only list read the replica");
+    },
+    write: async () => {
+      throw new Error("unexpected write");
+    },
+    observeNetworkRequested: (observation) => {
+      observations.push(observation);
+      throw new Error("best-effort observer failure");
+    },
+  });
+
+  const get = await service.get("key", { source: "network", raw: true });
+  const list = await service.list({ source: "network", prefix: "notes" });
+
+  expect(get).toMatchObject({ ok: true, data: { data: "network value" } });
+  expect(list).toMatchObject({ ok: true, data: { keys: ["notes/a"] } });
+  expect(fetchCount).toBe(2);
+  expect(localReadCount).toBe(0);
+  expect(observations).toEqual([
+    {
+      op: "get",
+      space: "tinycloud:pkh:eip155:1:0xabc:default",
+      path: "key",
+      reason: "NETWORK_REQUESTED",
+    },
+    {
+      op: "list",
+      space: "tinycloud:pkh:eip155:1:0xabc:default",
+      path: "notes",
+      reason: "NETWORK_REQUESTED",
+    },
+  ]);
+});

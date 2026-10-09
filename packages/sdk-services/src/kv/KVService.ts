@@ -862,7 +862,22 @@ export class KVService extends BaseService implements IKVService {
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const network = () => this.getFromNetwork<T>(key, path, options, request.signal);
-        if (options?.source === "network" || this.readThrough === null) return await network();
+        if (options?.source === "network") {
+          if (this.readThrough !== null) {
+            try {
+              this.readThrough.observeNetworkRequested({
+                op: "get",
+                space: this.context.session!.spaceId,
+                path,
+                reason: "NETWORK_REQUESTED",
+              });
+            } catch {
+              // Observation is best-effort and must not affect the network read.
+            }
+          }
+          return await network();
+        }
+        if (this.readThrough === null) return await network();
         return await this.readThrough.get({
           space: this.context.session!.spaceId,
           key,
@@ -1368,15 +1383,32 @@ export class KVService extends BaseService implements IKVService {
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const network = () => this.listFromNetwork(listPath, options, request.signal);
-        const page = options?.source === "network" || this.readThrough === null
-          ? await network()
-          : await this.readThrough.list({
-              space: this.context.session!.spaceId,
-              listPath,
-              options,
-              signal: request.signal,
-              network,
-            });
+        let page: Result<KVListPage>;
+        if (options?.source === "network") {
+          if (this.readThrough !== null) {
+            try {
+              this.readThrough.observeNetworkRequested({
+                op: "list",
+                space: this.context.session!.spaceId,
+                path: listPath,
+                reason: "NETWORK_REQUESTED",
+              });
+            } catch {
+              // Observation is best-effort and must not affect the network read.
+            }
+          }
+          page = await network();
+        } else if (this.readThrough === null) {
+          page = await network();
+        } else {
+          page = await this.readThrough.list({
+            space: this.context.session!.spaceId,
+            listPath,
+            options,
+            signal: request.signal,
+            network,
+          });
+        }
         return page.ok
           ? this.finishList(page.data, listPath, options?.removePrefix)
           : page;

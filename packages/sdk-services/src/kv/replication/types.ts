@@ -20,7 +20,7 @@ export interface LocalReadMeta {
   asOf: string | null;
   coverage: ReplicaCoverage;
   authority: ReplicaAuthorityState;
-  /** Identity commit epoch captured at the start of this replica's last successful sync. */
+  /** Durable identity commit epoch captured before the last successful sync began. */
   syncedThroughEpoch: number;
 }
 
@@ -61,7 +61,7 @@ export type LocalSyncResult =
       fetched: number;
       contentMissing: number;
       coverage: ReplicaCoverage;
-      /** Identity commit epoch captured before this sync began. */
+      /** The input syncStartEpoch, persisted atomically only when this sync succeeds. */
       syncedThroughEpoch: number;
     }
   | { status: "busy" };
@@ -70,6 +70,8 @@ export interface ReplicaGrantInfo {
   cid: string;
   parentCid: string | null;
   expiresAt: number | null;
+  /** Grant lifecycle: pending until confirmed/activated by a successful replica sync. */
+  state: "active" | "pending";
   /** Both get and sync in the grant carry no caveats. */
   unconstrained: boolean;
 }
@@ -77,7 +79,7 @@ export interface ReplicaGrantInfo {
 export interface LocalReplicaStatus {
   coverage: ReplicaCoverage;
   lastSyncAt: string | null;
-  /** Identity commit epoch captured at the start of this replica's last successful sync. */
+  /** Durable identity commit epoch captured before the last successful sync began. */
   syncedThroughEpoch: number;
   authority: { state: ReplicaAuthorityState; expiresAt: string | null };
   grant: ReplicaGrantInfo | null;
@@ -118,8 +120,14 @@ export interface KVReplicaHandle {
   }): Promise<LocalListResult>;
   grant(): Promise<ReplicaGrantInfo | null>;
   installGrant(ucan: string): Promise<ReplicaGrantInfo>;
-  /** Resolves only after sync and its lease/Web Lock have settled or been released. */
-  sync(o: { signal: AbortSignal }): Promise<LocalSyncResult>;
+  /**
+   * The controller supplies syncStartEpoch, captured from this identity's committedEpoch before
+   * starting the sync. Every adapter, including the browser worker, MUST persist that exact epoch
+   * atomically with the successful replica sync; failed and busy syncs MUST leave the prior fence
+   * unchanged. A successful result returns that persisted value as syncedThroughEpoch.
+   */
+  sync(o: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult>;
+  /** Status reports the durable syncedThroughEpoch, including after reopening this handle. */
   status(): Promise<LocalReplicaStatus>;
   /** Cancels and awaits in-flight syncs before closing. */
   close(): Promise<void>;
@@ -246,6 +254,18 @@ export interface KVReadThrough {
     signal: AbortSignal;
     network: () => Promise<Result<T>>;
   }): Promise<Result<T>>;
+  /**
+   * Best-effort observation for a caller-forced network read. This synchronous event hook MUST
+   * NOT read replica storage or start a sync. KVService catches and ignores thrown errors so the
+   * observation cannot change the network read.
+   */
+  observeNetworkRequested(r: {
+    op: "get" | "list";
+    space: string;
+    /** Absolute get path, or the fully resolved list path. */
+    path: string;
+    reason: "NETWORK_REQUESTED";
+  }): void;
 }
 export interface KVReplicationController extends KVReadThrough {
   status(): Promise<ReplicaStatusEntry[]>;
