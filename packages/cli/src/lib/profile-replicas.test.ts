@@ -1,3 +1,4 @@
+import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +8,7 @@ const home = await mkdtemp(join(tmpdir(), "tc-replica-logout-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
-const { removeProfileReplication } = await import("./profile-replicas.js");
+const { removeProfileReplicasAndReplication, removeProfileReplication } = await import("./profile-replicas.js");
 
 beforeEach(async () => {
   await rm(home, { recursive: true, force: true });
@@ -27,8 +28,6 @@ describe("flag-owned logout cleanup", () => {
     const replicaHash = "b".repeat(26);
     const partition = join(root, idHash);
     const replicas = join(partition, "replicas");
-    await mkdir(replicas, { recursive: true });
-    const { SqliteReplicaStore } = await import("@tinycloud/replica/sqlite");
     const store = await SqliteReplicaStore.open(join(replicas, replicaHash), { create: true });
     await store.init({
       name: "notes",
@@ -49,5 +48,40 @@ describe("flag-owned logout cleanup", () => {
     expect(await stat(join(replicas, replicaHash, "replica.db"))).toBeTruthy();
     expect(await removeProfileReplication("dogfood")).toEqual([`replication/${idHash}/${replicaHash}`]);
     await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  test("a busy flag-owned replica prevents deletion of legacy replicas", async () => {
+    const flagPath = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas", "b".repeat(26));
+    const legacyPath = join(profilePath("dogfood"), "replicas", "legacy");
+    const initialize = async (path: string, prefix: string) => {
+      const store = await SqliteReplicaStore.open(path, { create: true });
+      await store.init({
+        name: prefix,
+        replicaId: "b".repeat(26),
+        host: "https://node.example.test",
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+        prefix,
+        deviceDid: "did:key:device",
+        allowSecrets: false,
+        localReadPolicy: "whileGrantValid",
+        retentionGrantCid: null,
+      });
+      await store.close();
+    };
+    await initialize(legacyPath, "notes/");
+    await initialize(flagPath, "apps/");
+    const busy = await SqliteReplicaStore.open(flagPath, { create: false });
+    await busy.open();
+    const lease = await busy.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    try {
+      await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toMatchObject({
+        code: "REPLICA_BUSY",
+        message: expect.stringContaining("flag replica"),
+      });
+      expect(await stat(join(legacyPath, "replica.db"))).toBeTruthy();
+    } finally {
+      await busy.releaseLease(lease!);
+      await busy.close();
+    }
   });
 });

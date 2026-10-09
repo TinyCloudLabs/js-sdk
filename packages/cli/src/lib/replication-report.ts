@@ -92,9 +92,15 @@ export function renderReplicationReport(report: ReplicationReport): string {
     `Staleness ms: p50=${report.stalenessMs.p50 ?? "—"} p95=${report.stalenessMs.p95 ?? "—"} max=${report.stalenessMs.max ?? "—"}`,
     `Syncs: ${Object.entries(report.syncs).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
     `Writes: ${Object.entries(report.writes).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
-    `Divergences: ${report.totals.divergences}; showing ${report.divergences.length}`,
+    `Read source/reason: ${Object.entries(report.readsBySourceReason).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
+    `Divergences: ${report.totals.divergences}; showing ${report.divergences.length} of ${report.totals.divergences}`,
     `Replicas: ${report.replicas.length}`,
   ];
+  for (const divergence of report.divergences) {
+    if (divergence.type === "replication.divergence") {
+      lines.push(`  ${divergence.space} ${divergence.key}: ${divergence.kind} stalenessMs=${divergence.stalenessMs}`);
+    }
+  }
   for (const replica of report.replicas) {
     const grant = replica.grant ? ` grant=${replica.grant.cid} parent=${replica.grant.parentCid ?? "—"} expires=${replica.grant.expiresAt ?? "—"}` : " grant=missing";
     lines.push(`  ${replica.prefix}: ${replica.state}; pending in_flight=${replica.pending.inFlight} committed=${replica.pending.committed} ambiguous=${replica.pending.ambiguous}${grant}`);

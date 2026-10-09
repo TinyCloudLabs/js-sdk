@@ -241,13 +241,10 @@ mock.module("../config/profiles.js", () => ({
   },
 }));
 mock.module("../lib/profile-replicas.js", () => ({
-  removeProfileReplicas: async (profile: string) => {
+  removeProfileReplicasAndReplication: async (profile: string) => {
     recorded.removedReplicaProfiles.push(profile);
-    return ["notes"];
-  },
-  removeProfileReplication: async (profile: string) => {
     recorded.removedReplicationProfiles.push(profile);
-    return ["replication/idHash/replicaHash"];
+    return ["notes", "replication/idHash/replicaHash"];
   },
 }));
 
@@ -562,6 +559,37 @@ describe("CLI auth rotate command", () => {
     ]);
   });
 
+  test("rotation replays the previously scoped permissions after clearing the session", async () => {
+    profiles.set("default", makeProfile({
+      replication: { prefixes: ["applications/apps/"] },
+    }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "old", d: "private" });
+    sessions.set("default", {
+      permissions: [{
+        service: "tinycloud.kv",
+        space: "applications",
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      }],
+    });
+    generatedKeys.push({
+      jwk: { kty: "OKP", crv: "Ed25519", x: "new", d: "new-private" },
+      did: "did:key:new-openkey",
+    });
+
+    await runAuthCommand(["auth", "rotate", "--paste"]);
+
+    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
+      space: "applications",
+      path: "applications/apps/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+    }));
+    expect(recorded.startAuthFlows[0]?.options.permissions).not.toContainEqual(expect.objectContaining({
+      space: "default",
+      path: "",
+    }));
+  });
+
   test("passes --no-popup through owner OpenKey rotation", async () => {
     const oldJwk = { kty: "OKP", crv: "Ed25519", x: "old-public", d: "old-private" };
     const newJwk = { kty: "OKP", crv: "Ed25519", x: "new-public", d: "new-private" };
@@ -826,6 +854,18 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.startAuthFlows).toEqual([]);
     expect(recorded.outputs).toEqual([]);
     expect(profiles.has("owner")).toBe(false);
+  });
+  test("local login bootstraps a profile that does not yet exist", async () => {
+    generatedKeys.push({ jwk: { kty: "OKP", crv: "Ed25519", x: "local-session", d: "private" }, did: "did:key:local-session" });
+    await runAuthCommand(["auth", "login", "--method", "local"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(profiles.get("owner")).toEqual(expect.objectContaining({
+      name: "owner",
+      authMethod: "local",
+      posture: "local-owner-key",
+    }));
+    expect(recorded.outputs).toContainEqual(expect.objectContaining({ authenticated: true, profile: "owner" }));
   });
 
   test("OpenKey login on an existing profile without a key keeps NO_KEY with a hint for that profile", async () => {

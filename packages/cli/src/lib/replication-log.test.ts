@@ -47,4 +47,23 @@ describe("replication diagnostics", () => {
     expect(rendered).toContain("parent=parent");
     expect(rendered).toContain("key until the next sync after the commit");
   });
+  test("renders read reasons and capped divergence keys with the actual total", () => {
+    const now = new Date().toISOString();
+    const divergences: ReplicationEvent[] = Array.from({ length: 22 }, (_, index) => ({
+      type: "replication.divergence",
+      at: now,
+      op: "get",
+      space: "default",
+      key: `notes/key-${index}`,
+      replica: "notes",
+      kind: "value",
+      stalenessMs: index,
+    }));
+    const report = createReplicationReport("24h", [readHit(now, "network", 1, null), ...divergences], [], []);
+    const rendered = renderReplicationReport(report);
+    expect(rendered).toContain("Read source/reason: network:pending_write=1");
+    expect(rendered).toContain("Divergences: 22; showing 20 of 22");
+    expect(rendered).toContain("default notes/key-2: value stalenessMs=2");
+    expect(rendered).not.toContain("default notes/key-1: value");
+  });
 });

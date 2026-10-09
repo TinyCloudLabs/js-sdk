@@ -18,6 +18,22 @@ function codeOf(action: () => unknown): string | undefined {
   return undefined;
 }
 
+  test("unscoped replication login preserves the complete KV, SQL, and capability defaults", () => {
+    const result = buildReplicationLoginRequest(undefined, { prefixes: ["notes"] })!;
+    expect(result).toContainEqual({
+      service: "tinycloud.sql",
+      space: "default",
+      path: "",
+      actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"],
+    });
+    expect(result).toContainEqual({
+      service: "tinycloud.capabilities",
+      space: "default",
+      path: "",
+      actions: ["tinycloud.capabilities/read"],
+    });
+    expect(result.find((entry) => entry.path === "notes" && entry.actions.includes("tinycloud.kv/sync"))).toBeDefined();
+  });
 describe("replication login scope", () => {
   test("adds sync to an unscoped default login and owner-qualified default login", () => {
     const anonymous = buildReplicationLoginRequest(undefined, { prefixes: ["notes"] })!;

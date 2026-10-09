@@ -63,7 +63,7 @@ async function safeReplicaEntry(profile: string, root: string, entry: Dirent): P
 }
 
 /** Remove each replica through its fenced store API; refuse before deletion if any sync owns a lease. */
-export async function removeProfileReplicas(profile: string): Promise<string[]> {
+export async function removeProfileReplicas(profile: string, heldLeases?: ReadonlyMap<string, LeaseToken>): Promise<string[]> {
   return withProfileLock(profile, async () => {
     const root = join(profilePath(profile), "replicas");
     if (await safeReplicaRoot(profile, root) === null) return [];
@@ -92,13 +92,12 @@ export async function removeProfileReplicas(profile: string): Promise<string[]> 
         if (await store.open() === null) {
           throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
         }
-        const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
+        const lease = heldLeases?.get(entryPath) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
         if (lease === null) {
           throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
         }
         opened[opened.length - 1]!.lease = lease;
       }
-
       const removed: string[] = [];
       for (const replica of opened) {
         try {
@@ -128,8 +127,8 @@ export async function removeProfileReplicas(profile: string): Promise<string[]> 
         ExitCode.ERROR,
       );
     } finally {
-      await Promise.all(opened.map(async ({ store, lease }) => {
-        if (lease !== null) await store.releaseLease(lease).catch(() => undefined);
+      await Promise.all(opened.map(async ({ name, store, lease }) => {
+        if (lease !== null && heldLeases?.has(join(root, name)) !== true) await store.releaseLease(lease).catch(() => undefined);
         await store.close().catch(() => undefined);
       }));
     }
@@ -137,14 +136,14 @@ export async function removeProfileReplicas(profile: string): Promise<string[]> 
 }
 
 /** Purge every flag-owned identity partition and remove its diagnostics root. */
-export async function removeProfileReplication(profile: string): Promise<string[]> {
+export async function removeProfileReplication(profile: string, heldLeases?: ReadonlyMap<string, LeaseToken>): Promise<string[]> {
   return withProfileLock(profile, async () => {
     const root = join(profilePath(profile), "replication");
     const rootReal = await safeReplicaRoot(profile, root);
     if (rootReal === null) return [];
     const profileReal = await realpath(profilePath(profile));
     const partitions = await readdir(root, { withFileTypes: true });
-    const opened: Array<{ name: string; store: SqliteReplicaStore; lease: LeaseToken }> = [];
+    const opened: Array<{ name: string; path: string; store: SqliteReplicaStore; lease: LeaseToken }> = [];
     try {
       for (const partition of partitions) {
         const partitionPath = join(root, partition.name);
@@ -212,12 +211,12 @@ export async function removeProfileReplication(profile: string): Promise<string[
             await store.close();
             throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "${name}" has no initialized store.`, ExitCode.ERROR);
           }
-          const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
+          const lease = heldLeases?.get(join(replicasRoot, entry.name)) ?? await store.acquireSyncLease(SYNC_LEASE_MS);
           if (lease === null) {
             await store.close();
             throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "${name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
           }
-          opened.push({ name, store, lease });
+          opened.push({ name, path: join(replicasRoot, entry.name), store, lease });
         }
       }
       for (const item of opened) await item.store.destroy(item.lease);
@@ -227,10 +226,127 @@ export async function removeProfileReplication(profile: string): Promise<string[
       if (error instanceof CLIError) throw error;
       throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but replication cleanup failed; the replication root was retained. ${error instanceof Error ? error.message : String(error)}`, ExitCode.ERROR);
     } finally {
-      await Promise.all(opened.map(async ({ store, lease }) => {
-        await store.releaseLease(lease).catch(() => undefined);
+      await Promise.all(opened.map(async ({ path, store, lease }) => {
+        if (heldLeases?.has(path) !== true) await store.releaseLease(lease).catch(() => undefined);
         await store.close().catch(() => undefined);
       }));
     }
   });
+}
+
+async function acquireLogoutLeases(profile: string): Promise<Array<{ path: string; store: SqliteReplicaStore; lease: LeaseToken }>> {
+  return withProfileLock(profile, async () => {
+    let sqliteLoaded = false;
+    const opened: Array<{ path: string; store: SqliteReplicaStore; lease: LeaseToken }> = [];
+    try {
+      const legacyRoot = join(profilePath(profile), "replicas");
+      if (await safeReplicaRoot(profile, legacyRoot) !== null) {
+        const entries = (await readdir(legacyRoot, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+        for (const entry of entries) {
+          const path = await safeReplicaEntry(profile, legacyRoot, entry);
+          if (!sqliteLoaded) {
+            await loadSqlite();
+            sqliteLoaded = true;
+          }
+          const store = await SqliteReplicaStore.open(path, { create: false, guard: async (action) => withProfileLock(profile, action, { requireProfile: true }) });
+          if (await store.open() === null) {
+            await store.close();
+            throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
+          }
+          const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
+          if (lease === null) {
+            await store.close();
+            throw new CLIError("REPLICA_BUSY", `Cannot log out: replica "${entry.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+          }
+          opened.push({ path, store, lease });
+        }
+      }
+      const replicationRoot = join(profilePath(profile), "replication");
+      const replicationReal = await safeReplicaRoot(profile, replicationRoot);
+      if (replicationReal !== null) {
+        const partitions = await readdir(replicationRoot, { withFileTypes: true });
+        for (const partition of partitions) {
+          const partitionPath = join(replicationRoot, partition.name);
+          const partitionStats = await lstat(partitionPath);
+          if (partition.isSymbolicLink() || partitionStats.isSymbolicLink()) {
+            throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" is a symlink`);
+          }
+          if (!partitionStats.isDirectory()) {
+            if (!partitionStats.isFile()) throw refuseUnsafeReplicaPath(profile, `replication path "${partition.name}" is not a regular file or directory`);
+            continue;
+          }
+          const partitionReal = await realpath(partitionPath);
+          if (!partitionReal.startsWith(replicationReal + sep)) {
+            throw refuseUnsafeReplicaPath(profile, `replication entry "${partition.name}" resolves outside the replication root`);
+          }
+          const replicasRoot = join(partitionPath, "replicas");
+          const replicasStats = await lstat(replicasRoot).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          });
+          if (!replicasStats) continue;
+          if (replicasStats.isSymbolicLink() || !replicasStats.isDirectory()) {
+            throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot}" is not a real directory`);
+          }
+          for (const replica of await readdir(replicasRoot, { withFileTypes: true })) {
+            const path = join(replicasRoot, replica.name);
+            const stats = await lstat(path);
+            if (!replica.isDirectory() || replica.isSymbolicLink() || stats.isSymbolicLink() || !stats.isDirectory()) {
+              throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" is not a real directory`);
+            }
+            const database = await lstat(join(path, "replica.db")).catch((error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            });
+            if (!database) continue;
+            if (database.isSymbolicLink() || !database.isFile()) {
+              throw refuseUnsafeReplicaPath(profile, `replication database "${replica.name}" is not a regular file`);
+            }
+            const replicaReal = await realpath(path);
+            if (!replicaReal.startsWith(replicationReal + sep)) {
+              throw refuseUnsafeReplicaPath(profile, `replication replica "${replica.name}" resolves outside the replication root`);
+            }
+            if (!sqliteLoaded) {
+              await loadSqlite();
+              sqliteLoaded = true;
+            }
+            const store = await SqliteReplicaStore.open(path, { create: false, guard: async (action) => withProfileLock(profile, action, { requireProfile: true }) });
+            if (await store.open() === null) {
+              await store.close();
+              throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "replication/${partition.name}/${replica.name}" has no initialized store.`, ExitCode.ERROR);
+            }
+            const lease = await store.acquireSyncLease(SYNC_LEASE_MS);
+            if (lease === null) {
+              await store.close();
+              throw new CLIError("REPLICA_BUSY", `Cannot log out: flag replica "replication/${partition.name}/${replica.name}" is syncing. The session was cleared and no replicas were removed.`, ExitCode.ERROR);
+            }
+            opened.push({ path, store, lease });
+          }
+        }
+      }
+      return opened;
+    } catch (error) {
+      await Promise.all(opened.map(async ({ store, lease }) => {
+        await store.releaseLease(lease).catch(() => undefined);
+        await store.close().catch(() => undefined);
+      }));
+      throw error;
+    }
+  });
+}
+
+/** Acquire every legacy and flag-owned lease before deleting either root. */
+export async function removeProfileReplicasAndReplication(profile: string): Promise<string[]> {
+  const acquired = await acquireLogoutLeases(profile);
+  const heldLeases = new Map(acquired.map(({ path, lease }) => [path, lease]));
+  try {
+    const legacy = await removeProfileReplicas(profile, heldLeases);
+    const replication = await removeProfileReplication(profile, heldLeases);
+    return [...legacy, ...replication];
+  } finally {
+    await Promise.all(acquired.map(async ({ store, lease }) => {
+      await store.releaseLease(lease).catch(() => undefined);
+      await store.close().catch(() => undefined);
+    }));
+  }
 }

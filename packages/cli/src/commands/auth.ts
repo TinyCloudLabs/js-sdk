@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
-import { removeProfileReplicas, removeProfileReplication } from "../lib/profile-replicas.js";
+import { removeProfileReplicasAndReplication } from "../lib/profile-replicas.js";
 import { ProfileManager } from "../config/profiles.js";
 import {
   outputJson,
@@ -179,10 +179,13 @@ export function registerAuthCommand(program: Command): void {
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
           : undefined;
-        const profileConfig = await ProfileManager.getProfile(ctx.profile);
+        const profileConfig = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
+          if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return undefined;
+          throw error;
+        });
         const replicationOptions: ReplicationLoginOptions = {
-          prefixes: options.replicationPrefix ?? profileConfig.replication?.prefixes ?? [],
-          ...(options.replicationAllowSecrets === true || profileConfig.replication?.allowSecrets === true ? { allowSecrets: true } : {}),
+          prefixes: options.replicationPrefix ?? profileConfig?.replication?.prefixes ?? [],
+          ...(options.replicationAllowSecrets === true || profileConfig?.replication?.allowSecrets === true ? { allowSecrets: true } : {}),
           ...(owner === undefined ? {} : { ownerDid: owner }),
         };
         const loginPermissions = permissions === undefined
@@ -285,7 +288,7 @@ export function registerAuthCommand(program: Command): void {
         await ProfileManager.clearSession(ctx.profile);
         const replicasRemoved = options.keepReplicas
           ? []
-          : [...await removeProfileReplicas(ctx.profile), ...await removeProfileReplication(ctx.profile)];
+          : await removeProfileReplicasAndReplication(ctx.profile);
         outputJson({
           profile: ctx.profile,
           authenticated: false,
@@ -1587,8 +1590,13 @@ async function rotateAuthKey(
 
   // One transaction: a concurrent login commit either lands before (and this
   // rotation then discards its session) or sees the new key and refuses.
+  let permissions: PermissionEntry[] | undefined;
   await ProfileManager.withLock(profileName, async () => {
     const current = await ProfileManager.getProfile(profileName);
+    if (current.replication?.prefixes.length) {
+      const previousSession = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+      if (Array.isArray(previousSession?.permissions)) permissions = previousSession.permissions as PermissionEntry[];
+    }
     await ProfileManager.setKey(profileName, jwk);
     await ProfileManager.clearSession(profileName);
     await ProfileManager.setProfile(profileName, {
@@ -1605,6 +1613,7 @@ async function rotateAuthKey(
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
     noPopup: options.noPopup,
+    permissions,
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }

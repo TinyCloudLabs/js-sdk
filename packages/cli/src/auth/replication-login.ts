@@ -55,7 +55,11 @@ export function buildReplicationLoginRequest(
   if (request === undefined) {
     const space = options.ownerDid === undefined ? "default" : ownerSpaceId("default", options.ownerDid);
     const defaults: PermissionEntry[] = options.ownerDid === undefined
-      ? [{ service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/metadata"] }]
+      ? [
+        { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/metadata"] },
+        { service: "tinycloud.sql", space, path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"] },
+        { service: "tinycloud.capabilities", space, path: "", actions: ["tinycloud.capabilities/read"] },
+      ]
       : ownerLoginPermissions(options.ownerDid);
     return addReplicationLoginEntries(defaults, space, options);
   }
