@@ -279,9 +279,9 @@ export interface KVReadThrough {
     network: () => Promise<Result<T>>;
   }): Promise<Result<T>>;
   /**
-   * Best-effort observation for a caller-forced network read. This synchronous event hook MUST
-   * NOT read replica storage or start a sync. KVService catches and ignores thrown errors so the
-   * observation cannot change the network read.
+   * Best-effort observation for a caller-forced network read, invoked after it settles. This
+   * synchronous event hook MUST NOT read replica storage or start a sync. KVService catches and
+   * ignores thrown errors so the observation cannot change the network read.
    */
   observeNetworkRequested(r: {
     op: "get" | "list";
@@ -289,6 +289,8 @@ export interface KVReadThrough {
     /** Absolute get path, or the fully resolved list path. */
     path: string;
     reason: "NETWORK_REQUESTED";
+    outcome: "found" | "not_found" | "error";
+    latencyMs: number;
   }): void;
 }
 export interface KVReplicationController extends KVReadThrough {

@@ -1866,10 +1866,10 @@ test("KVService uses its existing network path when read-through is unset", asyn
   expect(result).toMatchObject({ ok: true, data: { data: "network value" } });
   expect(fetchCount).toBe(1);
 });
-test("network-only reads observe the reason without reading the replica", async () => {
+test("network-only reads report their settled outcome without reading the replica", async () => {
   let fetchCount = 0;
   let localReadCount = 0;
-  const observations: Array<{ op: string; space: string; path: string; reason: string }> = [];
+  const observations: Array<{ op: string; space: string; path: string; reason: string; outcome: string; latencyMs: number; fetchCountAtObservation: number }> = [];
   const service = new KVService({});
   service.initialize(createContext(async () => {
     fetchCount += 1;
@@ -1890,7 +1890,7 @@ test("network-only reads observe the reason without reading the replica", async 
       throw new Error("unexpected write");
     },
     observeNetworkRequested: (observation) => {
-      observations.push(observation);
+      observations.push({ ...observation, fetchCountAtObservation: fetchCount });
       throw new Error("best-effort observer failure");
     },
   });
@@ -1908,12 +1908,47 @@ test("network-only reads observe the reason without reading the replica", async 
       space: "tinycloud:pkh:eip155:1:0xabc:default",
       path: "key",
       reason: "NETWORK_REQUESTED",
+      outcome: "found",
+      latencyMs: expect.any(Number),
+      fetchCountAtObservation: 1,
     },
     {
       op: "list",
       space: "tinycloud:pkh:eip155:1:0xabc:default",
       path: "notes",
       reason: "NETWORK_REQUESTED",
+      outcome: "found",
+      latencyMs: expect.any(Number),
+      fetchCountAtObservation: 2,
     },
   ]);
+});
+
+test("network-only read outcomes include not-found and error", async () => {
+  const observations: Array<{ op: string; outcome: string; latencyMs: number }> = [];
+  const service = new KVService({});
+  let fetchCount = 0;
+  service.initialize(createContext(async () => {
+    fetchCount++;
+    return fetchCount === 1
+      ? response(false, 404, "Key not found: missing")
+      : response(false, 500, "server failure");
+  }));
+  service.setReadThrough({
+    get: async () => { throw new Error("network-only get read the replica"); },
+    list: async () => { throw new Error("network-only list read the replica"); },
+    write: async () => { throw new Error("unexpected write"); },
+    observeNetworkRequested: ({ op, outcome, latencyMs }) => observations.push({ op, outcome, latencyMs }),
+  });
+
+  const missing = await service.get("missing", { source: "network" });
+  const failedList = await service.list({ source: "network", prefix: "notes" });
+
+  expect(missing).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_NOT_FOUND } });
+  expect(failedList.ok).toBe(false);
+  expect(observations.map(({ op, outcome }) => [op, outcome])).toEqual([
+    ["get", "not_found"],
+    ["list", "error"],
+  ]);
+  expect(observations.every(({ latencyMs }) => latencyMs >= 0)).toBe(true);
 });

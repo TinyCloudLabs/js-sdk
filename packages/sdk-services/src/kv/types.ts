@@ -45,8 +45,10 @@ export interface KVGetOptions {
   prefix?: string;
   /**
    * Require this read to bypass replication and use the network directly.
-   * This is supported by `get` and `list`; `head`, `batchGet`, `batchHead`
-   * and signed URL operations always use the network.
+   * A configured read-through observer receives `NETWORK_REQUESTED` after the
+   * network result settles, with its outcome and latency. This is supported by
+   * `get` and `list`; `head`, `batchGet`, `batchHead` and signed URL operations
+   * always use the network.
    */
   source?: "network";
 
@@ -201,7 +203,9 @@ export interface KVListOptions {
    */
   prefix?: string;
   /**
-   * Require this read to bypass replication and use the network directly.
+   * Require this read to bypass replication and use the network directly. A
+   * configured read-through observer receives `NETWORK_REQUESTED` after the
+   * network result settles, with its outcome and latency.
    */
   source?: "network";
 
