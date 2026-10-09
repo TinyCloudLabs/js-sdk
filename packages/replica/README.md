@@ -2,7 +2,7 @@
 
 A durable, read-only local replica of one TinyCloud KV prefix. Sync while online; read the latest locally observed values while offline. Replicas do not support offline writes or SQL data.
 
-**Status: beta / release candidate (Replication RC1).** APIs, limitations, and release versions may change.
+**Status: beta feature.** Local replicas are new. Before 1.0, the API and on-disk format may change in a minor release; pin an exact version.
 
 ## Requirements
 
@@ -11,10 +11,10 @@ A durable, read-only local replica of one TinyCloud KV prefix. Sync while online
 - Browser: IndexedDB for durable storage and Web Locks for `sync()`; without Web Locks, local reads remain available but sync is unsupported.
 - A device grant covering the configured prefix with both `get` and `sync` abilities.
 
-Install an explicit version; do not rely on a moving dist-tag:
+Install and pin an exact version:
 
 ```sh
-npm install @tinycloud/replica@0.1.0-beta.1
+npm install @tinycloud/replica@0.1.0
 ```
 
 ## Browser
