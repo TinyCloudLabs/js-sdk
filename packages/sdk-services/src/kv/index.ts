@@ -40,3 +40,4 @@ export type {
   KVChangesOptions,
   KVChangesResponse,
 } from "./types";
+export * from "./replication";
