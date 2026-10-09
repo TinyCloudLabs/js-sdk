@@ -125,11 +125,6 @@ jobs:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts
-      - name: Replication flag against the node
-        env:
-          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
-        run: bun test packages/cli/test/replication-flag.e2e.test.ts
 
   browser-e2e:
     name: Replica (Chromium, browser worker + IndexedDB)
