@@ -214,9 +214,26 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
-        "@tinycloud/replica": "0.1.0-beta.2",
+        "@tinycloud/courier": "0.0.0",
+        "@tinycloud/replica": "0.1.0-beta.3",
         "@types/node": "^20",
         "tsup": "^8.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
+    "packages/courier": {
+      "name": "@tinycloud/courier",
+      "version": "0.0.0",
+      "bin": {
+        "courier": "./dist/cli.js",
+      },
+      "dependencies": {
+        "@tinycloud/node-sdk": "3.1.0-beta.14",
+        "ulid": "^3.0.2",
+      },
+      "devDependencies": {
+        "@tinycloud/sdk-core": "3.1.0-beta.14",
+        "@types/node": "^20",
         "typescript": "^5.9.3",
       },
     },
@@ -1899,6 +1916,8 @@
     "@tinycloud/cli": ["@tinycloud/cli@workspace:packages/cli"],
 
     "@tinycloud/cli-tests": ["@tinycloud/cli-tests@workspace:tests/cli"],
+
+    "@tinycloud/courier": ["@tinycloud/courier@workspace:packages/courier"],
 
     "@tinycloud/manage-key-reference-clients": ["@tinycloud/manage-key-reference-clients@workspace:apps/manage-key-reference-clients"],
 
@@ -5197,6 +5216,8 @@
     "uint8arraylist": ["uint8arraylist@2.4.8", "", { "dependencies": { "uint8arrays": "^5.0.1" } }, "sha512-vc1PlGOzglLF0eae1M8mLRTBivsvrGsdmJ5RbK3e+QRvRLOZfZhQROTwH/OfyF3+ZVUg9/8hE8bmKP2CvP9quQ=="],
 
     "uint8arrays": ["uint8arrays@5.1.0", "", { "dependencies": { "multiformats": "^13.0.0" } }, "sha512-vA6nFepEmlSKkMBnLBaUMVvAC4G3CTmO58C12y4sq6WPDOR7mOFYOi7GlrQ4djeSbP6JG9Pv9tJDM97PedRSww=="],
+
+    "ulid": ["ulid@3.0.2", "", { "bin": { "ulid": "dist/cli.js" } }, "sha512-yu26mwteFYzBAot7KVMqFGCVpsF6g8wXfJzQUHvu1no3+rRRSFcSV2nKeYvNPLD2J4b08jYBDhHUjeH0ygIl9w=="],
 
     "unbox-primitive": ["unbox-primitive@1.1.0", "", { "dependencies": { "call-bound": "^1.0.3", "has-bigints": "^1.0.2", "has-symbols": "^1.1.0", "which-boxed-primitive": "^1.1.1" } }, "sha512-nWJ91DjeOkej/TA8pXQ3myruKpKEYgqvpw9lz4OPHj/NWFNluYrjbz9j01CJ8yKQd2g4jFoOkINCTW2I5LEEyw=="],
 

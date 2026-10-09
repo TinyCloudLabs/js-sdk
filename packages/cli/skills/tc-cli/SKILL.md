@@ -72,4 +72,4 @@ Share commands pin one profile for authentication and all history writes, even w
 
 ## Other operations
 
-App schemas, content parsing and retrieval helpers belong to the app's official skill pack. Read [INSTALL.md](INSTALL.md) for installing, updating and removing this skill for OpenCode, Codex and Claude Code. For storage writes, spaces, delegations, secrets and error codes, load [REFERENCE.md](REFERENCE.md). For integration code, load [SDK.md](SDK.md). Use only the authority the user's task needs; installing instructions grants no TinyCloud access.
+App schemas, content parsing and retrieval helpers belong to the app's official skill pack. Read [INSTALL.md](INSTALL.md) for installing, updating and removing this skill for OpenCode, Codex and Claude Code. For storage writes, spaces, delegations, secrets and error codes, load [REFERENCE.md](REFERENCE.md). For integration code, load [SDK.md](SDK.md). For agent-to-agent threads with `tc courier`, load the [courier skill](../courier/SKILL.md). Use only the authority the user's task needs; installing instructions grants no TinyCloud access.

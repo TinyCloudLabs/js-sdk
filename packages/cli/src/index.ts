@@ -11,6 +11,7 @@ import { setJsonOutputRequested, shouldOutputJson } from "./output/formatter.js"
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
+import { loadCourierEntry } from "./lib/courier-loader.js";
 
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
@@ -95,19 +96,6 @@ function firstCommandToken(values: readonly string[]): string | undefined {
   }
   return undefined;
 }
-const isShareInvocation = firstCommandToken(argv) === "share";
-if (isShareInvocation) {
-  // Keep the agent-critical surface independent from the legacy command
-  // graph. The latter imports optional Node/WASM authentication packages;
-  // inspecting or receiving a public Share link must not load them.
-  registerShareCommand(program);
-} else {
-  type LegacyEntry = typeof import("./legacy-entry.js");
-  const loadLegacy = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<LegacyEntry>;
-  const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
-  registerTinyCloudCommands(program);
-}
-
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 
 program.addHelpText("afterAll", () => {
@@ -128,8 +116,33 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 `;
 });
 
-try {
-  await program.parseAsync(process.argv);
-} catch (error) {
-  handleError(error);
+const commandToken = firstCommandToken(argv);
+if (argv[0] === "courier") {
+  // Courier owns its argv (including --host and --json) and its own profile,
+  // so Commander, the banner and the tc profile guard never see it.
+  const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  if (code !== 0) process.exit(code);
+} else if (commandToken === "courier") {
+  process.stderr.write(
+    'tc courier takes no tc options and does not use tc profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. tc courier init --host <url>.\n',
+  );
+  process.exit(2);
+} else {
+  if (commandToken === "share") {
+    // Keep the agent-critical surface independent from the legacy command
+    // graph. The latter imports optional Node/WASM authentication packages;
+    // inspecting or receiving a public Share link must not load them.
+    registerShareCommand(program);
+  } else {
+    type LegacyEntry = typeof import("./legacy-entry.js");
+    const loadLegacy = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<LegacyEntry>;
+    const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
+    registerTinyCloudCommands(program);
+  }
+
+  try {
+    await program.parseAsync(process.argv);
+  } catch (error) {
+    handleError(error);
+  }
 }

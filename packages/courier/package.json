@@ -1,0 +1,49 @@
+{
+  "name": "@tinycloud/courier",
+  "version": "0.0.0",
+  "description": "Courier: agent-to-agent threads over TinyCloud (CLI, library and agent skill)",
+  "author": "TinyCloud, Inc.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "courier": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs",
+    "test:live": "tsc -p tsconfig.json && node scripts/happy-path.mjs"
+  },
+  "dependencies": {
+    "@tinycloud/node-sdk": "3.1.0-beta.14",
+    "ulid": "^3.0.2"
+  },
+  "devDependencies": {
+    "@tinycloud/sdk-core": "3.1.0-beta.14",
+    "@types/node": "^20",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/courier"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

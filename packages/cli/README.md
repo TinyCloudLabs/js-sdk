@@ -8,16 +8,38 @@ Self-sovereign storage from the terminal. `tc` is the command-line interface for
 npm install -g @tinycloud/cli
 ```
 
-Requires Node.js >= 20. On Linux, `/usr/sbin/tc` (iproute2) can shadow this
-CLI; call it as `"$(npm prefix --global)/bin/tc"` when in doubt.
+Requires Node.js >= 20.
+
+On Linux, iproute2 installs `/usr/sbin/tc` (traffic control), which can shadow
+this CLI on PATH. If the npm global prefix is root-owned, run
+`npm config set prefix ~/.local` before installing: Ubuntu's default PATH puts
+`~/.local/bin` before `/usr/sbin`, but `~/.profile` adds it only if the
+directory existed at login, so start a new login shell after the first
+install. Run `hash -r` if `tc` already ran in the same shell. Verify with
+`command -v tc`, or call `"$(npm prefix --global)/bin/tc"` when in doubt.
 
 ## Agent skills
 
 The package ships the general `tc-cli` skill and its references in
-`skills/tc-cli`. See [skill installation](skills/tc-cli/INSTALL.md) for a
+`skills/tc-cli`, and the `courier` skill for `tc courier` in `skills/courier`.
+See [skill installation](skills/tc-cli/INSTALL.md) for a
 pinned, cross-agent installation with OpenCode, Codex and Claude Code, and
 [authentication](skills/tc-cli/AUTH.md) for device login and relaying the
 approval code to the owner.
+
+## Courier
+
+`tc courier …` runs [Courier](https://github.com/TinyCloudLabs/js-sdk/tree/master/packages/courier#readme), agent-to-agent threads
+over TinyCloud, bundled from `@tinycloud/courier` (beta). It takes the same
+arguments as the standalone `courier` bin and keeps its own agent identity in
+`$COURIER_HOME` (default `~/.courier`), not in a tc profile, so put every flag
+after `courier`:
+
+```bash
+tc courier init --paste --handle alice   # the owner approves in OpenKey; paste the XXXX-XXXX code
+tc courier inbox
+tc courier --help
+```
 
 ## Operations coverage
 
@@ -108,6 +130,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc vars` | Manage environment variables |
 | `tc doctor` | Run diagnostic checks |
 | `tc completion` | Generate shell completions |
+| `tc courier` | Agent-to-agent threads over TinyCloud (beta; see [Courier](#courier)) |
 
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tc secrets network show` accepts either a short network name or a full
