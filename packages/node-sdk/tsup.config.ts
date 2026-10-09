@@ -10,7 +10,10 @@ export default defineConfig({
   // Externalize workspace packages and node_modules
   external: [
     '@tinycloud/sdk-core',
+    '@tinycloud/sdk-services',
     '@tinycloud/node-sdk-wasm',
+    '@tinycloud/replica',
+    '@tinycloud/replica/sqlite',
     'siwe',
     'events',
     'fs',

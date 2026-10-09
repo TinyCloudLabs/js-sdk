@@ -604,3 +604,8 @@ export {
   type WasmKeyProviderConfig,
   createWasmKeyProvider,
 } from "./keys/WasmKeyProvider";
+
+// Read-through replication storage (TC-858 §11.1): Node entry ONLY —
+// loading the adapter is lazy (replica/sqlite/wasm import at first use),
+// but the export itself must never reach `@tinycloud/node-sdk/core`.
+export { sqliteReplicaStorage } from "./replication/sqlite";
