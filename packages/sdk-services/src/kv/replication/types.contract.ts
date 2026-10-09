@@ -3,7 +3,9 @@ import type {
   KVReplicaHandle,
   LocalReplicaStatus,
   LocalSyncResult,
+  PendingWriteStore,
   ReplicaGrantInfo,
+  ReplicationReason,
 } from "../../index";
 
 type Assert<T extends true> = T;
@@ -31,3 +33,8 @@ type _ObservationReportsReason = Assert<
   Equal<NetworkObservation["reason"], "NETWORK_REQUESTED">
 >;
 type _ObservationReportsOperation = Assert<Equal<NetworkObservation["op"], "get" | "list">>;
+type _PendingStoreDeclaresDurability = Assert<HasRequiredKey<PendingWriteStore, "durable">>;
+type _PendingStoreDurabilityIsBoolean = Assert<Equal<PendingWriteStore["durable"], boolean>>;
+type _UnprovenSinceStartIsAReason = Assert<
+  "REPLICA_UNPROVEN_SINCE_START" extends ReplicationReason ? true : false
+>;

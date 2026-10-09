@@ -142,6 +142,12 @@ export interface PurgeTarget {
   sessionDeviceDid?: string;
 }
 
+/**
+ * Replica persistence adapters. B-node's Node/CLI adapter MUST provide durable pending state.
+ * If that state cannot be opened (for example, a file-store failure), it MUST surface the
+ * unavailable/error to the controller; the controller MUST fail closed to network reads and
+ * MUST NOT silently substitute memory.
+ */
 export interface KVReplicaStorage {
   readonly kind: "sqlite" | "indexeddb";
   open(spec: KVReplicaSpec): Promise<KVReplicaHandle>;
@@ -153,7 +159,11 @@ export interface KVReplicaStorage {
    * may remain. Rejects with an error carrying `code` on failure.
    */
   purge(target: PurgeTarget): Promise<void>;
-  /** Durable cross-process pending state, when provided; otherwise the runtime uses memory. */
+  /**
+   * Optional only for volatile runtimes. Omission means an in-memory store with `durable: false`.
+   * B-node's Node/CLI adapter MUST provide a durable store and surface open failures, never
+   * silently fall back to memory.
+   */
   pendingWrites?(identity: ReplicationIdentity): PendingWriteStore;
 }
 
@@ -169,7 +179,7 @@ export interface PendingWriteRecord {
   code?: string;
 }
 
-/** One durable identity state, with a monotonically increasing commit epoch and sequence. */
+/** One identity-scoped pending state, with a monotonically increasing commit epoch and sequence. */
 export interface PendingWriteState {
   v: 2;
   identity: ReplicationIdentity;
@@ -178,11 +188,17 @@ export interface PendingWriteState {
   records: PendingWriteRecord[];
 }
 
+/** Identity-scoped pending state and its restart-durability guarantee. */
 export interface PendingWriteStore {
+  /**
+   * True only when committedEpoch and all records survive process restarts; false for memory or
+   * other volatile stores.
+   */
+  readonly durable: boolean;
   readonly identity: ReplicationIdentity;
   /** Consistent lock-free snapshot, e.g. a read of an atomic file replacement. */
   read(): Promise<PendingWriteState>;
-  /** Serialized read-modify-write; durable before resolve, errors on identity mismatch or failure. */
+  /** Serialized read-modify-write; durable stores persist before resolve. Errors on mismatch/failure. */
   update<T>(mutate: (s: PendingWriteState) => T): Promise<T>;
 }
 
@@ -217,6 +233,14 @@ export interface KVReplicationDeps {
   identity: ReplicationIdentity;
   session: { id: string; did: string; space: string };
   authority: ReplicationAuthority;
+  /**
+   * The controller MUST enforce the catch-up trust invariant. With durable pending state,
+   * committedEpoch and records survive restarts, so the syncedThroughEpoch fence applies normally.
+   * With non-durable state, a replica may serve local reads only after a successful sync that
+   * started in this process after this store was created. Until then, every read MUST use the
+   * network with REPLICA_UNPROVEN_SINCE_START; an older durable syncedThroughEpoch is not proof
+   * after restart. Pending-state failures also fail closed to network reads.
+   */
   pending: PendingWriteStore;
   scheduler: ReplicationScheduler;
   emit(event: ReplicationEvent): void;
@@ -366,6 +390,7 @@ export type ReplicationReason =
   | "cursor_restart"
   | "aborted"
   | "REPLICA_BEHIND_OWN_WRITES"
+  | "REPLICA_UNPROVEN_SINCE_START"
   | "NETWORK_REQUESTED";
 
 export type ReplicationEvent =
