@@ -52,16 +52,6 @@ import type {
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
 
-// The module specifiers stay VARIABLES, not literals: this package compiles
-// under `moduleResolution: node`, which cannot read replica's `exports` map,
-// so tsc fails (TS2307) resolving the type of a literal `import(...)` whenever
-// replica's dist is absent — the CI build order builds node-sdk first. A
-// non-literal specifier is never resolved at compile time, while the emitted
-// code still carries the real specifier and Node's runtime resolver (or a
-// bundler's) resolves it through the `exports` map at call time.
-const REPLICA_MODULE: string = "@tinycloud/replica";
-const REPLICA_SQLITE_MODULE: string = "@tinycloud/replica/sqlite";
-
 /** A storage-layer failure carrying the replica error-code convention. */
 class ReplicaStorageError extends Error {
   readonly code: string;
@@ -890,10 +880,14 @@ export function createSqliteReplicaStorage(
   async function openHandle(spec: KVReplicaSpec): Promise<KVReplicaHandle> {
     // Lazy by contract (§11.1): only the Node entry reaches this module,
     // and only enabled replicas reach this point.
-    const [replica, sqlite]: [ReplicaRuntime, SqliteRuntime] = await Promise.all([
-      import(REPLICA_MODULE),
-      import(REPLICA_SQLITE_MODULE),
-    ]);
+    // Literal specifiers so bundlers can follow the dependency; @ts-ignore
+    // (not expect-error) because tsc resolves replica when its dist exists.
+    const [replica, sqlite] = (await Promise.all([
+      // @ts-ignore — TS2307 when replica's dist is absent (CI builds node-sdk first).
+      import("@tinycloud/replica"),
+      // @ts-ignore — same as above.
+      import("@tinycloud/replica/sqlite"),
+    ])) as [ReplicaRuntime, SqliteRuntime];
     // Defense in depth (§10.1): the secrets gate again at open, on the
     // session's actual verbatim space — even when sign-in never ran.
     if (requiresSecretsOptIn(spec.space, spec.prefix) && spec.allowSecrets !== true) {
@@ -992,10 +986,13 @@ export function createSqliteReplicaStorage(
   }
 
   async function purgePartition(target: PurgeTarget): Promise<void> {
-    const [replica, sqlite]: [ReplicaRuntime, SqliteRuntime] = await Promise.all([
-      import(REPLICA_MODULE),
-      import(REPLICA_SQLITE_MODULE),
-    ]);
+    // Literal specifiers, as in openHandle, so bundlers follow the dependency.
+    const [replica, sqlite] = (await Promise.all([
+      // @ts-ignore — TS2307 when replica's dist is absent (CI builds node-sdk first).
+      import("@tinycloud/replica"),
+      // @ts-ignore — same as above.
+      import("@tinycloud/replica/sqlite"),
+    ])) as [ReplicaRuntime, SqliteRuntime];
     const idDir = partitionDirOf(root, target.identity);
     if (!(await pathExists(idDir))) return;
     // The deduplicated device union (§10.2): the partition's stored device
