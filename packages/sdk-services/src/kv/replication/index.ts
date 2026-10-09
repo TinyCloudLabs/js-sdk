@@ -39,3 +39,5 @@ export {
   replicationIdentityKey,
 } from "./identity";
 export { kvPrefixCovers, requiresSecretsOptIn } from "./scope";
+export { createKVReplication } from "./controller";
+export { createMemoryPendingStore } from "./memoryPendingStore";

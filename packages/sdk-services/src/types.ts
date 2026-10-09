@@ -435,6 +435,11 @@ export const TelemetryEvents = {
   SERVICE_RETRY: "service.retry",
   SESSION_CHANGED: "session.changed",
   SESSION_EXPIRED: "session.expired",
+  REPLICATION_READ: "replication.read",
+  REPLICATION_WRITE: "replication.write",
+  REPLICATION_SYNC: "replication.sync",
+  REPLICATION_STATE: "replication.state",
+  REPLICATION_DIVERGENCE: "replication.divergence",
 } as const;
 
 // =============================================================================

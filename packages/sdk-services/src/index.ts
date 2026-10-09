@@ -249,6 +249,8 @@ export {
   kvPrefixCovers,
   replicationIdentityKey,
   requiresSecretsOptIn,
+  createKVReplication,
+  createMemoryPendingStore,
 } from "./kv/replication";
 
 // SQL service
