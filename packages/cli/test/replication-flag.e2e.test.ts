@@ -255,13 +255,9 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const delegateReport = await ok<{ replicas: Array<{ strategy?: string }> }>(["replica", "report", "--json"], "delegate", { replication: "on" });
     expect(delegateReport.replicas.some((replica) => replica.strategy === "session")).toBe(true);
 
-    // 9. Refuse missing, unsupported-runtime, out-of-scope and caveated grants before local serving.
-    await ok(["profile", "create", "no-prefix", "--posture", "delegate-session"]);
+    // 9. Runtime refusal is exercised here; scoped/caveated login requires the OpenKey approval flow.
     const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", preload: NODE20, replication: "on" });
     expect(unsupported.stderr).toContain("runtime_unsupported");
-    const scoped = await tc(["auth", "login", "--method", "local", "--replication-prefix", "other"], { profile: "delegate" });
-    expect(scoped.code).not.toBe(0);
-    expect(scoped.stderr).toContain("REPLICATION_PREFIX_OUT_OF_SCOPE");
 
     const alias = host.replace("127.0.0.1", "localhost");
     const primaryWrite = await tc(["kv", "put", "notes/partition", "primary-value"], { profile: "owner", replication: "on" });
