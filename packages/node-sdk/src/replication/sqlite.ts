@@ -14,7 +14,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { chmod, mkdir, open as openFile, readFile, rename, rm, stat, type FileHandle } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 
 import { KVService, ServiceContext } from "@tinycloud/sdk-core";
@@ -335,11 +335,43 @@ async function ensurePartitionIdentity(
 /**
  * The durable pending-write store of ONE identity (§6.3): `pending.json`
  * inside the identity's partition. `read` is a lock-free snapshot (writers
- * rename whole files); `update` serializes read-modify-write under the
- * guard — the profile lock for the CLI — and is durable before it resolves.
+ * rename whole files). `update` ALWAYS serializes its read-modify-write in
+ * process — a promise chain per canonical file path, shared by every store
+ * instance — so two concurrent updates can never both read the same state
+ * and lose a record (review). When a `guard` is supplied the mutation then
+ * runs under it too, adding cross-process exclusion — the in-process lock is
+ * taken first and never held across a second store's section, so the
+ * ordering cannot deadlock. The store is durable before `update` resolves.
  * Open failures surface as `STORAGE_ERROR` on read/update; there is no
  * memory fallback anywhere in this store.
  */
+
+/**
+ * In-process serialization of pending.json read-modify-writes, keyed by the
+ * canonical file path and shared by every `FilePendingWriteStore` instance —
+ * two stores on one partition (or two `update` calls on one store) can never
+ * interleave reads and writes. Entries delete themselves once their section
+ * is the chain tail, so the map stays bounded by in-flight updates.
+ */
+const PENDING_WRITE_LOCKS = new Map<string, Promise<unknown>>();
+
+/** Run `section` after every queued section for `file`; the chain tail never rejects. */
+function serializePendingWrite<T>(file: string, section: () => Promise<T>): Promise<T> {
+  const key = resolve(file);
+  const tail = PENDING_WRITE_LOCKS.get(key) ?? Promise.resolve();
+  const entered = tail.then(section);
+  // The tail swallows each section's outcome; the caller still gets it via
+  // `entered`.
+  const next: Promise<unknown> = entered.then(
+    () => undefined,
+    () => undefined,
+  );
+  PENDING_WRITE_LOCKS.set(key, next);
+  void next.then(() => {
+    if (PENDING_WRITE_LOCKS.get(key) === next) PENDING_WRITE_LOCKS.delete(key);
+  });
+  return entered;
+}
 
 export class FilePendingWriteStore implements PendingWriteStore {
   readonly durable = true;
@@ -414,12 +446,18 @@ export class FilePendingWriteStore implements PendingWriteStore {
   }
 
   async update<T>(mutate: (state: PendingWriteState) => T): Promise<T> {
-    return this.#guard(async () => {
-      const state = await this.read();
-      const result = mutate(state);
-      await writeJsonAtomic(join(this.#dir, "pending.json"), state, this.#dirSync);
-      return result;
-    });
+    const file = join(this.#dir, "pending.json");
+    // In-process serialization first (review), then the optional
+    // cross-process guard — never the reverse, so the profile lock can never
+    // be held while waiting on this file's chain.
+    return serializePendingWrite(file, () =>
+      this.#guard(async () => {
+        const state = await this.read();
+        const result = mutate(state);
+        await writeJsonAtomic(file, state, this.#dirSync);
+        return result;
+      }),
+    );
   }
 }
 

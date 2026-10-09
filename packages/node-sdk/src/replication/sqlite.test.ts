@@ -292,6 +292,70 @@ describe("FilePendingWriteStore (§6.3)", () => {
     const reopened = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
     expect((await reopened.read()).committedEpoch).toBe(3);
   });
+
+  test("concurrent update() calls on one store all survive — in-process serialization", async () => {
+    const dir = await makeDir();
+    // No guard: the fix must serialize in process even when no cross-process
+    // profile lock is supplied (review: unguarded concurrent writes lost
+    // records).
+    const store = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    const N = 50;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        store.update((state) => {
+          state.records.push({
+            opId: `op-${i}`,
+            seq: ++state.seq,
+            key: `notes/${i}`,
+            op: "put",
+            state: "in_flight",
+            epoch: null,
+            at: new Date().toISOString(),
+            settledAt: null,
+          });
+        }),
+      ),
+    );
+    const state = await createSqliteReplicaStorage({ dir })
+      .pendingWrites!(identity())
+      .read();
+    expect(state.seq).toBe(N);
+    expect(state.records).toHaveLength(N);
+    expect(state.records.map((record) => record.seq)).toEqual(
+      Array.from({ length: N }, (_, i) => i + 1),
+    );
+  });
+
+  test("concurrent update() calls across store instances on the same path all survive", async () => {
+    const dir = await makeDir();
+    const first = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    const second = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    const N = 50;
+    // Interleave the two instances: both must share the file's in-process
+    // chain, not race independent read-modify-writes.
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        (i % 2 === 0 ? first : second).update((state) => {
+          state.records.push({
+            opId: `op-${i}`,
+            seq: ++state.seq,
+            key: `notes/${i}`,
+            op: "put",
+            state: "in_flight",
+            epoch: null,
+            at: new Date().toISOString(),
+            settledAt: null,
+          });
+        }),
+      ),
+    );
+    const state = await first.read();
+    expect(state.seq).toBe(N);
+    expect(state.records).toHaveLength(N);
+    expect(state.records.map((record) => record.seq)).toEqual(
+      Array.from({ length: N }, (_, i) => i + 1),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
