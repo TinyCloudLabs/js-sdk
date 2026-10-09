@@ -88,6 +88,49 @@ describe("replication registry shutdown", () => {
     expect(registeredReplications().size).toBe(0);
     release();
   });
+  test("a drain request also closes controllers registered during the active drain", async () => {
+    let releaseA!: () => void;
+    let closedB = false;
+    const startedA = Promise.withResolvers<void>();
+    registerReplication("A", control(() => {
+      startedA.resolve();
+      return new Promise<void>((resolve) => { releaseA = resolve; });
+    }));
+    const draining = closeReplication();
+    await startedA.promise;
+    registerReplication("B", control(async () => { closedB = true; }));
+    const requestedDuringDrain = closeReplication();
+    expect(requestedDuringDrain).toBe(draining);
+    releaseA();
+    await draining;
+    expect(closedB).toBe(true);
+    expect(registeredReplications().size).toBe(0);
+  });
+  test("built CLI exits successfully after a stalled controller drain timeout", () => {
+    const mainEntry = fileURLToPath(new URL("../../dist/index.js", import.meta.url));
+    const script = `
+      const key = Symbol.for("@tinycloud/cli/replication-registry");
+      const stalled = { close: () => new Promise(() => {}) };
+      globalThis[key] = {
+        controls: new Map([["stalled", stalled]]),
+        allControls: new Set([stalled]),
+        installedSignalHandlers: false,
+        generation: 0
+      };
+      // A referenced interval proves the bounded shutdown exits the real child process.
+      setInterval(() => {}, 1000);
+      process.argv = [process.execPath, ${JSON.stringify(mainEntry)}, "completion", "bash"];
+      await import(${JSON.stringify(mainEntry)});
+    `;
+    const startedAt = Date.now();
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 4_500,
+    });
+    expect(result.status).toBe(0);
+    expect(result.error).toBeUndefined();
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+  });
   test("built main and legacy bundles drain the shared registry instance", () => {
     const legacyEntry = fileURLToPath(new URL("../../dist/legacy-entry.js", import.meta.url));
     const mainEntry = fileURLToPath(new URL("../../dist/index.js", import.meta.url));

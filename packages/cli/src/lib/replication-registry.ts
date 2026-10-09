@@ -7,7 +7,8 @@ type RegistryState = {
   installedSignalHandlers: boolean;
   sigintHandler?: () => void;
   sigtermHandler?: () => void;
-  closing?: Promise<void>;
+  closing?: Promise<boolean>;
+  generation: number;
 };
 
 const registryKey = Symbol.for("@tinycloud/cli/replication-registry");
@@ -16,6 +17,7 @@ const state: RegistryState = globalState[registryKey] ??= {
   controls: new Map<string, ReplicationControl>(),
   allControls: new Set<ReplicationControl>(),
   installedSignalHandlers: false,
+  generation: 0,
 };
 const CLOSE_TIMEOUT_MS = 3_000;
 const scheduleTimeout: ReplicationCloseScheduler = (callback, delayMs) => setTimeout(callback, delayMs);
@@ -47,6 +49,7 @@ function removeSignalHandlers(): void {
 export function registerReplication(profile: string, control: ReplicationControl): void {
   state.controls.set(profile, control);
   state.allControls.add(control);
+  state.generation += 1;
   installSignalHandlers();
 }
 
@@ -58,22 +61,30 @@ export function registeredReplications(): ReadonlyMap<string, ReplicationControl
   return state.controls;
 }
 
-/** Drain all registered controllers once; a stalled controller cannot delay CLI exit beyond three seconds. */
-export function closeReplication(schedule: ReplicationCloseScheduler = scheduleTimeout): Promise<void> {
+/** Drain registered controllers; a stalled controller cannot delay CLI exit beyond three seconds per drain. */
+export function closeReplication(schedule: ReplicationCloseScheduler = scheduleTimeout): Promise<boolean> {
   if (state.closing) return state.closing;
   removeSignalHandlers();
-  const pending = [...state.allControls];
-  state.controls.clear();
-  state.allControls.clear();
-  let timeout: NodeJS.Timeout;
-  const bounded = new Promise<void>((resolve) => {
-    timeout = schedule(resolve, CLOSE_TIMEOUT_MS);
-  });
-  state.closing = Promise.race([
-    Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close()))).then(() => undefined),
-    bounded,
-  ]).finally(() => {
-    clearTimeout(timeout!);
+  state.closing = (async () => {
+    let timedOut = false;
+    while (state.allControls.size > 0) {
+      const generation = state.generation;
+      const pending = [...state.allControls];
+      state.controls.clear();
+      state.allControls.clear();
+      let timeout: NodeJS.Timeout;
+      const bounded = new Promise<boolean>((resolve) => {
+        timeout = schedule(() => resolve(true), CLOSE_TIMEOUT_MS);
+      });
+      const drained = Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close())))
+        .then(() => false);
+      const batchTimedOut = await Promise.race([drained, bounded]);
+      clearTimeout(timeout!);
+      timedOut ||= batchTimedOut;
+      if (state.generation === generation) break;
+    }
+    return timedOut;
+  })().finally(() => {
     state.closing = undefined;
   });
   return state.closing;

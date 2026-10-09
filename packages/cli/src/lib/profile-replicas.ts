@@ -1,6 +1,6 @@
 import { lstat, readdir, realpath, rm } from "node:fs/promises";
 import type { Dirent, Stats } from "node:fs";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { ProfileDeletedError, profilePath, withProfileLock } from "@tinycloud/operations/state";
 import { ReplicaError, ReplicaErrorCode, type LeaseToken } from "@tinycloud/replica";
 import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
@@ -144,6 +144,8 @@ export async function removeProfileReplication(profile: string, heldLeases?: Rea
     const profileReal = await realpath(profilePath(profile));
     const partitions = await readdir(root, { withFileTypes: true });
     const opened: Array<{ name: string; path: string; store: SqliteReplicaStore; lease: LeaseToken }> = [];
+    const removed: string[] = [];
+    let deleting = false;
     try {
       for (const partition of partitions) {
         const partitionPath = join(root, partition.name);
@@ -219,12 +221,25 @@ export async function removeProfileReplication(profile: string, heldLeases?: Rea
           opened.push({ name, path: join(replicasRoot, entry.name), store, lease });
         }
       }
-      for (const item of opened) await item.store.destroy(item.lease);
+      deleting = true;
+      for (const item of opened) {
+        await item.store.destroy(item.lease);
+        removed.push(item.name);
+      }
       await rm(root, { recursive: true });
-      return opened.map((item) => item.name);
+      return removed;
     } catch (error) {
+      if (deleting) {
+        const remaining = opened.filter(({ name }) => !removed.includes(name)).map(({ name }) => name);
+        throw new CLIError(
+          "REPLICA_PURGE_FAILED",
+          `Logout cleared the session, but replication cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
+          ExitCode.ERROR,
+          { replicasRemoved: removed, replicasRemaining: remaining },
+        );
+      }
       if (error instanceof CLIError) throw error;
-      throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but replication cleanup failed; the replication root was retained. ${error instanceof Error ? error.message : String(error)}`, ExitCode.ERROR);
+      throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but replication cleanup failed; no flag replicas were removed. ${error instanceof Error ? error.message : String(error)}`, ExitCode.ERROR);
     } finally {
       await Promise.all(opened.map(async ({ path, store, lease }) => {
         if (heldLeases?.has(path) !== true) await store.releaseLease(lease).catch(() => undefined);
@@ -335,18 +350,42 @@ async function acquireLogoutLeases(profile: string): Promise<Array<{ path: strin
   });
 }
 
-/** Acquire every legacy and flag-owned lease before deleting either root. */
+/** Acquire every legacy and flag-owned lease and delete both roots under one profile-lock turn. */
 export async function removeProfileReplicasAndReplication(profile: string): Promise<string[]> {
-  const acquired = await acquireLogoutLeases(profile);
-  const heldLeases = new Map(acquired.map(({ path, lease }) => [path, lease]));
-  try {
-    const legacy = await removeProfileReplicas(profile, heldLeases);
-    const replication = await removeProfileReplication(profile, heldLeases);
-    return [...legacy, ...replication];
-  } finally {
-    await Promise.all(acquired.map(async ({ store, lease }) => {
-      await store.releaseLease(lease).catch(() => undefined);
-      await store.close().catch(() => undefined);
-    }));
-  }
+  return withProfileLock(profile, async () => {
+    const acquired = await acquireLogoutLeases(profile);
+    const heldLeases = new Map(acquired.map(({ path, lease }) => [path, lease]));
+    let legacyRemoved: string[] = [];
+    try {
+      legacyRemoved = await removeProfileReplicas(profile, heldLeases);
+      const replication = await removeProfileReplication(profile, heldLeases);
+      return [...legacyRemoved, ...replication];
+    } catch (error) {
+      if (legacyRemoved.length > 0) {
+        const flagRemoved = error instanceof CLIError && Array.isArray(error.metadata?.replicasRemoved)
+          ? error.metadata.replicasRemoved.filter((name): name is string => typeof name === "string")
+          : [];
+        const removed = [...legacyRemoved, ...flagRemoved];
+        const removedSet = new Set(removed);
+        const remaining = acquired
+          .map(({ path }) => {
+            const name = relative(profilePath(profile), path).split(sep).join("/");
+            return name.startsWith("replication/") ? name.replace("/replicas/", "/") : name.split("/").at(-1)!;
+          })
+          .filter((name) => !removedSet.has(name));
+        throw new CLIError(
+          error instanceof CLIError ? error.code : "REPLICA_PURGE_FAILED",
+          `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ")}. Not removed: ${remaining.join(", ") || "none"}.`,
+          error instanceof CLIError ? error.exitCode : ExitCode.ERROR,
+          { replicasRemoved: removed, replicasRemaining: remaining },
+        );
+      }
+      throw error;
+    } finally {
+      await Promise.all(acquired.map(async ({ store, lease }) => {
+        await store.releaseLease(lease).catch(() => undefined);
+        await store.close().catch(() => undefined);
+      }));
+    }
+  });
 }

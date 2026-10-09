@@ -135,7 +135,16 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 
 try {
   await program.parseAsync(process.argv);
-  await closeReplication();
+  if (await closeReplication()) {
+    process.exitCode = 0;
+    const stdoutFlushed = Promise.withResolvers<void>();
+    process.stdout.write("", () => stdoutFlushed.resolve());
+    await stdoutFlushed.promise;
+    const stderrFlushed = Promise.withResolvers<void>();
+    process.stderr.write("", () => stderrFlushed.resolve());
+    await stderrFlushed.promise;
+    process.exit();
+  }
 } catch (error) {
   await handleError(error);
 }

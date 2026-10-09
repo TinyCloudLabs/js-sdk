@@ -84,4 +84,30 @@ describe("flag-owned logout cleanup", () => {
       await busy.close();
     }
   });
+  test("a competing store writer waits for the complete logout lock turn", async () => {
+    const legacyPath = join(profilePath("dogfood"), "replicas", "legacy");
+    const initialize = async (path: string, name: string) => {
+      const store = await SqliteReplicaStore.open(path, { create: true });
+      await store.init({
+        name,
+        replicaId: "c".repeat(26),
+        host: "https://node.example.test",
+        space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+        prefix: `${name}/`,
+        deviceDid: "did:key:device",
+        allowSecrets: false,
+        localReadPolicy: "whileGrantValid",
+        retentionGrantCid: null,
+      });
+      await store.close();
+    };
+    await initialize(legacyPath, "legacy");
+    const writerPath = join(profilePath("dogfood"), "replication", "d".repeat(26), "replicas", "e".repeat(26));
+    const writer = initialize(writerPath, "concurrent");
+    const logout = removeProfileReplicasAndReplication("dogfood");
+
+    const [removed] = await Promise.all([logout, writer]);
+    expect(removed).toContain("legacy");
+    await expect(stat(join(legacyPath, "replica.db"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
