@@ -1,5 +1,16 @@
 # @tinycloudlabs/web-sdk
 
+## 3.1.0-beta.15
+
+### Minor Changes
+
+- 1f44a61: Add `DelegateToOptions.onPrepared` so callers can durably record a grant before it goes live (TC-839). `delegateTo` calls `onPrepared(delegation)` with the exact `PortableDelegation` it then returns as `result.delegation` (CID included), after signing and before host activation, on both the session-key and runtime-grant paths. If the hook rejects, no `/delegate` activation request is sent and `delegateTo` rejects with that same error. Passing `onPrepared` together with `forceWalletSign: true` throws before anything is signed, because the wallet path activates as part of signing. `TinyCloudWeb.delegateTo` passes the option through unchanged. Calls without `onPrepared` behave as before.
+
+### Patch Changes
+
+- Updated dependencies [1f44a61]
+  - @tinycloud/node-sdk@3.1.0-beta.15
+
 ## 3.1.0-beta.14
 
 ### Patch Changes

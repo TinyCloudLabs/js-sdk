@@ -68,6 +68,7 @@
     "tc-756-757-private-output-logout",
     "tc-820-hooks-stream-recovery",
     "tc-838-replica-readme",
+    "tc-839-delegateto-onprepared",
     "tc-848-cli-beta",
     "tc-848-replica-beta"
   ]
