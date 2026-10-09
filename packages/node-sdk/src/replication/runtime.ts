@@ -12,7 +12,7 @@ import type {
   ReplicationOptions,
   ReplicationScheduler,
 } from "@tinycloud/sdk-services";
-type ReplicationServices = typeof import("@tinycloud/sdk-services");
+type ReplicationServices = typeof import("@tinycloud/sdk-services/kv/replication");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
   storage: KVReplicaStorage;
@@ -96,7 +96,7 @@ export class ReplicationRuntime {
   }
 
   private loadServices(): Promise<ReplicationServices> {
-    return (this.services ??= import("@tinycloud/sdk-services"));
+    return (this.services ??= import("@tinycloud/sdk-services/kv/replication"));
   }
 
   private detachAll(): void {

@@ -60,13 +60,13 @@ mock.module("@tinycloud/node-sdk", () => ({
       restoreCalls.push({ jwk: args.jwk });
     }
   },
+  sqliteReplicaStorage() {
+    throw new Error("replication storage is not used in these non-replication SDK tests");
+  },
 }));
 
-// sdk.js -> permissions.js -> sdk-core/manifest.js pulls in the published
-// @tinycloud/sdk-services dist, whose build is currently broken on import.
-// Stub the one symbol the resolver needs (replayAdditionalDelegations) so the
-// gate under test imports cleanly without that chain. Other CLI test files
-// already mock ../lib/permissions.js the same way.
+// This file exercises the local SDK session path, not additional-delegation
+// replay; keep that separate dependency outside the test boundary.
 mock.module("./permissions.js", () => ({
   replayAdditionalDelegations: async () => {},
 }));

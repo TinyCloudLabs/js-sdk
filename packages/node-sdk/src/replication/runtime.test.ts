@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { ServiceContext, createMemoryPendingStore, type KVReadThrough, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
+import { ServiceContext, type KVReadThrough, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
+import { createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
 import type { ServiceSession } from "@tinycloud/sdk-core";
 import { ReplicationRuntime } from "./runtime";
 

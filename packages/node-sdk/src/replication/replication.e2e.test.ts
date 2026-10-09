@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceContext } from "@tinycloud/sdk-core";
 import {
-  canonicalReplicationIdentity,
-  createMemoryPendingStore,
   type KVReadThrough,
   type KVReplicaHandle,
   type KVReplicaStorage,
@@ -11,7 +9,15 @@ import {
   type ReplicationAuthority,
   type ReplicationScheduler,
 } from "@tinycloud/sdk-services";
+import { canonicalReplicationIdentity, createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
 import { ReplicationRuntime } from "./runtime";
+import { NodeWasmBindings } from "../NodeWasmBindings";
+import { PrivateKeySigner } from "../signers/PrivateKeySigner";
+import { TinyCloudNode } from "../TinyCloudNode";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createSqliteReplicaStorage } from "./sqlite";
 
 const address = "0x0000000000000000000000000000000000000001";
 const space = `tinycloud:pkh:eip155:1:${address}:default`;
@@ -33,6 +39,49 @@ const scheduler: ReplicationScheduler = {
   now: () => now,
   setTimeout: () => () => undefined,
 };
+
+const RESTORE_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
+
+async function replicationRestorableSession() {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(RESTORE_PRIVATE_KEY);
+  const manager = wasm.createSessionManager();
+  const jwk = JSON.parse(manager.jwk("default")!);
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const spaceId = wasm.makeSpaceId(address, chainId, "default");
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 4 * 60_000);
+  const verificationMethod = manager.getDID("default");
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    address,
+    chainId,
+    domain: "replication.test",
+    issuedAt: now.toISOString(),
+    expirationTime: expiresAt.toISOString(),
+    spaceId,
+    jwk,
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  const restored = wasm.completeSessionSetup({ ...prepared, signature });
+  return {
+    proof: {
+      delegationHeader: restored.delegationHeader,
+      delegationCid: restored.delegationCid,
+      spaceId,
+      jwk,
+      verificationMethod,
+      address,
+      chainId,
+      siwe: prepared.siwe,
+      signature,
+      expiresAt: expiresAt.toISOString(),
+    },
+    address,
+    chainId,
+  };
+}
 
 function harness(options: {
   prefixes?: string[];
@@ -253,5 +302,111 @@ describe("node replication integration", () => {
       await runtime.control.close();
     }
     expect(env.counts().mintCalls).toBe(0);
+  });
+  test("ten TinyCloudNode restores near the four-minute grant boundary issue zero POST /delegate calls", async () => {
+    const { proof } = await replicationRestorableSession();
+    const originalFetch = globalThis.fetch;
+    let delegatePosts = 0;
+    let opened = 0;
+    const expiresAt = Date.now() + 240_000;
+    const parentCid = proof.delegationCid;
+    const host = "https://replication.restore.test";
+    globalThis.fetch = async (input, init) => {
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      if (method.toUpperCase() === "POST" && new URL(String(input)).pathname.endsWith("/delegate")) {
+        delegatePosts++;
+      }
+      return new Response("{}", { status: 500 });
+    };
+    try {
+      for (let index = 0; index < 10; index++) {
+        const grant = {
+          cid: `bafy-installed-${index}`,
+          parentCid,
+          expiresAt,
+          state: "active" as const,
+          unconstrained: true,
+        };
+        const replicaStatus: LocalReplicaStatus = {
+          coverage: "complete",
+          lastSyncAt: new Date().toISOString(),
+          syncedThroughEpoch: 0,
+          authority: { state: "valid", expiresAt: new Date(expiresAt).toISOString() },
+          grant,
+          counts: { keys: 0, contentMissing: 0, tombstones: 0 },
+          bytes: 0,
+          lastError: null,
+        };
+        const storage: KVReplicaStorage = {
+          kind: "sqlite",
+          async open(spec) {
+            opened++;
+            const handle: KVReplicaHandle = {
+              spec,
+              deviceDid: spec.device?.did ?? `did:key:replica-${index}`,
+              async get(key) {
+                return { status: "absent", key, meta: { asOf: new Date().toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 } };
+              },
+              async list() {
+                return { keys: [], meta: { asOf: new Date().toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 } };
+              },
+              async grant() { return grant; },
+              async installGrant() { return grant; },
+              async sync({ syncStartEpoch }) {
+                return { status: "synced", pages: 0, changes: 0, deleted: 0, fetched: 0, contentMissing: 0, coverage: "complete", syncedThroughEpoch: syncStartEpoch };
+              },
+              async status() { return replicaStatus; },
+              async close() {},
+            };
+            return handle;
+          },
+          async purge() {},
+          pendingWrites: createMemoryPendingStore,
+        };
+        const node = new TinyCloudNode({
+          host,
+          autoBootstrapAccount: false,
+          wasmBindings: new NodeWasmBindings(),
+          replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+        });
+        await node.restoreSession({ ...proof, tinycloudHosts: [host] });
+        const control = node.replication;
+        if (!control) throw new Error("replication control missing after restore");
+        await control.sync();
+        expect((await control.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
+        await control.close();
+      }
+      expect(opened).toBe(10);
+      expect(delegatePosts).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+  test("two hosts sharing one storage directory keep separate replica partitions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc858-replication-e2e-"));
+    const storage = createSqliteReplicaStorage({
+      dir,
+      createDevice: async () => ({ did: "did:key:replica-e2e", jwk: {} }),
+    });
+    const first = await storage.open({
+      identity: canonicalReplicationIdentity({ ...identity, host: "https://one.example" }),
+      space,
+      prefix: "notes/",
+      allowSecrets: false,
+    });
+    const second = await storage.open({
+      identity: canonicalReplicationIdentity({ ...identity, host: "https://two.example" }),
+      space,
+      prefix: "notes/",
+      allowSecrets: false,
+    });
+    try {
+      expect(first.spec.identity.host).toBe("https://one.example");
+      expect(second.spec.identity.host).toBe("https://two.example");
+      expect(await readdir(dir)).toHaveLength(2);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

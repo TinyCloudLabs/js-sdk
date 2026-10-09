@@ -16,6 +16,7 @@ export default defineConfig({
   external: [
     '@tinycloud/sdk-core',
     '@tinycloud/sdk-services',
+    '@tinycloud/sdk-services/kv/replication',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',

@@ -26,6 +26,11 @@
       "import": "./dist/kv/index.js",
       "require": "./dist/kv/index.cjs"
     },
+    "./kv/replication": {
+      "types": "./dist/kv/replication/index.d.ts",
+      "import": "./dist/kv/replication/index.js",
+      "require": "./dist/kv/replication/index.cjs"
+    },
     "./sql": {
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js",
@@ -40,6 +45,11 @@
       "types": "./dist/internal/decrypt-transport-response-error.d.cts",
       "import": "./dist/internal/decrypt-transport-response-error.cjs",
       "require": "./dist/internal/decrypt-transport-response-error.cjs"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "kv/replication": ["dist/kv/replication/index.d.ts"]
     }
   },
   "files": [
