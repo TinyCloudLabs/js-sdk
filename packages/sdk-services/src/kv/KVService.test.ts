@@ -1853,3 +1853,16 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
     });
   });
 });
+test("KVService uses its existing network path when read-through is unset", async () => {
+  let fetchCount = 0;
+  const service = new KVService({});
+  service.initialize(createContext(async () => {
+    fetchCount += 1;
+    return response(true, 200, "network value");
+  }));
+
+  const result = await service.get("key", { raw: true });
+
+  expect(result).toMatchObject({ ok: true, data: { data: "network value" } });
+  expect(fetchCount).toBe(1);
+});

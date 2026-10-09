@@ -31,6 +31,7 @@
  * ```
  */
 
+import type { KVReplicaStorage, ReplicationOptions } from "@tinycloud/sdk-core";
 import {
   TinyCloud,
   TinyCloudSession,
@@ -823,6 +824,8 @@ export interface TinyCloudNodeConfig {
   autoBootstrapAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
+  /** Optional read-through replica configuration; disabled unless explicitly enabled. */
+  replication?: ReplicationOptions & { storage: KVReplicaStorage; mode?: "background" | "foreground" };
 }
 
 /**

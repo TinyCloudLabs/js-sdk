@@ -15,6 +15,7 @@ import {
   FetchResponse,
   ServiceHeaders,
 } from "../types";
+import type { KVReadThrough, KVListPage } from "./replication/types";
 import {
   authRequiredError,
   wrapError,
@@ -150,6 +151,7 @@ export class KVService extends BaseService implements IKVService {
    * Service configuration.
    */
   declare protected _config: KVServiceConfig;
+  private readThrough: KVReadThrough | null = null;
 
   /**
    * Create a new KVService instance.
@@ -166,6 +168,10 @@ export class KVService extends BaseService implements IKVService {
    */
   get config(): KVServiceConfig {
     return this._config;
+  }
+  /** Install or remove the optional replication read-through policy. */
+  setReadThrough(readThrough: KVReadThrough | null): void {
+    this.readThrough = readThrough;
   }
 
   private handleQuotaErrorResponse(
@@ -855,74 +861,15 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeOperation(
+        const network = () => this.getFromNetwork<T>(key, path, options, request.signal);
+        if (options?.source === "network" || this.readThrough === null) return await network();
+        return await this.readThrough.get({
+          space: this.context.session!.spaceId,
+          key,
           path,
-          KVAction.GET,
-          undefined,
-          request.signal,
-          options?.maxResponseBytes === undefined
-            ? undefined
-            : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
-        );
-
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            const errorText = await this.readAuthorizationText(response);
-            const permissionHint = parsePermissionHintFromErrorText(errorText);
-            const structuredCapability = permissionHint?.service === "tinycloud.kv" &&
-              permissionHint.space === this.context.session!.spaceId &&
-              permissionHint.path === path
-              ? validatedCapabilityOf({
-                  service: "kv",
-                  code: ErrorCodes.AUTH_UNAUTHORIZED,
-                  meta: {
-                    status: response.status,
-                    resource: `${this.context.session!.spaceId}/kv/${path}`,
-                    requiredAction: KVAction.GET,
-                  },
-                })
-              : undefined;
-            return this.authorizationFailure(
-              `Failed to get key ${JSON.stringify(key)}`,
-              response,
-              errorText,
-              [path],
-              KVAction.GET,
-              structuredCapability ? { permissionHint, ...structuredCapability } : {}
-            );
-          }
-
-          if (response.status === 404) {
-            return this.classifyNotFound(response, key);
-          }
-
-          const errorText = await response.text();
-          if (response.status === 413) {
-            return err(serviceError(
-              ErrorCodes.KV_RESPONSE_TOO_LARGE,
-              `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-
-        const data = await this.parseResponse<T>(
-          response,
-          options?.raw,
-          options?.binary
-        );
-        return ok({
-          data: data as T,
-          headers: this.createResponseHeaders(response.headers),
+          options,
+          signal: request.signal,
+          network,
         });
       } catch (error) {
         return err(wrapError("kv", error));
@@ -930,6 +877,67 @@ export class KVService extends BaseService implements IKVService {
         request.dispose();
       }
     });
+  }
+  private async getFromNetwork<T>(
+    key: string,
+    path: string,
+    options: KVGetOptions | undefined,
+    signal: AbortSignal
+  ): Promise<Result<KVResponse<T>>> {
+    const response = await this.invokeOperation(
+      path,
+      KVAction.GET,
+      undefined,
+      signal,
+      options?.maxResponseBytes === undefined
+        ? undefined
+        : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
+    );
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        const errorText = await this.readAuthorizationText(response);
+        const permissionHint = parsePermissionHintFromErrorText(errorText);
+        const structuredCapability = permissionHint?.service === "tinycloud.kv" &&
+          permissionHint.space === this.context.session!.spaceId &&
+          permissionHint.path === path
+          ? validatedCapabilityOf({
+              service: "kv",
+              code: ErrorCodes.AUTH_UNAUTHORIZED,
+              meta: {
+                status: response.status,
+                resource: `${this.context.session!.spaceId}/kv/${path}`,
+                requiredAction: KVAction.GET,
+              },
+            })
+          : undefined;
+        return this.authorizationFailure(
+          `Failed to get key ${JSON.stringify(key)}`,
+          response,
+          errorText,
+          [path],
+          KVAction.GET,
+          structuredCapability ? { permissionHint, ...structuredCapability } : {}
+        );
+      }
+      if (response.status === 404) return this.classifyNotFound(response, key);
+      const errorText = await response.text();
+      if (response.status === 413) {
+        return err(serviceError(
+          ErrorCodes.KV_RESPONSE_TOO_LARGE,
+          `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
+      return err(serviceError(
+        ErrorCodes.NETWORK_ERROR,
+        `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        "kv",
+        { meta: { status: response.status, statusText: response.statusText } }
+      ));
+    }
+    const data = await this.parseResponse<T>(response, options?.raw, options?.binary);
+    return ok({ data: data as T, headers: this.createResponseHeaders(response.headers) });
   }
 
   async batchGet<T = unknown>(
@@ -971,80 +979,78 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.PUT,
-          body,
-          request.signal,
-          {
-            ...(options?.ifMatch === undefined ? {} : { "if-match": options.ifMatch }),
-            ...(options?.ifNoneMatch === undefined ? {} : { "if-none-match": options.ifNoneMatch }),
-          }
-        );
-
-        if (response.status === 401 || response.status === 403) {
-          return this.authorizationFailure(
-            `Failed to put key ${JSON.stringify(key)}`,
-            response,
-            await this.readAuthorizationText(response),
-            [path],
-            KVAction.PUT
-          );
-        }
-
-        if (!response.ok) {
-          const errorText = await response.text();
-
-          if (response.status === 412) {
-            return err(serviceError(
-              ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-
-          if (
-            response.status === 503 &&
-            (options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined)
-          ) {
-            return err(serviceError(
-              ErrorCodes.KV_CONFLICT,
-              `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-
-          // Check for storage quota errors (402, 413)
-          const quotaError = this.handleQuotaErrorResponse(
-            response,
-            errorText,
-            key
-          );
-          if (quotaError) {
-            return quotaError;
-          }
-
-          return err(
-            serviceError(
-              ErrorCodes.KV_WRITE_FAILED,
-              `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-
-        return ok({
-          data: undefined as void,
-          headers: this.createResponseHeaders(response.headers),
+        const network = () => this.putToNetwork(key, path, body, options, request.signal);
+        if (this.readThrough === null) return await network();
+        return await this.readThrough.write({
+          op: "put",
+          space: this.context.session!.spaceId,
+          entries: [{ path, body }],
+          signal: request.signal,
+          network,
         });
       } catch (error) {
         return err(wrapError("kv", error));
       } finally {
         request.dispose();
       }
+    });
+  }
+  private async putToNetwork(
+    key: string,
+    path: string,
+    body: Blob | string,
+    options: KVPutOptions | undefined,
+    signal: AbortSignal
+  ): Promise<Result<KVResponse<void>>> {
+    const response = await this.invokeOperation(
+      path,
+      KVAction.PUT,
+      body,
+      signal,
+      {
+        ...(options?.ifMatch === undefined ? {} : { "if-match": options.ifMatch }),
+        ...(options?.ifNoneMatch === undefined ? {} : { "if-none-match": options.ifNoneMatch }),
+      }
+    );
+    if (response.status === 401 || response.status === 403) {
+      return this.authorizationFailure(
+        `Failed to put key ${JSON.stringify(key)}`,
+        response,
+        await this.readAuthorizationText(response),
+        [path],
+        KVAction.PUT
+      );
+    }
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (response.status === 412) {
+        return err(serviceError(
+          ErrorCodes.KV_PRECONDITION_FAILED,
+          `KV precondition failed for key ${JSON.stringify(key)}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
+      if (response.status === 503 && (options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined)) {
+        return err(serviceError(
+          ErrorCodes.KV_CONFLICT,
+          `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
+      const quotaError = this.handleQuotaErrorResponse(response, errorText, key);
+      if (quotaError) return quotaError;
+      return err(serviceError(
+        ErrorCodes.KV_WRITE_FAILED,
+        `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        "kv",
+        { meta: { status: response.status, statusText: response.statusText } }
+      ));
+    }
+    return ok({
+      data: undefined as void,
+      headers: this.createResponseHeaders(response.headers),
     });
   }
 
@@ -1090,25 +1096,54 @@ export class KVService extends BaseService implements IKVService {
         seen.add(path);
       }
 
-      // Conservative: `true` means we handed a fully-constructed request to
-      // fetch(). It does NOT prove bytes reached the node — DNS/connect
-      // failures and synchronous fetch rejections are included. Proving
-      // actual dispatch requires lower-level transport instrumentation (out
-      // of scope). The over-approximation is intentional and bounded: it can
-      // only cause a reconciliation of at most N idempotent, byte-identical
-      // overwrites — never a corrupted or differently-timestamped record.
-      let requestMayHaveDispatched = false;
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
+        const network = () => this.batchPutToNetwork(items, paths, request.signal);
+        if (this.readThrough === null) return await network();
+        const entries = items.map((item, index) => ({
+          path: paths[index]!,
+          body: this.serializeBatchPutValue(item),
+        }));
+        return await this.readThrough.write({
+          op: "batchPut",
+          space: session.spaceId,
+          entries,
+          signal: request.signal,
+          network: () => this.batchPutToNetwork(items, paths, request.signal, entries),
+        });
+      } catch (error) {
+        const wrapped = wrapError("kv", error);
+        return err({ ...wrapped, meta: { ...wrapped.meta, requestMayHaveDispatched: false } });
+      } finally {
+        request.dispose();
+      }
+    });
+  }
+  private async batchPutToNetwork(
+    items: KVBatchPutItem[],
+    paths: string[],
+    signal: AbortSignal,
+    entries?: Array<{ path: string; body: Blob }>
+  ): Promise<Result<KVBatchPutResponse>> {
+    const session = this.context.session!;
+    // Conservative: `true` means we handed a fully-constructed request to
+    // fetch(). It does NOT prove bytes reached the node — DNS/connect
+    // failures and synchronous fetch rejections are included. Proving
+    // actual dispatch requires lower-level transport instrumentation (out
+    // of scope). The over-approximation is intentional and bounded: it can
+    // only cause a reconciliation of at most N idempotent, byte-identical
+    // overwrites — never a corrupted or differently-timestamped record.
+    let requestMayHaveDispatched = false;
+    try {
         const body = new FormData();
         for (let index = 0; index < items.length; index++) {
           body.append(
             encodeKvBatchPartName(paths[index]!),
-            this.serializeBatchPutValue(items[index]!)
+            entries?.[index]?.body ?? this.serializeBatchPutValue(items[index]!)
           );
         }
 
-        const headers = this.context.invokeAny(
+        const headers = this.context.invokeAny!(
           session,
           paths.map((path) => ({
             spaceId: session.spaceId,
@@ -1123,7 +1158,7 @@ export class KVService extends BaseService implements IKVService {
           method: "POST",
           headers,
           body,
-          signal: request.signal,
+          signal,
         };
 
         // Resolve the fetch function to a local BEFORE flipping the flag.
@@ -1301,10 +1336,7 @@ export class KVService extends BaseService implements IKVService {
           ...wrapped,
           meta: { ...wrapped.meta, requestMayHaveDispatched },
         });
-      } finally {
-        request.dispose();
-      }
-    });
+    }
   }
 
   /**
@@ -1335,71 +1367,87 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeOperation(
-          listPath,
-          KVAction.LIST,
-          undefined,
-          request.signal,
-          options?.limit === undefined && options?.cursor === undefined
-            ? undefined
-            : {
-                ...(options?.limit === undefined ? {} : { "x-tinycloud-limit": String(options.limit) }),
-                ...(options?.cursor === undefined ? {} : { "x-tinycloud-cursor": options.cursor }),
-              }
-        );
-
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              "Failed to list keys",
-              response,
-              await this.readAuthorizationText(response),
-              [listPath],
-              KVAction.LIST
-            );
-          }
-
-          const errorText = await response.text();
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to list keys: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-
-        let keys = await this.parseResponse<string[]>(response, options?.raw);
-        keys = keys ?? [];
-
-        // Optionally remove prefix from keys
-        if (options?.removePrefix && listPath) {
-          const prefixWithSlash = listPath.endsWith("/")
-            ? listPath
-            : `${listPath}/`;
-          keys = keys.map((key) =>
-            key.startsWith(prefixWithSlash)
-              ? key.slice(prefixWithSlash.length)
-              : key
-          );
-        }
-
-        return ok({
-          keys,
-          ...(response.headers.get("x-tinycloud-truncated") === null
-            ? {}
-            : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
-          ...(response.headers.get("x-tinycloud-next-cursor") === null
-            ? {}
-            : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? undefined }),
-        });
+        const network = () => this.listFromNetwork(listPath, options, request.signal);
+        const page = options?.source === "network" || this.readThrough === null
+          ? await network()
+          : await this.readThrough.list({
+              space: this.context.session!.spaceId,
+              listPath,
+              options,
+              signal: request.signal,
+              network,
+            });
+        return page.ok
+          ? this.finishList(page.data, listPath, options?.removePrefix)
+          : page;
       } catch (error) {
         return err(wrapError("kv", error));
       } finally {
         request.dispose();
       }
     });
+  }
+  private async listFromNetwork(
+    listPath: string,
+    options: KVListOptions | undefined,
+    signal: AbortSignal
+  ): Promise<Result<KVListPage>> {
+    const response = await this.invokeOperation(
+      listPath,
+      KVAction.LIST,
+      undefined,
+      signal,
+      options?.limit === undefined && options?.cursor === undefined
+        ? undefined
+        : {
+            ...(options?.limit === undefined ? {} : { "x-tinycloud-limit": String(options.limit) }),
+            ...(options?.cursor === undefined ? {} : { "x-tinycloud-cursor": options.cursor }),
+          }
+    );
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        return this.authorizationFailure(
+          "Failed to list keys",
+          response,
+          await this.readAuthorizationText(response),
+          [listPath],
+          KVAction.LIST
+        );
+      }
+      const errorText = await response.text();
+      return err(serviceError(
+        ErrorCodes.NETWORK_ERROR,
+        `Failed to list keys: ${response.status} - ${errorText}`,
+        "kv",
+        { meta: { status: response.status, statusText: response.statusText } }
+      ));
+    }
+    const keys = (await this.parseResponse<string[]>(response, options?.raw)) ?? [];
+    return ok({
+      keys,
+      ...(response.headers.get("x-tinycloud-truncated") === null
+        ? {}
+        : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
+      ...(response.headers.get("x-tinycloud-next-cursor") === null
+        ? {}
+        : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? undefined }),
+    });
+  }
+
+  private finishList(
+    page: KVListPage,
+    listPath: string,
+    removePrefix: boolean | undefined
+  ): Result<KVListResponse> {
+    let keys = page.keys;
+    if (removePrefix && listPath) {
+      const prefixWithSlash = listPath.endsWith("/") ? listPath : `${listPath}/`;
+      keys = keys.map((key) =>
+        key.startsWith(prefixWithSlash) ? key.slice(prefixWithSlash.length) : key
+      );
+    }
+    return ok({ keys, ...(page.truncated === undefined ? {} : { truncated: page.truncated }),
+      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) });
   }
 
   /**
@@ -1621,67 +1669,73 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.DELETE,
-          undefined,
-          request.signal,
-          options?.ifMatch === undefined
-            ? undefined
-            : { "if-match": options.ifMatch }
-        );
-
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              `Failed to delete key ${JSON.stringify(key)}`,
-              response,
-              await this.readAuthorizationText(response),
-              [path],
-              KVAction.DELETE
-            );
-          }
-
-          if (response.status === 404) {
-            return this.classifyNotFound(response, key);
-          }
-
-          const errorText = await response.text();
-          if (response.status === 412) {
-            return err(serviceError(
-              ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          if (response.status === 503 && options?.ifMatch !== undefined) {
-            return err(serviceError(
-              ErrorCodes.KV_CONFLICT,
-              `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-
-        return ok({
-          data: undefined as void,
-          headers: this.createResponseHeaders(response.headers),
+        const network = () => this.deleteFromNetwork(key, path, options, request.signal);
+        if (this.readThrough === null) return await network();
+        return await this.readThrough.write({
+          op: "delete",
+          space: this.context.session!.spaceId,
+          entries: [{ path }],
+          signal: request.signal,
+          network,
         });
       } catch (error) {
         return err(wrapError("kv", error));
       } finally {
         request.dispose();
       }
+    });
+  }
+  private async deleteFromNetwork(
+    key: string,
+    path: string,
+    options: KVDeleteOptions | undefined,
+    signal: AbortSignal
+  ): Promise<Result<KVResponse<void>>> {
+    const response = await this.invokeOperation(
+      path,
+      KVAction.DELETE,
+      undefined,
+      signal,
+      options?.ifMatch === undefined ? undefined : { "if-match": options.ifMatch }
+    );
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        return this.authorizationFailure(
+          `Failed to delete key ${JSON.stringify(key)}`,
+          response,
+          await this.readAuthorizationText(response),
+          [path],
+          KVAction.DELETE
+        );
+      }
+      if (response.status === 404) return this.classifyNotFound(response, key);
+      const errorText = await response.text();
+      if (response.status === 412) {
+        return err(serviceError(
+          ErrorCodes.KV_PRECONDITION_FAILED,
+          `KV precondition failed for key ${JSON.stringify(key)}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
+      if (response.status === 503 && options?.ifMatch !== undefined) {
+        return err(serviceError(
+          ErrorCodes.KV_CONFLICT,
+          `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
+      return err(serviceError(
+        ErrorCodes.NETWORK_ERROR,
+        `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+        "kv",
+        { meta: { status: response.status, statusText: response.statusText } }
+      ));
+    }
+    return ok({
+      data: undefined as void,
+      headers: this.createResponseHeaders(response.headers),
     });
   }
 

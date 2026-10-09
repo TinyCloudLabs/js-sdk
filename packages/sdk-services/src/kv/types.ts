@@ -43,6 +43,12 @@ export interface KVGetOptions {
    * Override the default prefix for this operation.
    */
   prefix?: string;
+  /**
+   * Require this read to bypass replication and use the network directly.
+   * This is supported by `get` and `list`; `head`, `batchGet`, `batchHead`
+   * and signed URL operations always use the network.
+   */
+  source?: "network";
 
   /**
    * Return raw response instead of parsed JSON.
@@ -194,6 +200,10 @@ export interface KVListOptions {
    * Override the default prefix for this operation.
    */
   prefix?: string;
+  /**
+   * Require this read to bypass replication and use the network directly.
+   */
+  source?: "network";
 
   /**
    * Additional path to append to the prefix.
