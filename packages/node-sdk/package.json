@@ -30,6 +30,7 @@
     "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun test src/",
+    "typecheck:replica-contract": "tsc --noEmit -p tsconfig.replica-contract.json",
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {

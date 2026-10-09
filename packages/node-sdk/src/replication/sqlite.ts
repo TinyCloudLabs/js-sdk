@@ -7,9 +7,11 @@
  * `@tinycloud/replica`, `@tinycloud/replica/sqlite` and
  * `@tinycloud/node-sdk-wasm` load lazily — only inside `open`, `purge`,
  * `sync` and device-key creation — so this module never lands in the `/core`
- * entry and flag-off Node processes never evaluate replica code. The static
- * `import type` declarations below are erased at compile time and keep
- * consumers' type signatures precise without loading the modules.
+ * entry and flag-off Node processes never evaluate replica code. The replica
+ * types are the structural declarations in `./replica-contract` (never an
+ * import of replica's own `.d.ts`), so this package's build — DTS included —
+ * does not depend on replica's dist being built first. `replica-contract.test.ts`
+ * pins the declarations against the real modules wherever replica IS built.
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -40,60 +42,25 @@ import type {
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
 import type {
-  assertGrantInstallable,
   GrantRecord,
-  isReplicaError,
-  kvSyncTransport,
-  parseUcanGrant,
-  ReadMeta,
-  Replica,
-  ReplicaError,
-  ReplicaErrorCode,
-  ReplicaOptions,
+  MutationGuard,
+  ReplicaListEntry,
+  ReplicaRuntime,
   ReplicaTransport,
-} from "@tinycloud/replica";
-import type { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+  SqliteReplicaStore,
+  SqliteRuntime,
+} from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
 
-type MutationGuard = <T>(section: () => Promise<T>) => Promise<T>;
-
-/** The members of `@tinycloud/replica` the adapter uses, as a value-level contract. */
-interface ReplicaRuntime {
-  Replica: new (options: ReplicaOptions) => Replica;
-  ReplicaError: new (
-    code: ReplicaErrorCode,
-    message: string,
-    detail?: Record<string, unknown>,
-    options?: { cause?: unknown },
-  ) => ReplicaError;
-  ReplicaErrorCode: {
-    BUSY: ReplicaErrorCode;
-    NOT_FOUND: ReplicaErrorCode;
-    CLOSED: ReplicaErrorCode;
-    CONFIG_MISMATCH: ReplicaErrorCode;
-    SECRETS_OPT_IN_REQUIRED: ReplicaErrorCode;
-    GRANT_NOT_COVERING: ReplicaErrorCode;
-    RESET_REQUIRED: ReplicaErrorCode;
-  };
-  isReplicaError: typeof isReplicaError;
-  parseUcanGrant: typeof parseUcanGrant;
-  assertGrantInstallable: typeof assertGrantInstallable;
-  kvSyncTransport: typeof kvSyncTransport;
-}
-
-/** The members of `@tinycloud/replica/sqlite` the adapter uses. */
-interface SqliteRuntime {
-  SqliteReplicaStore: {
-    open(
-      dir: string,
-      options: {
-        create: boolean;
-        now?: () => number;
-        guard?: MutationGuard;
-      },
-    ): Promise<SqliteReplicaStore>;
-  };
-}
+// The module specifiers stay VARIABLES, not literals: this package compiles
+// under `moduleResolution: node`, which cannot read replica's `exports` map,
+// so tsc fails (TS2307) resolving the type of a literal `import(...)` whenever
+// replica's dist is absent — the CI build order builds node-sdk first. A
+// non-literal specifier is never resolved at compile time, while the emitted
+// code still carries the real specifier and Node's runtime resolver (or a
+// bundler's) resolves it through the `exports` map at call time.
+const REPLICA_MODULE: string = "@tinycloud/replica";
+const REPLICA_SQLITE_MODULE: string = "@tinycloud/replica/sqlite";
 
 /** A storage-layer failure carrying the replica error-code convention. */
 class ReplicaStorageError extends Error {
@@ -773,7 +740,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       ...(options.limit === undefined ? {} : { limit: options.limit }),
     });
     return {
-      keys: result.entries.map((entry) => entry.key),
+      keys: result.entries.map((entry: ReplicaListEntry) => entry.key),
       meta: {
         asOf: result.meta.asOf,
         coverage: result.meta.coverage,
@@ -924,8 +891,8 @@ export function createSqliteReplicaStorage(
     // Lazy by contract (§11.1): only the Node entry reaches this module,
     // and only enabled replicas reach this point.
     const [replica, sqlite]: [ReplicaRuntime, SqliteRuntime] = await Promise.all([
-      import("@tinycloud/replica"),
-      import("@tinycloud/replica/sqlite"),
+      import(REPLICA_MODULE),
+      import(REPLICA_SQLITE_MODULE),
     ]);
     // Defense in depth (§10.1): the secrets gate again at open, on the
     // session's actual verbatim space — even when sign-in never ran.
@@ -1026,8 +993,8 @@ export function createSqliteReplicaStorage(
 
   async function purgePartition(target: PurgeTarget): Promise<void> {
     const [replica, sqlite]: [ReplicaRuntime, SqliteRuntime] = await Promise.all([
-      import("@tinycloud/replica"),
-      import("@tinycloud/replica/sqlite"),
+      import(REPLICA_MODULE),
+      import(REPLICA_SQLITE_MODULE),
     ]);
     const idDir = partitionDirOf(root, target.identity);
     if (!(await pathExists(idDir))) return;
