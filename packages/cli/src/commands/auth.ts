@@ -253,7 +253,7 @@ export function registerAuthCommand(program: Command): void {
 
         if (method === "local") {
           buildReplicationLoginRequest(undefined, replicationOptions);
-          await handleLocalAuth(ctx.profile, ctx.host);
+          await handleLocalAuth(ctx.profile, ctx.host, { replication: replicationOptions });
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
@@ -1678,7 +1678,7 @@ type LocalAuthResult = {
 async function handleLocalAuth(
   profileName: string,
   host: string,
-  options: { emitOutput?: boolean; forceSessionKey?: boolean } = {},
+  options: { emitOutput?: boolean; forceSessionKey?: boolean; replication?: ReplicationLoginOptions } = {},
 ): Promise<LocalAuthResult> {
   const snapshot = await readProfileSnapshot(profileName);
   const profile = snapshot.profile;
@@ -1734,7 +1734,12 @@ async function handleLocalAuth(
 
   // Sign in using the private key
   const sessionResult = await withSpinner("Signing in...", async () => {
-    return localKeySignIn({ privateKey, host });
+    return localKeySignIn({
+      privateKey,
+      host,
+      profile: profileName,
+      replication: options.replication ?? profile?.replication,
+    });
   });
 
   const session = {

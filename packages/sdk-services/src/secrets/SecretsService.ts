@@ -67,7 +67,9 @@ export class SecretsService implements ISecretsService {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
-    const result = await this.vault.get<SecretPayload>(secretPath.vaultKey);
+    const result = await this.vault.get<SecretPayload>(secretPath.vaultKey, {
+      ...(options?.source === undefined ? {} : { source: options.source }),
+    });
     if (!result.ok) {
       return result;
     }
@@ -116,6 +118,7 @@ export class SecretsService implements ISecretsService {
     const result = await this.vault.list({
       prefix,
       removePrefix: true,
+      ...(options?.source === undefined ? {} : { source: options.source }),
     });
     if (!result.ok) {
       return result;
@@ -138,6 +141,7 @@ export class SecretsService implements ISecretsService {
         prefix: "secrets/",
         removePrefix: true,
         limit: 1000,
+        source: "network",
         ...(cursor === undefined ? {} : { cursor }),
       });
       if (!result.ok) {

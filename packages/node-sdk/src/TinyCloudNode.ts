@@ -35,8 +35,8 @@ import {
   assertValidReplicationConfig,
   createReplicationAuthority,
 } from "./replication/authority";
-import type { ReplicationAuthority } from "@tinycloud/sdk-services";
-import type { KVReplicaStorage, ReplicationOptions } from "@tinycloud/sdk-core";
+import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
+import { ReplicationRuntime } from "./replication/runtime";
 import {
   TinyCloud,
   TinyCloudSession,
@@ -1121,6 +1121,7 @@ export class TinyCloudNode {
   private _serviceGraph!: ServiceGraphLifetime;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
+  private readonly replicationRuntime?: ReplicationRuntime;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
   private _hooks?: HooksService;
@@ -1342,6 +1343,9 @@ export class TinyCloudNode {
       ...config,
       host: config.host ?? DEFAULT_HOST,
     };
+    if (this.config.replication?.enabled) {
+      this.replicationRuntime = new ReplicationRuntime(this.config.replication);
+    }
 
     // Initialize WASM bindings (uses registered Node defaults if not provided)
     if (config.wasmBindings) {
@@ -1794,6 +1798,7 @@ export class TinyCloudNode {
     // this sign-in and permanently retire anything captured from the previous
     // session. The authorization flow above remains transactional: a rejected
     // sign-in leaves the existing graph untouched.
+    this.replicationRuntime?.unbind();
     const oldGraph = this._serviceGraph;
     this._serviceGraph = this.createServiceGraphLifetime();
     oldGraph.retire();
@@ -3097,6 +3102,7 @@ export class TinyCloudNode {
       this._restoredTcSession = stagedTcSession;
     }
     oldGraph.retire();
+    this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv);
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
   }
 
@@ -3823,6 +3829,7 @@ export class TinyCloudNode {
       jwk: session.jwk,
     };
     this._serviceContext.setSession(serviceSession);
+    this.bindReplicationRuntime(this._serviceContext, serviceSession, this._kv!);
     (this.tc!.serviceContext as ServiceContext).setSession(serviceSession);
 
     // Create and register Vault service
@@ -3849,6 +3856,7 @@ export class TinyCloudNode {
         spaceScopedContext.setSession({ ...session, spaceId });
       }
       kvService.initialize(spaceScopedContext);
+      this.replicationRuntime?.attach(spaceId, kvService);
     }
     return kvService;
   }
@@ -4784,6 +4792,7 @@ export class TinyCloudNode {
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
+    this.replicationRuntime?.attach(spaceId, kv);
     return kv;
   }
 
@@ -6145,12 +6154,29 @@ export class TinyCloudNode {
    * Empty when replication is off or no address is known. Pure.
    */
   replicationSignInEntries(): PermissionEntry[] {
+
     if (this.config.replication?.enabled !== true) return [];
     const auth = this.auth as NodeUserAuthorization | undefined;
     if (auth === undefined || typeof auth.replicationSignInEntries !== "function") {
       return [];
     }
     return auth.replicationSignInEntries();
+  }
+  private bindReplicationRuntime(context: ServiceContext, session: ServiceSession, kv: KVService): void {
+    if (!this.replicationRuntime || this._address === undefined) return;
+    this.replicationRuntime.bind({
+      context,
+      session,
+      address: this._address,
+      chainId: this._chainId,
+      authority: this.replicationAuthority(),
+      primaryKV: [{ space: session.spaceId, kv }],
+    });
+  }
+
+  /** Stable control facade for this node's optional replication runtime. */
+  get replication(): ReplicationControl | undefined {
+    return this.replicationRuntime?.control;
   }
 
 

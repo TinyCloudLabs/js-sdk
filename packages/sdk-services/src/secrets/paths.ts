@@ -7,7 +7,10 @@ const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 export interface SecretScopeOptions {
   /** Optional logical scope. Omit for the global secret namespace. */
   scope?: string;
+  /** Bypass replication for existence-sensitive reads. */
+  source?: "network";
 }
+
 
 export interface ResolvedSecretPath {
   /** Canonical env-style secret name. */

@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -279,6 +279,23 @@ describe("FilePendingWriteStore (§6.3)", () => {
     await expect(store.read()).rejects.toMatchObject({ code: "STORAGE_ERROR" });
   });
 
+  test("pending updates fail closed when an open identity partition is swapped for a symlink", async () => {
+    const dir = await makeDir();
+    const alternateRoot = await makeDir();
+    const store = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity());
+    const alternate = createSqliteReplicaStorage({ dir: alternateRoot }).pendingWrites!(identity());
+    await store.read();
+    await alternate.read();
+    const [partition] = await partitionDirs(dir);
+    const [alternatePartition] = await partitionDirs(alternateRoot);
+    await rename(join(dir, partition!), join(dir, `${partition!}-moved`));
+    await symlink(join(alternateRoot, alternatePartition!), join(dir, partition!), "dir");
+
+    await expect(store.update((state) => { state.seq += 1; }))
+      .rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect((await alternate.read()).seq).toBe(0);
+  });
+
   test("no guard → pendingWrites is still the durable file store, never memory", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage({ dir });
@@ -433,6 +450,17 @@ describe("identity partition isolation (§6.3)", () => {
     expect((await spaceB.read()).records).toHaveLength(0);
   });
 
+  test("two hosts on one storage root create separate identity partitions", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const first = await storage.open(spec({ identity: identity({ host: HOST_A }) }));
+    const second = await storage.open(spec({ identity: identity({ host: HOST_B }) }));
+    expect(first.spec.identity.host).toBe(HOST_A);
+    expect(second.spec.identity.host).toBe(HOST_B);
+    expect(await partitionDirs(dir)).toHaveLength(2);
+    await first.close();
+    await second.close();
+  });
   test("canonicalization: HTTPS://host:443 and https://host share one partition", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());

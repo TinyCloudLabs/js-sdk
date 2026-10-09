@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { ensureAuthenticated } from "../lib/sdk.js";
 import { replicationForProfile } from "../lib/replication-registry.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
@@ -432,6 +433,9 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .option("--clear-pending", "Clear ambiguous and likely orphaned in-flight writes")
     .action((options, cmd: Command) =>
       run(async () => {
+        const globals = cmd.optsWithGlobals();
+        const context = await ProfileManager.resolveContext(globals);
+        const node = context.replication ? await ensureAuthenticated(context) : undefined;
         const profile = await profileName(cmd);
         let durationMs: number;
         try {
@@ -439,7 +443,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         } catch (error) {
           throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
         }
-        const control: ReplicationControl | undefined = replicationForProfile(profile);
+        const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
         let cleared: number | undefined;
         let purged: unknown;
         let warning: string | undefined;
@@ -454,7 +458,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const [events, partitions, replicas] = await Promise.all([
           readReplicationEvents(profile, sinceMs),
           replicationPartitions(profile),
-          control ? control.status() : Promise.resolve([]),
+          node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
         ]);
         const report = createReplicationReport(options.since, events, replicas, partitions, warning);
         if (shouldOutputJson()) {
