@@ -142,18 +142,28 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
   test("covers the 12 Phase 1 CLI acceptance steps", async () => {
     // 1. The local-key sign-in recap must request get+sync for the configured prefix.
     await ok(["init", "--name", "owner", "--key-only"]);
-    const login = await ok<{ spaceId: string; recap?: unknown }>(["auth", "login", "--method", "local", "--replication-prefix", "notes", "--replication-prefix", "variables"]);
+    const login = await ok<{ spaceId: string }>(["auth", "login", "--method", "local", "--replication-prefix", "notes", "--replication-prefix", "variables"]);
     space = login.spaceId;
-    expect(login).toHaveProperty("spaceId");
+    expect(space).toMatch(/^tinycloud:/);
 
     // 2. Seed covered and uncovered keys, including the vars namespace.
     for (const [key, value] of Object.entries(initial)) {
       const result = await put(key, value);
       expect(result.code).toBe(0);
     }
-    const profile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as { privateKey: string };
+    const profile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as { privateKey: string; replication?: { prefixes: string[] } };
+    expect(profile.replication?.prefixes).toEqual(["notes", "variables"]);
     const varsPut = await tc(["vars", "put", "flag", "one"], { profile: "owner", extraEnv: { TC_PRIVATE_KEY: profile.privateKey } });
     expect(varsPut.code).toBe(0);
+    // 11. Before any replica is opened, flag-off and default reads are identical and leave no state or log.
+    const profileDir = join(home, ".tinycloud", "profiles", "owner", "replication");
+    const flagOffBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "off" });
+    const defaultBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner" });
+    expect(flagOffBeforeActivation.code).toBe(0);
+    expect(flagOffBeforeActivation.stdout).toEqual(defaultBeforeActivation.stdout);
+    expect(flagOffBeforeActivation.stderr).not.toContain("replica");
+    expect(defaultBeforeActivation.stderr).not.toContain("replica");
+    await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
 
     // 3. Both explicit and environment activation serve covered reads locally; raw data is byte-identical.
     const hit = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on" });
@@ -214,7 +224,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     await stopNode();
     const offlineHit = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", preload: NO_NETWORK, replication: "on" });
     expect(offlineHit.code).toBe(0);
-    expect(offlineHit.stderr).toContain("replica hit");
+    expect(offlineHit.stderr).toContain("syncError");
     expect((await tc(["kv", "list", "--prefix", "notes"], { profile: "owner", preload: NO_NETWORK, replication: "on" })).code).toBe(0);
     expect((await tc(["kv", "get", "other/x"], { profile: "owner", preload: NO_NETWORK, replication: "on" })).code).toBe(6);
     await startNode();
@@ -244,25 +254,28 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(scoped.code).not.toBe(0);
     expect(scoped.stderr).toContain("REPLICATION_PREFIX_OUT_OF_SCOPE");
 
-    // 10. Host aliases form independent durable partitions; one identity's sync cannot clear the other's records.
     const alias = host.replace("127.0.0.1", "localhost");
-    const aliasWrite = await tc(["kv", "put", "notes/a.txt", "alias-value"], { profile: "owner", replication: "on", host: alias });
-    expect(aliasWrite.code).toBe(0);
+    const primaryWrite = await tc(["kv", "put", "notes/partition", "primary-value"], { profile: "owner", replication: "on" });
+    expect(primaryWrite.code).toBe(0);
+    const aliasSync = await tc(["replica", "sync"], { profile: "owner", replication: "on", host: alias, extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    expect(aliasSync.code).toBe(0);
+    const primaryReport = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    expect(primaryReport.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/partition", state: "committed" }));
+    const primarySync = await tc(["replica", "sync"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    expect(primarySync.code).toBe(0);
+    const caughtUpReport = await ok<{ replicas: Array<{ pinned: Array<{ key: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    expect(caughtUpReport.replicas.flatMap((replica) => replica.pinned.map((entry) => entry.key))).not.toContain("notes/partition");
     const aliasReport = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on", host: alias });
     expect(aliasReport.code).toBe(0);
-    const profileDir = join(home, ".tinycloud", "profiles", "owner", "replication");
     expect((await readdir(profileDir)).length).toBeGreaterThan(1);
-
-    // 11. Flag-off output remains unchanged and creates neither replication state nor a replication log.
+    // 11. Later flag-off invocation preserves output and emits no replication log.
     const flagOff = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "off" });
     expect(flagOff.code).toBe(0);
     expect(flagOff.stderr).not.toContain("replica");
     const withoutFlag = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner" });
     expect(withoutFlag.stdout).toEqual(flagOff.stdout);
-    expect(flagOff.stdout).toEqual(withoutFlag.stdout);
     expect(flagOff.stderr).not.toContain("replica");
     expect(withoutFlag.stderr).not.toContain("replica");
-
     // 12. JSON report reflects recorded read events and logout purges every identity partition.
     const report = await ok<{ totals: { reads: number; replicaReads: number }; replicas: unknown[]; partitions: unknown[] }>(["replica", "report", "--json"], "owner", { replication: "on" });
     expect(report.totals.replicaReads).toBeGreaterThan(0);
@@ -270,6 +283,6 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(report.partitions.length).toBeGreaterThan(0);
     await ok(["auth", "logout"], "owner");
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(space.length).toBeGreaterThan(0);
+    expect(space).toMatch(/^tinycloud:/);
   }, 300_000);
 });
