@@ -53,7 +53,7 @@ import {
 } from "@tinycloud/sdk-core";
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
-import { augmentSignInEntriesWithReplication } from "../replication/authority";
+import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
 import {
   SignStrategy,
   SignRequest,

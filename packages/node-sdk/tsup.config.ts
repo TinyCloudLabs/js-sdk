@@ -1,7 +1,12 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/core.ts'],
+  entry: {
+    index: 'src/index.ts',
+    core: 'src/core.ts',
+    'replication/runtime': 'src/replication/runtime.ts',
+    'replication/authority': 'src/replication/authority.ts',
+  },
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
@@ -18,5 +23,7 @@ export default defineConfig({
     'events',
     'fs',
     'path',
+    './replication/runtime',
+    './replication/authority',
   ],
 });

@@ -54,11 +54,11 @@ describe("node ReplicationRuntime binding", () => {
       primaryKV: [{ space: primarySpace, kv }],
     });
 
-    runtime.bind(binding("HTTPS://Node.Example:443/", "bafyFirst"));
+    await runtime.bind(binding("HTTPS://Node.Example:443/", "bafyFirst"));
     expect(attached).not.toBeNull();
     const first = await runtime.control.status();
     expect(first.map((entry) => entry.prefix)).toEqual(["notes"]);
-    runtime.bind(binding("https://node.example", "bafyReplacement"));
+    await runtime.bind(binding("https://node.example", "bafyReplacement"));
     expect(pendingStores).toBe(1);
     expect(await runtime.control.status()).toMatchObject([{ prefix: "notes", pending: { inFlight: 0, committed: 0, ambiguous: 0 } }]);
 
@@ -72,7 +72,7 @@ describe("node ReplicationRuntime binding", () => {
     await runtime.control.sync();
   });
 
-  test("isolates pending stores when the bind host changes", () => {
+  test("isolates pending stores when the bind host changes", async () => {
     const identities: string[] = [];
     const storage = {
       kind: "sqlite",
@@ -89,8 +89,8 @@ describe("node ReplicationRuntime binding", () => {
       primaryKV: [{ space: primarySpace, kv: { setReadThrough() {} } }],
     });
 
-    bind("https://one.example");
-    bind("https://two.example");
+    await bind("https://one.example");
+    await bind("https://two.example");
     expect(identities).toHaveLength(2);
     expect(identities[0]).not.toBe(identities[1]);
     expect(JSON.parse(identities[0]!).host).toBe("https://one.example");

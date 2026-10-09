@@ -17,19 +17,18 @@ import {
   KV,
   actionContains,
   canonicalizeRecapCaveats,
-  isCapabilitySubset,
   type PermissionEntry,
-  type ReplicationOptions,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 import {
   kvPrefixCovers,
-  requiresSecretsOptIn,
   type AuthorityRefusal,
   type ReplicaDevice,
   type ReplicationAuthority,
 } from "@tinycloud/sdk-services";
 import { compactUcanPayload } from "../delegation";
+export { assertValidReplicationConfig } from "./config";
+export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
 
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
@@ -48,99 +47,7 @@ function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] 
 }
 
 
-/**
- * The unrestricted-get gate (§4.1): the request may gain `sync` on `p` only
- * where it already requests an unrestricted `get` on a path that covers `p`
- * under the SAME subset semantics `signedCapabilitySubset` uses for the
- * signed recap — `isCapabilitySubset`, whose `pathContains` requires a
- * trailing-segment prefix (`notes/` covers `notes/x`; an exact `get(notes)`
- * does NOT cover `notes/private`). A requested entry with no caveats covers
- * only uncaveated grants, so a caveated covering `get` fails the gate.
- */
-export function hasUnrestrictedGetCoverage(
-  entries: readonly PermissionEntry[],
-  spaceId: string,
-  prefix: string,
-): boolean {
-  return isCapabilitySubset(
-    [
-      {
-        service: KV_SERVICE,
-        space: spaceId,
-        path: prefix,
-        actions: [KV_GET],
-      },
-    ],
-    [...entries],
-  ).subset;
-}
 
-/**
- * One augmentation step for both the sign-in request and
- * `replicationSignInEntries()` (§4.1, §4.6): for each configured prefix, the
- * replication entry `{kv, spaceId, prefix, [get, sync]}` — added only when an
- * unrestricted `get` covering the prefix already exists and the
- * secrets/vault opt-in is satisfied.
- */
-export function augmentSignInEntriesWithReplication(input: {
-  entries: readonly PermissionEntry[];
-  primarySpaceId: string;
-  replication?: Pick<ReplicationOptions, "prefixes" | "allowSecrets">;
-}): PermissionEntry[] {
-  const out: PermissionEntry[] = [];
-  const replication = input.replication;
-  if (replication === undefined) return out;
-  for (const prefix of replication.prefixes) {
-    if (
-      requiresSecretsOptIn(input.primarySpaceId, prefix) &&
-      replication.allowSecrets !== true
-    ) {
-      continue;
-    }
-    if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, prefix)) {
-      continue;
-    }
-    out.push({
-      service: KV_SERVICE,
-      space: input.primarySpaceId,
-      path: prefix,
-      actions: [KV_GET, KV_SYNC],
-    });
-  }
-  return out;
-}
-
-/** Constructor-time validation (§3.1). The space-dependent secrets check runs later, at sign-in/open. */
-export function assertValidReplicationConfig(
-  replication: (ReplicationOptions & { storage?: unknown }) | undefined,
-): void {
-  if (replication === undefined || replication.enabled !== true) return;
-  if (replication.storage === undefined || replication.storage === null) {
-    throw new TypeError("replication.enabled requires replication.storage");
-  }
-  if (!Array.isArray(replication.prefixes) || replication.prefixes.length === 0) {
-    throw new TypeError("replication.prefixes must be a non-empty array");
-  }
-  for (const prefix of replication.prefixes) {
-    if (typeof prefix !== "string" || prefix === "") {
-      throw new TypeError("replication.prefixes must not contain an empty prefix");
-    }
-  }
-  for (const [index, prefix] of replication.prefixes.entries()) {
-    for (const other of replication.prefixes.slice(index + 1)) {
-      if (kvPrefixCovers(prefix, other) || kvPrefixCovers(other, prefix)) {
-        throw new TypeError(
-          `replication.prefixes must not overlap: ${JSON.stringify(prefix)} and ${JSON.stringify(other)}`,
-        );
-      }
-    }
-    if (prefix.split("/", 1)[0] === "vault" && replication.allowSecrets !== true) {
-      throw new TypeError(
-        `replication prefix ${JSON.stringify(prefix)} overlaps the vault namespace; pass allowSecrets to opt in`,
-      );
-    }
-  }
-}
 
 /**
  * The signed UCAN attenuation (`att`: resource → ability → caveat branches).

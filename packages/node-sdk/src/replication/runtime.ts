@@ -1,21 +1,18 @@
-import {
-  canonicalReplicationIdentity,
-  createKVReplication,
-  createMemoryPendingStore,
-  replicationIdentityKey,
-  type KVReadThrough,
-  type KVReplicaStorage,
-  type KVReplicationController,
-  type PendingWriteStore,
-  type ReplicationAuthority,
-  type ReplicationControl,
-  type ReplicationEvent,
-  type ReplicationIdentity,
-  type ReplicationOptions,
-  type ReplicationScheduler,
-} from "@tinycloud/sdk-services";
 import { pkhDid } from "@tinycloud/sdk-core";
 import type { FetchFunction, ServiceContext, ServiceSession } from "@tinycloud/sdk-core";
+import type {
+  KVReadThrough,
+  KVReplicaStorage,
+  KVReplicationController,
+  PendingWriteStore,
+  ReplicationAuthority,
+  ReplicationControl,
+  ReplicationEvent,
+  ReplicationIdentity,
+  ReplicationOptions,
+  ReplicationScheduler,
+} from "@tinycloud/sdk-services";
+type ReplicationServices = typeof import("@tinycloud/sdk-services");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
   storage: KVReplicaStorage;
@@ -59,23 +56,47 @@ export class ReplicationRuntime {
   private current?: KVReplicationController;
   private lastController?: KVReplicationController;
   private previous: Promise<void> = Promise.resolve();
+  private binding: Promise<void> = Promise.resolve();
+  private services?: Promise<ReplicationServices>;
+  private generation = 0;
   private lastIdentity?: ReplicationIdentity;
   private primarySpace?: string;
   private closed = false;
+
   constructor(
     private readonly options: ReplicationRuntimeOptions,
     private readonly clock: ReplicationScheduler = scheduler,
   ) {
     this.control = {
-      status: async () => this.current ? this.current.status() : [],
-      sync: async (input) => { if (this.current) await this.current.sync(input); },
+      status: async () => {
+        await this.binding;
+        return this.current ? this.current.status() : [];
+      },
+      sync: async (input) => {
+        await this.binding;
+        if (this.current) await this.current.sync(input);
+      },
       purge: async (input) => {
+        await this.binding;
         const controller = this.current ?? this.lastController;
         if (!controller) return { purged: [], failed: [] };
         return controller.purge(input);
       },
-      close: async () => { this.closed = true; this.unbind(); await this.previous; },
+      clearPending: async () => {
+        await this.binding;
+        return this.current ? this.current.clearPending() : 0;
+      },
+      close: async () => {
+        this.closed = true;
+        this.unbind();
+        await this.binding.catch(() => undefined);
+        await this.previous;
+      },
     };
+  }
+
+  private loadServices(): Promise<ReplicationServices> {
+    return (this.services ??= import("@tinycloud/sdk-services"));
   }
 
   private detachAll(): void {
@@ -83,62 +104,64 @@ export class ReplicationRuntime {
     this.attached.clear();
   }
 
-  bind(input: ReplicationRuntimeBinding): void {
-    if (this.closed || !this.options.enabled) return;
+  bind(input: ReplicationRuntimeBinding): Promise<void> {
+    if (this.closed || !this.options.enabled) return Promise.resolve();
+    const generation = ++this.generation;
     const { context, session } = input;
     const emit = (event: ReplicationEvent): void => {
       try { this.options.onEvent?.(event); } catch { /* Observability must not affect KV behavior. */ }
       const { type, ...data } = event;
       context.emit(type, data);
     };
-    let identity: ReplicationIdentity;
-    try {
-      identity = canonicalReplicationIdentity({
-        host: context.hosts[0]!,
-        space: session.spaceId,
-        principal: pkhDid(input.address, input.chainId),
-      });
-    } catch {
-      const previous = this.current;
-      this.current = undefined;
-      this.detachAll();
-      this.previous = previous ? previous.close().catch(() => undefined) : this.previous;
-      this.primarySpace = session.spaceId;
-      for (const prefix of this.options.prefixes) {
-        emit({ type: "replication.state", at: new Date(this.clock.now()).toISOString(), space: session.spaceId, replica: prefix, state: "unavailable", code: "CONFIG_INVALID" });
-      }
-      return;
-    }
     const previous = this.current;
     this.current = undefined;
     this.detachAll();
-    this.previous = previous ? previous.close().catch(() => undefined) : this.previous;
-    const key = replicationIdentityKey(identity);
-    let pending = this.pending.get(key);
-    if (!pending) {
-      pending = this.options.storage.pendingWrites?.(identity) ?? createMemoryPendingStore(identity);
-      this.pending.set(key, pending);
-    }
-    const controller = createKVReplication({
-      options: resolvedOptions(this.options),
-      mode: this.options.mode ?? "background",
-      storage: this.options.storage,
-      identity,
-      session: { id: session.delegationCid, did: session.verificationMethod, space: session.spaceId },
-      authority: input.authority,
-      pending,
-      scheduler: this.clock,
-      emit,
-      fetch: context.fetch as FetchFunction,
-      previous: this.previous,
-    });
-    this.current = controller;
-    this.lastController = controller;
     this.primarySpace = session.spaceId;
-    this.lastIdentity = identity;
-    for (const scoped of input.primaryKV) {
-      this.attach(scoped.space, scoped.kv);
-    }
+    this.previous = previous ? previous.close().catch(() => undefined) : this.previous;
+    const previousClose = this.previous;
+
+    this.binding = this.loadServices().then((services) => {
+      if (generation !== this.generation || this.closed) return;
+      let identity: ReplicationIdentity;
+      try {
+        identity = services.canonicalReplicationIdentity({
+          host: context.hosts[0]!,
+          space: session.spaceId,
+          principal: pkhDid(input.address, input.chainId),
+        });
+      } catch {
+        for (const prefix of this.options.prefixes) {
+          emit({ type: "replication.state", at: new Date(this.clock.now()).toISOString(), space: session.spaceId, replica: prefix, state: "unavailable", code: "CONFIG_INVALID" });
+        }
+        return;
+      }
+      const key = services.replicationIdentityKey(identity);
+      let pending = this.pending.get(key);
+      if (!pending) {
+        pending = this.options.storage.pendingWrites?.(identity) ?? services.createMemoryPendingStore(identity);
+        this.pending.set(key, pending);
+      }
+      const controller = services.createKVReplication({
+        options: resolvedOptions(this.options),
+        mode: this.options.mode ?? "background",
+        storage: this.options.storage,
+        identity,
+        session: { id: session.delegationCid, did: session.verificationMethod, space: session.spaceId },
+        authority: input.authority,
+        pending,
+        scheduler: this.clock,
+        emit,
+        fetch: context.fetch as FetchFunction,
+        previous: previousClose,
+      });
+      this.current = controller;
+      this.lastController = controller;
+      this.lastIdentity = identity;
+      for (const scoped of input.primaryKV) {
+        this.attach(scoped.space, scoped.kv);
+      }
+    });
+    return this.binding;
   }
 
   attach(space: string, kv: ReadThroughKV): void {
@@ -147,10 +170,13 @@ export class ReplicationRuntime {
   }
 
   unbind(): void {
+    this.generation++;
     const controller = this.current;
     this.current = undefined;
+    this.primarySpace = undefined;
     this.detachAll();
-    if (controller) this.previous = controller.close().catch(() => undefined);
+    const binding = this.binding;
+    this.previous = binding.then(() => controller?.close()).catch(() => undefined);
   }
 
   get boundIdentity(): ReplicationIdentity | undefined {

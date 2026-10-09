@@ -31,12 +31,9 @@
  * ```
  */
 
-import {
-  assertValidReplicationConfig,
-  createReplicationAuthority,
-} from "./replication/authority";
+import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
-import { ReplicationRuntime } from "./replication/runtime";
+import type { ReplicationRuntime } from "./replication/runtime";
 import {
   TinyCloud,
   TinyCloudSession,
@@ -1121,7 +1118,8 @@ export class TinyCloudNode {
   private _serviceGraph!: ServiceGraphLifetime;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
-  private readonly replicationRuntime?: ReplicationRuntime;
+  private readonly replicationRuntime?: Promise<ReplicationRuntime>;
+  private readonly replicationControl?: ReplicationControl;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
   private _hooks?: HooksService;
@@ -1344,7 +1342,17 @@ export class TinyCloudNode {
       host: config.host ?? DEFAULT_HOST,
     };
     if (this.config.replication?.enabled) {
-      this.replicationRuntime = new ReplicationRuntime(this.config.replication);
+      const runtime = import(/* webpackIgnore: true */ "./replication/runtime").then(
+        ({ ReplicationRuntime }) => new ReplicationRuntime(this.config.replication!),
+      );
+      this.replicationRuntime = runtime;
+      this.replicationControl = {
+        status: async () => (await runtime).control.status(),
+        sync: async (input) => (await runtime).control.sync(input),
+        purge: async (input) => (await runtime).control.purge(input),
+        clearPending: async () => (await runtime).control.clearPending(),
+        close: async () => (await runtime).control.close(),
+      };
     }
 
     // Initialize WASM bindings (uses registered Node defaults if not provided)
@@ -1798,7 +1806,7 @@ export class TinyCloudNode {
     // this sign-in and permanently retire anything captured from the previous
     // session. The authorization flow above remains transactional: a rejected
     // sign-in leaves the existing graph untouched.
-    this.replicationRuntime?.unbind();
+    if (this.replicationRuntime) (await this.replicationRuntime).unbind();
     const oldGraph = this._serviceGraph;
     this._serviceGraph = this.createServiceGraphLifetime();
     oldGraph.retire();
@@ -1814,7 +1822,7 @@ export class TinyCloudNode {
     }
 
     // Initialize service context with session
-    this.initializeServices();
+    await this.initializeServices();
 
     // Register the primary session's own recap as the highest-trust
     // (`provenance: "primary"`) runtime grant so it always wins invocation
@@ -3102,7 +3110,7 @@ export class TinyCloudNode {
       this._restoredTcSession = stagedTcSession;
     }
     oldGraph.retire();
-    this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv);
+    await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv);
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
   }
 
@@ -3773,7 +3781,7 @@ export class TinyCloudNode {
    * Initialize the service context and KV service after sign-in.
    * @internal
    */
-  private initializeServices(): void {
+  private async initializeServices(): Promise<void> {
     const session = this.currentTinyCloudSession();
     if (!session) {
       return;
@@ -3829,7 +3837,7 @@ export class TinyCloudNode {
       jwk: session.jwk,
     };
     this._serviceContext.setSession(serviceSession);
-    this.bindReplicationRuntime(this._serviceContext, serviceSession, this._kv!);
+    await this.bindReplicationRuntime(this._serviceContext, serviceSession, this._kv!);
     (this.tc!.serviceContext as ServiceContext).setSession(serviceSession);
 
     // Create and register Vault service
@@ -3856,7 +3864,7 @@ export class TinyCloudNode {
         spaceScopedContext.setSession({ ...session, spaceId });
       }
       kvService.initialize(spaceScopedContext);
-      this.replicationRuntime?.attach(spaceId, kvService);
+      if (this.replicationRuntime) void this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kvService));
     }
     return kvService;
   }
@@ -4792,7 +4800,7 @@ export class TinyCloudNode {
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
-    this.replicationRuntime?.attach(spaceId, kv);
+    if (this.replicationRuntime) void this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kv));
     return kv;
   }
 
@@ -6124,27 +6132,6 @@ export class TinyCloudNode {
     return this.planDerivation(expandedEntries, session, effectiveExpiration, nowMs);
   }
 
-  /**
-   * The per-prefix authority the replication runtime asks about (TC-858
-   * §4): delegate posture when the session UCAN itself carries unrestricted
-   * get+sync, else a `delegateTo`-minted device grant, else a refusal the
-   * controller reports as `grant_missing`. Pure except for `mint`.
-   * @internal
-   */
-  replicationAuthority(): ReplicationAuthority {
-    return createReplicationAuthority({
-      replicationSession: () => this.currentTinyCloudSession(),
-      siweExpiration: (siwe) => extractSiweExpiration(siwe),
-      planDelegation: (entries, options) => this.planDelegation(entries, options),
-      mintDelegation: async (deviceDid, entries) => {
-        const result = await this.delegateTo(deviceDid, entries);
-        return {
-          ucan: result.delegation.delegationHeader.Authorization,
-          expiresAt: result.delegation.expiry.getTime(),
-        };
-      },
-    });
-  }
 
   /**
    * The replication entries this node's sign-in request carries for the
@@ -6162,21 +6149,41 @@ export class TinyCloudNode {
     }
     return auth.replicationSignInEntries();
   }
-  private bindReplicationRuntime(context: ServiceContext, session: ServiceSession, kv: KVService): void {
+  private async replicationAuthority(): Promise<ReplicationAuthority> {
+    const { createReplicationAuthority } = await import(
+      /* webpackIgnore: true */ "./replication/authority"
+    );
+    return createReplicationAuthority({
+      replicationSession: () => this.currentTinyCloudSession(),
+      siweExpiration: (siwe) => extractSiweExpiration(siwe),
+      planDelegation: (entries, options) => this.planDelegation(entries, options),
+      mintDelegation: async (deviceDid, entries) => {
+        const result = await this.delegateTo(deviceDid, entries);
+        return {
+          ucan: result.delegation.delegationHeader.Authorization,
+          expiresAt: result.delegation.expiry.getTime(),
+        };
+      },
+    });
+  }
+
+  private async bindReplicationRuntime(context: ServiceContext, session: ServiceSession, kv: KVService): Promise<void> {
     if (!this.replicationRuntime || this._address === undefined) return;
-    this.replicationRuntime.bind({
+    const runtime = await this.replicationRuntime;
+    const authority = await this.replicationAuthority();
+    await runtime.bind({
       context,
       session,
       address: this._address,
       chainId: this._chainId,
-      authority: this.replicationAuthority(),
+      authority,
       primaryKV: [{ space: session.spaceId, kv }],
     });
   }
 
   /** Stable control facade for this node's optional replication runtime. */
   get replication(): ReplicationControl | undefined {
-    return this.replicationRuntime?.control;
+    return this.replicationControl;
   }
 
 
