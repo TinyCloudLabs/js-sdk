@@ -1,12 +1,21 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
-// Browser globals the web SDK touches at import/construct time.
+// Browser globals the web SDK touches at import/construct time. Importing tcw
+// evaluates `class … extends HTMLElement` for the SDK's web components, and the
+// module cache keeps that superclass for later test files in the same run, so
+// this stub must behave like a real element: `attachShadow` sets `shadowRoot`.
+const browserGlobals = ["HTMLElement", "customElements", "window", "document"] as const;
+const originalGlobals = new Map(
+  browserGlobals.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
+);
 Object.assign(globalThis, {
   HTMLElement: class {
+    shadowRoot: { innerHTML: string; querySelector: () => null } | null = null;
     attachShadow() {
-      return { innerHTML: "", querySelector: () => null };
+      this.shadowRoot = { innerHTML: "", querySelector: () => null };
+      return this.shadowRoot;
     }
     remove() {}
   },
@@ -25,6 +34,15 @@ Object.assign(globalThis, {
     }),
     body: { appendChild: () => undefined, style: {} },
   },
+});
+afterAll(() => {
+  for (const [name, descriptor] of originalGlobals) {
+    if (descriptor) {
+      Object.defineProperty(globalThis, name, descriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, name);
+    }
+  }
 });
 
 const BOB_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
