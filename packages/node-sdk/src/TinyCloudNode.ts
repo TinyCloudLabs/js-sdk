@@ -31,6 +31,11 @@
  * ```
  */
 
+import {
+  assertValidReplicationConfig,
+  createReplicationAuthority,
+} from "./replication/authority";
+import type { ReplicationAuthority } from "@tinycloud/sdk-services";
 import type { KVReplicaStorage, ReplicationOptions } from "@tinycloud/sdk-core";
 import {
   TinyCloud,
@@ -907,6 +912,36 @@ interface RuntimePermissionOperation {
   caveats?: Record<string, unknown>[];
 }
 
+/**
+ * The parent `delegateTo` would sign under (TC-858 §4.3): the session's own
+ * delegation CID on the session path, or the selected runtime grant's
+ * session CID on the runtime path. Refusals classify why no authority can
+ * be derived; `expiredAt`/`missing`/`granted`/`caveated` let `delegateTo`
+ * reproduce its exact typed errors from the same decision.
+ */
+type DelegationPlan =
+  | {
+      path: "session";
+      parentCid: string;
+      expiresAt: number;
+      effectiveExpiration: Date;
+    }
+  | {
+      path: "runtime";
+      parentCid: string;
+      expiresAt: number;
+      effectiveExpiration: Date;
+      grant: RuntimePermissionGrant;
+      operations: RuntimePermissionOperation[];
+    }
+  | {
+      refused: "NOT_COVERED" | "CAVEATED_AUTHORITY" | "SESSION_EXPIRING";
+      expiredAt?: Date;
+      missing?: PermissionEntry[];
+      granted?: PermissionEntry[];
+      caveated?: PermissionEntry[];
+    };
+
 interface RuntimePermissionGrant {
   session: ServiceSession;
   delegation: PortableDelegation;
@@ -1296,6 +1331,10 @@ export class TinyCloudNode {
    * ```
    */
   constructor(config: TinyCloudNodeConfig = {}) {
+    // Fail fast on a malformed replication config (TC-858 §3.1). Runs only
+    // when `enabled` is true so flag-off configs stay inert; the
+    // space-dependent secrets check runs at sign-in and open (§10.1).
+    assertValidReplicationConfig(config.replication);
     this.explicitHost = config.host;
 
     // Store config with default host
@@ -1440,6 +1479,15 @@ export class TinyCloudNode {
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
         : config.includeAccountRegistryPermissions,
+      // Sign-in needs only the entry inputs (prefixes + secrets opt-in);
+      // storage and scheduling never leave TinyCloudNode.
+      replication: config.replication?.enabled === true
+        ? {
+            enabled: true,
+            prefixes: config.replication.prefixes,
+            allowSecrets: config.replication.allowSecrets === true,
+          }
+        : undefined,
     });
 
     this.tc = new TinyCloud(this.auth, {
@@ -3623,6 +3671,13 @@ export class TinyCloudNode {
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
         : this.config.includeAccountRegistryPermissions,
+      replication: this.config.replication?.enabled === true
+        ? {
+            enabled: true,
+            prefixes: this.config.replication.prefixes,
+            allowSecrets: this.config.replication.allowSecrets === true,
+          }
+        : undefined,
     });
 
     // Create TinyCloud instance
@@ -3692,6 +3747,13 @@ export class TinyCloudNode {
       includeAccountRegistryPermissions: useBootstrapSignInRequest
         ? false
         : this.config.includeAccountRegistryPermissions,
+      replication: this.config.replication?.enabled === true
+        ? {
+            enabled: true,
+            prefixes: this.config.replication.prefixes,
+            allowSecrets: this.config.replication.allowSecrets === true,
+          }
+        : undefined,
     });
 
     this.tc = new TinyCloud(this.auth, {
@@ -5878,56 +5940,36 @@ export class TinyCloudNode {
       return { delegation, prompted: true };
     }
 
-    // 6. Derivability check across ALL entries. If any entry is not a
-    //    subset of the granted session capabilities, the whole call
-    //    fails with a typed error carrying the missing entries — we do
-    //    NOT partially issue and drop the failing ones, because that
-    //    would produce a delegation the caller didn't ask for.
-    //
-    //    `parseRecapCapabilities` is a thin wrapper around the
-    //    injected WASM binding; the binding is required because
-    //    `IWasmBindings` declares `parseRecapFromSiwe` as mandatory.
-    //    If the runtime binding hasn't been updated, this call will
-    //    surface a clear TypeError rather than silently falling
-    //    through.
-    const granted = this.projectSignedRecapCapabilities(session.siwe);
-    const { subset, missing } = this.signedCapabilitySubset(expandedEntries, granted);
-
-    if (!subset) {
-      // This branch only runs when the session recap is NOT a superset of the
-      // requested entries. The synthetic primary grant is built from that same
-      // recap, so it should never cover an entry the recap itself doesn't —
-      // but `operationCovers` is strictly more permissive than
-      // `isCapabilitySubset` (action `/*` and path `/*`/`/**` wildcards), so a
-      // wildcard-bearing recap could slip through and mint a delegation with
-      // the primary session's spaceId (the wrong-space class). Exclude the
-      // primary explicitly; failure then degrades to
-      // PermissionNotInManifestError instead of a wrong-space delegation.
-      const runtimeOperations = this.permissionEntriesToOperations(expandedEntries, session);
-      const runtimeGrant = this.findGrantForOperations(
-        runtimeOperations,
-        { excludePrimary: true },
-      );
-      if (runtimeGrant) {
-        const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
-        if (runtimeGrant.expiresAt.getTime() <= Date.now() + marginMs) {
-          throw new SessionExpiredError(runtimeGrant.expiresAt);
-        }
-        const runtimeExpiration =
-          runtimeGrant.expiresAt < effectiveExpiration
-            ? runtimeGrant.expiresAt
-            : effectiveExpiration;
-        const delegation = await this.createDelegationViaRuntimeGrant(
-          did,
-          expandedEntries,
-          runtimeExpiration,
-          runtimeGrant,
-          runtimeOperations,
-          onPrepared,
-        );
-        return { delegation, prompted: false };
+    // 6. Derivability check across ALL entries. The pure plan is shared with
+    //    {@link planDelegation} (TC-858 replication authority): the session
+    //    path when the signed recap covers every entry, the runtime-grant
+    //    path otherwise, or a refusal classified as CAVEATED_AUTHORITY /
+    //    SESSION_EXPIRING / NOT_COVERED.
+    const plan = this.planDerivation(
+      expandedEntries,
+      session,
+      effectiveExpiration,
+      Date.now(),
+    );
+    if ("refused" in plan) {
+      if (plan.refused === "SESSION_EXPIRING") {
+        throw new SessionExpiredError(plan.expiredAt ?? sessionExpiry ?? new Date(0));
       }
-      throw new PermissionNotInManifestError(missing, granted);
+      if (plan.refused === "CAVEATED_AUTHORITY") {
+        throw new CaveatedDelegationUnsupportedError(plan.caveated ?? []);
+      }
+      throw new PermissionNotInManifestError(plan.missing ?? [], plan.granted ?? []);
+    }
+    if (plan.path === "runtime") {
+      const delegation = await this.createDelegationViaRuntimeGrant(
+        did,
+        expandedEntries,
+        plan.effectiveExpiration,
+        plan.grant,
+        plan.operations,
+        onPrepared,
+      );
+      return { delegation, prompted: false };
     }
 
     // 7. Subset path — sign ONE sub-delegation with the session key
@@ -5945,6 +5987,172 @@ export class TinyCloudNode {
     );
     return { delegation, prompted: false };
   }
+
+  /**
+   * What `delegateTo` would select for `entries`, without signing or any
+   * network call (TC-858 plan v3 §4.3): the session path when the signed
+   * recap covers every entry, the runtime-grant path otherwise, or a
+   * refusal. A refusal of `CAVEATED_AUTHORITY` means coverage exists only
+   * through caveated branches, which the action-only WASM child-delegation
+   * boundary cannot preserve — replication never derives authority through
+   * them. `expiredAt`/`missing`/`granted`/`caveated` carry the payload
+   * `delegateTo` turns back into its typed errors.
+   * @internal
+   */
+  private planDerivation(
+    expandedEntries: PermissionEntry[],
+    session: TinyCloudSession,
+    effectiveExpiration: Date,
+    nowMs: number,
+  ): DelegationPlan {
+    // Requested entries carrying caveats are refused outright: identical to
+    // the assert at the top of both create paths, and to the runtime-grant
+    // path's preservable-caveats refusal.
+    const caveatedRequest = expandedEntries.filter((entry) =>
+      !recapCaveatsEqual(entry.caveats, undefined),
+    );
+    if (caveatedRequest.length > 0) {
+      return { refused: "CAVEATED_AUTHORITY", caveated: caveatedRequest };
+    }
+
+    // Derivability check across ALL entries: same subset check delegateTo
+    // ran, over the same signed recap projection. A caveated grant only
+    // covers the exact same caveat set, so a recap whose only covering
+    // branches are caveated fails here and is re-checked below.
+    const granted = this.projectSignedRecapCapabilities(session.siwe);
+    const { subset, missing } = this.signedCapabilitySubset(expandedEntries, granted);
+    if (subset) {
+      return {
+        path: "session",
+        parentCid: session.delegationCid,
+        expiresAt: effectiveExpiration.getTime(),
+        effectiveExpiration,
+      };
+    }
+
+    const runtimeOperations = this.permissionEntriesToOperations(expandedEntries, session);
+    const runtimeGrant = this.findGrantForOperations(
+      runtimeOperations,
+      { excludePrimary: true },
+    );
+    if (runtimeGrant) {
+      const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
+      if (runtimeGrant.expiresAt.getTime() <= nowMs + marginMs) {
+        return { refused: "SESSION_EXPIRING", expiredAt: runtimeGrant.expiresAt };
+      }
+      const caveated = this.caveatedRuntimeGrantEntries(
+        expandedEntries,
+        runtimeOperations,
+        runtimeGrant,
+      );
+      if (caveated.length > 0) {
+        return { refused: "CAVEATED_AUTHORITY", caveated };
+      }
+      const runtimeExpiration =
+        runtimeGrant.expiresAt < effectiveExpiration
+          ? runtimeGrant.expiresAt
+          : effectiveExpiration;
+      return {
+        path: "runtime",
+        parentCid: runtimeGrant.session.delegationCid,
+        expiresAt: runtimeExpiration.getTime(),
+        effectiveExpiration: runtimeExpiration,
+        grant: runtimeGrant,
+        operations: runtimeOperations,
+      };
+    }
+
+    // No parent. Coverage that exists only behind caveated branches is a
+    // CAVEATED_AUTHORITY refusal, not a plain miss: compare again with
+    // caveats stripped from both sides.
+    const relaxedGranted = granted.map((entry) => ({ ...entry, caveats: undefined }));
+    const relaxedRequested = expandedEntries.map((entry) => ({ ...entry, caveats: undefined }));
+    const relaxed = this.signedCapabilitySubset(relaxedRequested, relaxedGranted);
+    if (relaxed.subset) {
+      return {
+        refused: "CAVEATED_AUTHORITY",
+        caveated: missing.map((entry) => ({ ...entry, caveats: [{ via: "session-recap" }] })),
+      };
+    }
+    return { refused: "NOT_COVERED", missing, granted };
+  }
+
+  /**
+   * The plan `delegateTo(device, entries)` would follow, as a pure lookup:
+   * no WASM sign and no `POST /delegate`. Backs
+   * `ReplicationAuthority.plan` (and `mint` inside it) so a predicted
+   * parent and expiry can never disagree with what a mint would use (§4.3,
+   * §4.4). Session expiry inside the 60 s margin refuses with
+   * `SESSION_EXPIRING`; the same check delegateTo performs.
+   * @internal
+   */
+  planDelegation(
+    entries: PermissionEntry[],
+    options?: { expiry?: string | number },
+  ): DelegationPlan {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      throw new Error("planDelegation requires a non-empty permissions array");
+    }
+    const session = this.currentTinyCloudSession();
+    if (!session) {
+      return { refused: "SESSION_EXPIRING", expiredAt: new Date(0) };
+    }
+    const nowMs = Date.now();
+    const sessionExpiry = extractSiweExpiration(session.siwe);
+    if (
+      sessionExpiry !== undefined &&
+      sessionExpiry.getTime() <= nowMs + TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS
+    ) {
+      return { refused: "SESSION_EXPIRING", expiredAt: sessionExpiry };
+    }
+    const expandedEntries = this.expandPermissionEntries(entries);
+    const expiryMs = resolveExpiryMs(options?.expiry);
+    const expirationTime = new Date(nowMs + expiryMs);
+    const effectiveExpiration =
+      sessionExpiry !== undefined && sessionExpiry < expirationTime
+        ? sessionExpiry
+        : expirationTime;
+    return this.planDerivation(expandedEntries, session, effectiveExpiration, nowMs);
+  }
+
+  /**
+   * The per-prefix authority the replication runtime asks about (TC-858
+   * §4): delegate posture when the session UCAN itself carries unrestricted
+   * get+sync, else a `delegateTo`-minted device grant, else a refusal the
+   * controller reports as `grant_missing`. Pure except for `mint`.
+   * @internal
+   */
+  replicationAuthority(): ReplicationAuthority {
+    return createReplicationAuthority({
+      replicationSession: () => this.currentTinyCloudSession(),
+      siweExpiration: (siwe) => extractSiweExpiration(siwe),
+      planDelegation: (entries, options) => this.planDelegation(entries, options),
+      mintDelegation: async (deviceDid, entries) => {
+        const result = await this.delegateTo(deviceDid, entries);
+        return {
+          ucan: result.delegation.delegationHeader.Authorization,
+          expiresAt: result.delegation.expiry.getTime(),
+        };
+      },
+    });
+  }
+
+  /**
+   * The replication entries this node's sign-in request carries for the
+   * current replication config and the signed-in or restored address: the
+   * output of the same augmentation step `resolveSignInCapabilities` runs,
+   * with the unrestricted-get and secrets gates applied (§4.1, §4.6).
+   * Empty when replication is off or no address is known. Pure.
+   */
+  replicationSignInEntries(): PermissionEntry[] {
+    if (this.config.replication?.enabled !== true) return [];
+    const auth = this.auth as NodeUserAuthorization | undefined;
+    if (auth === undefined || typeof auth.replicationSignInEntries !== "function") {
+      return [];
+    }
+    return auth.replicationSignInEntries();
+  }
+
 
   /**
    * Materialize one manifest-declared delegation using the current session key.
@@ -6250,6 +6458,23 @@ export class TinyCloudNode {
     requestedOperations: RuntimePermissionOperation[],
     grant: RuntimePermissionGrant,
   ): void {
+    const caveated = this.caveatedRuntimeGrantEntries(entries, requestedOperations, grant);
+    if (caveated.length > 0) {
+      throw new CaveatedDelegationUnsupportedError(caveated);
+    }
+  }
+
+  /**
+   * The entries of `grant` that cover a requested operation while carrying
+   * caveats — the branches {@link assertRuntimeGrantCaveatsPreservable}
+   * rejects and {@link planDerivation} classifies as `CAVEATED_AUTHORITY`.
+   * Shared so the pure plan and the mint path can't disagree.
+   */
+  private caveatedRuntimeGrantEntries(
+    entries: PermissionEntry[],
+    requestedOperations: RuntimePermissionOperation[],
+    grant: RuntimePermissionGrant,
+  ): PermissionEntry[] {
     let operationIndex = 0;
     const caveated: PermissionEntry[] = [];
     for (const entry of entries) {
@@ -6269,9 +6494,7 @@ export class TinyCloudNode {
         }
       }
     }
-    if (caveated.length > 0) {
-      throw new CaveatedDelegationUnsupportedError(caveated);
-    }
+    return caveated;
   }
 
   /** Reject caveated parent branches before action-only child signing. */

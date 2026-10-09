@@ -30,9 +30,11 @@
     "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun test src/",
+    "typecheck:replica-contract": "tsc --noEmit -p tsconfig.replica-contract.json",
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {
+    "@tinycloud/replica": "0.1.0",
     "@tinycloud/sdk-services": "3.1.0",
     "@tinycloud/sdk-core": "3.1.0",
     "@tinycloud/node-sdk-wasm": "1.7.7",

@@ -248,7 +248,7 @@ function didPrincipalsMatch(left: string, right: string): boolean {
   }
 }
 
-function compactUcanPayload(authorization: string): Record<string, unknown> {
+export function compactUcanPayload(authorization: string): Record<string, unknown> {
   const compact = authorizationWithoutBearer(authorization);
   const parts = compact.split(".");
   if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
