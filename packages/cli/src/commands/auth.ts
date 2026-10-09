@@ -1734,11 +1734,11 @@ async function handleLocalAuth(
 
   // Sign in using the private key
   const sessionResult = await withSpinner("Signing in...", async () => {
+    const replication = options.replication ?? profile?.replication;
     return localKeySignIn({
       privateKey,
       host,
-      profile: profileName,
-      replication: options.replication ?? profile?.replication,
+      ...(replication?.prefixes.length ? { profile: profileName, replication } : {}),
     });
   });
 

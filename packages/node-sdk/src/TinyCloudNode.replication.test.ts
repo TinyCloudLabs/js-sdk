@@ -21,6 +21,7 @@ import {
   type ReplicationAuthority,
 } from "@tinycloud/sdk-core";
 
+import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";

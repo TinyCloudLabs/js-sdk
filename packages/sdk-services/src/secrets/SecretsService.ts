@@ -67,9 +67,12 @@ export class SecretsService implements ISecretsService {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
-    const result = await this.vault.get<SecretPayload>(secretPath.vaultKey, {
-      ...(options?.source === undefined ? {} : { source: options.source }),
-    });
+    const result =
+      options?.source === undefined
+        ? await this.vault.get<SecretPayload>(secretPath.vaultKey)
+        : await this.vault.get<SecretPayload>(secretPath.vaultKey, {
+            source: options.source,
+          });
     if (!result.ok) {
       return result;
     }

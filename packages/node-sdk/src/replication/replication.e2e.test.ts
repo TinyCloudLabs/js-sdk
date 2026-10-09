@@ -13,6 +13,7 @@ import { canonicalReplicationIdentity, createMemoryPendingStore } from "@tinyclo
 import { ReplicationRuntime } from "./runtime";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
+import "./node-loader";
 import { TinyCloudNode } from "../TinyCloudNode";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

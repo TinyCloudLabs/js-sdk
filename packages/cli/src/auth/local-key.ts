@@ -83,7 +83,7 @@ export async function generateLocalIdentity(chainId: number = 1): Promise<{
 export async function localKeySignIn(options: {
   privateKey: string;
   host: string;
-  profile: string;
+  profile?: string;
   replication?: ProfileReplicationSettings;
 }): Promise<{
   spaceId: string;
@@ -97,8 +97,9 @@ export async function localKeySignIn(options: {
   signature?: string;
 }> {
   const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+  const profile = options.profile ?? "default";
   const replication = createCliReplicationConfig(
-    options.profile,
+    profile,
     options.replication,
     { debug: false, quiet: true },
     options.replication !== undefined,

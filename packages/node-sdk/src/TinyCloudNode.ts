@@ -34,6 +34,7 @@
 import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
 import type { ReplicationRuntime } from "./replication/runtime";
+import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
   TinyCloud,
   TinyCloudSession,
@@ -1097,6 +1098,7 @@ type BootstrapDecision =
   | { action: "skip" }
   | { action: "run"; mode: "fresh" | "repair" };
 
+
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
   private static nodeDefaults?: NodeDefaults;
@@ -1342,9 +1344,9 @@ export class TinyCloudNode {
       host: config.host ?? DEFAULT_HOST,
     };
     if (this.config.replication?.enabled) {
-      const runtime = import(/* webpackIgnore: true */ "./replication/runtime").then(
-        ({ ReplicationRuntime }) => new ReplicationRuntime(this.config.replication!),
-      );
+      const runtime = getNodeReplicationLoaders()
+        .runtime()
+        .then(({ ReplicationRuntime }) => new ReplicationRuntime(this.config.replication!));
       this.replicationRuntime = runtime;
       this.replicationControl = {
         status: async () => (await runtime).control.status(),
@@ -6150,9 +6152,7 @@ export class TinyCloudNode {
     return auth.replicationSignInEntries();
   }
   private async replicationAuthority(): Promise<ReplicationAuthority> {
-    const { createReplicationAuthority } = await import(
-      /* webpackIgnore: true */ "./replication/authority"
-    );
+    const { createReplicationAuthority } = await getNodeReplicationLoaders().authority();
     return createReplicationAuthority({
       replicationSession: () => this.currentTinyCloudSession(),
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
