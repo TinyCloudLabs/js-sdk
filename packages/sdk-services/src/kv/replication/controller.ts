@@ -9,6 +9,7 @@ import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } fr
 import { emitEvent, type ReplicationEventInput } from "./events";
 import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 
+const CLOSE_TIMEOUT_MS = 3_000;
 interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean }
 const nowDate = (now: number) => new Date(now).toISOString();
 const errorCode = (e: unknown): string => typeof e === "object" && e !== null && "code" in e && typeof e.code === "string" ? e.code : "REPLICA_UNAVAILABLE";
@@ -149,6 +150,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     state.sync = job;
     try { return await job; } finally { if (state.sync === job) state.sync = undefined; }
   }
+  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<void> {
+    let cancel = () => {};
+    const timeout = new Promise<"timeout">((resolve) => {
+      cancel = scheduler.setTimeout(() => resolve("timeout"), CLOSE_TIMEOUT_MS);
+    });
+    try {
+      if (await Promise.race([sync.then(() => "settled" as const, () => "settled" as const), timeout]) === "timeout") {
+        emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
+      }
+    } finally { cancel(); }
+  }
   async function freshness(prefix: string, handle: KVReplicaHandle, signal: AbortSignal): Promise<{ status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" }> {
     let currentStatus = await handle.status();
     const syncedAt = currentStatus.lastSyncAt === null ? null : Date.parse(currentStatus.lastSyncAt);
@@ -191,12 +203,12 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if ("callerAborted" in outcome) {
         if (syncController) {
           syncController.abort(signal.reason);
-          await sync.catch(() => undefined);
+          await drainForegroundSync(prefix, sync);
         }
         return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
       }
       if ("timeout" in outcome) {
-        if (syncController) await sync.catch(() => undefined);
+        if (syncController) await drainForegroundSync(prefix, sync);
         return { status: currentStatus, syncedBeforeRead: false, syncError: "TIMEOUT" };
       }
       if ("error" in outcome) {
@@ -354,6 +366,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return value;
     }
     if (r.signal.aborted) return abortedResult(r.signal);
+    if (fresh.syncError === ErrorCodes.TIMEOUT) return err(serviceError(ErrorCodes.TIMEOUT, "KV request timed out", "kv"));
     if (fresh.failure) { const value = await r.network(); readEvent("get", r.path, prefix, "network", fresh.failure === "busy" ? "stale" : "stale", value.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError, syncedBeforeRead: fresh.syncedBeforeRead }); return value; }
     let pendingState: PendingWriteState;
     try { pendingState = await raceSignal(pending.read(), r.signal); }
@@ -439,6 +452,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return result;
     }
     if (r.signal.aborted) return abortedResult(r.signal);
+    if (fresh.syncError === ErrorCodes.TIMEOUT) return err(serviceError(ErrorCodes.TIMEOUT, "KV request timed out", "kv"));
     let state: PendingWriteState;
     try { state = await raceSignal(pending.read(), r.signal); }
     catch (error) {
@@ -595,7 +609,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       await state.handle?.close().catch(() => undefined);
     }));
     let cancel = () => {};
-    const timeout = new Promise<void>((resolve) => { cancel = scheduler.setTimeout(resolve, 3_000); });
+    const timeout = new Promise<void>((resolve) => { cancel = scheduler.setTimeout(resolve, CLOSE_TIMEOUT_MS); });
+
     try { await Promise.race([drain, timeout]); }
     finally { cancel(); }
   }
