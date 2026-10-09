@@ -857,6 +857,115 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect((node as any).wasmBindings.createDelegation).not.toHaveBeenCalled();
   });
 
+  describe("delegateTo onPrepared on the runtime-grant path", () => {
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+    };
+
+    // Installs a runtime grant directly (no grant-time activation request) so
+    // the only `/delegate` call the spy can see is the one delegateTo makes.
+    function makeNodeWithRuntimeGrant(): TinyCloudNode {
+      const node = makeNode(mock(() => ({})));
+      Object.assign(node, {
+        runtimePermissionGrants: [{
+          session: {
+            delegationHeader: { Authorization: "runtime-token" },
+            delegationCid: "runtime-cid",
+            spaceId,
+            verificationMethod: "did:key:default",
+            jwk: { kty: "OKP" },
+          },
+          delegation: {
+            cid: "runtime-cid",
+            delegationHeader: { Authorization: "runtime-token" },
+            spaceId,
+            path: permission.path,
+            actions: permission.actions,
+            expiry: new Date(Date.now() + 3_600_000),
+            delegateDID: "did:key:default",
+            ownerAddress: address,
+            chainId: 1,
+          },
+          operations: [{
+            spaceId,
+            service: "kv",
+            path: permission.path,
+            action: "tinycloud.kv/put",
+          }],
+          expiresAt: new Date(Date.now() + 3_600_000),
+          provenance: "delegated",
+        }],
+      });
+      return node;
+    }
+
+    async function withFetchSpy(
+      events: string[],
+      fn: () => Promise<void>,
+    ): Promise<void> {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        events.push(`fetch:${String(input)}`);
+        return new Response(JSON.stringify({ activated: ["child-runtime-cid"] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      try {
+        await fn();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+
+    test("hook receives the returned delegation before the activation request", async () => {
+      const node = makeNodeWithRuntimeGrant();
+      const events: string[] = [];
+      let prepared: unknown;
+
+      await withFetchSpy(events, async () => {
+        const result = await node.delegateTo("did:key:backend", [permission], {
+          onPrepared: async (delegation) => {
+            events.push(`hook:${delegation.cid}`);
+            prepared = delegation;
+          },
+        });
+        expect(result.prompted).toBe(false);
+        expect(prepared).toBe(result.delegation);
+        expect(result.delegation.cid).toBe("child-runtime-cid");
+      });
+
+      expect(events).toEqual([
+        "hook:child-runtime-cid",
+        "fetch:https://tinycloud.test/delegate",
+      ]);
+    });
+
+    test("rejecting hook propagates the same error and sends no activation request", async () => {
+      const node = makeNodeWithRuntimeGrant();
+      const events: string[] = [];
+      const failure = new Error("inventory write failed");
+
+      await withFetchSpy(events, async () => {
+        await expect(
+          node.delegateTo("did:key:backend", [permission], {
+            onPrepared: async () => {
+              events.push("hook");
+              throw failure;
+            },
+          }),
+        ).rejects.toBe(failure);
+      });
+
+      expect(events).toEqual(["hook"]);
+    });
+  });
+
   test("rejects an uncaveated public request selected against a caveated runtime grant", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
