@@ -83,7 +83,7 @@ export function registerUpgradeCommand(program: Command): void {
           process.stderr.write(`  ${theme.command(`npm install -g ${PACKAGE_NAME}@latest`)}\n`);
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

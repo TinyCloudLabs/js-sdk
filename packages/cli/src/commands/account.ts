@@ -24,7 +24,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(status);
         outputJson(status.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -63,7 +63,7 @@ export function registerAccountCommand(program: Command): void {
           ) + "\n",
         );
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -102,7 +102,7 @@ export function registerAccountCommand(program: Command): void {
           ) + "\n",
         );
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -116,7 +116,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson(formatSpace(result.data));
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -141,7 +141,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ space: formatSpace(result.data), registered: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -155,7 +155,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ spaces: result.data.map(formatSpace), count: result.data.length, synced: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -170,7 +170,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ spaceId, removed: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -184,7 +184,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson(result.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -199,7 +199,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ application: result.data, registered: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -214,7 +214,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ appId, removed: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -261,7 +261,7 @@ export function registerAccountCommand(program: Command): void {
           ) + "\n",
         );
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -276,7 +276,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ cid, space: options.space, revoked: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -292,7 +292,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson({ ...result.data, ensured: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -306,7 +306,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson(result.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -320,7 +320,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson(result.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -336,7 +336,7 @@ export function registerAccountCommand(program: Command): void {
         assertOk(result);
         outputJson(result.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -354,7 +354,7 @@ export function registerAccountCommand(program: Command): void {
           }
           outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
         } catch (error) {
-          handleError(error);
+          return handleError(error);
         }
       });
   }

@@ -1,3 +1,4 @@
+import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
@@ -147,7 +148,7 @@ export function storageFullError(error: unknown, progress?: string): CLIError | 
   return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
 
-export function handleError(error: unknown): never {
+export function handleError(error: unknown): Promise<never> {
   const cliError = wrapError(error);
   // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
   // hint) takes precedence over the derived auth/network hints.
@@ -172,7 +173,8 @@ export function handleError(error: unknown): never {
     ...(Object.keys(meta).length ? { meta } : {}),
     warnings: operationWarnings(cliError.metadata?.warnings),
   });
-  process.exit(cliError.exitCode);
+  if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+  return closeReplication().then(() => process.exit(cliError.exitCode));
 }
 
 function buildAuthHint(error: CLIError): string | undefined {

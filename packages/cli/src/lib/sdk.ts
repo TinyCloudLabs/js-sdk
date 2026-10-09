@@ -6,6 +6,7 @@ import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
 
+export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
 /**
  * Returns true when a JWK carries the private-key parameter required by the
  * WASM signer. The CLI is OKP/EC-only (Ed25519, secp256k1) where `d` is the

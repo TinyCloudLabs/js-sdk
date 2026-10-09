@@ -136,7 +136,7 @@ Output:
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -181,7 +181,7 @@ Output:
           lastInsertRowId: result.data.lastInsertRowId,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -229,7 +229,7 @@ Output:
           sizeHuman: formatBytes(blob.size),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -360,7 +360,7 @@ Notes:
           tables: plan.map((p) => ({ table: p.table, rowsRead: p.rows, rowsWritten: p.copied })),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

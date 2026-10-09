@@ -479,6 +479,8 @@ export function invokeCommanderSecretGetAdapter(params: {
       verbose: false,
       noCache: false,
       quiet: true,
+      replication: false,
+      replicationDebug: false,
     },
     name: params.input.name,
     ...(params.input.scope === undefined ? {} : { scope: params.input.scope }),
@@ -1086,7 +1088,7 @@ export function registerSecretsCommand(
           ...(descriptor ? { descriptor } : {}),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1109,7 +1111,7 @@ export function registerSecretsCommand(
           descriptor,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1216,7 +1218,7 @@ export function registerSecretsCommand(
           checks,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1258,7 +1260,7 @@ export function registerSecretsCommand(
           ...(spaceUri ? { space: spaceUri } : {}),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1363,7 +1365,7 @@ export function registerSecretsCommand(
         }
         outputWarnings(operationWarnings(result.warnings));
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1421,7 +1423,7 @@ export function registerSecretsCommand(
 
         outputJson({ name, written: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1457,7 +1459,7 @@ export function registerSecretsCommand(
 
         outputJson({ name, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1494,7 +1496,7 @@ export function registerSecretsCommand(
           actions: result.delegation.actions,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1508,7 +1510,7 @@ export function registerSecretsCommand(
         await open("https://secrets.tinycloud.xyz");
         outputJson({ opened: "https://secrets.tinycloud.xyz" });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }
