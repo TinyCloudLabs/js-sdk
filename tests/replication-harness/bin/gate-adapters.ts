@@ -14,6 +14,7 @@ import { scenarioRegistry, expandScenarios, validateRegistry, type ProbeRequirem
 import { createRunReportBase, runRowsWithInterrupt } from "../src/runner/run";
 import { createScenarioExecutor } from "../src/runner/executor";
 import { ResolvedImageSchema, RunInputsSchema } from "../src/schemas/gate";
+import { RunReportSchema, type ValidatedRunReport } from "../src/schemas/report";
 import { aggregate, aggregateExitCode, type LegEvidence } from "../src/gate/aggregate";
 import { createManifest, type ManifestRegistry } from "../src/gate/manifest";
 import { resolveInputs, readResolveEvent, subjectFromEvent } from "../src/gate/resolve";
@@ -292,13 +293,17 @@ export async function runLegCommand(args: { options: Record<string, string | tru
   if (reportConclusion([evidence]) !== "success") process.exitCode = 1;
 }
 
+function validReport(value: unknown): ValidatedRunReport | null {
+  const parsed = RunReportSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 function reportConclusion(legs: readonly LegEvidence[]): "success" | "failure" | "cancelled" | "skipped" {
   if (!legs.length) return "failure";
   for (const leg of legs) {
-    const report = leg.report as Partial<RunReport> | null;
-    if (!report || typeof report !== "object") return "failure";
-    if (report.interrupted || report.results?.some((row) => row.reason === "INTERRUPTED" || (row.status as string) === "cancelled")) return "cancelled";
-    if (!report.results || report.results.some((row) => row.status !== "pass")) return "failure";
+    const report = validReport(leg.report);
+    if (!report) return "failure";
+    if (report.interrupted || report.results.some((row) => row.reason === "INTERRUPTED" || (row.status as string) === "cancelled")) return "cancelled";
+    if (report.results.some((row) => row.status !== "pass")) return "failure";
   }
   return "success";
 }
@@ -348,8 +353,8 @@ export async function aggregateCommand(args: { options: Record<string, string | 
     }
   }
   const legSet = (leg: LegEvidence): SetId | null | "companion" => {
-    const report = leg.report as Partial<RunReport> | null;
-    if (report?.invocation && report.invocation.set !== undefined) return report.invocation.set;
+    const report = validReport(leg.report);
+    if (report) return report.invocation.set;
     const expected = expectedLegs.find((entry) => entry.name === leg.name);
     if (expected) return expected.set;
     return leg.name.startsWith("companion-") ? "companion" : null;

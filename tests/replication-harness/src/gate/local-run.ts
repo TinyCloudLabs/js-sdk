@@ -1,24 +1,21 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AggregateReport, Manifest, RunInputs } from "../contracts/gate";
+import { RunReportSchema, type ValidatedRunReport } from "../schemas/report";
 import type { SetId } from "../contracts/common";
 import type { LegEvidence } from "./aggregate";
 import { aggregate } from "./aggregate";
 
 function legConclusion(legs: LegEvidence[], set?: SetId | null): "success" | "failure" | "cancelled" {
-  const selected = legs.filter((leg) => {
-    const report = leg.report as { invocation?: { set?: SetId | null }; interrupted?: boolean; results?: { status?: string; reason?: string }[] };
-    return set === undefined ? report.invocation?.set !== null && report.invocation?.set !== undefined : report.invocation?.set === set;
-  });
+  const selected: ValidatedRunReport[] = [];
+  for (const leg of legs) {
+    const parsed = RunReportSchema.safeParse(leg.report);
+    if (!parsed.success) return "failure";
+    if (set === undefined ? parsed.data.invocation.set !== null : parsed.data.invocation.set === set) selected.push(parsed.data);
+  }
   if (!selected.length) return "failure";
-  if (selected.some((leg) => {
-    const report = leg.report as { interrupted?: boolean; results?: { status?: string; reason?: string }[] };
-    return report.interrupted === true || report.results?.some((row) => row.reason === "INTERRUPTED" || row.status === "cancelled");
-  })) return "cancelled";
-  if (selected.some((leg) => {
-    const report = leg.report as { results?: { status?: string }[] };
-    return !report.results || report.results.some((row) => row.status !== "pass");
-  })) return "failure";
+  if (selected.some((report) => report.interrupted || report.results.some((row) => row.reason === "INTERRUPTED" || (row.status as string) === "cancelled"))) return "cancelled";
+  if (selected.some((report) => report.results.some((row) => row.status !== "pass"))) return "failure";
   return "success";
 }
 

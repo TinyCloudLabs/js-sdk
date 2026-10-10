@@ -143,12 +143,15 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
   const failIfPassing = (conclusion: AggregateReport["legCoreConclusion"]) => conclusion === "success" ? "failure" as const : conclusion;
   for (const evidence of options.legs) {
     const parsed = RunReportSchema.safeParse(evidence.report);
-    if (!parsed.success || parsed.data.kind !== "leg") {
+    const emptyBackends = parsed.success && parsed.data.invocation.backends.length === 0;
+    if (!parsed.success || parsed.data.kind !== "leg" || emptyBackends) {
       const detail = evidence.parseError
         ? `report.json is not valid JSON (${evidence.parseError})`
-        : parsed.success
-          ? `report kind ${JSON.stringify(parsed.data.kind)} is not "leg"`
-          : `report fails schema validation (${parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : "invalid"})`;
+        : emptyBackends && parsed.success
+          ? `leg report declares no invocation backends`
+          : parsed.success
+            ? `report kind ${JSON.stringify(parsed.data.kind)} is not "leg"`
+            : `report fails schema validation (${parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : "invalid"})`;
       const expected = options.expectedLegs?.find((entry) => entry.name === evidence.name);
       const set: SetId | "core" | "companion" = expected ? (expected.set ?? "core") : evidence.name.startsWith("companion-") ? "companion" : "core";
       invalidLegs.set(set, [...(invalidLegs.get(set) ?? []), { evidence, detail }]);

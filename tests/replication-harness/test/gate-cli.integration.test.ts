@@ -231,4 +231,78 @@ describe("executable gate CLI adapters", () => {
     const driftReport = JSON.parse(await readFile(join(root, "drift-aggregate", "aggregate.json"), "utf8"));
     expect(driftReport.legCoreConclusion).toBe("failure");
   });
+  test("schema-invalid leg reports still write the aggregate and fail the conclusion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc893-invalid-"));
+    roots.push(root);
+    const env = {
+      TC893_RUNTIME_MODULE: runtimeModule,
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_REF: "refs/pull/475/merge",
+      GITHUB_SHA: "f".repeat(40),
+      GITHUB_RUN_ID: "12345",
+      GITHUB_RUN_ATTEMPT: "1",
+    };
+    const gateEvent = {
+      repository: { full_name: "TinyCloudLabs/js-sdk" },
+      pull_request: { number: 475, head: { sha: "a".repeat(40), ref: "feat/tc-893-harness-s3b" }, base: { sha: "b".repeat(40), ref: "master" } },
+    };
+    const gateEventFile = join(root, "gate-event.json");
+    await writeFile(gateEventFile, JSON.stringify(gateEvent));
+    const gateInputs = join(root, "gate-in");
+    const gateResolved = command(["resolve", "--event-file", gateEventFile,
+      "--dispatch-inputs", JSON.stringify({ gate: "tc858-phase1-workspace", clients: "workspace", set: "phase1-companion", tier: "core", backends: '["sqlite","pg16"]' }),
+      "--out", gateInputs], env);
+    expect(gateResolved.exitCode).toBe(0);
+    const gateMatrix = JSON.parse(gateResolved.stdout?.toString() ?? "") as { include: { name: string }[] };
+    const gateLegs = join(root, "gate-legs");
+    for (const leg of gateMatrix.include) {
+      const run = command(["run", "--inputs", join(gateInputs, "inputs.json"), "--leg", leg.name, "--results", join(gateLegs, leg.name)], env);
+      expect(run.exitCode).toBe(0);
+    }
+    const adhocEventFile = join(root, "adhoc-event.json");
+    await writeFile(adhocEventFile, JSON.stringify({ repository: { full_name: "TinyCloudLabs/js-sdk" }, ref: "refs/heads/adhoc", after: "0".repeat(40) }));
+    const adhocEnv = { ...env, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/adhoc", GITHUB_SHA: "0".repeat(40) };
+    const adhocInputs = join(root, "adhoc-in");
+    const adhocResolved = command(["resolve", "--event-file", adhocEventFile,
+      "--dispatch-inputs", JSON.stringify({ gate: "none", clients: "workspace", tier: "core", backends: '["sqlite"]' }), "--out", adhocInputs], adhocEnv);
+    expect(adhocResolved.exitCode).toBe(0);
+    const adhocLegs = join(root, "adhoc-legs");
+    const adhocRun = command(["run", "--inputs", join(adhocInputs, "inputs.json"), "--leg", "core-sqlite", "--results", join(adhocLegs, "core-sqlite")], adhocEnv);
+    expect(adhocRun.exitCode).toBe(0);
+
+    const gateReportPath = join(gateLegs, "core-sqlite", "report.json");
+    const adhocReportPath = join(adhocLegs, "core-sqlite", "report.json");
+    const mutations: { label: string; rewrite: (report: unknown) => string }[] = [
+      { label: "results-string", rewrite: (report) => JSON.stringify({ ...(report as Record<string, unknown>), results: "bad" }) },
+      { label: "results-null", rewrite: (report) => JSON.stringify({ ...(report as Record<string, unknown>), results: null }) },
+      { label: "top-level-array", rewrite: () => "[]" },
+      { label: "missing-interrupted", rewrite: (report) => { const clone = { ...(report as Record<string, unknown>) }; delete clone.interrupted; return JSON.stringify(clone); } },
+      { label: "empty-backends", rewrite: (report) => { const clone = JSON.parse(JSON.stringify(report)) as { invocation: { backends: string[] } }; clone.invocation.backends = []; return JSON.stringify(clone); } },
+    ];
+    for (const [index, mutation] of mutations.entries()) {
+      const gateCopy = join(root, `gate-invalid-${index}`);
+      await cp(gateLegs, gateCopy, { recursive: true });
+      const gateReport = JSON.parse(await readFile(gateReportPath, "utf8"));
+      await writeFile(join(gateCopy, "core-sqlite", "report.json"), mutation.rewrite(gateReport));
+      const gateOut = join(root, `gate-invalid-out-${index}`);
+      const gateResult = command(["aggregate", "--inputs", join(gateInputs, "inputs.json"), "--legs", gateCopy,
+        "--leg-core-conclusion", "success", "--leg-companion-conclusion", "success", "--out", gateOut], env);
+      expect(gateResult.exitCode).toBe(3);
+      const gateAggregate = JSON.parse(await readFile(join(gateOut, "aggregate.json"), "utf8"));
+      expect(gateAggregate.gate.passed).toBe(false);
+      expect(gateAggregate.legCoreConclusion).toBe("failure");
+      expect(gateAggregate.gate.reasons.some((item: { code: string; leg?: string }) => item.code === "MISSING_LEG" && item.leg === "core-sqlite")).toBe(true);
+
+      const adhocCopy = join(root, `adhoc-invalid-${index}`);
+      await cp(adhocLegs, adhocCopy, { recursive: true });
+      const adhocReport = JSON.parse(await readFile(adhocReportPath, "utf8"));
+      await writeFile(join(adhocCopy, "core-sqlite", "report.json"), mutation.rewrite(adhocReport));
+      const adhocOut = join(root, `adhoc-invalid-out-${index}`);
+      const adhocResult = command(["aggregate", "--inputs", join(adhocInputs, "inputs.json"), "--legs", adhocCopy,
+        "--leg-core-conclusion", "success", "--leg-companion-conclusion", "success", "--out", adhocOut], adhocEnv);
+      expect(adhocResult.exitCode).toBe(1);
+      const adhocAggregate = JSON.parse(await readFile(join(adhocOut, "aggregate.json"), "utf8"));
+      expect(adhocAggregate.legCoreConclusion).toBe("failure");
+    }
+  });
 });
