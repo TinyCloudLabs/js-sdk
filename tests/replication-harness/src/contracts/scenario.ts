@@ -4,7 +4,7 @@ import type { TopologySpec } from "./topology";
 import type { RunEnvironment, ResolvedImage, ResolvedSut, Topology } from "./lifecycle";
 import type { KvClient } from "./client";
 export type Status = "pass" | "fail" | "error" | "skipped" | "unsupported" | "xfail" | "xpass";
-export type Requirement = "workspace-sut" | "unshare" | "node-image:previous" | "tc12:host-sync";
+export type Requirement = "workspace-sut" | "unshare" | "node-image:previous" | "tc12:host-sync" | "tc674:delegate-session-expiry";
 export interface RunContextView { tiers: Tier[]; backends: Backend[]; sut: ResolvedSut; image: ResolvedImage; ciPinImage: string }
 export interface Scenario<V extends string = string> {
   id: string; title: string; tier: Tier; sets?: readonly SetId[]; variants?: readonly V[]; backends?: readonly Backend[];

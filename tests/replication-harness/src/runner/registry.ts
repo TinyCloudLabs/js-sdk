@@ -4,6 +4,7 @@ import type { Requirement, RunContextView, Scenario } from "../contracts/scenari
 export type ScenarioRow = { key: string; id: string; variant: string | null; backend: Backend; tier: Tier; sets: SetId[]; scenario: Scenario; reason?: string; unavailableStatus?: "skipped" | "unsupported"; forcedUnsupported?: boolean };
 export type RegistryFilters = { tiers?: readonly Tier[]; set?: SetId | null; only?: readonly string[]; variants?: readonly string[]; backends: readonly Backend[]; forceUnsupported?: boolean };
 export type ProbeRequirement = (requirement: Requirement) => true | string;
+const expectedUnsupportedRequirements = new Set<Requirement>(["tc12:host-sync", "tc674:delegate-session-expiry"]);
 export const scenarioRegistry: Scenario[] = [];
 export function registerScenarios(...scenarios: Scenario[]): void {
   scenarioRegistry.push(...scenarios);
@@ -53,13 +54,14 @@ export function expandScenarios(scenarios: readonly Scenario[], filters: Registr
         result: probe ? probe(requirement) : `requirement probe unavailable: ${requirement}`,
         missingProbe: !probe,
       })).find(({ result }) => result !== true);
-      const forceUnsupported = filters.forceUnsupported && (requirementFailure?.missingProbe || requirementFailure?.requirement === "tc12:host-sync");
+      const isExpectedUnsupported = requirementFailure !== undefined && expectedUnsupportedRequirements.has(requirementFailure.requirement);
+      const forceUnsupported = filters.forceUnsupported && (requirementFailure?.missingProbe || isExpectedUnsupported);
       for (const backend of scenario.backends ?? filters.backends) {
         if (!filters.backends.includes(backend)) continue;
         const key = `${scenario.id}${variant === null ? "" : `[${variant}]`}@${backend}`;
         rows.push({ key, id: scenario.id, variant, backend, tier: scenario.tier, sets: [...(scenario.sets ?? [])], scenario,
           ...(requirementFailure && !forceUnsupported ? { reason: requirementFailure.result as string,
-            unavailableStatus: requirementFailure.missingProbe || requirementFailure.requirement === "tc12:host-sync" ? "unsupported" as const : "skipped" as const } : {}),
+            unavailableStatus: requirementFailure.missingProbe || isExpectedUnsupported ? "unsupported" as const : "skipped" as const } : {}),
           ...(forceUnsupported ? { forcedUnsupported: true } : {}) });
       }
     }

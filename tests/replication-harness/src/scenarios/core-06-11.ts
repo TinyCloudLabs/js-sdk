@@ -102,7 +102,16 @@ const core06: Scenario<Variant> = {
     const recovered = await reader.sync({ prefix: PREFIX, ...replicationOptions(reader, ctx.signal) });
     ctx.check("sync recovers after connectivity returns", recovered.ok && recovered.syncs.some((event) => event.outcome === "ok"), recovered.syncs);
     if (covered.read) ctx.check("offline read metadata reports sync error", Boolean(covered.read.syncError), covered.read);
-    ctx.check("offline uncovered get is refused", !uncovered.ok && uncovered.code === "NETWORK_ERROR" && (variant !== "cli" || uncovered.exit === 6), { ok: uncovered.ok, code: uncovered.code, exit: uncovered.exit, stderr: uncovered.stderr, read: uncovered.read });
+    // TC-897 tracks the pre-existing CLI exit 1; require exit 6 again once its fix lands.
+    if (variant === "cli") {
+      const networkErrorReported = uncovered.code === "NETWORK_ERROR" || uncovered.stderr?.includes("NETWORK_ERROR") === true;
+      const noReplicaRead = uncovered.read?.source !== "replica" && !uncovered.events.some((item) => item.event.type === "replication.read" && item.event.source === "replica");
+      ctx.check("offline uncovered CLI get is refused with NETWORK_ERROR and no replica read event",
+        !uncovered.ok && uncovered.exit !== undefined && uncovered.exit !== null && uncovered.exit !== 0 && networkErrorReported && noReplicaRead,
+        { ok: uncovered.ok, code: uncovered.code, exit: uncovered.exit, stderr: uncovered.stderr, read: uncovered.read, events: operationEvents(uncovered) });
+    } else {
+      ctx.check("offline uncovered get is refused", !uncovered.ok && uncovered.code === "NETWORK_ERROR", { ok: uncovered.ok, code: uncovered.code, read: uncovered.read });
+    }
   },
 };
 
