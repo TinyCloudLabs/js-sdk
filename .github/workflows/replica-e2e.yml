@@ -21,6 +21,8 @@ on:
       - "packages/web-sdk/**"
       - ".github/scripts/**"
       - ".github/workflows/replica-e2e.yml"
+      - "tests/replication-harness/**"
+      - ".github/workflows/replication-harness.yml"
   schedule:
     - cron: "17 4 * * 1"
   push:
@@ -107,13 +109,6 @@ jobs:
       - name: Prepare JUnit reports
         run: mkdir -p "$RUNNER_TEMP/replica-junit"
 
-      - name: node-sdk replication against the node
-        if: always() && matrix.database == 'sqlite'
-        env:
-          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-        run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
-
       - name: Start Postgres 16
         if: matrix.database == 'postgres'
         run: |
@@ -124,6 +119,21 @@ jobs:
           done
           docker logs replica-e2e-pg
           exit 1
+
+      - name: node-sdk replication against the SQLite node
+        if: always() && matrix.database == 'sqlite'
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
+
+      - name: node-sdk replication against the Postgres node
+        if: always() && matrix.database == 'postgres'
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TINYCLOUD_STORAGE__DATABASE: postgres://postgres:postgres@127.0.0.1:5432/replica_e2e
+        run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
 
       - name: Replica engine and store conformance
         if: matrix.database == 'sqlite'
@@ -150,7 +160,7 @@ jobs:
         run: bun test packages/cli/test/replication-flag.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-flag.xml"
       - name: Enforce real-node JUnit counts and zero skips
         if: always()
-        run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--node-sdk' || '' }}
+        run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--cli-replica-command' || '' }}
       - name: Upload backend JUnit reports
         if: always()
         uses: actions/upload-artifact@v4

@@ -2,12 +2,12 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const root = process.env.RUNNER_TEMP ?? process.cwd();
-const includeNodeSdk = process.argv.includes("--node-sdk");
+const includeCliReplicaCommand = process.argv.includes("--cli-replica-command");
 const suites = [
-  ...(includeNodeSdk ? [{ name: "node-sdk real-node", file: "node-sdk.xml", min: 10 }] : []),
+  { name: "node-sdk real-node", file: "node-sdk.xml", min: 10 },
   { name: "CLI replication flag real-node", file: "cli-flag.xml", min: 1 },
   { name: "CLI replica real-node", file: "cli-replica-e2e.xml", min: 4 },
-  ...(includeNodeSdk ? [{ name: "CLI replica command", file: "cli-replica-command.xml", min: 11 }] : []),
+  ...(includeCliReplicaCommand ? [{ name: "CLI replica command", file: "cli-replica-command.xml", min: 11 }] : []),
 ];
 let failed = false;
 for (const suite of suites) {
