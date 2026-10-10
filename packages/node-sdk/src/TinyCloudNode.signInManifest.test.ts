@@ -1018,8 +1018,8 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     // this fix (TC-372) exists to prevent.
     let registrySync: Promise<void> | undefined;
     const originalWithAccountRegistryRetry = (node as any).withAccountRegistryRetry.bind(node);
-    (node as any).withAccountRegistryRetry = (task: () => Promise<void>) => {
-      registrySync = originalWithAccountRegistryRetry(task);
+    (node as any).withAccountRegistryRetry = (task: () => Promise<void>, signal: AbortSignal) => {
+      registrySync = originalWithAccountRegistryRetry(task, signal);
       return registrySync;
     };
 

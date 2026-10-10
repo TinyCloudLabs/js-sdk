@@ -2728,11 +2728,10 @@ export class TinyCloudNode {
       );
     }
 
-    const created = await (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(
-      spaceId,
-      undefined,
-      signal,
-    );
+    const authorization = this.auth as NodeUserAuthorization;
+    const created = signal
+      ? await authorization.hostOwnedSpaceResult(spaceId, undefined, signal)
+      : await authorization.hostOwnedSpaceResult(spaceId);
     if (!created.success) {
       throw Object.assign(
         new Error(`Failed to create owned space ${spaceId}: ${describeHostFailure(created)}`),
