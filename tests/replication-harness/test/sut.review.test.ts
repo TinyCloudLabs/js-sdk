@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { checkInstalledIntegrity, installedFilesSha256, publishedCachePrefix, verifyInstalledFiles } from "../src/clients/sut";
+import { checkInstalledIntegrity, cleanupPublishedSutCache, installedFilesSha256, publishedCachePrefix, verifyInstalledFiles } from "../src/clients/sut";
 
 describe("published SUT integrity", () => {
   test("rejects installed package-lock integrity that differs from the registry", async () => {
@@ -44,5 +44,17 @@ describe("published SUT integrity", () => {
     const first = publishedCachePrefix("/tmp", "run-a", "1.1.0-beta.24", "3.1.0-beta.15");
     const second = publishedCachePrefix("/tmp", "run-b", "1.1.0-beta.24", "3.1.0-beta.15");
     expect(first).not.toBe(second);
+  });
+  test("removes per-run published install directories during cleanup", async () => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), "tc893-sut-cache-cleanup-"));
+    const prefix = publishedCachePrefix(cacheRoot, "test-run", "1.1.0-beta.24", "3.1.0-beta.15");
+    try {
+      await mkdir(prefix, { recursive: true });
+      await writeFile(join(prefix, "package-lock.json"), "{}");
+      await cleanupPublishedSutCache(cacheRoot, "test-run");
+      await expect(stat(prefix)).rejects.toThrow();
+    } finally {
+      await rm(cacheRoot, { recursive: true, force: true });
+    }
   });
 });

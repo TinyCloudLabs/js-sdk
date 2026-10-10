@@ -89,6 +89,7 @@ async function handle(op, args, controller) {
     }
     case "session.export": return { session: savedSession ?? node.restorableSession };
     case "session.restore": {
+      if (savedPosture === "delegate-session") throw Object.assign(new Error("Delegate sessions must be restored from their combined device proof"), { code: "CLIENT_UNSUPPORTED_OPTION" });
       savedPosture = "owner";
       await node.restoreSession({ ...args.session, tinycloudHosts: args.hosts });
       savedSession = { ...args.session, tinycloudHosts: args.hosts };
@@ -119,7 +120,7 @@ async function handle(op, args, controller) {
       return { spaceId: compact.spaceId, sessionExpiresAt: sessionExpiry(compact) };
     }
     case "kv.get": {
-      const result = await node.kv.get(args.key, { source: args.source, maxResponseBytes: args.maxResponseBytes, timeout: args.timeoutMs, space: args.space, signal: controller.signal, binary: true });
+      const result = await node.kv.get(args.key, { source: args.source, maxResponseBytes: args.maxResponseBytes, timeout: args.timeoutMs, signal: controller.signal, binary: true });
       if (result?.ok === false) return result.error?.code === "KV_NOT_FOUND" ? { found: false } : result;
       const value = sdkValue(result)?.data;
       return value === undefined || value === null ? { found: false } : { found: true, value: encoded(value) };

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { lstat, mkdir, readFile, readdir, realpath, readlink, symlink, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { lstat, mkdir, readFile, readdir, realpath, readlink, symlink, writeFile, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -20,11 +21,20 @@ interface CachedPublishedSut {
   readonly cliIntegrity: string;
   readonly sdkIntegrity: string;
 }
+export function publishedCacheRunDirectory(cacheRoot: string, runId: string): string {
+  return join(cacheRoot, "tc893-sut-cache", runId);
+}
 export function publishedCachePrefix(cacheRoot: string, runId: string, cliVersion: string, nodeSdkVersion: string): string {
-  return join(cacheRoot, "tc893-sut-cache", runId, `tc893-${cliVersion}+${nodeSdkVersion}`);
+  return join(publishedCacheRunDirectory(cacheRoot, runId), `tc893-${cliVersion}+${nodeSdkVersion}`);
 }
 const publishedCacheRunId = `${process.pid}-${randomUUID()}`;
 const publishedInstalls = new Map<string, Promise<CachedPublishedSut>>();
+process.once("exit", () => rmSync(publishedCacheRunDirectory(tmpdir(), publishedCacheRunId), { recursive: true, force: true }));
+export async function cleanupPublishedSutCache(cacheRoot = tmpdir(), runId = publishedCacheRunId): Promise<void> {
+  await Promise.allSettled([...publishedInstalls.values()]);
+  await rm(publishedCacheRunDirectory(cacheRoot, runId), { recursive: true, force: true });
+  if (cacheRoot === tmpdir() && runId === publishedCacheRunId) publishedInstalls.clear();
+}
 interface NpmMetadata { version: string; integrity?: string }
 
 function fail(message: string, detail?: unknown): never {

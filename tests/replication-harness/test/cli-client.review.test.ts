@@ -136,6 +136,7 @@ console.log(JSON.stringify({ release: process.release.name, version: process.ver
     const networkArgs = JSON.parse(await readFile(join(home, "args.json"), "utf8")) as string[];
     expect(networkArgs).toContain("--no-replication");
     expect(networkArgs).not.toContain("--replication");
+    await expect(cli.clearPending({ keys: [] })).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_OPTION" });
   });
   test("records expiry returned by a direct delegate grant import", async () => {
     const root = await temporaryDirectory();
@@ -292,6 +293,7 @@ console.error("cli-stderr-canary");
 if (key === "missing") process.exit(4);
 if (key === "failed") process.exit(1);
 if (key === "killed") process.kill(process.pid, "SIGKILL");
+if (args.includes("delete")) process.exit(1);
 `);
     const cli = new CliClientImpl({ id: "get-results", home, artifactDirectory: artifacts, cliEntry: entry, host: "http://127.0.0.1" });
     const missing = await cli.get("missing");
@@ -301,6 +303,8 @@ if (key === "killed") process.kill(process.pid, "SIGKILL");
     const killed = await cli.get("killed");
     expect(killed).toMatchObject({ ok: false, found: false, code: "SIGNAL_SIGKILL", exit: null, signal: "SIGKILL" });
     await expect(cli.restart({ auth: "fresh-sign-in" })).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_OPTION" });
+    const deleted = await cli.del("delete-failed");
+    expect(deleted).toMatchObject({ ok: false, outcome: "failed", code: "EXIT_1" });
     expect(await readFile(join(artifacts, "stderr.log"), "utf8")).toContain("cli-stderr-canary");
     await readFile(join(artifacts, "events.jsonl"), "utf8");
   });
@@ -355,6 +359,66 @@ if (args.includes("auth") && args.includes("login")) {
     const aliasResult = await aliasClient.tc(["hello"]);
     expect(JSON.parse(Buffer.from(aliasResult.stdout).toString("utf8"))).toMatchObject({ host: "http://127.0.0.1:9876" });
     expect(JSON.parse(Buffer.from(aliasResult.stdout).toString("utf8")).profile).not.toBe("owner");
+  });
+  test("attributes a joining start sync to the manual CLI sync, but keeps interval background", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const entry = await cliEntry(root, `
+import { appendFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+const profile = args[args.indexOf("--profile") + 1];
+const directory = join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "replication");
+await mkdir(directory, { recursive: true });
+const events = [
+  { type: "replication.sync", trigger: "start", outcome: "ok" },
+  { type: "replication.sync", trigger: "interval", outcome: "ok" },
+];
+await appendFile(join(directory, "events.jsonl"), events.map((event) => JSON.stringify(event)).join("\\n") + "\\n");
+console.log(JSON.stringify({ keys: [] }));
+`);
+    const cli = new CliClientImpl({ id: "start-sync", home, cliEntry: entry, host: "http://node.example" });
+    const result = await cli.sync({ prefix: "notes/" });
+    expect(result.ok).toBe(true);
+    expect(result.syncs).toEqual([{ type: "replication.sync", trigger: "start", outcome: "ok" }]);
+    expect(result.events).toMatchObject([
+      { attribution: "op", opSeq: result.opSeq, event: { trigger: "start" } },
+      { attribution: "background", opSeq: null, event: { trigger: "interval" } },
+    ]);
+  });
+
+  test("allocates CLI operation sequence before host-profile setup awaits", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const source = join(home, ".tinycloud", "profiles", "owner");
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, "key.json"), JSON.stringify({ kty: "EC", d: "synthetic" }));
+    await writeFile(join(source, "profile.json"), JSON.stringify({ privateKey: "a".repeat(64), posture: "local-owner-key" }));
+    const entry = await cliEntry(root, `
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const profile = args[args.indexOf("--profile") + 1];
+if (args.includes("auth") && args.includes("login")) {
+  await writeFile(join(process.env.TC_HOME, "host-login-started"), "ready");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const session = join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "session.json");
+  await mkdir(dirname(session), { recursive: true });
+  await writeFile(session, "{}");
+} else {
+  console.log(JSON.stringify({ value: "ok" }));
+}
+`);
+    const cli = new CliClientImpl({
+      id: "sequence-before-await", home, cliEntry: entry, host: "http://node-a.example",
+      hostAliases: { b: "http://node-b.example" }, profile: "owner", ownerPosture: true,
+    });
+    const hostClient = cli.withHost("b");
+    const hostCall = hostClient.tc(["kv", "get", "host-key"]);
+    await waitForFile(join(home, "host-login-started"));
+    const parentCall = cli.tc(["kv", "get", "parent-key"]);
+    const [hostResult, parentResult] = await Promise.all([hostCall, parentCall]);
+    expect(hostResult.opSeq).toBeLessThan(parentResult.opSeq);
   });
 
   test("preserves the actual signal on abort and returns deadline-exceeded for CLI get", async () => {

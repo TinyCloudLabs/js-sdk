@@ -10,7 +10,7 @@ import { createSharedEndpointStorageDeviceFixture } from "../src/clients/shared-
 import type { ClientSpec, TopologySpec } from "../src/contracts/topology";
 import type { ClientConstructionOptions } from "../src/contracts/frozen";
 import type { ResolvedImage, RunEnvironment, Topology } from "../src/contracts/lifecycle";
-import { resolveSut } from "../src/clients/sut";
+import { cleanupPublishedSutCache, resolveSut } from "../src/clients/sut";
 
 const enabled = process.env.HARNESS_DOCKER === "1";
 const bIntRoot = "/home/tinycloud/.paseo/worktrees/1896iijk/tc-858-b-int-node";
@@ -155,6 +155,7 @@ describe.skipIf(!enabled)("S2 client real-node integration", () => {
     node?.kill("SIGTERM");
     if (node && node.exitCode === null && node.signalCode === null) await new Promise<void>((resolveExit) => node?.once("exit", () => resolveExit()));
     await Promise.all(clientHomes.map((clientHome) => rm(clientHome, { recursive: true, force: true })));
+    await cleanupPublishedSutCache();
     await rm(root, { recursive: true, force: true });
   });
 

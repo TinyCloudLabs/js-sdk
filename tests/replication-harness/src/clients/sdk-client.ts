@@ -41,6 +41,62 @@ function assertSdkOptions(options: OpOptions): void {
   if (options.fault !== undefined) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK client does not support fetch faults");
   if (options.replication !== undefined || options.flag !== undefined || options.debug !== undefined) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK replication is configured per client, not per operation");
 }
+function sdkRpcValueProblem(op: RpcOp, value: unknown): string | undefined {
+  if (op === "replication.status") return Array.isArray(value) ? undefined : "SDK driver returned a malformed replication.status result";
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return `SDK driver returned a malformed ${op} result`;
+  const result = value as Record<string, unknown>;
+  if (result.ok === false) {
+    const error = result.error;
+    return error !== null && typeof error === "object" && !Array.isArray(error) && typeof (error as Record<string, unknown>).code === "string"
+      ? undefined
+      : `SDK driver returned a ${op} failure without an error code`;
+  }
+  switch (op) {
+    case "kv.get":
+      if (typeof result.found !== "boolean") return "SDK driver returned a malformed kv.get result";
+      if (result.found && (result.value === null || typeof result.value !== "object" || Array.isArray(result.value) ||
+        typeof (result.value as Record<string, unknown>).$b64 !== "string")) return "SDK driver returned a malformed kv.get value";
+      return;
+    case "kv.list":
+      if (!Array.isArray(result.keys) || !result.keys.every((key) => typeof key === "string") ||
+        (result.nextCursor !== undefined && typeof result.nextCursor !== "string")) return "SDK driver returned a malformed kv.list result";
+      return;
+    case "kv.batchPut":
+      if (!Array.isArray(result.written) || !result.written.every((key) => typeof key === "string")) return "SDK driver returned a malformed kv.batchPut result";
+      return;
+    case "replication.purge":
+      if (!Array.isArray(result.purged) || !result.purged.every((prefix) => typeof prefix === "string") ||
+        !Array.isArray(result.failed) || !result.failed.every((entry) => entry !== null && typeof entry === "object" && !Array.isArray(entry) &&
+          typeof (entry as Record<string, unknown>).prefix === "string" && typeof (entry as Record<string, unknown>).code === "string")) {
+        return "SDK driver returned a malformed replication.purge result";
+      }
+      return;
+    case "replication.clearPending":
+      if (!Number.isSafeInteger(result.cleared)) return "SDK driver returned a malformed replication.clearPending result";
+      return;
+    default:
+      return;
+  }
+}
+interface SharedSdkEventState {
+  eventSequence: number;
+  operationSequence: number;
+  allEvents: EventEnvelope[];
+  appendEvent(envelope: EventEnvelope): void;
+}
+function createSdkEventState(options: SdkClientOptions): SharedSdkEventState {
+  const path = join(options.artifactDirectory ?? options.home, "events.jsonl");
+  return {
+    eventSequence: 0,
+    operationSequence: 0,
+    allEvents: [],
+    appendEvent: (envelope) => appendFileSync(path, `${JSON.stringify(envelope)}\n`, { mode: 0o600 }),
+  };
+}
+function unsupportedOption(name: string): never {
+  throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", `SDK client does not support ${name}`);
+}
+
 
 export class SdkClientImpl implements SdkClient {
   readonly kind = "sdk" as const;
@@ -48,7 +104,6 @@ export class SdkClientImpl implements SdkClient {
   readonly id: string;
   private options: SdkClientOptions;
   private process?: ChildProcess;
-  private operationSequence = 0;
   private startPromise?: Promise<void>;
   private ready = false;
   private failure?: Error;
@@ -58,11 +113,18 @@ export class SdkClientImpl implements SdkClient {
   private stderrOutput = "";
   private rpcId = 0;
   private pending = new Map<number, Pending>();
-  private allEvents: EventEnvelope[] = [];
   private inFlight = new Map<number, number>();
+  private readonly hostClients = new Map<string, SdkClientImpl>();
+  private readonly eventState: SharedSdkEventState;
+  private readonly restoreProofHome?: string;
   private initArgs?: RpcOps["init"]["args"];
   private proof?: unknown;
-  constructor(options: SdkClientOptions) { this.id = options.id; this.options = options; }
+  constructor(options: SdkClientOptions, sharedEventState?: SharedSdkEventState, restoreProofHome?: string) {
+    this.id = options.id;
+    this.options = options;
+    this.eventState = sharedEventState ?? createSdkEventState(options);
+    this.restoreProofHome = restoreProofHome;
+  }
   home(): string { return this.options.home; }
   get stderr(): string { return this.stderrOutput; }
   get stderrArtifactPath(): string { return join(this.options.artifactDirectory ?? this.options.home, "stderr.log"); }
@@ -143,7 +205,16 @@ export class SdkClientImpl implements SdkClient {
       if (auth === "restore") {
         let saved: { posture?: string; session?: unknown; deviceJwk?: unknown; verificationMethod?: unknown; delegation?: unknown };
         try { saved = JSON.parse(await readFile(sessionPath, "utf8")) as typeof saved; }
-        catch (error) { throw new HarnessError("RPC_PROTOCOL", "Saved combined session proof is missing or invalid", String(error)); }
+        catch (error) {
+          if (!this.restoreProofHome || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw new HarnessError("RPC_PROTOCOL", "Saved combined session proof is missing or invalid", String(error));
+          }
+          try { saved = JSON.parse(await readFile(join(this.restoreProofHome, "session.json"), "utf8")) as typeof saved; }
+          catch (sourceError) { throw new HarnessError("RPC_PROTOCOL", "Saved combined session proof is missing or invalid", String(sourceError)); }
+          await mkdir(dirname(sessionPath), { recursive: true, mode: 0o700 });
+          await writeFile(sessionPath, JSON.stringify(saved), { mode: 0o600 });
+          await chmod(sessionPath, 0o600);
+        }
         this.proof = saved;
         if (saved.posture === "delegate-session" || (!saved.posture && saved.delegation)) await this.rpcRaw("session.useDelegation", { delegation: saved, hosts: this.options.hosts ?? [this.options.host] });
         else if (saved.session !== undefined) await this.rpcRaw("session.restore", { session: saved.session, hosts: this.options.hosts ?? [this.options.host] });
@@ -192,13 +263,13 @@ export class SdkClientImpl implements SdkClient {
         return;
       }
       const sole = message.inFlight.length === 1;
-      const background = !message.inFlight.length || message.event.type === "replication.sync" && ["interval", "start"].includes(String(message.event.trigger));
+      const background = !message.inFlight.length || message.event.type === "replication.sync" && message.event.trigger === "interval";
       const correlated = sole ? this.inFlight.get(message.inFlight[0]) : undefined;
       const attribution = background ? "background" : sole && correlated !== undefined ? "op" : "ambiguous";
       const opSeq = attribution === "op" ? correlated! : null;
-      const envelope: EventEnvelope = { clientId: this.id, seq: this.allEvents.length + 1, opSeq, attribution, recvMono: performance.now(), event: message.event };
-      this.allEvents.push(envelope);
-      appendFileSync(this.eventsArtifactPath, `${JSON.stringify(envelope)}\n`, { mode: 0o600 });
+      const envelope: EventEnvelope = { clientId: this.id, seq: ++this.eventState.eventSequence, opSeq, attribution, recvMono: performance.now(), event: message.event };
+      this.eventState.allEvents.push(envelope);
+      this.eventState.appendEvent(envelope);
       return;
     }
     if (message.type !== "response" || !Number.isSafeInteger(message.id) || typeof message.ok !== "boolean") {
@@ -212,10 +283,9 @@ export class SdkClientImpl implements SdkClient {
     const response = message as RpcResponse;
     if (response.ok) {
       const value = response.value;
-      if (value === undefined || value === null || typeof value !== "object" ||
-        (pending.op === "replication.status" ? !Array.isArray(value) : Array.isArray(value))) {
-        pending.reject(new HarnessError("RPC_PROTOCOL", `SDK driver returned a malformed ${pending.op} result`, value));
-      } else pending.resolve(value);
+      const problem = sdkRpcValueProblem(pending.op, value);
+      if (problem) pending.reject(new HarnessError("RPC_PROTOCOL", problem, value));
+      else pending.resolve(value);
     } else if (response.error && typeof response.error.code === "string" && typeof response.error.message === "string") {
       pending.reject(Object.assign(new Error(response.error.message), { code: response.error.code, meta: response.error.meta }));
     } else {
@@ -282,7 +352,7 @@ export class SdkClientImpl implements SdkClient {
     return result.finally(() => this.inFlight.delete(id));
   }
   private async timed<T>(action: (opSeq: number) => Promise<T>): Promise<{ value: T; opSeq: number; startedMono: number; durationMs: number; events: EventEnvelope[] }> {
-    const opSeq = ++this.operationSequence;
+    const opSeq = ++this.eventState.operationSequence;
     const startedMono = performance.now();
     const since = this.eventCursor();
     const value = await action(opSeq);
@@ -290,8 +360,8 @@ export class SdkClientImpl implements SdkClient {
     const events = this.events({ since }).filter((event) => event.opSeq === opSeq);
     return { value, opSeq, startedMono, durationMs, events };
   }
-  eventCursor(): number { return this.allEvents.at(-1)?.seq ?? 0; }
-  events(query: EventQuery = {}): EventEnvelope[] { return this.allEvents.filter((event) => (query.since === undefined || event.seq > query.since) && (query.opSeq === undefined || event.opSeq === query.opSeq) && (query.type === undefined || (Array.isArray(query.type) ? query.type : [query.type]).includes(event.event.type))); }
+  eventCursor(): number { return this.eventState.allEvents.at(-1)?.seq ?? 0; }
+  events(query: EventQuery = {}): EventEnvelope[] { return this.eventState.allEvents.filter((event) => (query.since === undefined || event.seq > query.since) && (query.opSeq === undefined || event.opSeq === query.opSeq) && (query.type === undefined || (Array.isArray(query.type) ? query.type : [query.type]).includes(event.event.type))); }
   replicaDir(): string { return this.options.storageDir; }
   async scanReplica(needle: Uint8Array): Promise<string[]> {
     const matches: string[] = [];
@@ -304,12 +374,27 @@ export class SdkClientImpl implements SdkClient {
   }
   withHost(alias: string): KvClient {
     const host = this.options.hostAliases?.[alias] ?? alias;
+    const cached = this.hostClients.get(host);
+    if (cached) return cached;
     const hosts = [...new Set([host, ...(this.options.hosts ?? [this.options.host])])];
-    return new SdkClientImpl({ ...this.options, host, domain: new URL(host).hostname, hosts, home: this.options.home, storageDir: this.options.storageDir, auth: this.options.privateKeyHex ? "fresh-sign-in" : "restore" });
+    const home = join(this.options.home, "hosts", createHash("sha256").update(host).digest("hex"));
+    const child = new SdkClientImpl({
+      ...this.options,
+      host,
+      domain: new URL(host).hostname,
+      hosts,
+      home,
+      artifactDirectory: this.options.artifactDirectory ?? this.options.home,
+      storageDir: this.options.storageDir,
+      auth: this.options.privateKeyHex ? "fresh-sign-in" : "restore",
+    }, this.eventState, this.options.privateKeyHex ? undefined : this.options.home);
+    this.hostClients.set(host, child);
+    return child;
   }
   async get(key: string, options: OpOptions & { source?: "network"; maxResponseBytes?: number; space?: string } = {}): Promise<GetResult> {
     assertSdkOptions(options);
-    const result = await this.timed((opSeq) => this.operationRpc(opSeq, "kv.get", { key, source: options.source, maxResponseBytes: options.maxResponseBytes, timeoutMs: options.deadlineMs, space: options.space }, options));
+    if (options.space !== undefined) unsupportedOption("space selection");
+    const result = await this.timed((opSeq) => this.operationRpc(opSeq, "kv.get", { key, source: options.source, maxResponseBytes: options.maxResponseBytes, timeoutMs: options.deadlineMs }, options));
     const readEvent = result.events.find((item) => item.event.type === "replication.read")?.event as GetResult["readEvent"];
     const sdkResult = result.value as unknown as { found?: boolean; value?: { $b64: string }; ok?: boolean; error?: { code?: string } };
     const failed = sdkResult.ok === false && sdkResult.error?.code !== "KV_NOT_FOUND";
@@ -327,14 +412,14 @@ export class SdkClientImpl implements SdkClient {
     const result = await this.timed((opSeq) => this.operationRpc(opSeq, "kv.put", { key, value: { $b64: Buffer.from(value).toString("base64") }, contentType: options.contentType, timeoutMs: options.deadlineMs }, options));
     const sdkResult = result.value as unknown as { ok?: boolean; error?: { code?: string } };
     const failed = sdkResult.ok === false;
-    return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, outcome: failed ? "failed" : "committed", ...(failed && sdkResult.error?.code ? { code: sdkResult.error.code } : {}) };
+    return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, outcome: failed ? "failed" : "committed", ...(failed ? { code: sdkResult.error?.code ?? "RPC_PROTOCOL" } : {}) };
   }
   async del(key: string, options?: OpOptions): Promise<WriteResult> {
     if (options) assertSdkOptions(options);
     const result = await this.timed((opSeq) => this.operationRpc(opSeq, "kv.delete", { key, timeoutMs: options?.deadlineMs }, options));
     const sdkResult = result.value as unknown as { ok?: boolean; error?: { code?: string } };
     const failed = sdkResult.ok === false;
-    return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, outcome: failed ? "failed" : "committed", ...(failed && sdkResult.error?.code ? { code: sdkResult.error.code } : {}) };
+    return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, outcome: failed ? "failed" : "committed", ...(failed ? { code: sdkResult.error?.code ?? "RPC_PROTOCOL" } : {}) };
   }
   async list(prefix: string, options: OpOptions & { source?: "network"; limit?: number; cursor?: string } = {}) {
     assertSdkOptions(options);
@@ -371,7 +456,8 @@ export class SdkClientImpl implements SdkClient {
     return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !rejected && failed.length === 0, purged, failed, ...(rejected && sdkResult.error?.code ? { code: sdkResult.error.code } : {}) };
   }
   async clearPending(options?: { keys?: string[] } & CallOptions) {
-    const result = await this.timed((opSeq) => this.operationRpc(opSeq, "replication.clearPending", { keys: options?.keys }, options));
+    if (options?.keys !== undefined) unsupportedOption("clearPending keys");
+    const result = await this.timed((opSeq) => this.operationRpc(opSeq, "replication.clearPending", {}, options));
     const sdkResult = result.value as unknown as { ok?: boolean; error?: { code?: string }; cleared?: number };
     const failed = sdkResult.ok === false;
     return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, cleared: failed ? 0 : sdkResult.cleared ?? 0, ...(failed && sdkResult.error?.code ? { code: sdkResult.error.code } : {}) };
@@ -393,6 +479,9 @@ export class SdkClientImpl implements SdkClient {
   async restart(options: { auth?: "restore" | "fresh-sign-in"; replication?: ReplicationSpec | false } & OpOptions = {}): Promise<void> {
     assertSdkOptions(options);
     if (options.signal?.aborted) throw new HarnessError("ABORTED", "SDK restart was aborted", options.signal.reason);
+    if (options.auth === "fresh-sign-in" && !this.options.privateKeyHex && this.options.delegation === undefined) {
+      throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK delegate fresh sign-in requires the original ClientSpec delegation");
+    }
     await this.stopProcess(options.deadlineMs ?? 5_000, options.signal);
     if (options.signal?.aborted) throw new HarnessError("ABORTED", "SDK restart was aborted", options.signal.reason);
     if (options.replication !== undefined) {
@@ -431,14 +520,17 @@ export class SdkClientImpl implements SdkClient {
     return await promise;
   }
   async kill(signal: "SIGINT" | "SIGTERM" | "SIGKILL"): Promise<void> {
+    await Promise.all([...this.hostClients.values()].map((client) => client.kill(signal)));
     const child = this.process;
     if (!child) return;
     child.kill(signal);
     await this.waitForExit(child, 5_000);
   }
   async close(options: { deadlineMs: number }): Promise<{ graceful: boolean }> {
+    const children = await Promise.all([...this.hostClients.values()].map((client) => client.close(options)));
     await this.ensureArtifacts();
-    return { graceful: await this.stopProcess(options.deadlineMs) };
+    const graceful = await this.stopProcess(options.deadlineMs);
+    return { graceful: graceful && children.every((child) => child.graceful) };
   }
 }
 

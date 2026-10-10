@@ -250,7 +250,7 @@ class ProfileEventCoordinator {
         const event = eventRecord(value);
         if (!event || typeof event.type !== "string") continue;
         const candidates = [...this.active].filter((active) => matchesInvocation(active, event));
-        const background = event.type === "replication.sync" && ["interval", "start"].includes(String(event.trigger));
+        const background = event.type === "replication.sync" && event.trigger === "interval";
         const owner = candidates.length === 1 ? candidates[0] : !background && candidates.length === 0 && this.active.size === 1 ? [...this.active][0] : undefined;
         const ambiguous = !background && !owner;
         const target = owner ?? invocation;
@@ -656,14 +656,14 @@ export class CliClientImpl implements CliClient {
     await writeFile(join(this.homePath, ".tc893-authority.json"), JSON.stringify({ grantExpiresAt: expiresAt }), { mode: 0o600 });
   }
   private async run(args: string[], options: CliCallOptions = {}, skipHostProfile = false): Promise<InternalCliResult> {
+    const state = this.eventState;
+    const opSeq = ++state.opSequence;
     if (!skipHostProfile && this.hostProfileSource) await this.ensureHostProfile();
     rejectFault(options);
     const startedMono = now();
     await mkdir(this.homePath, { recursive: true, mode: 0o700 });
     await ensureClientArtifacts(this.artifactDirectory);
     await verifyNodeVersion(this.nodeExecutable, this.homePath);
-    const state = this.eventState;
-    const opSeq = ++state.opSequence;
     const activeProfile = options.profile ?? this.profileName;
     const coordinator = coordinatorFor(this.homePath, activeProfile);
     const description = describeInvocation(args, options);
@@ -779,7 +779,6 @@ export class CliClientImpl implements CliClient {
   private async op(args: string[], options: CliCallOptions = {}): Promise<InternalCliResult> { return this.run(args, options); }
   async get(key: string, options: CliCallOptions & GetOptions = {}): Promise<GetResult> {
     if (options.maxResponseBytes !== undefined) unsupportedOption("maxResponseBytes");
-    if (options.space !== undefined) unsupportedOption("space selection");
     const invocationOptions = options.source === "network" ? { ...options, flag: "off" as const } : options;
     const result = await this.op(["kv", "get", key, "--raw"], invocationOptions);
     if (result[DEADLINE_EXCEEDED]) {
@@ -788,17 +787,18 @@ export class CliClientImpl implements CliClient {
     const found = result.exit === 0;
     const event = result.events.map((item) => item.event).find((item) => item.type === "replication.read");
     const read = event as ReadView | undefined;
-    const code = found ? undefined : result.exit === 4 ? "NOT_FOUND" : result.signal ? `SIGNAL_${result.signal}` : `EXIT_${result.exit}`;
+    const code = found ? undefined : result.exit === 4 ? "NOT_FOUND" : result.signal ? `SIGNAL_${result.signal}` : result.exit === null ? "CLI_EXIT_UNKNOWN" : `EXIT_${result.exit}`;
     return { ...result, ok: found || result.exit === 4, found, ...(found ? { value: result.stdout } : {}), ...(read ? { read, readEvent: read as GetResult["readEvent"] } : {}), ...(code ? { code } : {}) };
   }
   async put(key: string, value: string | Uint8Array, options: CliCallOptions & PutOptions = {}): Promise<WriteResult> {
     if (options.contentType !== undefined) unsupportedOption("contentType");
     const result = await this.op(["kv", "put", key, "--stdin"], { ...options, stdin: value instanceof Uint8Array ? value : Buffer.from(value) });
-    return { ...result, ok: result.exit === 0, ...(result.exit === 0 ? { outcome: "committed" } : { outcome: "failed", code: `EXIT_${result.exit}` }) };
+    return { ...result, ok: result.exit === 0, ...(result.exit === 0 ? { outcome: "committed" } : { outcome: "failed", code: result.signal ? `SIGNAL_${result.signal}` : result.exit === null ? "CLI_EXIT_UNKNOWN" : `EXIT_${result.exit}` }) };
   }
   async del(key: string, options?: OpOptions & CliCallOptions): Promise<WriteResult> {
     const result = await this.op(["kv", "delete", key], options);
-    return { ...result, ok: result.exit === 0, outcome: result.exit === 0 ? "committed" : "failed" };
+    const code = result.signal ? `SIGNAL_${result.signal}` : result.exit === null ? "CLI_EXIT_UNKNOWN" : `EXIT_${result.exit}`;
+    return { ...result, ok: result.exit === 0, outcome: result.exit === 0 ? "committed" : "failed", ...(result.exit === 0 ? {} : { code }) };
   }
   async list(prefix: string, options: CliCallOptions & ListOptions = {}): Promise<ListResult> {
     if (options.source !== undefined) unsupportedOption("network-only lists");
@@ -816,7 +816,11 @@ export class CliClientImpl implements CliClient {
   }
   async status(options?: CliCallOptions): Promise<StatusEntry[]> { const result = await this.op(["replica", "report", "--json"], options); return ((result.json as { replicas?: StatusEntry[] } | undefined)?.replicas ?? []); }
   async purge(options?: CliCallOptions): Promise<PurgeResult> { const result = await this.op(["auth", "logout"], options); return { ...result, ok: result.exit === 0, purged: [], failed: [] }; }
-  async clearPending(options?: CliCallOptions): Promise<{ opSeq: number; startedMono: number; durationMs: number; events: EventEnvelope[]; ok: boolean; cleared: number }> { const result = await this.op(["replica", "report", "--clear-pending", "--json"], options); return { ...result, ok: result.exit === 0, cleared: Number((result.json as { cleared?: number } | undefined)?.cleared ?? 0) }; }
+  async clearPending(options?: { keys?: string[] } & CliCallOptions): Promise<{ opSeq: number; startedMono: number; durationMs: number; events: EventEnvelope[]; ok: boolean; cleared: number }> {
+    if (options?.keys !== undefined) unsupportedOption("clearPending keys");
+    const result = await this.op(["replica", "report", "--clear-pending", "--json"], options);
+    return { ...result, ok: result.exit === 0, cleared: Number((result.json as { cleared?: number } | undefined)?.cleared ?? 0) };
+  }
   async authority(): Promise<{ posture: "owner" | "delegate-session"; sessionExpiresAt: number | null; grantExpiresAt: number | null }> {
     const profilePath = join(this.homePath, ".tinycloud", "profiles", this.profileName);
     try {
