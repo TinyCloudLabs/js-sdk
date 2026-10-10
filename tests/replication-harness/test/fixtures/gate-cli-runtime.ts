@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { configureGateRuntime } from "../../bin/gate-adapters";
-import { registerScenarios } from "../../src/runner/registry";
+import { registerScenarios, scenarioRegistry } from "../../src/runner/registry";
 import type { Scenario } from "../../src/contracts/scenario";
 import type { RunEnvironment, Topology, TopologyFactory } from "../../src/contracts/lifecycle";
 import { realClock } from "../../src/contracts/clock";
@@ -14,6 +14,7 @@ async function fixturePreflight(ctx: Parameters<Scenario["run"]>[0]): Promise<vo
   process.kill(process.pid, "SIGINT");
   await ctx.clock.sleep(1000, ctx.signal);
 }
+scenarioRegistry.splice(0, scenarioRegistry.length);
 registerScenarios(
   { id: "CORE-00", title: "Fixture preflight", tier: "core", timeoutMs: 10_000, topology: emptyTopology, run: fixturePreflight },
   { id: "EDGE-12", title: "Fixture companion", tier: "edge", sets: ["phase1-companion"], backends: ["sqlite"], timeoutMs: 10_000, topology: emptyTopology, run: async () => {} },
