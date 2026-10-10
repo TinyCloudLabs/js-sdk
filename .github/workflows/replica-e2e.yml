@@ -146,6 +146,13 @@ jobs:
         run: bun test packages/cli/test/replication-flag.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-flag.xml"
       - name: Enforce real-node JUnit counts and zero skips
         run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--node-sdk' || '' }}
+      - name: Upload backend JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc858-junit-${{ matrix.database == 'postgres' && 'pg16' || 'sqlite' }}
+          path: ${{ runner.temp }}/replica-junit/*.xml
+          if-no-files-found: error
 
   browser-e2e:
     name: Replica (Chromium, browser worker + IndexedDB)
