@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { access, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { CliClient, KvClient, SdkClient, WriteResult } from "../contracts/client";
+import type { CliClient, GetResult, KvClient, SdkClient, WriteResult } from "../contracts/client";
 import type { EventEnvelope } from "../contracts/events";
 import type { Backend, ClientKind } from "../contracts/common";
 import type { Scenario, ScenarioContext } from "../contracts/scenario";
@@ -232,24 +232,30 @@ const core10: Scenario<Variant> = {
     requireOk(ctx, "write B value on node b", await writerB.put(key, "B"));
     requireOk(ctx, "write node-b-only key", await writerB.put(`${PREFIX}only-b`, "only-b"));
     const readA = await reader.get(key, replicationOptions(reader));
-    ctx.check("reader on node a observes A", readA.ok && readA.found && Buffer.from(readA.value ?? []).toString() === "A", readA.read);
     const readB = await viaB.get(key, replicationOptions(viaB));
-    const onlyOnB = await reader.get(`${PREFIX}only-b`, { ...replicationOptions(reader), source: "network" });
-    ctx.check("node-b-only key is absent through node a network", onlyOnB.ok && !onlyOnB.found, { ok: onlyOnB.ok, found: onlyOnB.found });
+    let onlyOnB: GetResult | undefined;
+    let onlyOnBError: unknown;
+    try { onlyOnB = await reader.get(`${PREFIX}only-b`, { ...replicationOptions(reader), source: "network" }); }
+    catch (error) { onlyOnBError = error; }
     const localAbsence = await reader.get(`${PREFIX}only-b`, replicationOptions(reader));
-    ctx.check("node-b-only key is absent through node a replica or network", localAbsence.ok && !localAbsence.found && (localAbsence.read?.source === "replica" || localAbsence.read?.source === "network"), localAbsence.read);
+    let partitionReport: { ok: boolean; detail: unknown } | undefined;
     if (ctx.variant === "cli") {
       const report = await cli(ctx, "reader").tc(["replica", "report", "--json"], { signal: ctx.signal });
       let partitions: { host?: unknown }[] = [];
       try { partitions = (JSON.parse(Buffer.from(report.stdout).toString("utf8")) as { partitions?: { host?: unknown }[] }).partitions ?? []; } catch { /* assertion records malformed report */ }
       const hosts = new Set(partitions.map((partition) => partition.host).filter((host): host is string => typeof host === "string"));
-      ctx.check("CLI report lists two distinct node partitions", report.exit === 0 && partitions.length >= 2 && hosts.size >= 2, { exit: report.exit, partitions });
+      partitionReport = { ok: report.exit === 0 && partitions.length >= 2 && hosts.size >= 2, detail: { exit: report.exit, partitions } };
     }
-    ctx.check("node a and b have distinct proxy endpoints", ctx.topo.proxy("client:reader->a").listenUrl !== ctx.topo.proxy("client:reader->b").listenUrl);
+    const endpointsDistinct = ctx.topo.proxy("client:reader->a").listenUrl !== ctx.topo.proxy("client:reader->b").listenUrl;
     await ctx.topo.node("nodeb").stop({ signal: ctx.signal });
     const stillA = await reader.get(key, replicationOptions(reader, ctx.signal));
+    ctx.check("reader on node a observes A", readA.ok && readA.found && Buffer.from(readA.value ?? []).toString() === "A", readA.read);
+    ctx.check("node-b-only key is absent through node a replica or network", localAbsence.ok && !localAbsence.found && (localAbsence.read?.source === "replica" || localAbsence.read?.source === "network"), localAbsence.read);
+    if (partitionReport) ctx.check("CLI report lists two distinct node partitions", partitionReport.ok, partitionReport.detail);
+    ctx.check("node a and b have distinct proxy endpoints", endpointsDistinct);
     ctx.check("stopping b does not affect reads via a", stillA.ok && stillA.found && Buffer.from(stillA.value ?? []).toString() === "A", { ok: stillA.ok, read: stillA.read });
     ctx.check("reader through node b observes B", readB.ok && readB.found && Buffer.from(readB.value ?? []).toString() === "B", readB.read);
+    ctx.check("node-b-only key is absent through node a network", onlyOnB?.ok === true && !onlyOnB.found, onlyOnB ?? onlyOnBError);
   },
 };
 
