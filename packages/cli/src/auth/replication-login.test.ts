@@ -43,6 +43,34 @@ describe("replication login scope", () => {
       .toBe(`tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default`);
   });
 
+  test("exact-only get refuses replication and leaves the login request unchanged", () => {
+    const request = [get("notes")];
+    const before = structuredClone(request);
+    try {
+      buildReplicationLoginRequest(request, { prefixes: ["notes/"] });
+      throw new Error("expected replication scope refusal");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "REPLICATION_PREFIX_OUTSIDE_SCOPE", exitCode: 2 });
+    }
+    expect(request).toEqual(before);
+    expect(buildReplicationLoginRequest([get("notes/")], { prefixes: ["notes/"] }))
+      .toContainEqual(expect.objectContaining({ path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] }));
+  });
+  test("replication eligibility follows exact and trailing-slash containment", () => {
+    for (const prefix of ["notes/", "notes/private", "notesX"]) {
+      expect(codeOf(() => buildReplicationLoginRequest([get("notes")], { prefixes: [prefix] })))
+        .toBe("REPLICATION_PREFIX_OUTSIDE_SCOPE");
+    }
+    expect(codeOf(() => buildReplicationLoginRequest([get("notes")], { prefixes: ["notes"] }))).toBeUndefined();
+    for (const prefix of ["notes/a", "notes/a/b"]) {
+      expect(codeOf(() => buildReplicationLoginRequest([get("notes/")], { prefixes: [prefix] })))
+        .toBeUndefined();
+    }
+    expect(codeOf(() => buildReplicationLoginRequest([get("notes/")], { prefixes: ["notes"] })))
+      .toBe("REPLICATION_PREFIX_OUTSIDE_SCOPE");
+  });
+
+
   test("keeps a narrow manifest narrow and normalizes matching short and full spaces", () => {
     const full = `tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications`;
     const request = [get("apps/", "applications")];

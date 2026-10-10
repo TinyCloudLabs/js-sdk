@@ -2,14 +2,13 @@ import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import type { AuthorityState, AuthorityWindow, GrantRecord, LocalReadPolicy } from "./types.js";
 
 /**
- * The node's `kv_prefix_covers`: whole path segments, byte-exact. `notes/`
- * covers everything under `notes/` but not `notes`; `notes` covers `notes`
- * and `notes/…` but not `notes-secret/x`.
+ * Coverage matches sdk-core capability containment: empty/root scope covers
+ * everything, trailing-slash paths cover descendants, and other paths are exact.
  */
 export function kvPrefixCovers(prefix: string, key: string): boolean {
-  if (prefix === "") return true;
+  if (prefix === "" || prefix === "/") return true;
   if (prefix.endsWith("/")) return key.startsWith(prefix);
-  return key === prefix || key.startsWith(`${prefix}/`);
+  return key === prefix;
 }
 
 /**

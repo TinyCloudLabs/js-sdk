@@ -220,7 +220,7 @@ export class Replica {
     const rows = await this.#store.list(options);
     const entries: ReplicaListEntry[] = [];
     for (const row of rows) {
-      if (row.deleted) continue;
+      if (row.deleted || !kvPrefixCovers(scope, row.key)) continue;
       entries.push({ key: row.key, etag: row.etag, metadata: row.metadata, content: row.content });
     }
     return { entries, meta: await this.#confirmedMeta() };

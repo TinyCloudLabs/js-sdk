@@ -1,5 +1,5 @@
-import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { kvPrefixCovers, requiresSecretsOptIn } from "@tinycloud/replica";
+import { isCapabilitySubset, type PermissionEntry } from "@tinycloud/sdk-core";
+import { requiresSecretsOptIn } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ownerLoginPermissions } from "./owner-key.js";
@@ -25,12 +25,17 @@ export function addReplicationLoginEntries(
     if (requiresSecretsOptIn(primarySpace, prefix) && options.allowSecrets !== true) {
       throw new CLIError("SECRETS_OPT_IN_REQUIRED", `Replication prefix ${JSON.stringify(prefix)} in ${primarySpace} requires --replication-allow-secrets.`, ExitCode.USAGE_ERROR);
     }
-    const covering = request.filter((entry) =>
-      entry.service === "tinycloud.kv" &&
-      sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid) &&
-      (entry.actions.includes("tinycloud.kv/get") || entry.actions.includes("tinycloud.kv/*")) &&
-      kvPrefixCovers(entry.path, prefix),
-    );
+    const requested: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: primarySpace,
+      path: prefix,
+      actions: ["tinycloud.kv/get"],
+    };
+    const covering = request.filter((entry) => {
+      const { caveats: _caveats, ...grant } = entry;
+      return sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid) &&
+        isCapabilitySubset([requested], [{ ...grant, space: primarySpace }]).subset;
+    });
     if (!covering.length) {
       throw new CLIError("REPLICATION_PREFIX_OUTSIDE_SCOPE", `Replication prefix ${JSON.stringify(prefix)} has no covering get in the login request.`, ExitCode.USAGE_ERROR);
     }

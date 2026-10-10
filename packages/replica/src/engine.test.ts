@@ -68,6 +68,17 @@ describe("sync and offline reads", () => {
     expect(status.device.pendingDelegationCid).toBeNull();
     await reopened.close();
   });
+  test("an exact-key replica can serve only that key from local lists", async () => {
+    const node = new FakeNode("notes");
+    node.put("notes", "exact");
+    const store = await newStore(undefined, { prefix: "notes" });
+    const replica = new Replica({ store, transport: node });
+    await replica.sync();
+    expect((await replica.list()).entries.map((entry) => entry.key)).toEqual(["notes"]);
+    await rejectsWith(replica.list({ prefix: "notes/" }), ReplicaErrorCode.NOT_COVERED);
+    await store.close();
+  });
+
 
   test("catches up updates and deletes; metadata-only changes do not refetch", async () => {
     const node = new FakeNode();

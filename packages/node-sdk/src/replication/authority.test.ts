@@ -59,13 +59,13 @@ describe("assertValidReplicationConfig (§3.1)", () => {
 
   test("overlapping prefixes throw; sibling prefixes pass", () => {
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "notes/todo"] }),
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/", "notes/todo"] }),
     ).toThrow(/overlap/);
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "note-s"] }),
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/", "note-s/"] }),
     ).not.toThrow();
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "other"] }),
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "notes/todo"] }),
     ).not.toThrow();
   });
 
@@ -118,23 +118,22 @@ describe("hasUnrestrictedGetCoverage (§4.1 gate)", () => {
     ).toBe(false);
   });
 
-  test("an exact-path get never authorizes a child-prefix augmentation (review: signed-check semantics)", () => {
-    // `get(notes)` is an exact grant under `isCapabilitySubset`/`pathContains`:
-    // it must NOT cover `notes/private`. Only a trailing-slash prefix grant
-    // (`notes/`) does — the flag never adds a `get` the request lacked.
-    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes" })], SPACE, "notes/private")).toBe(
-      false,
-    );
-    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes/" })], SPACE, "notes/private")).toBe(
-      true,
-    );
-    // End to end: augmentation signs only the prefix the request covered.
+  test("exact grants cover only their exact key; slash grants cover descendants", () => {
+    const exact = [kvEntry({ path: "notes" })];
+    for (const path of ["notes/", "notes/private", "notesX"]) {
+      expect(hasUnrestrictedGetCoverage(exact, SPACE, path)).toBe(false);
+    }
+    expect(hasUnrestrictedGetCoverage(exact, SPACE, "notes")).toBe(true);
+    const prefix = [kvEntry({ path: "notes/" })];
+    expect(hasUnrestrictedGetCoverage(prefix, SPACE, "notes")).toBe(false);
+    expect(hasUnrestrictedGetCoverage(prefix, SPACE, "notes/a")).toBe(true);
+    expect(hasUnrestrictedGetCoverage(prefix, SPACE, "notes/a/b")).toBe(true);
     const out = augmentSignInEntriesWithReplication({
-      entries: [kvEntry({ path: "notes" })],
+      entries: exact,
       primarySpaceId: SPACE,
-      replication: { prefixes: ["notes", "notes/private"] },
+      replication: { prefixes: ["notes/", "notes/private", "notesX"] },
     });
-    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
+    expect(out).toEqual([]);
   });
 });
 
@@ -153,14 +152,6 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
     ]);
   });
 
-  test("partial coverage: only covered prefixes gain entries", () => {
-    const out = augmentSignInEntriesWithReplication({
-      entries: [kvEntry({ path: "notes" })],
-      primarySpaceId: SPACE,
-      replication,
-    });
-    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
-  });
 
   test("a caveated covering get produces no entry", () => {
     const out = augmentSignInEntriesWithReplication({
@@ -201,6 +192,18 @@ describe("ucanAttCovers / ucanAttUnconstrainedFor (§4.2)", () => {
     expect(ucanAttUnconstrainedFor(att, SPACE, "notes")).toBe(true);
     expect(ucanAttUnconstrainedFor(att, SPACE, "other")).toBe(false);
   });
+  test("signed exact-key authority does not cover descendants or sibling keys", () => {
+    const exact = { [`tinycloud://${SPACE}/kv/notes`]: { "tinycloud.kv/get": {} } };
+    for (const prefix of ["notes/", "notes/private", "notesX"]) {
+      expect(ucanAttCovers(exact, SPACE, prefix, "tinycloud.kv/get")).toBe(false);
+    }
+    expect(ucanAttCovers(exact, SPACE, "notes", "tinycloud.kv/get")).toBe(true);
+    const slash = { [`tinycloud://${SPACE}/kv/notes/`]: { "tinycloud.kv/get": {} } };
+    expect(ucanAttCovers(slash, SPACE, "notes", "tinycloud.kv/get")).toBe(false);
+    expect(ucanAttCovers(slash, SPACE, "notes/a", "tinycloud.kv/get")).toBe(true);
+    expect(ucanAttCovers(slash, SPACE, "notes/a/b", "tinycloud.kv/get")).toBe(true);
+  });
+
 
   test("caveated branch: coverage under ignoreCaveats, refusal otherwise", () => {
     const att = {
@@ -321,6 +324,21 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     if ("refused" in result) throw new Error(`unexpected refusal ${result.refused}`);
     expect(result.device.did).toBe(SESSION_DID);
   });
+  test("sessionGrant never treats an exact-key signed resource as prefix coverage", () => {
+    const session = fakeSession({
+      delegationHeader: {
+        Authorization: fakeSessionUcan({
+          [`tinycloud://${SPACE}/kv/notes`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+        }),
+      },
+    });
+    const authority = createReplicationAuthority(makeHost({ replicationSession: () => session }));
+    for (const prefix of ["notes/", "notes/private", "notesX"]) {
+      expect(authority.sessionGrant(prefix)).toEqual({ refused: "NOT_COVERED" });
+    }
+    expect(authority.sessionGrant("notes")).not.toMatchObject({ refused: "NOT_COVERED" });
+  });
+
 
   test("sessionGrant refuses NOT_COVERED for a non-UCAN header and uncovered prefix", () => {
     const authority = createReplicationAuthority(

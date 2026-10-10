@@ -26,7 +26,7 @@ describe("pending write transitions", () => {
     settle(state, "b", "committed", at);
     begin(state, "c", [{ key: "notes/c", op: "put" }], at);
     settle(state, "c", "ambiguous", at, "TIMEOUT");
-    expect(afterSync(state, "notes", 2)).toBe(1);
+    expect(afterSync(state, "notes/", 2)).toBe(1);
     expect(state.records.map((r) => [r.key, r.state])).toEqual([["notes-x/b", "committed"], ["notes/c", "ambiguous"]]);
   });
 
@@ -40,7 +40,7 @@ describe("pending write transitions", () => {
     settle(state, "committed", "committed", at);
     expect(clearPending(state, Date.parse("2026-01-01T00:10:00.001Z"))).toBe(2);
     expect(state.records.map((r) => r.key)).toEqual(["notes/young", "notes/committed"]);
-    expect(pinnedKeys(state, "notes", Date.parse("2026-01-01T00:20:00.000Z"))).toEqual([{ key: "notes/young", state: "in_flight", op: "delete", since: "2026-01-01T00:09:59.999Z", likelyOrphaned: true }]);
+    expect(pinnedKeys(state, "notes/", Date.parse("2026-01-01T00:20:00.000Z"))).toEqual([{ key: "notes/young", state: "in_flight", op: "delete", since: "2026-01-01T00:09:59.999Z", likelyOrphaned: true }]);
   });
 });
 

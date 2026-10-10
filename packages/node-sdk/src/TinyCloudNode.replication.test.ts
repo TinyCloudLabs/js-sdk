@@ -216,7 +216,7 @@ describe("TinyCloudNode replication config validation (§3.1)", () => {
       () =>
         new TinyCloudNode({
           wasmBindings: makeFakeWasmBindings(),
-          replication: { enabled: true, storage, prefixes: ["notes", "notes/todo"] },
+          replication: { enabled: true, storage, prefixes: ["notes/", "notes/todo"] },
         }),
     ).toThrow(/overlap/);
   });

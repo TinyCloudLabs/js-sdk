@@ -29,11 +29,18 @@ export function decodeTcr1(cursor: string): { v: 1; space: string; path: string;
 export function cursorRestart() {
   return err(serviceError(ErrorCodes.INVALID_INPUT, "Local list cursor cannot be served; restart without the cursor", "kv", { meta: { replication: "cursor_restart" } }));
 }
-export function localList(handle: { list(o: { prefix: string; after?: string; limit?: number }): Promise<LocalListResult> }, space: string, path: string, limit: number | undefined, cursor: string | undefined, validateMeta: (meta: LocalReadMeta) => void): Promise<KVListPage> {
+export function localList(handle: { list(o: { prefix: string; after?: string; limit?: number }): Promise<LocalListResult> }, space: string, path: string, limit: number | undefined, cursor: string | undefined, validateMeta: (meta: LocalReadMeta) => void, coveragePrefix: string): Promise<KVListPage> {
   const after = cursor ? decodeTcr1(cursor)?.last : undefined;
+  const exactOnly = coveragePrefix !== "" && coveragePrefix !== "/" && !coveragePrefix.endsWith("/");
   const exact = !path.endsWith("/") && (after === undefined || utf8Compare(path, after) > 0)
     ? awaitExact(handle, path, after, validateMeta) : Promise.resolve(false);
   return exact.then(async (hasExact) => {
+    if (exactOnly) {
+      let keys = hasExact ? [path] : [];
+      const truncated = limit !== undefined && keys.length > limit;
+      if (truncated) keys = keys.slice(0, limit);
+      return { keys, truncated, ...(truncated ? { nextCursor: encodeTcr1(space, path, keys[keys.length - 1]!) } : {}) };
+    }
     const child = path.endsWith("/") ? path : `${path}/`;
     const want = limit === undefined ? undefined : limit + 1 - (hasExact ? 1 : 0);
     const children = await handle.list({ prefix: child, after, limit: want });

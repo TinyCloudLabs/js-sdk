@@ -622,7 +622,7 @@ describe("sqlite replica handle", () => {
     expect(status.syncedThroughEpoch).toBe(7);
     expect(status.grant).toMatchObject({ state: "active", unconstrained: true });
     const read = await handle.get("notes/a");
-    expect(read.status).toBe("absent");
+    expect(read.status).toBe("not_covered");
     expect(read.meta.syncedThroughEpoch).toBe(7);
     await handle.close();
 

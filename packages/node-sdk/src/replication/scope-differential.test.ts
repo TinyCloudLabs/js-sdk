@@ -1,10 +1,9 @@
 /**
- * Differential test (TC-858 §13.2): A1 copied `kvPrefixCovers` and
- * `requiresSecretsOptIn` from `packages/replica/src/scope.ts` into
- * sdk-services so node-sdk never imports replica. This pins the copies to
- * the originals on the same input corpus — a divergence here would let the
- * sign-in gate and the engine disagree about coverage.
+ * Differential tests keep the replication coverage helpers aligned with
+ * sdk-core capability containment, the authority source of truth.
  */
+
+import { isCapabilitySubset } from "@tinycloud/sdk-core";
 
 import { describe, expect, test } from "bun:test";
 
@@ -44,6 +43,23 @@ describe("kvPrefixCovers parity with @tinycloud/replica", () => {
     });
   }
 });
+ 
+describe("replication coverage matches sdk-core containment", () => {
+  const paths = ["", "/", "notes", "notes/", "notes/private", "notesX", "a/b/", "a/b/c"];
+  for (const grantedPath of paths) {
+    for (const requestedPath of paths) {
+      test(`${JSON.stringify(grantedPath)} → ${JSON.stringify(requestedPath)}`, () => {
+        const expected = isCapabilitySubset(
+          [{ service: "tinycloud.kv", space: "default", path: requestedPath, actions: ["tinycloud.kv/get"] }],
+          [{ service: "tinycloud.kv", space: "default", path: grantedPath, actions: ["tinycloud.kv/get"] }],
+        ).subset;
+        expect(kvPrefixCovers(grantedPath, requestedPath)).toBe(expected);
+        expect(kvPrefixCoversReplica(grantedPath, requestedPath)).toBe(expected);
+      });
+    }
+  }
+});
+ 
 
 describe("requiresSecretsOptIn parity with @tinycloud/replica", () => {
   const cases: Array<[string, string]> = [

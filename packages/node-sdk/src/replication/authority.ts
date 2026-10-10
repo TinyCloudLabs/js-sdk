@@ -17,12 +17,12 @@ import {
   KV,
   actionContains,
   canonicalizeRecapCaveats,
+  isCapabilitySubset,
   parseSpaceUri,
   type PermissionEntry,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 import {
-  kvPrefixCovers,
   type AuthorityRefusal,
   type ReplicaDevice,
   type ReplicationAuthority,
@@ -96,8 +96,12 @@ export function ucanAttCovers(
 ): boolean {
   for (const [resource, abilities] of Object.entries(att)) {
     const path = kvPathInResource(resource, space);
-    if (path === undefined || !kvPrefixCovers(path, prefix)) continue;
+    if (path === undefined) continue;
     for (const [granted, caveats] of Object.entries(abilities)) {
+      if (!isCapabilitySubset(
+        [{ service: KV_SERVICE, space, path: prefix, actions: [ability] }],
+        [{ service: KV_SERVICE, space, path, actions: [granted] }],
+      ).subset) continue;
       if (!actionContains(granted, ability)) continue;
       if (options?.ignoreCaveats === true || caveatBranchesUnconstrained(caveats)) {
         return true;
