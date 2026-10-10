@@ -178,6 +178,16 @@ function errnoOf(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") return false;
+    throw error;
+  }
+}
+
 /** A directory's entries; only a directory that does not exist is empty. */
 async function entriesOf(path: string): Promise<string[]> {
   try {
@@ -246,9 +256,13 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Inspect an existing replica without creating files, running migrations,
-   * recovering revocation cleanup, or entering the mutation guard.
+   * Read-only status snapshot; does not create files, migrate, recover
+   * revocation cleanup, or enter the mutation guard. SQLite immutable mode
+   * avoids locks and sidecar creation when either writer sidecar is absent.
+   * That snapshot may be stale if a writer starts concurrently; status is
+   * advisory and never authorizes local serving, which checks persisted authority.
    */
+
   static async inspect(
     dir: string,
     options: { now?: () => number; signal?: AbortSignal } = {},
@@ -270,7 +284,11 @@ export class SqliteReplicaStore implements ReplicaStore {
     checkAbort();
     let db: SqliteDatabase | undefined;
     try {
-      db = opener(dbPath, { readonly: true });
+      const [wal, shm] = await Promise.all([exists(join(dir, "replica.db-wal")), exists(join(dir, "replica.db-shm"))]);
+      // Use a normal readonly connection only when both live-writer sidecars exist.
+      // Otherwise immutable mode cannot create a missing sidecar; any stale view
+      // is acceptable because status never authorizes local serving.
+      db = opener(dbPath, { readonly: true, immutable: !(wal && shm) });
       checkAbort();
       const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
       const state = await store.open();
