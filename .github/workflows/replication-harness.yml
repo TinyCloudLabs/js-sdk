@@ -72,7 +72,7 @@ jobs:
     name: Resolve inputs and matrix
     if: github.event_name == 'workflow_dispatch' || (github.event.action == 'labeled' && github.event.label.name == 'replication') || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'replication'))
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
     outputs:
       core-matrix: ${{ steps.split.outputs.core-matrix }}
       companion-matrix: ${{ steps.split.outputs.companion-matrix }}
@@ -118,15 +118,36 @@ jobs:
 
       - name: Download TC-858 JUnit evidence for the subject SHA
         if: github.event_name == 'pull_request' || inputs.gate == 'tc858-phase1-workspace'
+        timeout-minutes: 65
         env:
           GH_TOKEN: ${{ github.token }}
           SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TC893_JUNIT_WAIT_MINUTES: "60"
         run: |
-          RUN_ID="$(gh run list --workflow replica-e2e.yml --commit "$SUBJECT_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
-          if [ -z "$RUN_ID" ]; then
-            echo "no successful replica-e2e run for $SUBJECT_SHA" >&2
-            exit 1
-          fi
+          set -euo pipefail
+          deadline=$(( $(date +%s) + TC893_JUNIT_WAIT_MINUTES * 60 ))
+          while true; do
+            runs="$(gh run list --workflow replica-e2e.yml --commit "$SUBJECT_SHA" --limit 20 --json databaseId,status,conclusion,updatedAt)"
+            pending="$(jq -r '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' <<<"$runs")"
+            if [ "$pending" -eq 0 ]; then
+              RUN_ID="$(jq -r 'sort_by(.updatedAt) | last // empty | select(.conclusion == "success") | .databaseId' <<<"$runs")"
+              if [ -n "$RUN_ID" ]; then
+                break
+              fi
+              latest="$(jq -r 'sort_by(.updatedAt) | last // empty | "\(.databaseId) concluded \(.conclusion)"' <<<"$runs")"
+              if [ -n "$latest" ]; then
+                echo "newest completed replica-e2e run $latest for $SUBJECT_SHA" >&2
+              else
+                echo "no replica-e2e run for $SUBJECT_SHA" >&2
+              fi
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "timed out after ${TC893_JUNIT_WAIT_MINUTES}m waiting for a successful replica-e2e run for $SUBJECT_SHA" >&2
+              exit 1
+            fi
+            sleep 30
+          done
           gh run download "$RUN_ID" --name tc858-junit-sqlite --dir "$RUNNER_TEMP/tc893/junit/tc858-junit-sqlite"
           gh run download "$RUN_ID" --name tc858-junit-pg16 --dir "$RUNNER_TEMP/tc893/junit/tc858-junit-pg16"
       - name: Resolve inputs and matrix
