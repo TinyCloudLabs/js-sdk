@@ -476,6 +476,61 @@ describe("A2 lifecycle review regressions", () => {
       expect(env.events.some((event) => event.type === "replication.read" && event.source === "replica" && event.syncError === "TIMEOUT")).toBe(true);
     }
   });
+  test("late stale-sync outcomes retain their §5.2 route for get and list", async () => {
+    const scenarios = [
+      { name: "SOURCE_CHANGED", code: "SOURCE_CHANGED", local: 0, network: 1, eventCode: "SOURCE_CHANGED" },
+      { name: "SCOPE_VIOLATION", code: "SCOPE_VIOLATION", local: 0, network: 1, eventCode: "SCOPE_VIOLATION" },
+      { name: "CONTENT_MISMATCH", code: "CONTENT_MISMATCH", local: 0, network: 1, eventCode: "CONTENT_MISMATCH" },
+      { name: "busy", busy: true, local: 0, network: 1, eventCode: "REPLICA_BUSY" },
+      { name: "success", local: 1, network: 0, syncError: undefined },
+      { name: "NETWORK_ERROR", code: "NETWORK_ERROR", local: 1, network: 0, syncError: "NETWORK_ERROR" },
+      { name: "ABORTED from stale timeout", aborted: true, local: 1, network: 0, syncError: "TIMEOUT" },
+    ] as const;
+    for (const op of ["get", "list"] as const) {
+      for (const scenario of scenarios) {
+        let listNetworkCalls = 0;
+        const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+        let syncStarted!: () => void;
+        let finishSync!: (error?: unknown) => void;
+        const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+        const env = setup({
+          syncOutcome: "busy" in scenario ? "busy" : "synced",
+          onSync: (_epoch, signal) => {
+            syncStarted();
+            return new Promise<void>((resolve, reject) => {
+              finishSync = (error) => error === undefined ? resolve() : reject(error);
+              signal.addEventListener("abort", () => {
+                if ("aborted" in scenario) finishSync(Object.assign(new Error("aborted"), { code: "ABORTED" }));
+              }, { once: true });
+            });
+          },
+          setTimeoutImpl: (fn, ms) => {
+            const timer = { fn, ms, cancelled: false };
+            timers.push(timer);
+            return () => { timer.cancelled = true; };
+          },
+        });
+        env.setNow(1_200_001);
+        const request = op === "get"
+          ? env.controller.get(readRequest(env.network))
+          : env.controller.list(listRequest(undefined, async () => { listNetworkCalls++; return ok({ keys: ["network/a"], truncated: false }); }));
+        await started;
+        timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled)!.fn();
+        for (let tick = 0; tick < 10 && !timers.some((timer) => timer.ms === 3_000 && !timer.cancelled); tick++) await Promise.resolve();
+        if ("code" in scenario) finishSync(Object.assign(new Error(scenario.code), { code: scenario.code }));
+        else if (!("aborted" in scenario)) finishSync();
+        const result = await request;
+        const localReads = op === "get" ? env.counters().localReads : env.listReads();
+        const event = env.events.findLast((item) => item.type === "replication.read");
+        expect(result.ok).toBe(true);
+        expect(localReads).toBe(scenario.local * (op === "list" ? 2 : 1));
+        expect(op === "get" ? env.counters().networkCalls : listNetworkCalls).toBe(scenario.network);
+        expect(event?.type === "replication.read" ? event.source : undefined).toBe(scenario.network ? "network" : "replica");
+        if ("eventCode" in scenario) expect(event?.type === "replication.read" ? event.code : undefined).toBe(scenario.eventCode);
+        if ("syncError" in scenario) expect(event?.type === "replication.read" ? event.syncError : undefined).toBe(scenario.syncError);
+      }
+    }
+  });
 
   test("a sync that misses the abort drain bound goes to the network", async () => {
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];

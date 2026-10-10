@@ -6,4 +6,4 @@ Move replication controller and memory pending-store factories out of the platfo
 
 Replication authority can now mark compact delegate sessions as session-only so a refusing session grant cannot fall back to installed device grants; an installed grant also cannot widen a refusal by the current session. KV operations avoid readiness awaits when no read-through is configured.
 
-In foreground read-through, reaching `staleSyncTimeoutMs` now aborts and drains the sync before serving an eligible replica result offline; a sync that exceeds the drain budget falls back to the network.
+In foreground read-through, reaching `staleSyncTimeoutMs` now aborts and drains the sync before serving an eligible replica result offline; a sync that exceeds the drain budget falls back to the network. Settled outcomes during the drain retain their normal classification: synced results proceed through fresh-replica gates, network failures and timeout-caused aborts may serve offline, and busy or other errors use the network with their code.

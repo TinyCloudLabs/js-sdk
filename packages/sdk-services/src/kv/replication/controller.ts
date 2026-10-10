@@ -151,17 +151,30 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     state.sync = job;
     try { return await job; } finally { if (state.sync === job) state.sync = undefined; }
   }
-  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<boolean> {
+  type DrainedSync = { settled: false } | { settled: true; result: LocalSyncResult } | { settled: true; error: unknown };
+  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<DrainedSync> {
     let cancel = () => {};
-    const settled = sync.then(() => true, () => true);
-    const timeout = new Promise<false>((resolve) => {
-      cancel = scheduler.setTimeout(() => resolve(false), CLOSE_TIMEOUT_MS);
+    const settled: Promise<DrainedSync> = sync.then(
+      (result) => ({ settled: true, result }),
+      (error: unknown) => ({ settled: true, error }),
+    );
+    const timeout = new Promise<DrainedSync>((resolve) => {
+      cancel = scheduler.setTimeout(() => resolve({ settled: false }), CLOSE_TIMEOUT_MS);
     });
     try {
       const drained = await Promise.race([settled, timeout]);
-      if (!drained) emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
+      if (!drained.settled) emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
       return drained;
     } finally { cancel(); }
+  }
+  function staleSyncOutcome(outcome: { result: LocalSyncResult } | { error: unknown }, timedOut: boolean, currentStatus: LocalReplicaStatus): { status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" } {
+    if ("error" in outcome) {
+      const code = errorCode(outcome.error);
+      if (code === "NETWORK_ERROR" || (timedOut && (code === "ABORTED" || code === "TIMEOUT"))) return { status: currentStatus, syncedBeforeRead: false, syncError: code === "NETWORK_ERROR" ? code : "TIMEOUT" };
+      return { status: currentStatus, syncedBeforeRead: false, syncError: code, failure: "error" };
+    }
+    if (outcome.result.status === "busy") return { status: currentStatus, syncedBeforeRead: false, failure: "busy" };
+    return { status: currentStatus, syncedBeforeRead: true };
   }
   async function freshness(prefix: string, handle: KVReplicaHandle, signal: AbortSignal): Promise<{ status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" }> {
     let currentStatus = await handle.status();
@@ -210,17 +223,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       }
       if ("timeout" in outcome) {
         syncController?.abort(Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }));
-        const drained = syncController ? await drainForegroundSync(prefix, sync) : true;
+        const drained = syncController ? await drainForegroundSync(prefix, sync) : undefined;
         if (signal.aborted) return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
-        if (!drained) return { status: currentStatus, syncedBeforeRead: false, syncError: "DRAIN_TIMEOUT", failure: "error" };
-        currentStatus = await handle.status();
-        return { status: currentStatus, syncedBeforeRead: false, syncError: "TIMEOUT" };
+        if (drained && !drained.settled) return { status: currentStatus, syncedBeforeRead: false, syncError: "DRAIN_TIMEOUT", failure: "error" };
+        if (drained?.settled && "result" in drained) currentStatus = await handle.status();
+        return staleSyncOutcome(
+          drained?.settled ? ("result" in drained ? { result: drained.result } : { error: drained.error }) : { error: Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }) },
+          true,
+          currentStatus,
+        );
       }
-      if ("error" in outcome) {
-        const code = errorCode(outcome.error);
-        if (code === "NETWORK_ERROR" || (timedOut && code === "ABORTED")) return { status: currentStatus, syncedBeforeRead: false, syncError: timedOut ? "TIMEOUT" : code };
-        return { status: currentStatus, syncedBeforeRead: false, syncError: code, failure: "error" };
-      }
+      if ("error" in outcome) return staleSyncOutcome({ error: outcome.error }, timedOut, currentStatus);
       if (outcome.result.status === "busy") return { status: currentStatus, syncedBeforeRead: false, failure: "busy" };
       currentStatus = await handle.status();
       return { status: currentStatus, syncedBeforeRead: true };
