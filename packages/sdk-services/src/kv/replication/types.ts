@@ -370,6 +370,7 @@ export interface ReplicaStatusEntry extends Partial<LocalReplicaStatus> {
   prefix: string;
   state: ReplicaState;
   reason?: ReplicationReason;
+  errorCode?: string;
   pending: { inFlight: number; committed: number; ambiguous: number };
   pinned: PinnedKey[];
   lagMs: number | null;

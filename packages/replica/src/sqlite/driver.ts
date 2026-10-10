@@ -1,5 +1,4 @@
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
-import { pathToFileURL } from "node:url";
 
 export type SqlValue = string | number | null | Uint8Array;
 
@@ -21,7 +20,7 @@ type Statement = {
 };
 type NativeDatabase = { exec(sql: string): void; prepare(sql: string): Statement; close(): void };
 
-export type SqliteOpenOptions = { readonly?: boolean; immutable?: boolean };
+export type SqliteOpenOptions = { readonly?: boolean };
 export type SqliteOpener = (path: string, options?: SqliteOpenOptions) => SqliteDatabase;
 
 function wrap(native: NativeDatabase): SqliteDatabase {
@@ -77,14 +76,8 @@ export async function loadSqlite(): Promise<SqliteOpener> {
   if (runtime.Bun !== undefined) {
     const module = await load(["bun", "sqlite"].join(":"));
     const Database = module.Database as new (path: string, options: { create: boolean; readonly?: boolean } | number) => NativeDatabase;
-    const constants = module.constants as { SQLITE_OPEN_READONLY: number; SQLITE_OPEN_URI: number };
-    return (path, options) => {
-      if (options?.immutable) {
-        const filename = `${pathToFileURL(path).href}?immutable=1`;
-        return wrap(new Database(filename, constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI));
-      }
-      return wrap(new Database(path, { create: !options?.readonly, ...(options?.readonly ? { readonly: true } : {}) }));
-    };
+    return (path, options) =>
+      wrap(new Database(path, { create: !options?.readonly, ...(options?.readonly ? { readonly: true } : {}) }));
   }
   const version = runtime.process?.versions?.node ?? "0.0.0";
   if (!nodeSqliteSupported(version)) {
@@ -109,8 +102,6 @@ export async function loadSqlite(): Promise<SqliteOpener> {
     process.emitWarning = emitWarning;
   }
   const DatabaseSync = module.DatabaseSync as new (path: string, options?: { readOnly?: boolean }) => NativeDatabase;
-  return (path, options) => {
-    const filename = options?.immutable ? `${pathToFileURL(path).href}?immutable=1` : path;
-    return wrap(options?.readonly ? new DatabaseSync(filename, { readOnly: true }) : new DatabaseSync(filename));
-  };
+  return (path, options) =>
+    wrap(options?.readonly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path));
 }

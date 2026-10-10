@@ -618,7 +618,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     emit({ type: "replication.read", op: r.op, space: r.space, key: r.path, replica: null, source: "network", reason: "NETWORK_REQUESTED", outcome: r.outcome, latencyMs: r.latencyMs, stalenessMs: null, coverage: null, authority: null });
   }
 
-  async function inspectPersistedStatus(prefix: string): Promise<{ missing: boolean; local?: LocalReplicaStatus }> {
+  async function inspectPersistedStatus(prefix: string): Promise<{ missing: boolean; local?: LocalReplicaStatus; errorCode?: string }> {
     if (!storage.inspectStatus || isClosed || purgeInProgress) return { missing: false };
     const sessionGrant = authority.sessionGrant(prefix);
     const device = "refused" in sessionGrant ? undefined : sessionGrant.device;
@@ -638,10 +638,10 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     });
     try {
       const result = await Promise.race([job.then((local) => ({ local })), timeout]);
-      if ("timedOut" in result) return { missing: false };
+      if ("timedOut" in result) return { missing: false, errorCode: "STATUS_TIMEOUT" };
       return { missing: result.local === undefined, ...(result.local ? { local: result.local } : {}) };
-    } catch {
-      return { missing: false };
+    } catch (error) {
+      return { missing: false, errorCode: errorCode(error) };
     } finally { cancel(); }
   }
 
@@ -667,11 +667,12 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       local ??= inspected.local;
       if (inspected.missing && !opened?.reason && !opened?.authorityRevoked && !opened?.opening && !isClosed) return undefined;
       const revoked = opened?.authorityRevoked === true || local?.authority.state === "revoked";
-      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : opened?.reason ? "unavailable" as const : "idle" as const;
+      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
       return {
         prefix,
         state,
-        ...(opened?.reason ? { reason: opened.reason } : {}),
+        ...(opened?.reason ? { reason: opened.reason } : inspected.errorCode ? { reason: "replica_unavailable" as const } : {}),
+        ...(inspected.errorCode ? { errorCode: inspected.errorCode } : {}),
         ...(local ?? {}),
         ...(revoked ? { authority: { state: "revoked" as const, expiresAt: local?.authority.expiresAt ?? null } } : {}),
         pending: {

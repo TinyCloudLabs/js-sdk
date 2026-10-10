@@ -178,15 +178,6 @@ function errnoOf(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
 
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (error) {
-    if (errnoOf(error) === "ENOENT") return false;
-    throw error;
-  }
-}
 
 /** A directory's entries; only a directory that does not exist is empty. */
 async function entriesOf(path: string): Promise<string[]> {
@@ -256,11 +247,9 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Read-only status snapshot; does not create files, migrate, recover
-   * revocation cleanup, or enter the mutation guard. SQLite immutable mode
-   * avoids locks and sidecar creation when either writer sidecar is absent.
-   * That snapshot may be stale if a writer starts concurrently; status is
-   * advisory and never authorizes local serving, which checks persisted authority.
+   * Read-only status snapshot; does not create a replica, migrate, recover
+   * revocation cleanup, or enter the mutation guard. An existing database is
+   * opened normally in read-only WAL mode so committed WAL state is visible.
    */
 
   static async inspect(
@@ -284,19 +273,22 @@ export class SqliteReplicaStore implements ReplicaStore {
     checkAbort();
     let db: SqliteDatabase | undefined;
     try {
-      const [wal, shm] = await Promise.all([exists(join(dir, "replica.db-wal")), exists(join(dir, "replica.db-shm"))]);
-      // Use a normal readonly connection only when both live-writer sidecars exist.
-      // Otherwise immutable mode cannot create a missing sidecar; any stale view
-      // is acceptable because status never authorizes local serving.
-      db = opener(dbPath, { readonly: true, immutable: !(wal && shm) });
+      db = opener(dbPath, { readonly: true });
+      db.exec("PRAGMA busy_timeout = 3000");
       checkAbort();
       const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
-      const state = await store.open();
-      checkAbort();
-      if (state === null) return null;
-      const status = await store.status();
-      checkAbort();
-      return { state, status };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const before = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
+        const state = await store.open();
+        checkAbort();
+        if (state === null) return null;
+        const status = await store.status();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        checkAbort();
+        const after = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
+        if (before === after) return { state, status };
+      }
+      throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica changed during status inspection.");
     } catch (error) {
       throw storageError(error, "Inspecting the replica");
     } finally {

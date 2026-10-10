@@ -363,6 +363,16 @@ describe("pending record evidence boundaries", () => {
     expect(env.counters().opens).toBe(0);
   });
 
+  test("a persisted inspection error reports unavailable with its code", async () => {
+    const env = setup({
+      inspectStatus: async () => { throw Object.assign(new Error("read-only inspection failed"), { code: "SQLITE_READONLY" }); },
+    });
+    expect(await env.controller.status()).toMatchObject([
+      { state: "unavailable", reason: "replica_unavailable", errorCode: "SQLITE_READONLY" },
+    ]);
+    await env.controller.close();
+  });
+
 });
 describe("KVReplication inline verification", () => {
   test("reports divergence but returns the replica answer", async () => {
