@@ -166,11 +166,30 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
     },
   };
 
+  Reflect.set(node, "_address", ADDRESS);
+  Reflect.set(node, "_chainId", 1);
   const syncAccessible = mock(async () => ({ ok: true, data: [] }));
   (node as any)._account = {
     index: { ensure: mock(async () => ({ ok: true, data: undefined })) },
     spaces: { syncAccessible },
   };
+  const context = new ServiceContext({
+    invoke: () => ({ Authorization: "registry" }),
+    hosts: ["https://tinycloud.test"],
+    fetch: async () => new Response(null, { status: 200 }),
+  });
+  context.setSession({
+    delegationHeader: { Authorization: "registry" },
+    delegationCid: "registry",
+    spaceId: SPACE_URI,
+    verificationMethod: "did:key:default",
+    jwk: {},
+  });
+  (node as any)._serviceContext = context;
+  (node as any).createAccountRegistryServices = (operationContext: ServiceContext) => ({
+    account: (node as any)._account,
+    contexts: [operationContext],
+  });
 
   return { node, wasm, syncAccessible };
 }
@@ -254,6 +273,7 @@ describe("sign-in account registry barrier", () => {
       spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
     });
     Reflect.set(node, "_serviceContext", context);
+    Reflect.deleteProperty(node, "createAccountRegistryServices");
     const scheduleRegistry = Reflect.get(node, "scheduleAccountRegistrySync");
     if (typeof scheduleRegistry !== "function") throw new Error("Registry scheduler is unavailable");
     Reflect.set(node, "accountRegistryTail", Promise.resolve());
@@ -324,6 +344,35 @@ describe("sign-in account registry barrier", () => {
       jwk: {},
     });
     Reflect.set(node, "_serviceContext", context);
+    Reflect.set(node, "createAccountRegistryServices", (
+      operationContext: ServiceContext,
+      signal: AbortSignal,
+    ) => {
+      const operationKVContext = new ServiceContext({
+        invoke: operationContext.invoke,
+        hosts: operationContext.hosts,
+        fetch: operationContext.fetch,
+      });
+      operationKVContext.setOperationAbortSignal(signal);
+      operationKVContext.setSession({
+        delegationHeader: { Authorization: "registry" },
+        delegationCid: "registry",
+        spaceId: ACCOUNT_SPACE,
+        verificationMethod: "did:key:default",
+        jwk: {},
+      });
+      const operationKV = new KVService({});
+      operationKV.initialize(operationKVContext);
+      const operationAccount = new AccountService({
+        getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
+        getHost: () => "https://tinycloud.test",
+        getPrimarySpaceId: () => SPACE_URI,
+        getAccountSpaceId: () => ACCOUNT_SPACE,
+        getSpaces: () => ({ get: () => ({ kv: operationKV }) }) as unknown as ISpaceService,
+        getAccountDb: () => undefined,
+      });
+      return { account: operationAccount, contexts: [operationContext, operationKVContext] };
+    });
     const createScopedKV = Reflect.get(node, "createSpaceScopedKVService") as (spaceId: string) => KVService;
     const registryKV = createScopedKV.call(node, ACCOUNT_SPACE);
     Reflect.set(node, "_account", new AccountService({
@@ -423,6 +472,7 @@ describe("sign-in account registry barrier", () => {
       jwk: {},
     });
     Reflect.set(node, "_serviceContext", context);
+    Reflect.deleteProperty(node, "createAccountRegistryServices");
     Reflect.set(node, "_account", {
       index: {
         ensure: async () => {
@@ -468,7 +518,10 @@ describe("sign-in account registry barrier", () => {
       index: { ensure: async () => { throw new Error("registry unavailable"); } },
       spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
     });
-    Reflect.set(node, "initializeServices", async () => {});
+    const serviceContext = Reflect.get(node, "_serviceContext");
+    Reflect.set(node, "initializeServices", async () => {
+      Reflect.set(node, "_serviceContext", serviceContext);
+    });
     Reflect.set(node, "registerPrimarySessionGrant", () => {});
     Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
     Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});

@@ -2444,7 +2444,10 @@ export class TinyCloudNode {
     });
   }
 
-  private async writeManifestRegistryRecords(signal: AbortSignal): Promise<void> {
+  private async writeManifestRegistryRecords(
+    account: AccountService,
+    signal: AbortSignal,
+  ): Promise<void> {
     const request = this.capabilityRequest;
     if (!request || request.registryRecords.length === 0) {
       return;
@@ -2456,13 +2459,72 @@ export class TinyCloudNode {
     const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
     await this.ensureOwnedSpaceHostedById(accountSpaceId, signal);
     if (signal.aborted) throw signal.reason;
-    const result = await this.account.applications.register(request.manifests);
+    const result = await account.applications.register(request.manifests);
     if (!result.ok) {
       throw Object.assign(
         new Error(`Failed to write manifest registry records: ${result.error.message}`),
         { cause: result.error },
       );
     }
+  }
+
+  private createAccountRegistryServices(
+    context: ServiceContext,
+    signal: AbortSignal,
+  ): { account: AccountService; contexts: ServiceContext[] } {
+    const session = context.session;
+    if (!session) throw new Error("Account registry requires an active service session");
+    const contexts: ServiceContext[] = [context];
+    const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
+    const createScopedContext = (spaceId: string): ServiceContext => {
+      const scoped = this._serviceGraph.track(new ServiceContext({
+        invoke: context.invoke,
+        invokeAny: context.invokeAny,
+        fetch: context.fetch,
+        hosts: context.hosts,
+        telemetry: this.config.telemetry,
+      }));
+      scoped.setOperationAbortSignal(signal);
+      scoped.setSession({ ...session, spaceId });
+      contexts.push(scoped);
+      return scoped;
+    };
+
+    const sql = new SQLService({});
+    const sqlContext = createScopedContext(accountSpaceId);
+    sql.initialize(sqlContext);
+    const spaces = new SpaceService({
+      hosts: context.hosts,
+      session,
+      invoke: context.invoke,
+      fetch: (url, init) =>
+        context.fetch(url, {
+          ...init,
+          signal: init?.signal
+            ? AbortSignal.any([init.signal, signal])
+            : signal,
+        }),
+      userDid: this.did,
+      createKVService: (spaceId) => {
+        const kv = new KVService({});
+        kv.initialize(createScopedContext(spaceId));
+        return kv;
+      },
+    });
+
+    return {
+      contexts,
+      account: new AccountService({
+        getDid: () => this.did,
+        getHost: () => context.hosts[0] ?? this.config.host!,
+        getPrimarySpaceId: () => session.spaceId,
+        getAccountSpaceId: () => accountSpaceId,
+        getSpaces: () => spaces,
+        getAccountDb: () => sql.db("account"),
+        ensureAccountSpaceHosted: () =>
+          this.ensureOwnedSpaceHostedById(accountSpaceId, signal),
+      }),
+    };
   }
 
   private scheduleAccountRegistrySync(): void {
@@ -2477,42 +2539,54 @@ export class TinyCloudNode {
       this.accountRegistryDeadlineMs,
     );
     const promise = this.enqueueAccountRegistryOperation(session, async () => {
-      const context = this._serviceContext;
-      context?.setOperationAbortSignal(controller.signal);
+      const sharedContext = this._serviceContext;
+      if (!sharedContext) return;
+      const context = this._serviceGraph.track(new ServiceContext({
+        invoke: sharedContext.invoke,
+        invokeAny: sharedContext.invokeAny,
+        fetch: sharedContext.fetch,
+        hosts: sharedContext.hosts,
+        telemetry: this.config.telemetry,
+      }));
+      context.setOperationAbortSignal(controller.signal);
+      const current = this.currentTinyCloudSession();
+      if (!current) return;
+      context.setSession({
+        delegationHeader: current.delegationHeader,
+        delegationCid: current.delegationCid,
+        spaceId: current.spaceId,
+        verificationMethod: current.verificationMethod,
+        jwk: current.jwk,
+      });
+      const registry = this.createAccountRegistryServices(context, controller.signal);
       try {
         await this.withAccountRegistryRetry(async () => {
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.currentTinyCloudSession() !== session) return;
-          await this.account.index.ensure();
+          await registry.account.index.ensure();
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.currentTinyCloudSession() !== session) return;
 
-          await this.writeManifestRegistryRecords(controller.signal);
+          await this.writeManifestRegistryRecords(registry.account, controller.signal);
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.currentTinyCloudSession() !== session) return;
 
           if (this.currentSessionCanListSpaces()) {
-            const spaces = await this.account.spaces.syncAccessible();
+            const result = await registry.account.spaces.syncAccessible();
             if (controller.signal.aborted) throw controller.signal.reason;
-            if (!spaces.ok) {
+            if (!result.ok) {
               throw Object.assign(
-                new Error(`Failed to sync account spaces: ${spaces.error.message}`),
-                { cause: spaces.error },
+                new Error(`Failed to sync account spaces: ${result.error.message}`),
+                { cause: result.error },
               );
             }
           }
-          // Else: the current session carries a recap that does not grant
-          // `tinycloud.space/list` (every manifest/recap session, and the default
-          // non-manifest recap alike — its abilities table has no `space` service).
-          // `syncAccessible()` depends on `tinycloud.space/list`, which such a
-          // session does not hold — see {@link isOwnedSpaceRegistered} — so the
-          // owned-space listing is a doomed request that 401s on the wire
-          // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
-          // spaces registry is instead maintained by bootstrap seeding +
-          // `spaces.register()`, so we skip the invoke entirely rather than emit it.
+          // Recap sessions without tinycloud.space/list cannot use syncAccessible.
         }, controller.signal);
       } finally {
-        context?.setOperationAbortSignal(undefined);
+        for (const operationContext of registry.contexts) {
+          operationContext.retire();
+        }
         clearTimeout(deadline);
       }
     });
@@ -3984,7 +4058,6 @@ export class TinyCloudNode {
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
-        operationAbortSignalProvider: () => this._serviceContext?.operationAbortSignal,
       }));
       const session = this._serviceContext.session;
       if (session) {
@@ -4895,7 +4968,6 @@ export class TinyCloudNode {
       hosts: this._serviceContext.hosts,
       telemetry: this.config.telemetry,
     }));
-    spaceScopedContext.setOperationAbortSignal(this._serviceContext.operationAbortSignal);
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     sql.initialize(spaceScopedContext);
     return sql;
@@ -4927,7 +4999,6 @@ export class TinyCloudNode {
       fetch: this._serviceContext.fetch,
       hosts: this._serviceContext.hosts,
     }));
-    spaceScopedContext.setOperationAbortSignal(this._serviceContext.operationAbortSignal);
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
     this.attachReplicationKV(spaceId, kv);

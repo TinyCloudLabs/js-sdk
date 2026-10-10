@@ -3,4 +3,4 @@
 "@tinycloud/sdk-services": patch
 ---
 
-Keep account-registry KV requests inside the sign-in deadline without retaining an expired signal in reusable scoped services. Await SQL and DuckDB error-body reads before disposing request cancellation listeners.
+Run account-registry SQL, KV, and hosting requests through a dedicated per-operation context so the sign-in deadline cannot abort unrelated requests or persist in cached space-scoped services. Await SQL and DuckDB error-body reads before disposing request cancellation listeners.

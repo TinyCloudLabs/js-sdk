@@ -358,7 +358,6 @@ export interface IServiceContext {
   // Lifecycle
   /** Abort signal that fires when SDK signs out. */
   readonly abortSignal: AbortSignal;
-
   /** Additional abort signal for a scoped operation, when active. */
   readonly operationAbortSignal?: AbortSignal;
   /** Install an additional signal for the duration of a scoped operation. */
