@@ -18,7 +18,7 @@ export async function scheduleRows<T>(rows: readonly ScenarioRow[], concurrency:
   return results;
 }
 
-export type TimedOutcome<T> = { value: T; timedOut: false } | { value?: T; timedOut: true; abandoned: boolean };
+export type TimedOutcome<T> = { value: T; timedOut: false } | { value?: T; timedOut: true; abandoned: boolean; cancelled: boolean };
 
 /** Deadline and grace use the injected clock; both wait timers are always cancelled. */
 export async function runWithDeadline<T>(clock: Clock, timeoutMs: number, abortGraceMs: number,
@@ -48,6 +48,6 @@ export async function runWithDeadline<T>(clock: Clock, timeoutMs: number, abortG
     scenario.then((value) => ({ kind: "settled" as const, value }), () => ({ kind: "rejected" as const })), grace,
   ]);
   graceController.abort();
-  if (settled.kind === "settled") return { value: settled.value, timedOut: true, abandoned: false };
-  return { timedOut: true, abandoned: settled.kind === "grace" };
+  if (settled.kind === "settled") return { value: settled.value, timedOut: true, abandoned: false, cancelled: first.kind === "abort" };
+  return { timedOut: true, abandoned: settled.kind === "grace", cancelled: first.kind === "abort" };
 }

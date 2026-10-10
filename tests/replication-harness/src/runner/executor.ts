@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, rename } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { validateTopology } from "../contracts/topology";
 import type { Clock } from "../contracts/clock";
 import type { RunEnvironment, TopologyFactory, ResourceRef, Topology, DisposeReport } from "../contracts/lifecycle";
 import type { ScenarioResult } from "../contracts/report";
 import type { ScenarioRow } from "./registry";
-import { createScenarioContext, ScenarioSkip, AssertionFailure, type ScenarioContextState, writeScenarioArtefacts } from "./context";
+import { createScenarioContext, ScenarioSkip, AssertionFailure, type ScenarioContextState, type ScenarioArtefactFile, writeScenarioArtefacts, normalizeArtefactName } from "./context";
 import { initialResult } from "./status";
-import { redactBytes, redactText } from "./redact";
+import { redactText } from "./redact";
 
 export type ScenarioExecutor = {
   executeRow(row: ScenarioRow, signal: AbortSignal): Promise<ScenarioResult>;
@@ -24,6 +24,29 @@ function topologyId(runId: string, row: ScenarioRow): string {
 }
 function artifactPath(row: ScenarioRow): string {
   return row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_");
+}
+async function indexCollectedArtefacts(files: readonly ScenarioArtefactFile[], directory: string, secrets: readonly string[]): Promise<ScenarioArtefactFile[]> {
+  const indexed: ScenarioArtefactFile[] = [];
+  const seen = new Set<string>();
+  for (const file of files) {
+    const sourceName = normalizeArtefactName(file.path, directory);
+    if (sourceName === "scenario.log") throw new Error("collector artefact path is reserved for scenario.log");
+    const safeName = normalizeArtefactName(redactText(sourceName, secrets), directory);
+    if (safeName === "scenario.log") throw new Error("collector artefact path is reserved for scenario.log");
+    if (seen.has(safeName)) throw new Error(`duplicate collector artefact path ${safeName}`);
+    seen.add(safeName);
+    const source = join(directory, ...sourceName.split("/"));
+    const target = join(directory, ...safeName.split("/"));
+    if (sourceName !== safeName) {
+      try { await access(target); throw new Error(`collector artefact target already exists: ${safeName}`); }
+      catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error; }
+      await mkdir(dirname(target), { recursive: true });
+      await rename(source, target);
+    }
+    const bytes = await readFile(target);
+    indexed.push({ path: safeName, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") });
+  }
+  return indexed;
 }
 
 export function createScenarioExecutor(options: { factory: TopologyFactory; env: RunEnvironment; clock: Clock; artefactRoot: string; secrets?: readonly string[] }): ScenarioExecutor {
@@ -63,9 +86,11 @@ export function createScenarioExecutor(options: { factory: TopologyFactory; env:
     result.durationMs = Math.max(0, options.clock.now() - lifecycle.started);
     try {
       await mkdir(lifecycle.dir, { recursive: true });
-      const scenarioFiles = await writeScenarioArtefacts(lifecycle.state, lifecycle.dir, options.secrets);
       const index = await lifecycle.topology.collectArtefacts(lifecycle.dir, { deadlineMs: 30_000 });
-      const files = new Map(index.files.map((file) => [redactText(file.path, options.secrets ?? []), { path: redactText(file.path, options.secrets ?? []), bytes: file.bytes, sha256: file.sha256 }]));
+      const secrets = options.secrets ?? [];
+      const collectedFiles = await indexCollectedArtefacts(index.files, lifecycle.dir, secrets);
+      const scenarioFiles = await writeScenarioArtefacts(lifecycle.state, lifecycle.dir, secrets);
+      const files = new Map(collectedFiles.map((file) => [file.path, file]));
       for (const file of scenarioFiles) files.set(file.path, file);
       result.artefacts = [...files.values()];
     } catch (error) {

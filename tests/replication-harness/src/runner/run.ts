@@ -28,15 +28,22 @@ export async function runRows(options: RunRowsOptions): Promise<RunRowsOutput> {
     if (row.reason) return initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), row.unavailableStatus ?? "skipped", row.reason);
     let result: ScenarioResult;
     let timedOut = false;
+    let cancelled = false;
     try {
       const timed = await runWithDeadline(options.clock, row.scenario.timeoutMs, options.abortGraceMs ?? 5000,
         options.runSignal, (signal) => options.executeRow(row, signal));
       timedOut = timed.timedOut;
-      result = timed.value ?? initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), "error", "DEADLINE_EXCEEDED");
+      cancelled = timed.timedOut && timed.cancelled;
+      result = cancelled
+        ? initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), "error", "INTERRUPTED")
+        : timed.value ?? initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), "error", "DEADLINE_EXCEEDED");
     } catch (error) {
-      interrupted ||= options.runSignal?.aborted === true;
+      cancelled = options.runSignal?.aborted === true;
+      interrupted ||= cancelled;
       const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof ScenarioSkip) {
+      if (cancelled) {
+        result = initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), "error", "INTERRUPTED");
+      } else if (error instanceof ScenarioSkip) {
         const status = row.tier === "core" ? "error" : row.forcedUnsupported ? "xfail" : error.status;
         result = initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), status, row.tier === "core" ? "CORE_STATUS_FORBIDDEN" : message);
       } else {
@@ -44,8 +51,11 @@ export async function runRows(options: RunRowsOptions): Promise<RunRowsOutput> {
         result = initialResult(row, row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_"), status, message);
       }
     }
-    if (timedOut) {
-      interrupted ||= options.runSignal?.aborted === true;
+    if (cancelled) {
+      interrupted = true;
+      result.status = "error";
+      result.reason = "INTERRUPTED";
+    } else if (timedOut) {
       result.status = row.forcedUnsupported ? "xfail" : "error";
       result.reason = "DEADLINE_EXCEEDED";
     } else if (row.forcedUnsupported) result.status = result.status === "pass" ? "xpass" : "xfail";

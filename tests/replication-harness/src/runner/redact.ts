@@ -7,7 +7,11 @@ function encodedForms(value: string): string[] {
   const url = encoded.replaceAll("+", "-").replaceAll("/", "_");
   return [value, JSON.stringify(value).slice(1, -1), encoded, url, url.replace(/=+$/, "")];
 }
-function secretForms(secret: string): { text: string[]; bytes: Uint8Array[] } {
+function hexForms(value: Uint8Array): string[] {
+  const hex = Buffer.from(value).toString("hex");
+  return hex ? [hex, hex.toUpperCase()] : [];
+}
+function secretForms(secret: string): { text: string[]; bytes: Uint8Array[]; multiline: string[] } {
   const text = new Set<string>();
   for (const source of [secret, JSON.stringify(secret).slice(1, -1)]) {
     for (const form of encodedForms(source)) text.add(form);
@@ -18,23 +22,46 @@ function secretForms(secret: string): { text: string[]; bytes: Uint8Array[] } {
     const decoded = Buffer.from(secret, "base64url");
     if (decoded.length && decoded.toString("base64url") === secret.replace(/=+$/, "")) bytes.push(new Uint8Array(decoded));
   }
+  const multiline = new Set([secret]);
+  for (const hex of [...text].flatMap((value) => hexForms(new TextEncoder().encode(value)))) {
+    text.add(hex);
+    multiline.add(hex);
+  }
+  for (const value of bytes) {
+    for (const hex of hexForms(value)) {
+      text.add(hex);
+      multiline.add(hex);
+    }
+  }
   const unique = new Map(bytes.map((value) => [Buffer.from(value).toString("hex"), value]));
-  return { text: [...text].filter((form) => form.length > 0).sort((a, b) => b.length - a.length), bytes: [...unique.values()].sort((a, b) => b.length - a.length) };
+  return { text: [...text].filter((form) => form.length > 0).sort((a, b) => b.length - a.length),
+    bytes: [...unique.values()].sort((a, b) => b.length - a.length), multiline: [...multiline].filter(Boolean) };
 }
-function allForms(secrets: readonly string[]): { text: string[]; bytes: Uint8Array[] } {
+function allForms(secrets: readonly string[]): { text: string[]; bytes: Uint8Array[]; multiline: string[] } {
   const text = new Set<string>();
   const bytes = new Map<string, Uint8Array>();
+  const multiline = new Set<string>();
   for (const secret of new Set(secrets)) {
     if (!secret) continue;
     const forms = secretForms(secret);
     for (const form of forms.text) text.add(form);
     for (const form of forms.bytes) bytes.set(Buffer.from(form).toString("hex"), form);
+    for (const form of forms.multiline) multiline.add(form);
   }
-  return { text: [...text].sort((a, b) => b.length - a.length), bytes: [...bytes.values()].sort((a, b) => b.length - a.length) };
+  return { text: [...text].sort((a, b) => b.length - a.length), bytes: [...bytes.values()].sort((a, b) => b.length - a.length),
+    multiline: [...multiline].sort((a, b) => b.length - a.length) };
+}
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 export function redactText(input: string, secrets: readonly string[]): string {
+  const forms = allForms(secrets);
   let result = input;
-  for (const form of allForms(secrets).text) result = result.split(form).join(REDACTED);
+  for (const form of forms.text) result = result.split(form).join(REDACTED);
+  if (result.includes("\n") || result.includes("\r")) for (const form of forms.multiline) {
+    const pattern = form.split("").map(escapeRegExp).join("(?:\\r?\\n)*");
+    result = result.replace(new RegExp(pattern, "g"), REDACTED);
+  }
   return result;
 }
 function replaceBytes(input: Uint8Array, patterns: readonly Uint8Array[]): Uint8Array {

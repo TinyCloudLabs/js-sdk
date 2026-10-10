@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Scenario } from "../src/contracts/scenario";
@@ -134,18 +134,24 @@ describe("S3a scenario expansion", () => {
     const dir = await tempDir();
     const target = new EventEmitter();
     try {
-      const [row] = expandScenarios([scenario("EDGE-08", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
-      const running = runRowsWithInterrupt({ rows: [row], clock: realClock, concurrency: 1, report: reportBase(dir), reportDirectory: dir,
-        executeRow: (selectedRow, signal) => {
-          const { promise, resolve } = Promise.withResolvers<ScenarioResult>();
-          signal.addEventListener("abort", () => resolve(result(selectedRow, "error")), { once: true });
-          return promise;
+      const [row] = expandScenarios([scenario("TC12-02", "tc12", { timeoutMs: 60_000, requires: ["tc12:host-sync"] })],
+        { tiers: ["tc12"], set: null, backends: ["sqlite"], forceUnsupported: true }, view, () => "host sync unavailable");
+      let abortObserved = false;
+      const running = runRowsWithInterrupt({ rows: [row!], clock: realClock, concurrency: 1, abortGraceMs: 15,
+        report: reportBase(dir), reportDirectory: dir,
+        executeRow: (_selectedRow, signal) => {
+          signal.addEventListener("abort", () => { abortObserved = true; }, { once: true });
+          return Promise.withResolvers<ScenarioResult>().promise;
         } }, target);
       await realClock.sleep(3);
       target.emit("SIGINT");
       const output = await running;
       expect(output.interrupted).toBe(true);
       expect(output.report.interrupted).toBe(true);
+      expect(abortObserved).toBe(true);
+      expect(output.report.results[0]?.status).toBe("error");
+      expect(output.report.results[0]?.reason).toBe("INTERRUPTED");
+      expect(output.report.results[0]?.status).not.toBe("xfail");
       expect(await readFile(join(dir, "report.json"), "utf8")).toContain("\"interrupted\": true");
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
@@ -205,11 +211,12 @@ describe("S3a scenario expansion", () => {
     ]).map((entry) => entry.key)).toEqual(["CORE-01[sdk>cli]@sqlite", "CORE-01[cli>sdk]@pg16"]);
   });
 
-  test("redacts serialized and binary secret forms before eq and in both leg reports", async () => {
+  test("redacts serialized and binary secrets without changing equality or leaking either leg report", async () => {
     const dir = await tempDir();
     const pem = "-----BEGIN PRIVATE KEY-----\nsynthetic-pem-secret\n-----END PRIVATE KEY-----";
     const jwkD = "c2VjcmV0LWp3ay1k";
-    const secrets = [pem, jwkD];
+    const otherSecret = "different-registered-key";
+    const secrets = [pem, jwkD, otherSecret];
     const [row] = expandScenarios([scenario("EDGE-09", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
     const fakeTopology = { spec: { clients: [] } } as unknown as Topology;
     const state: ScenarioContextState = { assertions: [], metrics: [], logs: [], artefacts: new Map(), secrets };
@@ -220,33 +227,57 @@ describe("S3a scenario expansion", () => {
       const pemJson = JSON.stringify({ privateKey: pem });
       const jwkBytes = new TextEncoder().encode(jwkD);
       const jwkBuffer = Buffer.from(jwkD, "utf8");
+      const pemHex = Buffer.from(pem, "utf8").toString("hex");
+      const jwkDecodedHex = Buffer.from(jwkD, "base64url").toString("hex");
+      const jwkTextHex = Buffer.from(jwkD, "utf8").toString("hex");
+      const otherSecretHex = Buffer.from(otherSecret, "utf8").toString("hex");
       context.eq("serialized PEM", pemJson, pemJson);
       context.eq("binary JWK d", jwkBytes, new Uint8Array(jwkBytes));
       context.eq("buffer JWK d", jwkBuffer, Buffer.from(jwkBytes));
+      expect(() => context.eq("different registered secrets", jwkD, otherSecret)).toThrow("different registered secrets");
+      expect(state.assertions.at(-1)?.ok).toBe(false);
       expect(JSON.stringify(state.assertions)).not.toContain(pem);
       expect(JSON.stringify(state.assertions)).not.toContain(jwkD);
+      expect(JSON.stringify(state.assertions)).not.toContain(otherSecret);
       expect(JSON.stringify(state.assertions)).toContain("[REDACTED]");
 
       expect(() => context.artefact(`${jwkD}.txt`, "secret filename")).toThrow("filename contains");
-      expect(() => context.artefact("scenario.log", "overwrite")).toThrow("reserved");
-      context.artefact("ordinary.txt", "ordinary contents");
-      context.log("runner log");
+      for (const name of ["scenario.log", "./scenario.log", "nested/../scenario.log", "nested\\..\\scenario.log"]) {
+        expect(() => context.artefact(name, "overwrite")).toThrow("reserved");
+      }
+      expect(() => context.artefact("../escaped.txt", "escape")).toThrow("escapes");
+      context.artefact("./nested/../ordinary.txt", "ordinary contents");
+      context.log(jwkDecodedHex.slice(0, 8));
+      context.log(jwkDecodedHex.slice(8));
       const indexed = await writeScenarioArtefacts(state, dir);
       for (const file of indexed) {
         const bytes = await readFile(join(dir, file.path));
         expect(file.bytes).toBe(bytes.byteLength);
         expect(file.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
       }
+      const log = await readFile(join(dir, "scenario.log"), "utf8");
+      expect(log).not.toContain(jwkDecodedHex);
+      expect(log).not.toContain(jwkDecodedHex.toUpperCase());
+      expect(log).toContain("[REDACTED]");
+      const bypassState: ScenarioContextState = { ...state, artefacts: new Map([["./scenario.log", "overwrite"]]) };
+      await expect(writeScenarioArtefacts(bypassState, dir)).rejects.toThrow("reserved");
 
       const failed = result(row!, "fail");
       failed.assertions.push({ name: "secret representations", ok: false, detail: {
         serializedPem: pemJson,
+        pemHex,
+        pemHexUpper: pemHex.toUpperCase(),
         pemBase64: Buffer.from(pem).toString("base64"),
         escapedPemBase64: Buffer.from(JSON.stringify(pem).slice(1, -1)).toString("base64"),
-        escapedPemBase64url: Buffer.from(JSON.stringify(pem).slice(1, -1)).toString("base64url"),
         jwkD,
         jwkDBase64: Buffer.from(jwkD).toString("base64"),
         jwkDBase64url: Buffer.from(jwkD).toString("base64url"),
+        jwkTextHex,
+        jwkTextHexUpper: jwkTextHex.toUpperCase(),
+        otherSecretHex,
+        otherSecretHexUpper: otherSecretHex.toUpperCase(),
+        jwkDecodedHex,
+        jwkDecodedHexUpper: jwkDecodedHex.toUpperCase(),
         jwkBytes,
         jwkBuffer,
         jwkNumbers: [...jwkBytes],
@@ -256,14 +287,49 @@ describe("S3a scenario expansion", () => {
       const jsonText = await readFile(join(dir, "report.json"), "utf8");
       const mdText = await readFile(join(dir, "report.md"), "utf8");
       const pemEscaped = JSON.stringify(pem).slice(1, -1);
-      const secretForms = [pem, pemEscaped, Buffer.from(pem).toString("base64"),
+      const secretForms = [pem, pemEscaped, pemHex, pemHex.toUpperCase(), Buffer.from(pem).toString("base64"),
         Buffer.from(pem).toString("base64url"), Buffer.from(pemEscaped).toString("base64"),
         Buffer.from(pemEscaped).toString("base64url"), jwkD, Buffer.from(jwkD).toString("base64"),
-        Buffer.from(jwkD).toString("base64url")];
+        Buffer.from(jwkD).toString("base64url"), jwkTextHex, jwkTextHex.toUpperCase(),
+        jwkDecodedHex, jwkDecodedHex.toUpperCase(), otherSecret, otherSecretHex, otherSecretHex.toUpperCase()];
       for (const text of [jsonText, mdText]) for (const secret of secretForms) expect(text).not.toContain(secret);
       expect(jsonText).toContain("[REDACTED]");
       expect(mdText).toContain("[REDACTED]");
       expect(RunReportSchema.safeParse(JSON.parse(jsonText)).success).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  test("collector secret-bearing filenames are renamed and reindexed from bytes on disk", async () => {
+    const dir = await tempDir();
+    const secret = "collector-secret";
+    const [row] = expandScenarios([scenario("EDGE-10", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
+    const content = new TextEncoder().encode("collector payload");
+    const fakeTopology = {
+      id: "fake-topology",
+      spec: { name: "fake", nodes: [], clients: [] },
+      backend: "sqlite",
+      resources: () => [],
+      collectArtefacts: async (outputDir: string) => {
+        await writeFile(join(outputDir, `${secret}.txt`), content);
+        return { dir: outputDir, files: [{ path: `${secret}.txt`, bytes: content.byteLength, sha256: "0".repeat(64) }] };
+      },
+      dispose: async () => ({ removed: [], leaked: [], errors: [], clients: [] }),
+    } as unknown as Topology;
+    const factory: TopologyFactory = { create: async () => fakeTopology };
+    const env: RunEnvironment = { runId: "test-run", resultsDir: dir, clock: realClock, docker: ["docker"], sut: view.sut,
+      image: () => view.image, slackMs: 1, teardownMs: 100 };
+    try {
+      const executor = createScenarioExecutor({ factory, env, clock: realClock, artefactRoot: dir, secrets: [secret] });
+      const result = await executor.executeRow(row!, new AbortController().signal);
+      await executor.finalizeRow(row!, result);
+      expect(result.status).toBe("pass");
+      expect(result.artefacts).toHaveLength(1);
+      expect(result.artefacts[0]?.path).toBe("[REDACTED].txt");
+      const target = join(dir, result.artefactDir, "[REDACTED].txt");
+      const bytes = await readFile(target);
+      expect([...bytes]).toEqual([...content]);
+      expect(result.artefacts[0]?.bytes).toBe(bytes.byteLength);
+      expect(result.artefacts[0]?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      await expect(readFile(join(dir, result.artefactDir, `${secret}.txt`))).rejects.toThrow();
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
