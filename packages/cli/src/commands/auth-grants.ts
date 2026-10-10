@@ -5,6 +5,7 @@ import {
   inspectStoredDelegation,
   operationSpaceResolver,
   storedDelegationKind,
+  storedDelegationForAnotherKey,
   storedDelegationSource,
   withoutBearer,
   type StoredDelegationInspection,
@@ -28,7 +29,7 @@ interface ListedGrant {
   cid: string | null;
   expiry: string | null;
   expired: boolean;
-  local: StoredDelegationInspection["local"];
+  local: StoredDelegationInspection["local"] | "for_another_key";
   reason: string | null;
   node: "not_checked";
   bound: boolean;
@@ -80,26 +81,27 @@ function storedProof(value: unknown): ListedGrant["proof"] {
 async function listedGrant(
   value: unknown,
   index: number,
-  options: Parameters<typeof inspectStoredDelegation>[1],
+  options: NonNullable<Parameters<typeof inspectStoredDelegation>[1]>,
 ): Promise<ListedGrant> {
   const delegation = record(record(value)?.delegation);
   const rawCid = delegation?.cid;
   const expiry = isoDate(delegation?.expiry);
-  const inspection = await inspectStoredDelegation(value, options);
+  const forAnotherKey = options.node !== undefined && storedDelegationForAnotherKey(value, options.node);
+  const inspection = forAnotherKey ? undefined : await inspectStoredDelegation(value, options);
   const source = storedDelegationSource(value);
   return {
     index,
     cid: typeof rawCid === "string" && CID.test(rawCid) ? rawCid : null,
     expiry,
     expired: expiry !== null && Date.parse(expiry) <= Date.now(),
-    local: inspection.local,
-    reason: inspection.local === "refused" ? inspection.reason : null,
+    local: inspection?.local ?? "for_another_key",
+    reason: inspection?.local === "refused" ? inspection.reason : null,
     node: "not_checked",
     bound: DelegationRequestBindingSchema.safeParse(record(value)?.authorityRequest).success,
     proof: storedProof(value),
     source,
-    scope: inspection.local === "verified" ? inspection.effectivePermissions : storedScope(value),
-    scopeSource: inspection.local === "verified" ? "signed" : "stored",
+    scope: inspection?.local === "verified" ? inspection.effectivePermissions : storedScope(value),
+    scopeSource: inspection?.local === "verified" ? "signed" : "stored",
   };
 }
 
@@ -132,7 +134,8 @@ function renderList(result: {
     ["CID", "LOCAL", "EXPIRES", "SOURCE", "BOUND", "SCOPE"],
     result.grants.map((grant) => [
       grant.cid ?? "—",
-      grant.local === "refused" ? `refused (${grant.reason})` : grant.local,
+      grant.local === "refused" ? `refused (${grant.reason})` :
+        grant.local === "for_another_key" ? "for another key (not installable here)" : grant.local,
       grant.expiry ?? "—",
       grant.source,
       grant.bound ? "yes" : "no",
@@ -201,21 +204,34 @@ export function registerAuthGrantsCommand(
         }
 
         if (flags.revoke) {
-          const node = await ensureAuthenticated(ctx);
+          // Unlike list and local removal, revocation uses the same verified
+          // local-node discovery as `tc delegation revoke`.
+          const revokeCtx = await ProfileManager.resolveContext({ ...cmd.optsWithGlobals(), profile: ctx.profile });
+          const node = await ensureAuthenticated(revokeCtx);
           const resolveSpace = operationSpaceResolver(node, profile.spaceId);
           let localTarget: StoredAdditionalDelegation = matched[0]!;
           for (const candidate of matched) {
-            const inspection = await inspectStoredDelegation(candidate, { node, host: ctx.host, resolveSpace });
+            const inspection = await inspectStoredDelegation(candidate, { node, host: revokeCtx.host, resolveSpace });
             if (inspection.local === "verified") {
               localTarget = candidate;
               break;
             }
           }
           const revoked = await revokeDelegationOnNode({
-            ctx, profile, node, cid, yes: flags.yes ?? false, localTarget,
+            ctx: revokeCtx, profile, node, cid, yes: flags.yes ?? false, localTarget,
             openKeyAcquisition: options.openKeyAcquisition,
           });
-          const removed = await removeStoredDelegations(ctx.profile, cid);
+          let removed: number;
+          try {
+            removed = await removeStoredDelegations(ctx.profile, cid);
+          } catch {
+            throw new CLIError(
+              "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
+              `Delegation ${cid} was revoked on the node, but its local grant could not be removed.`,
+              ExitCode.ERROR,
+              { hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}` },
+            );
+          }
           discardWarnings(cid);
           const result = { profile: ctx.profile, cid, removed, revoked: true as const,
             targetSpaceSource: revoked.targetSpaceSource,

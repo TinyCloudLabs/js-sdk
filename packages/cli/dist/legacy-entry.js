@@ -20245,6 +20245,7 @@ import {
   inspectStoredDelegation as inspectStoredDelegation2,
   operationSpaceResolver,
   storedDelegationKind,
+  storedDelegationForAnotherKey,
   storedDelegationSource,
   withoutBearer as withoutBearer2
 } from "@tinycloud/operations/delegation-binding";
@@ -20484,21 +20485,22 @@ async function listedGrant(value, index, options) {
   const delegation = record(record(value)?.delegation);
   const rawCid = delegation?.cid;
   const expiry = isoDate(delegation?.expiry);
-  const inspection = await inspectStoredDelegation2(value, options);
+  const forAnotherKey = options.node !== void 0 && storedDelegationForAnotherKey(value, options.node);
+  const inspection = forAnotherKey ? void 0 : await inspectStoredDelegation2(value, options);
   const source = storedDelegationSource(value);
   return {
     index,
     cid: typeof rawCid === "string" && CID.test(rawCid) ? rawCid : null,
     expiry,
     expired: expiry !== null && Date.parse(expiry) <= Date.now(),
-    local: inspection.local,
-    reason: inspection.local === "refused" ? inspection.reason : null,
+    local: inspection?.local ?? "for_another_key",
+    reason: inspection?.local === "refused" ? inspection.reason : null,
     node: "not_checked",
     bound: DelegationRequestBindingSchema.safeParse(record(value)?.authorityRequest).success,
     proof: storedProof(value),
     source,
-    scope: inspection.local === "verified" ? inspection.effectivePermissions : storedScope(value),
-    scopeSource: inspection.local === "verified" ? "signed" : "stored"
+    scope: inspection?.local === "verified" ? inspection.effectivePermissions : storedScope(value),
+    scopeSource: inspection?.local === "verified" ? "signed" : "stored"
   };
 }
 function localSessionCid(session, host) {
@@ -20526,7 +20528,7 @@ function renderList(result) {
     ["CID", "LOCAL", "EXPIRES", "SOURCE", "BOUND", "SCOPE"],
     result.grants.map((grant) => [
       grant.cid ?? "\u2014",
-      grant.local === "refused" ? `refused (${grant.reason})` : grant.local,
+      grant.local === "refused" ? `refused (${grant.reason})` : grant.local === "for_another_key" ? "for another key (not installable here)" : grant.local,
       grant.expiry ?? "\u2014",
       grant.source,
       grant.bound ? "yes" : "no",
@@ -20580,18 +20582,19 @@ function registerAuthGrantsCommand(auth, options = {}) {
         throw new CLIError("GRANT_NOT_FOUND", `No locally stored grant has CID ${cid}.`, ExitCode.NOT_FOUND);
       }
       if (flags.revoke) {
-        const node = await ensureAuthenticated(ctx);
+        const revokeCtx = await ProfileManager.resolveContext({ ...cmd.optsWithGlobals(), profile: ctx.profile });
+        const node = await ensureAuthenticated(revokeCtx);
         const resolveSpace2 = operationSpaceResolver(node, profile.spaceId);
         let localTarget = matched[0];
         for (const candidate of matched) {
-          const inspection = await inspectStoredDelegation2(candidate, { node, host: ctx.host, resolveSpace: resolveSpace2 });
+          const inspection = await inspectStoredDelegation2(candidate, { node, host: revokeCtx.host, resolveSpace: resolveSpace2 });
           if (inspection.local === "verified") {
             localTarget = candidate;
             break;
           }
         }
         const revoked = await revokeDelegationOnNode({
-          ctx,
+          ctx: revokeCtx,
           profile,
           node,
           cid,
@@ -20599,7 +20602,17 @@ function registerAuthGrantsCommand(auth, options = {}) {
           localTarget,
           openKeyAcquisition: options.openKeyAcquisition
         });
-        const removed = await removeStoredDelegations(ctx.profile, cid);
+        let removed;
+        try {
+          removed = await removeStoredDelegations(ctx.profile, cid);
+        } catch {
+          throw new CLIError(
+            "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
+            `Delegation ${cid} was revoked on the node, but its local grant could not be removed.`,
+            ExitCode.ERROR,
+            { hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}` }
+          );
+        }
         discardWarnings(cid);
         const result = {
           profile: ctx.profile,

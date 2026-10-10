@@ -477,6 +477,7 @@ class LoopbackEncryptedNode {
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204 });
+    if (url.pathname === "/healthz" && request.method === "GET") return new Response("ok");
     if (url.pathname === "/info" && request.method === "GET") {
       return this.json({
         protocol: this.wasm.protocolVersion(),

@@ -265,7 +265,8 @@ export async function prepareStoredDelegationReplay(
       const unbound: string[] = [];
       for (const entry of await readAdditionalDelegations<unknown>(profile)) {
         // Elements that are not objects are skipped: they install nothing.
-        if (!isRecord(entry) || "authorityRequest" in entry || storedDelegationKind(entry) !== "compact") continue;
+        if (!isRecord(entry) || "authorityRequest" in entry || storedDelegationKind(entry) !== "compact" ||
+          storedDelegationForAnotherKey(entry, node)) continue;
         const migrated = await migratedRecord(node, entry, options.host, recordedAt);
         if (migrated === undefined) unbound.push(String(storedCid(entry)));
         else bound.set(recordKey(entry)!, migrated);
@@ -354,7 +355,10 @@ export async function replayProfileDelegations(
   const installed: ValidatedRuntimeDelegation[] = [];
   const warnings: OperationWarning[] = [];
   const seen = new Set<string>();
+  // Cross-user imports are retained for wallet-mode use, not replayed into
+  // this session. They are neither broken bindings nor actionable skips.
   for (const entry of await readAdditionalDelegations<unknown>(profile)) {
+    if (storedDelegationForAnotherKey(entry, node)) continue;
     const replay = await replayStoredDelegation(node, entry, options);
     if (replay.status === "installed") {
       if (!seen.has(replay.delegation.cid)) {
@@ -371,6 +375,18 @@ export async function replayProfileDelegations(
     }
   }
   return { installed, warnings };
+}
+
+/** The stored audience targets another principal, not this restored session. */
+export function storedDelegationForAnotherKey(entry: unknown, node: RuntimeDelegationActivator): boolean {
+  if (storedDelegationKind(entry) === "refused" || !isRecord(entry) ||
+    !isRecord(entry.delegation) || typeof entry.delegation.delegateDID !== "string" ||
+    typeof node.sessionDid !== "string") return false;
+  try {
+    return !nodeSdk.principalDidEquals(entry.delegation.delegateDID, node.sessionDid);
+  } catch {
+    return entry.delegation.delegateDID !== node.sessionDid;
+  }
 }
 
 /**
@@ -452,13 +468,19 @@ async function assess(
   if (kind === "other") return skipped("proof_missing");
   const limit = replayLimit(entry);
   if (limit === undefined) return skipped("unbound");
+  // Bearer is a storage/HTTP presentation prefix, not part of the signed
+  // compact bytes. The node's invocation signer must receive the raw token.
+  const authorization = withoutBearer(delegation.delegationHeader.Authorization);
+  const toActivate = authorization === delegation.delegationHeader.Authorization
+    ? delegation
+    : { ...delegation, delegationHeader: { Authorization: authorization }, authHeader: authorization };
   let outsideRequest = false;
   let effectivePermissions: readonly PermissionEntry[] | undefined;
   try {
-    const installed = await nodeSdk.activateValidatedRuntimeDelegation(node, delegation, {
+    const installed = await nodeSdk.activateValidatedRuntimeDelegation(node, toActivate, {
       host: options.host,
       authorize: (effective) => {
-        verifyCompactProof(delegation);
+        verifyCompactProof(toActivate);
         outsideRequest = !delegationWithinRequest(limit, effective, options.resolveSpace);
         if (outsideRequest) return false;
         effectivePermissions = effective;

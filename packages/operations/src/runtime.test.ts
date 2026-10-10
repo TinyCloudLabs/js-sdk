@@ -201,11 +201,22 @@ test("accepts a bound Bearer-prefixed compact grant and migrates an unbound one"
     const first = await authenticatedRuntime(fixture.profile);
     expect(installedCids(first)).toEqual([bearer.cid]);
     expect(first.runtime.warnings).toBeUndefined();
+    const firstNode = first.runtime.node as RuntimeNode;
+    const firstInstalled = firstNode.getRuntimePermissionDelegations()[0]!;
+    expect(firstInstalled.delegationHeader.Authorization).toBe(grant.delegationHeader.Authorization);
+    await fixture.hermetic.readAndDecrypt(firstNode, validatedDelegation(
+      firstInstalled, first.runtime.granted,
+    ));
     await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation: bearer, permissions: [] }]);
     await rm(bindingMigrationPath(fixture.profile), { force: true });
     const second = await authenticatedRuntime(fixture.profile);
     expect(installedCids(second)).toEqual([bearer.cid]);
     expect(second.runtime.warnings).toBeUndefined();
+    const secondNode = second.runtime.node as RuntimeNode;
+    const secondInstalled = secondNode.getRuntimePermissionDelegations()[0]!;
+    await fixture.hermetic.readAndDecrypt(secondNode, validatedDelegation(
+      secondInstalled, second.runtime.granted,
+    ));
     expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [bearer.cid] });
   } finally {
     fixture.hermetic.stop();

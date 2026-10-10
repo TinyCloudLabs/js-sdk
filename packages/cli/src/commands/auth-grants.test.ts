@@ -394,6 +394,53 @@ test.each(runtimes)("public %s list is local and public remove preserves other g
   expect(await readAdditionalDelegations(fixture.profile)).toEqual([JSON.parse(JSON.stringify(rows[1]))]);
 }, 30_000);
 
+test.each(runtimes)("public %s cross-user import stays stored without replay warnings and is labelled for another key", async (_name, runtime) => {
+  const grant = await fixture.hermetic.mintDelegation();
+  const path = additionalDelegationsPath(fixture.ownerProfile);
+  const artifact = join(home, `cross-user-${_name}.json`);
+  await writeJsonAtomic(path, []);
+  await writeFile(artifact, JSON.stringify(grant), "utf8");
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
+  delete env.TC_HOST;
+  delete env.TC_PRIVATE_KEY;
+  try {
+    const attempts = fixture.hermetic.nativeBearerStats().delegationAttempts;
+    const child = Bun.spawn([...runtime, "--quiet", "--json", "--profile", fixture.ownerProfile, "auth", "import", artifact], {
+      env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toMatchObject({ imported: true, activated: false, delegationCid: grant.cid });
+    expect((await readAdditionalDelegations(fixture.ownerProfile))[0]).not.toHaveProperty("authorityRequest");
+
+    const read = Bun.spawn([...runtime, "--quiet", "--json", "--profile", fixture.ownerProfile,
+      "kv", "get", "vault/secrets/HERMETIC_DELEGATION_CANARY"], {
+      env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [readOutput, readError, readCode] = await Promise.all([
+      new Response(read.stdout).text(), new Response(read.stderr).text(), read.exited,
+    ]);
+    expect({ code: readCode, stdout: readOutput }).toEqual({ code: 5, stdout: "" });
+    const readFailure = JSON.parse(readError);
+    expect(readFailure.error).toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(readFailure.error).not.toHaveProperty("warnings");
+    expect(readError).not.toContain("STORED_GRANT_SKIPPED");
+    expect(fixture.hermetic.nativeBearerStats().delegationAttempts).toBe(attempts);
+
+    const list = await publicCommand(runtime, fixture.ownerProfile, ["list"]);
+    expect({ code: list.code, stderr: list.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(list.stdout).grants).toMatchObject([{
+      cid: grant.cid, local: "for_another_key", reason: null, bound: false,
+      node: "not_checked", scopeSource: "stored",
+    }]);
+  } finally {
+    await writeJsonAtomic(path, []);
+    await rm(artifact, { force: true });
+  }
+}, 30_000);
+
 test.each(runtimes)("public %s delegate-session --revoke refuses before node access", async (_name, runtime) => {
   const delegation = await fixture.hermetic.mintDelegation();
   const path = additionalDelegationsPath(fixture.profile);
@@ -494,6 +541,73 @@ test.each(runtimes)("public %s node refusal keeps the exact local stored grant b
   });
   expect(await readFile(path, "utf8")).toBe(before);
   expect(fixture.hermetic.nativeBearerStats().revocations).toBe(priorRevocations);
+}, 30_000);
+
+test.each(runtimes)("public %s --revoke discovers the verified local node instead of using the stale stored host", async (_name, runtime) => {
+  const configPath = profileConfigPath(fixture.ownerProfile);
+  const original = await readFile(configPath);
+  const grant = await fixture.hermetic.mintDelegation();
+  const { restoreProfileSessionNode } = await import("../lib/sdk.js");
+  const restored = await restoreProfileSessionNode({
+    profile: fixture.profile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+  });
+  if (!("node" in restored)) throw new Error(`delegate session unavailable: ${restored.unavailable}`);
+  await restored.node.useRuntimeDelegation(grant);
+  await writeJsonAtomic(additionalDelegationsPath(fixture.ownerProfile), [bound(grant)]);
+  await writeJsonAtomic(configPath, {
+    ...JSON.parse(original.toString()), host: "http://127.0.0.1:1", localNodeUrl: fixture.hermetic.host,
+  });
+  try {
+    const before = fixture.hermetic.nativeBearerStats().revocations;
+    const result = await publicCommand(runtime, fixture.ownerProfile, ["remove", grant.cid, "--revoke", "--yes"]);
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ cid: grant.cid, revoked: true, removed: 1 });
+    expect(fixture.hermetic.nativeBearerStats().revocations).toBe(before + 1);
+    expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([]);
+  } finally {
+    await writeFile(configPath, original);
+  }
+}, 30_000);
+
+test.each(runtimes)("public %s reports node revocation when local removal times out, then permits local-only cleanup", async (_name, runtime) => {
+  const grant = await fixture.hermetic.mintDelegation();
+  const { restoreProfileSessionNode } = await import("../lib/sdk.js");
+  const restored = await restoreProfileSessionNode({
+    profile: fixture.profile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+  });
+  if (!("node" in restored)) throw new Error(`delegate session unavailable: ${restored.unavailable}`);
+  await restored.node.useRuntimeDelegation(grant);
+  const path = additionalDelegationsPath(fixture.ownerProfile);
+  await writeJsonAtomic(path, [bound(grant)]);
+  const original = await readFile(path, "utf8");
+  const before = fixture.hermetic.nativeBearerStats().revocations;
+  const entered = Promise.withResolvers<void>();
+  const proceed = Promise.withResolvers<void>();
+  const holding = ProfileManager.withLock(fixture.ownerProfile, async () => {
+    entered.resolve();
+    await proceed.promise;
+  });
+  try {
+    await entered.promise;
+    const result = await publicCommand(runtime, fixture.ownerProfile, ["remove", grant.cid, "--revoke", "--yes"]);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr).error).toMatchObject({
+      code: "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
+      message: expect.stringContaining("revoked on the node"),
+      hint: expect.stringContaining(`auth grants remove ${grant.cid}`),
+    });
+    expect(JSON.parse(result.stderr).error.hint).toContain("Do not use --revoke again");
+    expect(fixture.hermetic.nativeBearerStats().revocations).toBe(before + 1);
+    expect(await readFile(path, "utf8")).toBe(original);
+  } finally {
+    proceed.resolve();
+    await holding;
+  }
+  const removed = await publicCommand(runtime, fixture.ownerProfile, ["remove", grant.cid]);
+  expect({ code: removed.code, stderr: removed.stderr }).toEqual({ code: 0, stderr: "" });
+  expect(JSON.parse(removed.stdout)).toMatchObject({ removed: 1, revoked: false });
+  expect(fixture.hermetic.nativeBearerStats().revocations).toBe(before + 1);
 }, 30_000);
 
 test("local removal waits for the profile lock without touching the store", async () => {
