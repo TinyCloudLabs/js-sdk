@@ -610,7 +610,16 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       await state.handle?.close().catch(() => undefined);
     }));
     let cancel = () => {};
-    const timeout = new Promise<void>((resolve) => { cancel = scheduler.setTimeout(resolve, CLOSE_TIMEOUT_MS); });
+    let drained = false;
+    void drain.then(
+      () => { drained = true; cancel(); },
+      () => { drained = true; cancel(); },
+    );
+    const timeout = new Promise<void>((resolve) => {
+      queueMicrotask(() => {
+        if (!drained) cancel = scheduler.setTimeout(resolve, CLOSE_TIMEOUT_MS);
+      });
+    });
 
     try { await Promise.race([drain, timeout]); }
     finally { cancel(); }
