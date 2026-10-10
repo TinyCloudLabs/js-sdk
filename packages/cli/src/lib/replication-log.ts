@@ -40,16 +40,29 @@ export function createReplicationEventSink(
   options: { debug: boolean; quiet: boolean },
 ): (event: ReplicationEvent) => void {
   const pinnedNotices = new Set<string>();
+  const missingGrantWarnings = new Set<string>();
+
   return (event) => {
     appendProfileReplicationEvent(profileRoot, event);
+    if (event.type === "replication.state" && event.state === "grant_missing") {
+      const prefix = event.replica ?? event.space ?? "configured prefix";
+      const key = `${event.space ?? ""}\u0000${event.replica ?? ""}`;
+      if (!missingGrantWarnings.has(key)) {
+        missingGrantWarnings.add(key);
+        process.stderr.write(`[replication] Warning: no usable kv/get+sync grant for ${prefix}; reads use the network (${event.code ?? "grant_missing"}).\n`);
+      }
+    }
     if (options.debug) {
       if (event.type === "replication.read") {
         const detail = event.source === "replica" ? "replica hit" : `${event.source} ${event.reason}`;
-        process.stderr.write(`[replication] ${event.op} ${event.key} ← ${detail} ${event.latencyMs}ms${event.stalenessMs === null ? "" : ` (synced ${Math.round(event.stalenessMs / 1000)}s ago)`}\n`);
+        const syncStatus = event.syncedBeforeRead === undefined ? "" : ` syncedBeforeRead:${event.syncedBeforeRead}`;
+        const syncError = event.syncError === undefined ? "" : ` syncError:${event.syncError}`;
+        process.stderr.write(`[replication] ${event.op} ${event.key} ← ${detail} ${event.latencyMs}ms${syncStatus}${syncError}${event.stalenessMs === null ? "" : ` (synced ${Math.round(event.stalenessMs / 1000)}s ago)`}\n`);
       } else if (event.type === "replication.write") {
         process.stderr.write(`[replication] ${event.op} ${event.keys.join(",")} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
       } else if (event.type === "replication.sync") {
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
+        const pending = event.pendingCleared === undefined ? "" : ` pendingCleared:${event.pendingCleared}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}\n`);
       }
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {

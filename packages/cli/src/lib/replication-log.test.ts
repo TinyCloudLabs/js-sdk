@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReplicaStatusEntry, ReplicationEvent } from "@tinycloud/node-sdk";
-import { appendReplicationEvent } from "./replication-log.js";
+import { appendReplicationEvent, createReplicationEventSink } from "./replication-log.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport } from "./replication-report.js";
 
 const roots: string[] = [];
@@ -25,6 +25,70 @@ describe("replication diagnostics", () => {
     expect(statSync(root).mode & 0o777).toBe(0o700);
     expect(readFileSync(join(root, "events.jsonl.1"), "utf8")).toContain('"key":"' + "x".repeat(16));
     expect(readFileSync(join(root, "events.jsonl"), "utf8")).toContain('"key":"' + "y".repeat(16));
+  });
+  test("debug reads report whether a sync ran before the read", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-replication-log-debug-"));
+    roots.push(root);
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      createReplicationEventSink(root, { debug: true, quiet: false })({
+        ...readHit(new Date().toISOString(), "replica", 2, 10),
+        syncedBeforeRead: true,
+        syncError: "NETWORK_ERROR",
+      });
+      const output = write.mock.calls.map(([message]) => String(message)).join("");
+      expect(output).toContain("syncedBeforeRead:true");
+      expect(output).toContain("syncError:NETWORK_ERROR");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test("warns once per missing-grant prefix in an invocation", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-replication-log-grant-warning-"));
+    roots.push(root);
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    const sink = createReplicationEventSink(root, { debug: false, quiet: true });
+    const missingGrant: Extract<ReplicationEvent, { type: "replication.state" }> = {
+      type: "replication.state",
+      at: new Date().toISOString(),
+      space: "default",
+      replica: "notes",
+      state: "grant_missing",
+      code: "SESSION_LACKS_SYNC",
+    };
+    try {
+      sink(missingGrant);
+      sink(missingGrant);
+      const output = write.mock.calls.map(([message]) => String(message)).join("");
+      expect(output.match(/Warning:/g)).toHaveLength(1);
+      expect(output).toContain("SESSION_LACKS_SYNC");
+      expect(output).toContain("reads use the network");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test("debug sync events report the pending-clear count", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-replication-log-sync-"));
+    roots.push(root);
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      createReplicationEventSink(root, { debug: true, quiet: false })({
+        type: "replication.sync",
+        at: new Date().toISOString(),
+        space: "default",
+        replica: "notes",
+        trigger: "stale_read",
+        outcome: "ok",
+        durationMs: 2,
+        lagMs: null,
+        pendingCleared: 2,
+      });
+      expect(write.mock.calls.map(([message]) => String(message)).join("")).toContain("pendingCleared:2");
+    } finally {
+      write.mockRestore();
+    }
   });
 
   test("renders aggregates, recent divergences and pinned status with the clear warning", () => {

@@ -118,7 +118,7 @@ describe("pending-write exhaustive state model", () => {
     const counterexample = { initial: "v0" as Content, ops: [{ kind: "put", value: "v0" } as Op, { kind: "put", value: "v1" } as Op], modes: ["timeoutCommit" as Mode, "ok" as Mode], sequential: false, replicaCount: 1 as const };
     expect(explore(counterexample, { evidence: true, supersede: false, fence: true }).violations).toBeGreaterThan(0);
     expect(explore(counterexample, { evidence: false, supersede: true, fence: true }).violations).toBeGreaterThan(0);
-  }, 30_000);
+  }, FULL ? 180_000 : 30_000);
 
   test("same-identity replica/device/prefix family is fenced", () => {
     const family = scenarios(2).filter((scenario) => scenario.modes.every((mode) => mode === "ok" || mode === "timeoutCommit"));
@@ -128,5 +128,5 @@ describe("pending-write exhaustive state model", () => {
     }
     const counterexample = { initial: "v0" as Content, ops: [{ kind: "put", value: "v1" } as Op, { kind: "delete" } as Op], modes: ["ok" as Mode, "ok" as Mode], sequential: true, replicaCount: 2 as const };
     expect(explore(counterexample, { evidence: false, supersede: false, fence: false }).violations).toBeGreaterThan(0);
-  }, 30_000);
+  }, FULL ? 180_000 : 30_000);
 });
