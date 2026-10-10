@@ -65,6 +65,7 @@ export class ServiceContext implements IServiceContext {
   private _services: Map<string, IService> = new Map();
   private _eventHandlers: Map<string, Set<EventHandler>> = new Map();
   private _abortController: AbortController = new AbortController();
+  private _operationAbortSignal?: AbortSignal;
   private _retired = false;
   private readonly _invoke: InvokeFunction;
   private readonly _invokeAny?: InvokeAnyFunction;
@@ -279,6 +280,14 @@ export class ServiceContext implements IServiceContext {
    */
   get abortSignal(): AbortSignal {
     return this._abortController.signal;
+  }
+
+  get operationAbortSignal(): AbortSignal | undefined {
+    return this._operationAbortSignal;
+  }
+
+  setOperationAbortSignal(signal: AbortSignal | undefined): void {
+    this._operationAbortSignal = signal;
   }
 
   /**

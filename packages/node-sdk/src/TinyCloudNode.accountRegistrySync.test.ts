@@ -207,6 +207,116 @@ describe("sign-in account registry barrier", () => {
     await signIn;
     expect(settled).toBe(true);
   });
+  test("aborts a hung registry request at its real-time deadline before sign-in resolves", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 40);
+    const requestSignals: AbortSignal[] = [];
+    const requestStarted = Promise.withResolvers<void>();
+    const context = new ServiceContext({
+      invoke: () => ({ Authorization: "registry" }),
+      hosts: ["https://tinycloud.test"],
+      fetch: async (_input, init) => {
+        const { promise, reject } = Promise.withResolvers<Response>();
+        const signal = init?.signal;
+        if (!signal) throw new Error("Registry request did not receive an AbortSignal");
+        requestSignals.push(signal);
+        requestStarted.resolve();
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        return promise;
+      },
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "registry" },
+      delegationCid: "registry",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_account", {
+      index: {
+        ensure: async () => {
+          const sql = node.sqlForSpace(SPACE_URI);
+          const result = await sql.execute("CREATE TABLE registry_deadline (id INTEGER)");
+          return result.ok
+            ? { ok: true, data: undefined }
+            : { ok: false, error: result.error };
+        },
+      },
+      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+    });
+    Reflect.set(node, "_serviceContext", context);
+    const scheduleRegistry = Reflect.get(node, "scheduleAccountRegistrySync");
+    if (typeof scheduleRegistry !== "function") throw new Error("Registry scheduler is unavailable");
+    Reflect.set(node, "accountRegistryTail", Promise.resolve());
+    // Start a registry queue with the same session and service graph sign-in drains.
+    scheduleRegistry.call(node);
+    expect(Reflect.get(node, "pendingAccountRegistrySync")).toBeDefined();
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => true);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    // This integration test deliberately uses the platform clock: the property
+    // under test is that native AbortSignal cancellation beats a hung fetch.
+    // Exercise signIn while the SQL request is already hung on the wire.
+    await requestStarted.promise;
+    const started = Date.now();
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await node.signIn();
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnedWith(warnSpy, "deadline exceeded")).toBe(true);
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(requestSignals).toHaveLength(1);
+    expect(requestSignals[0]?.aborted).toBe(true);
+  });
+
+  // Use the real retry delays: a transient registry rejection must warn only
+  // after its bounded attempts and must not reject the sign-in promise.
+  test("ordinary registry rejection warns and sign-in succeeds", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 4_000);
+    Reflect.set(node, "_account", {
+      index: { ensure: async () => { throw new Error("registry unavailable"); } },
+      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+    });
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await node.signIn();
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
+  }, 5_000);
 });
 
 describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
@@ -290,7 +400,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     const warnSpy = mock(() => {});
     console.warn = warnSpy as any;
     try {
-      await (node as any).withAccountRegistryRetry(task);
+      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
     } finally {
       console.warn = originalWarn;
     }
@@ -309,7 +419,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     const warnSpy = mock(() => {});
     console.warn = warnSpy as any;
     try {
-      await (node as any).withAccountRegistryRetry(task);
+      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
     } finally {
       console.warn = originalWarn;
     }
@@ -518,7 +628,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     const warnSpy = mock(() => {});
     console.warn = warnSpy as any;
     try {
-      await (node as any).withAccountRegistryRetry(task);
+      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
     } finally {
       console.warn = originalWarn;
     }

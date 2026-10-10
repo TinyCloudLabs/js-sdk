@@ -309,6 +309,7 @@ export abstract class BaseService implements IService {
     const parents = [
       this.abortController.signal,
       this.context?.abortSignal,
+      this.context?.operationAbortSignal,
       signal,
     ].filter((parent): parent is AbortSignal => parent !== undefined);
     for (const parent of parents) {
