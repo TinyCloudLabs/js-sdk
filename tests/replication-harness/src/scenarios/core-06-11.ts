@@ -142,16 +142,16 @@ const core07: Scenario<Variant> = {
     await clientProxy(ctx, "reader").disable({ signal: ctx.signal });
     const offline = await reader.get(key, replicationOptions(reader, ctx.signal));
     ctx.check("expired reader does not serve offline replica", !offline.ok && !offline.found && offline.value === undefined && offline.read?.source !== "replica", { ok: offline.ok, found: offline.found, read: offline.read, code: offline.code, exit: offline.exit });
-    if (variant === "cli") ctx.check("offline CLI expiry uses supported refusal", offline.exit === 3 || offline.exit === 5, { exit: offline.exit, code: offline.code });
     ctx.check("expired offline invocation has no replica read event", !operationEvents(offline).some((event) => event.type === "replication.read" && event.source === "replica"), operationEvents(offline));
     await clientProxy(ctx, "reader").enable({ signal: ctx.signal });
     const online = await reader.get(key, replicationOptions(reader, ctx.signal));
     const onlineAccepted = (!online.ok && online.read?.source !== "replica") || (online.ok && online.found && online.read?.source === "network" && Buffer.from(online.value ?? []).toString() === VALUE);
     ctx.check("online expiry is refused or returns current network value", onlineAccepted, { ok: online.ok, found: online.found, read: online.read, code: online.code, exit: online.exit });
-    if (variant === "cli" && !online.ok) ctx.check("online CLI expiry uses supported refusal", online.exit === 3 || online.exit === 5, { exit: online.exit, code: online.code });
     ctx.check("expired online invocation has no replica read event", !operationEvents(online).some((event) => event.type === "replication.read" && event.source === "replica"), operationEvents(online));
     const confirmed = await control.get(key, { source: "network", signal: ctx.signal });
     ctx.check("still-authorized control client confirms last committed value", confirmed.ok && confirmed.found && Buffer.from(confirmed.value ?? []).toString() === VALUE, { ok: confirmed.ok, found: confirmed.found });
+    if (variant === "cli") ctx.check("offline CLI expiry uses supported refusal", offline.exit === 3 || offline.exit === 5, { exit: offline.exit, code: offline.code });
+    if (variant === "cli" && !online.ok) ctx.check("online CLI expiry uses supported refusal", online.exit === 3 || online.exit === 5, { exit: online.exit, code: online.code });
   },
 };
 
@@ -240,11 +240,16 @@ const core10: Scenario<Variant> = {
     const localAbsence = await reader.get(`${PREFIX}only-b`, replicationOptions(reader));
     let partitionReport: { ok: boolean; detail: unknown } | undefined;
     if (ctx.variant === "cli") {
-      const report = await cli(ctx, "reader").tc(["replica", "report", "--json"], { signal: ctx.signal });
-      let partitions: { host?: unknown }[] = [];
-      try { partitions = (JSON.parse(Buffer.from(report.stdout).toString("utf8")) as { partitions?: { host?: unknown }[] }).partitions ?? []; } catch { /* assertion records malformed report */ }
+      const reports = [
+        await cli(ctx, "reader").tc(["replica", "report", "--json"], { signal: ctx.signal }),
+        await (viaB as CliClient).tc(["replica", "report", "--json"], { signal: ctx.signal }),
+      ];
+      const partitions: { host?: unknown }[] = [];
+      for (const report of reports) {
+        try { partitions.push(...((JSON.parse(Buffer.from(report.stdout).toString("utf8")) as { partitions?: { host?: unknown }[] }).partitions ?? [])); } catch { /* assertion records malformed report */ }
+      }
       const hosts = new Set(partitions.map((partition) => partition.host).filter((host): host is string => typeof host === "string"));
-      partitionReport = { ok: report.exit === 0 && partitions.length >= 2 && hosts.size >= 2, detail: { exit: report.exit, partitions } };
+      partitionReport = { ok: reports.every((report) => report.exit === 0) && partitions.length >= 2 && hosts.size >= 2, detail: { exits: reports.map((report) => report.exit), partitions } };
     }
     const endpointsDistinct = ctx.topo.proxy("client:reader->a").listenUrl !== ctx.topo.proxy("client:reader->b").listenUrl;
     await ctx.topo.node("nodeb").stop({ signal: ctx.signal });
