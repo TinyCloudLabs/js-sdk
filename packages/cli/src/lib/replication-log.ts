@@ -40,17 +40,20 @@ export function createReplicationEventSink(
   options: { debug: boolean; quiet: boolean },
 ): (event: ReplicationEvent) => void {
   const pinnedNotices = new Set<string>();
+
   return (event) => {
     appendProfileReplicationEvent(profileRoot, event);
     if (options.debug) {
       if (event.type === "replication.read") {
         const detail = event.source === "replica" ? "replica hit" : `${event.source} ${event.reason}`;
         const syncStatus = event.syncedBeforeRead === undefined ? "" : ` syncedBeforeRead:${event.syncedBeforeRead}`;
-        process.stderr.write(`[replication] ${event.op} ${event.key} ← ${detail} ${event.latencyMs}ms${syncStatus}${event.stalenessMs === null ? "" : ` (synced ${Math.round(event.stalenessMs / 1000)}s ago)`}\n`);
+        const syncError = event.syncError === undefined ? "" : ` syncError:${event.syncError}`;
+        process.stderr.write(`[replication] ${event.op} ${event.key} ← ${detail} ${event.latencyMs}ms${syncStatus}${syncError}${event.stalenessMs === null ? "" : ` (synced ${Math.round(event.stalenessMs / 1000)}s ago)`}\n`);
       } else if (event.type === "replication.write") {
         process.stderr.write(`[replication] ${event.op} ${event.keys.join(",")} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
       } else if (event.type === "replication.sync") {
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
+        const pending = event.pendingCleared === undefined ? "" : ` pendingCleared:${event.pendingCleared}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}\n`);
       }
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {

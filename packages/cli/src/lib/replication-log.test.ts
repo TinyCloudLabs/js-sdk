@@ -34,8 +34,33 @@ describe("replication diagnostics", () => {
       createReplicationEventSink(root, { debug: true, quiet: false })({
         ...readHit(new Date().toISOString(), "replica", 2, 10),
         syncedBeforeRead: true,
+        syncError: "NETWORK_ERROR",
       });
-      expect(write.mock.calls.map(([message]) => String(message)).join("")).toContain("syncedBeforeRead:true");
+      const output = write.mock.calls.map(([message]) => String(message)).join("");
+      expect(output).toContain("syncedBeforeRead:true");
+      expect(output).toContain("syncError:NETWORK_ERROR");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test("debug sync events report the pending-clear count", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-replication-log-sync-"));
+    roots.push(root);
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      createReplicationEventSink(root, { debug: true, quiet: false })({
+        type: "replication.sync",
+        at: new Date().toISOString(),
+        space: "default",
+        replica: "notes",
+        trigger: "stale_read",
+        outcome: "ok",
+        durationMs: 2,
+        lagMs: null,
+        pendingCleared: 2,
+      });
+      expect(write.mock.calls.map(([message]) => String(message)).join("")).toContain("pendingCleared:2");
     } finally {
       write.mockRestore();
     }

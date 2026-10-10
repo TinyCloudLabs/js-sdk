@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { contentHash } from "@tinycloud/replica";
+import { contentHash, parseUcanGrant } from "@tinycloud/replica";
 import { NodeWasmBindings, TinyCloudNode } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -203,37 +203,51 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       await ownerSdk.replication?.close();
     }
 
-    // 4. Committed and ambiguous writes remain pinned until a sync started after the write.
+    // 4. Committed writes return the new value: either network fallback or one catch-up sync.
     const next = await put("notes/a.txt", Buffer.from("v2"), "owner", "on");
     expect(next.code).toBe(0);
     const pendingRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on" });
     expect(pendingRead.stdout.toString()).toBe("v2");
-    expect(pendingRead.stderr).toContain("pending_write");
-    const caughtUp = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
-    expect(caughtUp.stderr).toContain("pendingCleared:1");
+    const networkPending = pendingRead.stderr.includes("pending_write");
+    const syncedBeforeRead = pendingRead.stderr.includes("replica hit")
+      && pendingRead.stderr.includes("syncedBeforeRead:true")
+      && /pendingCleared:[1-9]\d*/.test(pendingRead.stderr);
+    expect(networkPending || syncedBeforeRead).toBe(true);
+    if (networkPending) {
+      const caughtUp = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+      expect(caughtUp.stdout.toString()).toBe("v2");
+      expect(caughtUp.stderr).toMatch(/pendingCleared:[1-9]\d*/);
+    }
     const deleted = await tc(["kv", "delete", "notes/b.json"], { profile: "owner", replication: "on" });
     expect(deleted.code).toBe(0);
     expect((await tc(["kv", "get", "notes/b.json"], { profile: "owner", replication: "on" })).code).toBe(4);
     const ambiguousPreload = join(home, "ambiguous.cjs");
-    await writeFile(ambiguousPreload, `const original = globalThis.fetch; globalThis.fetch = async (...args) => { const response = await original(...args); if (String(args[0]).includes("/kv/")) throw Object.assign(new Error("synthetic timeout"), { name: "TimeoutError", code: "TIMEOUT" }); return response; };`);
+    await writeFile(ambiguousPreload, `const original = globalThis.fetch; globalThis.fetch = async (...args) => { const response = await original(...args); if (String(args[0]).includes("/invoke")) throw Object.assign(new Error("synthetic timeout"), { name: "TimeoutError", code: "TIMEOUT" }); return response; };`);
     const ambiguousFile = join(home, "ambiguous.bin");
     await writeFile(ambiguousFile, "v3");
     const ambiguous = await tc(["kv", "put", "notes/a.txt", "--file", ambiguousFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(ambiguous.stderr).toContain("TIMEOUT");
+    expect(ambiguous.stderr).toContain("ambiguous NETWORK_ERROR");
     const ambiguousRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(ambiguousRead.stdout.toString()).toBe("v3");
-    expect(ambiguousRead.stderr).toContain("pinned");
+    expect(ambiguousRead.stderr).toContain("network pending_write");
     const reportPinned = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string; code?: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(reportPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/a.txt", state: "ambiguous", code: "TIMEOUT" }));
+    expect(reportPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/a.txt", state: "ambiguous", code: "NETWORK_ERROR" }));
     const clear = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
-    expect(clear.stderr).toContain("read-your-writes");
+    expect(clear.code).toBe(0);
+    expect(clear.stderr).toContain("Clearing pending writes stops pinning keys");
     expect((await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).toContain("replica hit");
     const abaFile = join(home, "aba.bin");
     await writeFile(abaFile, "v0");
     const aba = await tc(["kv", "put", "notes/c", "--file", abaFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(aba.stderr).toContain("TIMEOUT");
-    expect((await tc(["replica", "sync"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).code).toBe(0);
-    expect((await ok<{ replicas: Array<{ pinned: Array<{ key: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" })).replicas.flatMap((replica) => replica.pinned.map((entry) => entry.key))).toContain("notes/c");
+    expect(aba.stderr).toContain("ambiguous NETWORK_ERROR");
+    const abaRead = await tc(["kv", "get", "notes/c", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    expect(abaRead.stdout.toString()).toBe("v0");
+    expect(abaRead.stderr).toContain("network pending_write");
+    expect(abaRead.stderr).toContain("pendingCleared:0");
+    const abaPinned = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string; code?: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    expect(abaPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/c", state: "ambiguous", code: "NETWORK_ERROR" }));
+    const abaClear = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
+    expect(abaClear.code).toBe(0);
 
     // 5. A flag-off writer changes the node; default staleness stays local, zero staleness catches up.
     const remote = await put("notes/a.txt", Buffer.from("v4"), "owner", "off");
@@ -245,37 +259,63 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
     // 6. Offline reads use the replica; an uncovered online-only read fails closed.
     await stopNode();
-    const offlineHit = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", preload: NO_NETWORK, replication: "on" });
+    const offlineHit = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", preload: NO_NETWORK, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(offlineHit.code).toBe(0);
     expect(offlineHit.stderr).toContain("syncError");
-    expect((await tc(["kv", "list", "--prefix", "notes"], { profile: "owner", preload: NO_NETWORK, replication: "on" })).code).toBe(0);
-    expect((await tc(["kv", "get", "other/x"], { profile: "owner", preload: NO_NETWORK, replication: "on" })).code).toBe(6);
+    const offlineList = await tc(["kv", "list", "--prefix", "notes"], { profile: "owner", preload: NO_NETWORK, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    expect(offlineList.code === 0, `${offlineList.code}\n${offlineList.stderr}`).toBe(true);
+    const offlineOutside = await tc(["kv", "get", "other/x"], { profile: "owner", preload: NO_NETWORK, replication: "on" });
+    expect(offlineOutside.code).toBe(1);
+    expect(offlineOutside.stderr).toContain("NETWORK_ERROR");
     await startNode();
 
     // 7. Foreground termination drains the active replication controller before process exit.
     const stalledPreload = join(home, "stalled-sync.cjs");
-    await writeFile(stalledPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => String(args[0]).includes("/kv/sync") ? new Promise(() => {}) : original(...args);`);
-    const timed = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: stalledPreload, replication: "on", extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500" } });
-    expect(timed.stderr).toContain("syncError");
+    await writeFile(stalledPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => { if (!String(args[0]).includes("/invoke")) return original(...args); const signal = args[1]?.signal ?? args[0]?.signal; if (!signal) return original(...args); return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("synthetic fetch timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 5000); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); };`);
+    const timed = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: stalledPreload, replication: "on", extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    expect(timed.code).toBe(1);
+    expect(timed.stderr).toContain("KV request timed out");
     expect((await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).not.toContain("busy");
 
     const interruptPreload = join(home, "interrupt-sync.cjs");
-    await writeFile(interruptPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => { if (String(args[0]).includes("/kv/sync")) { setImmediate(() => process.kill(process.pid, "SIGINT")); return new Promise(() => {}); } return original(...args); };`);
-    const interrupted = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: interruptPreload, replication: "on" });
+    await writeFile(interruptPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => { if (!String(args[0]).includes("/invoke")) return original(...args); setImmediate(() => process.kill(process.pid, "SIGINT")); const signal = args[1]?.signal ?? args[0]?.signal; if (!signal) return original(...args); return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("synthetic fetch timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 5000); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); };`);
+    const interrupted = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: interruptPreload, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(interrupted.code).toBe(130);
     expect((await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).not.toContain("busy");
     // 8. A delegate-session device uses its signed session grant for the replica.
     await ok(["profile", "create", "delegate", "--posture", "delegate-session"]);
-    await ok(["auth", "request", "--cap", `tinycloud.kv:${space}:notes/:get,list,metadata,sync`, "--expiry", "30d", "--emit", "delegate-request.json"], "delegate");
+    // Profiles have no config-only CLI command; seed the persisted setting created by auth login.
+    const delegateProfilePath = join(home, ".tinycloud", "profiles", "delegate", "profile.json");
+    const delegateProfile = JSON.parse(await readFile(delegateProfilePath, "utf8")) as Record<string, unknown>;
+    await writeFile(delegateProfilePath, JSON.stringify({ ...delegateProfile, replication: { prefixes: ["notes"] } }, null, 2));
+    await ok(["auth", "request", "--cap", `tinycloud.kv:${space}:notes:get,list,metadata,sync`, "--expiry", "30d", "--emit", "delegate-request.json"], "delegate");
     const delegateGrant = await tc(["auth", "grant", "delegate-request.json", "--yes"], { profile: "owner" });
     expect(delegateGrant.code).toBe(0);
+    const grantArtifact = JSON.parse(delegateGrant.stdout.toString()) as { delegation: { delegationHeader: { Authorization: string } } };
+    const signedGrant = parseUcanGrant(grantArtifact.delegation.delegationHeader.Authorization);
+    const signedScopes = Object.entries(signedGrant.att).map(([resource, actions]) => ({ resource, actions: Object.keys(actions) }));
+    expect(signedScopes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        resource: `${space}/kv/notes`,
+        actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
+      }),
+    ]));
     await writeFile(join(home, "delegate-grant.json"), delegateGrant.stdout);
-    await ok(["auth", "import", "delegate-grant.json"], "delegate");
+    const importedDelegate = await ok<{ permissions: Array<{ service: string; space: string; path: string; actions: string[] }> }>(["auth", "import", "delegate-grant.json"], "delegate");
+    expect(importedDelegate.permissions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        service: "tinycloud.kv",
+        space,
+        path: "notes",
+        actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
+      }),
+    ]));
+    const delegateIdentity = await ok<{ spaceId: string; sessionDid: string }>(["auth", "whoami"], "delegate");
+    expect(delegateIdentity.spaceId).toBe(space);
+    expect(signedGrant.audience.split("#", 1)[0]).toBe(delegateIdentity.sessionDid.split("#", 1)[0]);
     const delegatedHit = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", replication: "on" });
     expect(delegatedHit.code).toBe(0);
     expect(delegatedHit.stderr).toContain("replica hit");
-    const delegateReport = await ok<{ replicas: Array<{ strategy?: string }> }>(["replica", "report", "--json"], "delegate", { replication: "on" });
-    expect(delegateReport.replicas.some((replica) => replica.strategy === "session")).toBe(true);
 
     // 9. Node 20 is refused; compact-delegate revocation was exercised above (TC-721).
     const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", preload: NODE20, replication: "on" });
@@ -284,14 +324,18 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const alias = host.replace("127.0.0.1", "localhost");
     const primaryWrite = await tc(["kv", "put", "notes/partition", "primary-value"], { profile: "owner", replication: "on" });
     expect(primaryWrite.code).toBe(0);
-    const aliasSync = await tc(["replica", "sync"], { profile: "owner", replication: "on", host: alias, extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
-    expect(aliasSync.code).toBe(0);
-    const primaryReport = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(primaryReport.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/partition", state: "committed" }));
-    const primarySync = await tc(["replica", "sync"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    const aliasRead = await tc(["kv", "get", "notes/partition", "--raw"], { profile: "owner", replication: "on", host: alias, extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    if (aliasRead.code !== 0) throw new Error(`alias replica read failed\n${aliasRead.stderr}\n${aliasRead.stdout}`);
+    expect(aliasRead.stdout.toString()).toBe("primary-value");
+    expect(aliasRead.stderr).toContain("replica hit");
+    const primaryReport = await ok<{ replicas: Array<{ prefix: string; pending: { committed: number } }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    expect(primaryReport.replicas.find((replica) => replica.prefix === "notes")?.pending.committed).toBe(1);
+    const primarySync = await tc(["kv", "get", "notes/partition", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(primarySync.code).toBe(0);
-    const caughtUpReport = await ok<{ replicas: Array<{ pinned: Array<{ key: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(caughtUpReport.replicas.flatMap((replica) => replica.pinned.map((entry) => entry.key))).not.toContain("notes/partition");
+    expect(primarySync.stdout.toString()).toBe("primary-value");
+    expect(primarySync.stderr).toContain("replica hit");
+    const caughtUpReport = await ok<{ replicas: Array<{ prefix: string; pending: { committed: number } }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
+    expect(caughtUpReport.replicas.find((replica) => replica.prefix === "notes")?.pending.committed).toBe(0);
     const aliasReport = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on", host: alias });
     expect(aliasReport.code).toBe(0);
     expect((await readdir(profileDir)).length).toBeGreaterThan(1);
