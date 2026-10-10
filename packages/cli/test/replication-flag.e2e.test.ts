@@ -394,7 +394,10 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     await ok(["init", "--name", "caveated-scope", "--key-only"], "caveated-scope");
     const caveatedManifest = join(home, "caveated-scope-manifest.json");
     await writeFile(caveatedManifest, JSON.stringify({
+      id: "tc858-caveated-scope",
       app_id: "tc858-caveated-scope",
+      name: "TC858 caveated scope",
+      defaults: false,
       space: "default",
       permissions: [
         { service: "tinycloud.kv", path: "notes", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
