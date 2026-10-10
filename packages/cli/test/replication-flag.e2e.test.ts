@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { contentHash } from "@tinycloud/replica";
+import { NodeWasmBindings, TinyCloudNode } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -175,11 +176,32 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(contentHash(raw.stdout)).toBe(contentHash(initial["notes/bin"]));
     const list = await tc(["kv", "list", "--prefix", "notes"], { profile: "owner", replication: "on" });
     expect(list.stderr).toContain("replica hit");
-    const variable = await tc(["vars", "get", "flag", "--raw"], { profile: "owner", replication: "on" });
+    const variable = await tc(["vars", "get", "flag", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_PRIVATE_KEY: profile.privateKey } });
+    expect(variable.code).toBe(0);
     expect(variable.stdout.toString()).toContain("one");
     expect(variable.stderr).toContain("replica hit");
     const outside = await tc(["kv", "get", "other/x"], { profile: "owner", replication: "on" });
     expect(outside.stderr).toContain("not_covered");
+    // TC-721 expected-unsupported: exercise the real compact-delegate revocation endpoint.
+    const manager = new NodeWasmBindings().createSessionManager();
+    const recipientKey = manager.createSessionKey("tc-721-compact-delegate");
+    const recipientDid = manager.getDID(recipientKey)!.split("#")[0]!;
+    const ownerSdk = new TinyCloudNode({ host, privateKey: profile.privateKey, autoBootstrapAccount: false, autoCreateSpace: true, includeAccountRegistryPermissions: false });
+    try {
+      await ownerSdk.signIn();
+      const compactGrant = await ownerSdk.delegateTo(recipientDid, [{
+        service: "tinycloud.kv",
+        space,
+        path: "notes/",
+        actions: ["tinycloud.kv/get"],
+      }]);
+      const revocation = await ownerSdk.revokeDelegation(compactGrant.delegation.cid);
+      expect(revocation.ok).toBe(false);
+      expect(JSON.stringify(revocation.error)).toMatch(/403|Unauthorized Revoker/i);
+      process.stderr.write("EXPECTED-UNSUPPORTED TC-721: compact delegate revoke is rejected; no revoked-sync result is simulated.\n");
+    } finally {
+      await ownerSdk.replication?.close();
+    }
 
     // 4. Committed and ambiguous writes remain pinned until a sync started after the write.
     const next = await put("notes/a.txt", Buffer.from("v2"), "owner", "on");
@@ -255,7 +277,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const delegateReport = await ok<{ replicas: Array<{ strategy?: string }> }>(["replica", "report", "--json"], "delegate", { replication: "on" });
     expect(delegateReport.replicas.some((replica) => replica.strategy === "session")).toBe(true);
 
-    // 9. Runtime refusal is exercised here; scoped/caveated login requires the OpenKey approval flow.
+    // 9. Node 20 is refused; compact-delegate revocation was exercised above (TC-721).
     const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", preload: NODE20, replication: "on" });
     expect(unsupported.stderr).toContain("runtime_unsupported");
 

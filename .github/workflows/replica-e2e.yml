@@ -17,8 +17,8 @@ on:
       - "packages/node-sdk/**"
       - "packages/sdk-core/**"
       - "packages/sdk-services/src/**"
-      - "packages/web-sdk/scripts/**"
-      - "packages/operations/src/state.ts"
+      - "packages/web-sdk/**"
+      - ".github/scripts/**"
       - ".github/workflows/replica-e2e.yml"
   schedule:
     - cron: "17 4 * * 1"
@@ -81,7 +81,7 @@ jobs:
       - name: Build web-sdk for the Phase 1 dist acceptance
         run: bun run --cwd packages/web-sdk build
 
-      - name: Check Phase 1 web-sdk dist
+      - name: Check Phase 1 web-sdk dist and test baseline
         run: bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
 
       - name: Run replication model
@@ -102,12 +102,15 @@ jobs:
           docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
+      - name: Prepare JUnit reports
+        run: mkdir -p "$RUNNER_TEMP/replica-junit"
 
       - name: node-sdk replication against the node
         if: matrix.database == 'sqlite'
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-        run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
 
       - name: Start Postgres 16
         if: matrix.database == 'postgres'
@@ -124,13 +127,23 @@ jobs:
         if: matrix.database == 'sqlite'
         run: |
           bun run --cwd packages/replica test
-          bun test packages/cli/src/commands/replica.test.ts
+          mkdir -p "$RUNNER_TEMP/replica-junit"
+          bun test packages/cli/src/commands/replica.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-command.xml"
 
       - name: tc replica against the node
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
-        run: bun test packages/cli/test/replica.e2e.test.ts
+        run: bun test packages/cli/test/replica.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-e2e.xml"
+      - name: CLI replication flag against the node
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
+        run: bun test packages/cli/test/replication-flag.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-flag.xml"
+      - name: Enforce real-node JUnit counts and zero skips
+        run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--node-sdk' || '' }}
 
   browser-e2e:
     name: Replica (Chromium, browser worker + IndexedDB)

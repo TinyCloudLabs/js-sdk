@@ -45,7 +45,8 @@ export function createReplicationEventSink(
     if (options.debug) {
       if (event.type === "replication.read") {
         const detail = event.source === "replica" ? "replica hit" : `${event.source} ${event.reason}`;
-        process.stderr.write(`[replication] ${event.op} ${event.key} ← ${detail} ${event.latencyMs}ms${event.stalenessMs === null ? "" : ` (synced ${Math.round(event.stalenessMs / 1000)}s ago)`}\n`);
+        const syncStatus = event.syncedBeforeRead === undefined ? "" : ` syncedBeforeRead:${event.syncedBeforeRead}`;
+        process.stderr.write(`[replication] ${event.op} ${event.key} ← ${detail} ${event.latencyMs}ms${syncStatus}${event.stalenessMs === null ? "" : ` (synced ${Math.round(event.stalenessMs / 1000)}s ago)`}\n`);
       } else if (event.type === "replication.write") {
         process.stderr.write(`[replication] ${event.op} ${event.keys.join(",")} ${event.outcome}${event.code ? ` ${event.code}` : ""}\n`);
       } else if (event.type === "replication.sync") {

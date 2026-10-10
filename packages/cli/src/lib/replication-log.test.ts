@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReplicaStatusEntry, ReplicationEvent } from "@tinycloud/node-sdk";
-import { appendReplicationEvent } from "./replication-log.js";
+import { appendReplicationEvent, createReplicationEventSink } from "./replication-log.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport } from "./replication-report.js";
 
 const roots: string[] = [];
@@ -25,6 +25,20 @@ describe("replication diagnostics", () => {
     expect(statSync(root).mode & 0o777).toBe(0o700);
     expect(readFileSync(join(root, "events.jsonl.1"), "utf8")).toContain('"key":"' + "x".repeat(16));
     expect(readFileSync(join(root, "events.jsonl"), "utf8")).toContain('"key":"' + "y".repeat(16));
+  });
+  test("debug reads report whether a sync ran before the read", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-replication-log-debug-"));
+    roots.push(root);
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      createReplicationEventSink(root, { debug: true, quiet: false })({
+        ...readHit(new Date().toISOString(), "replica", 2, 10),
+        syncedBeforeRead: true,
+      });
+      expect(write.mock.calls.map(([message]) => String(message)).join("")).toContain("syncedBeforeRead:true");
+    } finally {
+      write.mockRestore();
+    }
   });
 
   test("renders aggregates, recent divergences and pinned status with the clear warning", () => {
