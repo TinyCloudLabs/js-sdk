@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runCommand, exactSemver, parseArgs, type Command } from "../bin/harness";
+import { exactSemver, parseArgs, type Command } from "../bin/harness";
 import { HarnessError } from "../src/contracts/common";
 import { realClock, waitFor } from "../src/contracts/clock";
 import { validateTopology, type TopologySpec } from "../src/contracts/topology";
@@ -152,15 +152,9 @@ describe("serialized contracts", () => {
     expect(validAggregate.companion[0].passed).toBe(false);
   });
 
-  test("CLI runs S3a list/run wiring and preserves S1/S3b command ownership", async () => {
-    const owners = { manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b" };
-    for (const [command, slice] of Object.entries(owners) as [Command, string][]) {
-      expect(parseArgs([command]).command).toBe(command);
-      await expect(runCommand([command])).rejects.toThrow(`${command} is owned by ${slice}`);
-    }
-    await expect(runCommand(["run"])).rejects.toThrow("run requires the topology runner to be configured");
-    await expect(runCommand(["list"])).resolves.toBeUndefined();
-    expect(parseArgs(["doctor"]).command).toBe("doctor");
+  test("CLI accepts every declared subcommand and parses verify options", () => {
+    const expected = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"];
+    for (const command of expected as Command[]) expect(parseArgs([command]).command).toBe(command);
     expect(parseArgs(["gc", "--older-than", "2h"])).toEqual({ command: "gc", positionals: [], options: { "older-than": "2h" } });
     expect(parseArgs(["verify-aggregate", "aggregate.json", "--gate", "tc858-phase1-beta", "--print", "cli.version"]))
       .toEqual({ command: "verify-aggregate", positionals: ["aggregate.json"], options: { gate: "tc858-phase1-beta", print: "cli.version" } });
@@ -170,5 +164,10 @@ describe("serialized contracts", () => {
     const result = Bun.spawnSync(["bun", "bin/harness.ts", "list"], { cwd: new URL("..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(0);
     expect(result.stderr.toString()).toBe("");
+  });
+
+  test("strict SemVer 2 validation rejects ranges, tags, prefixes, and leading-zero identifiers", () => {
+    for (const valid of ["0.0.0", "1.2.3", "1.2.3-alpha.0", "1.2.3+build.01", "1.2.3-rc.1+build.5"]) expect(exactSemver(valid)).toBe(true);
+    for (const invalid of ["beta", "^1.2.3", "1.2", "v1.2.3", "01.2.3", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3-alpha.01", "1.2.3+", "1.2.3-alpha..1"]) expect(exactSemver(invalid)).toBe(false);
   });
 });

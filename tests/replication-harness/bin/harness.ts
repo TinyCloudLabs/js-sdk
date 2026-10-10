@@ -3,9 +3,32 @@ import { scenarioRegistry, validateRegistry } from "../src/runner/registry";
 import { dockerDoctor, gc } from "../src/topology/gc";
 import { realClock } from "../src/contracts/clock";
 import type { RunEnvironment } from "../src/contracts/lifecycle";
+import { verifyAggregateFile, VerifyAggregateError, type PrintedAggregateValue } from "../src/gate/verify";
+import { exactSemver } from "../src/gate/semver";
+import type { GateId } from "../src/contracts/common";
+import { runGateLocally, type LocalGateHooks } from "../src/gate/local-run";
+import { aggregateCommand, createGateHooks, manifestCommand, resolveCommand, runLegCommand, verifyAggregateCommandFile } from "./gate-adapters";
+
+export { exactSemver };
 export const commands = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"] as const;
 export type Command = typeof commands[number];
 export interface ParsedArgs { command: Command; positionals: string[]; options: Record<string, string | true> }
+export interface HarnessCommandHandlers {
+  run?: (parsed: ParsedArgs) => Promise<void> | void;
+  gateHooks?: (parsed: ParsedArgs) => Promise<LocalGateHooks>;
+  list?: (parsed: ParsedArgs) => Promise<void> | void;
+  manifest?: (parsed: ParsedArgs) => Promise<void> | void;
+  resolve?: (parsed: ParsedArgs) => Promise<void> | void;
+  aggregate?: (parsed: ParsedArgs) => Promise<void> | void;
+  doctor?: (parsed: ParsedArgs) => Promise<void> | void;
+  gc?: (parsed: ParsedArgs) => Promise<void> | void;
+}
+let handlers: HarnessCommandHandlers = {};
+
+export function registerHarnessCommandHandlers(next: HarnessCommandHandlers): void {
+  handlers = { ...handlers, ...next };
+}
+
 export function parseArgs(args: string[]): ParsedArgs {
   const [command, ...rest] = args;
   if (!commands.includes(command as Command)) throw new Error(`usage: harness <${commands.join("|")}> [options]`);
@@ -23,14 +46,48 @@ export function parseArgs(args: string[]): ParsedArgs {
   }
   return { command: command as Command, positionals, options };
 }
-export function exactSemver(value: string): boolean {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(value);
-  if (!match) return false;
-  return (match[4]?.split(".") ?? []).every((identifier) => !/^\d+$/.test(identifier) || identifier === "0" || !identifier.startsWith("0"));
+
+function optionValue(parsed: ParsedArgs, key: string): string | undefined {
+  const value = parsed.options[key];
+  return typeof value === "string" ? value : undefined;
 }
 export type CommandHandler = (parsed: ParsedArgs) => Promise<void> | void;
 let runHandler: CommandHandler | undefined;
 export function setRunCommandHandler(handler: CommandHandler): void { runHandler = handler; }
+
+function gateValue(value: string | undefined): GateId {
+  if (value === "tc858-phase1-workspace" || value === "tc858-phase1-beta") return value;
+  throw new Error("--gate must be tc858-phase1-workspace or tc858-phase1-beta");
+}
+
+async function verifyCommand(parsed: ParsedArgs): Promise<void> {
+  const [aggregatePath] = parsed.positionals;
+  if (!aggregatePath) throw new Error("usage: harness verify-aggregate <aggregate.json> --gate <id> [--run-id N] [--print cli.version|node-sdk.version|image]");
+  const printValue = optionValue(parsed, "print");
+  if (printValue && !["cli.version", "node-sdk.version", "image"].includes(printValue)) throw new Error(`unsupported --print value ${printValue}`);
+  const options = {
+    gate: gateValue(optionValue(parsed, "gate")),
+    ...(optionValue(parsed, "run-id") ? { runId: optionValue(parsed, "run-id") } : {}),
+    ...(printValue ? { print: printValue as PrintedAggregateValue } : {}),
+  };
+  try {
+    const result = await verifyAggregateCommandFile(aggregatePath, options);
+    if (printValue) {
+      if (printValue === "cli.version" && !exactSemver(result.output)) throw new Error("CLI version was not exact SemVer");
+      process.stdout.write(`${result.output}\n`);
+      process.stderr.write(`gate=passed companion=${result.companionPassed ? "passed" : "failed"}\n`);
+      return;
+    }
+    console.log(JSON.stringify({ gatePassed: result.gatePassed, companionPassed: result.companionPassed }));
+  } catch (error) {
+    if (error instanceof VerifyAggregateError) {
+      console.error(`${error.failure}: ${error.message}`);
+      process.exitCode = error.failure === "GATE_FAILED" ? 3 : error.failure === "PRODUCTION_DRIFT" ? 4 : error.failure === "COMPANION_ESCALATE" ? 5 : 1;
+      return;
+    }
+    throw error;
+  }
+}
 export async function runCommand(args: string[]): Promise<void> {
   const parsed = parseArgs(args);
   if (parsed.options.help === true) {
@@ -72,15 +129,24 @@ export async function runCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (parsed.command === "verify-aggregate") return verifyCommand(parsed);
+  if (parsed.command === "resolve") return (handlers.resolve ?? resolveCommand)(parsed);
+  if (parsed.command === "manifest") return (handlers.manifest ?? manifestCommand)(parsed);
+  if (parsed.command === "aggregate") return (handlers.aggregate ?? aggregateCommand)(parsed);
   if (parsed.command === "run") {
-    if (!runHandler) throw new Error("run requires the topology runner to be configured");
-    await runHandler(parsed);
-    return;
+    if (parsed.options.gate !== undefined) {
+      const result = await runGateLocally(await (handlers.gateHooks ? handlers.gateHooks(parsed) : createGateHooks(parsed)));
+      const companionPassed = result.aggregate.companion.every((item) => item.passed);
+      console.log(JSON.stringify({ gatePassed: result.aggregate.gate?.passed ?? false, companionPassed }));
+      if (!result.aggregate.gate?.passed) process.exitCode = 3;
+      else if (!companionPassed) process.exitCode = 5;
+      return;
+    }
+    if (parsed.options.inputs !== undefined) return runLegCommand(parsed);
+    if (handlers.run) return handlers.run(parsed);
+    if (runHandler) return runHandler(parsed);
+    throw new Error("run requires the S3a runner hook or --inputs/--leg");
   }
-  const owner: Record<Exclude<Command, "run" | "list">, string> = {
-    manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b", doctor: "S1", gc: "S1",
-  };
-  throw new Error(`${parsed.command} is owned by ${owner[parsed.command]}`);
 }
 function parseDuration(value: string): number {
   const match = /^(\d+)(ms|s|m|h|d)$/.exec(value);
@@ -89,5 +155,5 @@ function parseDuration(value: string): number {
 }
 if (import.meta.main) {
   try { await runCommand(Bun.argv.slice(2)); }
-  catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(2); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 2; }
 }
