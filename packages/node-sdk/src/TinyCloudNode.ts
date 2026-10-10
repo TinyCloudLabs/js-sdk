@@ -1125,6 +1125,7 @@ export class TinyCloudNode {
   private readonly replicationRuntime?: Promise<ReplicationRuntime>;
   private replicationRuntimeInstance?: ReplicationRuntime;
   private replicationDelegateSession?: Pick<TinyCloudSession, "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk">;
+  private replicationScopeError?: string;
   private readonly replicationControl?: ReplicationControl;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
@@ -1357,7 +1358,23 @@ export class TinyCloudNode {
         });
       this.replicationRuntime = runtime;
       this.replicationControl = {
-        status: async () => (await runtime).control.status(),
+        status: async () => {
+          const status = await runtime.then((ready) => ready.control.status());
+          const scopeError = this.replicationScopeError;
+          if (!scopeError) return status;
+          return this.config.replication!.prefixes.map((prefix) => ({
+            prefix,
+            state: "unavailable" as const,
+            lastError: {
+              at: new Date().toISOString(),
+              code: "SESSION_SCOPE_MISMATCH",
+              message: scopeError,
+            },
+            pending: { inFlight: 0, committed: 0, ambiguous: 0 },
+            pinned: [],
+            lagMs: null,
+          }));
+        },
         sync: async (input) => (await runtime).control.sync(input),
         purge: (input) => {
           const instance = this.replicationRuntimeInstance;
@@ -1822,6 +1839,7 @@ export class TinyCloudNode {
     // session. The authorization flow above remains transactional: a rejected
     // sign-in leaves the existing graph untouched.
     this.replicationDelegateSession = undefined;
+    this.replicationScopeError = undefined;
     if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     const oldGraph = this._serviceGraph;
     this._serviceGraph = this.createServiceGraphLifetime();
@@ -3042,34 +3060,30 @@ export class TinyCloudNode {
     const stagedChainId = sessionData.chainId ?? 1;
     let replicationPrincipal: string | undefined;
     let compactReplicationSession: typeof this.replicationDelegateSession;
+    let replicationScopeError: string | undefined;
     if (this.config.replication?.enabled) {
       if (stagedAddress !== undefined) {
         replicationPrincipal = pkhDid(stagedAddress, stagedChainId);
       } else {
-        const spaceOwner = parseSpaceUri(sessionData.spaceId);
-        if (!spaceOwner?.address || !spaceOwner.chainId) {
-          throw new InvalidRestoredSessionError("Replication needs a full, owner-qualified session space.");
-        }
-        const activation = await activateSessionWithHost(stagedHost, sessionData.delegationHeader);
-        if (
-          !activation.success ||
-          activation.skipped?.includes(sessionData.spaceId) ||
-          (activation.activated !== undefined &&
-            activation.activated.length > 0 &&
-            !activation.activated.includes(sessionData.spaceId))
-        ) {
-          throw new InvalidRestoredSessionError(
-            "The host did not verify the metadata-light session's space delegation.",
-          );
-        }
-        replicationPrincipal = spaceOwner.owner;
-        compactReplicationSession = {
+        const { replicationScopeFromSignedSession } = await getNodeReplicationLoaders().authority();
+        const signedScope = replicationScopeFromSignedSession({
           delegationHeader: sessionData.delegationHeader,
           delegationCid: sessionData.delegationCid,
-          spaceId: sessionData.spaceId,
           verificationMethod: restoredVerificationMethod,
-          jwk: stagedJwk as { [k: string]: unknown },
-        };
+          persistedSpace: sessionData.spaceId,
+        });
+        if (!signedScope) {
+          replicationScopeError = "Persisted space does not match the locally verified delegation scope.";
+        } else {
+          replicationPrincipal = signedScope.principal;
+          compactReplicationSession = {
+            delegationHeader: sessionData.delegationHeader,
+            delegationCid: sessionData.delegationCid,
+            spaceId: signedScope.space,
+            verificationMethod: restoredVerificationMethod,
+            jwk: stagedJwk as { [k: string]: unknown },
+          };
+        }
       }
     }
     const stagedNodeDid = stagedAddress
@@ -3158,8 +3172,16 @@ export class TinyCloudNode {
       this._restoredTcSession = stagedTcSession;
     }
     this.replicationDelegateSession = compactReplicationSession;
+    this.replicationScopeError = replicationScopeError;
     if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     oldGraph.retire();
+    if (replicationScopeError) {
+      stagedGraph.serviceContext.emit("replication.state", {
+        state: "unavailable",
+        code: "SESSION_SCOPE_MISMATCH",
+        detail: replicationScopeError,
+      });
+    }
     await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
   }
@@ -3360,6 +3382,7 @@ export class TinyCloudNode {
         }));
         context.setSession(config.session);
         service.initialize(context);
+        this.attachReplicationKV(config.session.spaceId, service);
         return service;
       },
     });
@@ -3400,6 +3423,7 @@ export class TinyCloudNode {
         }));
         context.setSession({ ...input.serviceSession, spaceId });
         scopedKv.initialize(context);
+        this.attachReplicationKV(spaceId, scopedKv);
         return scopedKv;
       },
       createVaultService: (spaceId) => {
@@ -3414,6 +3438,7 @@ export class TinyCloudNode {
         }));
         context.setSession({ ...input.serviceSession, spaceId });
         scopedKv.initialize(context);
+        this.attachReplicationKV(spaceId, scopedKv);
         const scopedVault = this.createVaultService(spaceId, scopedKv, encryption, {
           host: input.host,
           did: input.nodeDid,
@@ -3899,6 +3924,12 @@ export class TinyCloudNode {
     this.initializeV2Services(serviceSession);
   }
 
+  private attachReplicationKV(spaceId: string, kvService: KVService): void {
+    if (!this.replicationRuntime) return;
+    const attached = this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kvService));
+    kvService.setReadThroughReady(attached);
+  }
+
   private createSpaceScopedKVService(spaceId: string): KVService {
     const kvService = new KVService({});
     if (this._serviceContext) {
@@ -3914,10 +3945,7 @@ export class TinyCloudNode {
         spaceScopedContext.setSession({ ...session, spaceId });
       }
       kvService.initialize(spaceScopedContext);
-      if (this.replicationRuntime) {
-        const attached = this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kvService));
-        kvService.setReadThroughReady(attached);
-      }
+      this.attachReplicationKV(spaceId, kvService);
     }
     return kvService;
   }
@@ -4471,6 +4499,7 @@ export class TinyCloudNode {
         }));
         context.setSession(config.session);
         service.initialize(context);
+        this.attachReplicationKV(config.session.spaceId, service);
         return service;
       },
       onRootDelegationNeeded: this.signer
@@ -4853,10 +4882,7 @@ export class TinyCloudNode {
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
-    if (this.replicationRuntime) {
-      const attached = this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kv));
-      kv.setReadThroughReady(attached);
-    }
+    this.attachReplicationKV(spaceId, kv);
     return kv;
   }
 

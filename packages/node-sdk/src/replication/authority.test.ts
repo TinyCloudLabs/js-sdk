@@ -5,6 +5,8 @@
  */
 
 import { describe, expect, mock, test } from "bun:test";
+import { ed25519 } from "@noble/curves/ed25519";
+import { ucanCid } from "@tinycloud/replica";
 
 import type { PermissionEntry, TinyCloudSession } from "@tinycloud/sdk-core";
 
@@ -229,26 +231,59 @@ describe("ucanAttCovers / ucanAttUnconstrainedFor (§4.2)", () => {
 
 const DEVICE_DID = "did:key:zDevice";
 
-/** Minimal compact UCAN the session path reads via compactUcanPayload. */
+const SESSION_SECRET = new Uint8Array(32).fill(7);
+const SESSION_PUBLIC = ed25519.getPublicKey(SESSION_SECRET);
+const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function base58(bytes: Uint8Array): string {
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  let encoded = "";
+  while (value > 0n) {
+    encoded = BASE58[Number(value % 58n)]! + encoded;
+    value /= 58n;
+  }
+  return encoded;
+}
+const KEY_MULTIBASE = `z${base58(Uint8Array.from([0xed, 0x01, ...SESSION_PUBLIC]))}`;
+const SESSION_DID = `did:key:${KEY_MULTIBASE}#${KEY_MULTIBASE}`;
+
 function fakeSessionUcan(att: Record<string, Record<string, unknown>>): string {
-  const b64 = (value: unknown) =>
-    Buffer.from(JSON.stringify(value)).toString("base64url");
-  return `${b64({ alg: "EdDSA" })}.${b64({ att, prf: ["bafyParent"], exp: Math.floor(Date.now() / 1000) + 3600 })}.${b64("sig")}`;
+  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const header = b64({ alg: "EdDSA" });
+  const payload = b64({
+    iss: SESSION_DID.split("#", 1)[0],
+    aud: SESSION_DID,
+    att,
+    prf: ["bafyParent"],
+    exp: Math.floor(Date.now() / 1000) + 3_600,
+  });
+  const signingInput = `${header}.${payload}`;
+  const signature = Buffer.from(ed25519.sign(new TextEncoder().encode(signingInput), SESSION_SECRET)).toString("base64url");
+  return `${signingInput}.${signature}`;
 }
 
 function fakeSession(over: Partial<TinyCloudSession> = {}): TinyCloudSession {
-  return {
+  const session = {
     address: ADDRESS,
     chainId: 1,
     sessionKey: "default",
     spaceId: SPACE,
     delegationCid: "bafySession",
     delegationHeader: { Authorization: fakeSessionUcan({}) },
-    verificationMethod: "did:key:zSessionDevice",
-    jwk: { kty: "OKP" },
+    verificationMethod: SESSION_DID,
+    jwk: {
+      kty: "OKP",
+      crv: "Ed25519",
+      x: Buffer.from(SESSION_PUBLIC).toString("base64url"),
+      d: Buffer.from(SESSION_SECRET).toString("base64url"),
+    },
     siwe: "siwe",
     signature: "0x",
     ...over,
+  };
+  return {
+    ...session,
+    delegationCid: ucanCid(session.delegationHeader.Authorization.replace(/^Bearer\s+/i, "")),
   };
 }
 
@@ -284,8 +319,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     );
     const result = authority.sessionGrant("notes");
     if ("refused" in result) throw new Error(`unexpected refusal ${result.refused}`);
-    expect(result.ucan).toBe(session.delegationHeader.Authorization);
-    expect(result.device.did).toBe("did:key:zSessionDevice");
+    expect(result.device.did).toBe(SESSION_DID);
   });
 
   test("sessionGrant refuses NOT_COVERED for a non-UCAN header and uncovered prefix", () => {

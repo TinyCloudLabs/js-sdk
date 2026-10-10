@@ -1,3 +1,5 @@
+import { createPrivateKey, sign as signEd25519 } from "node:crypto";
+import { ucanCid } from "@tinycloud/replica";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ServiceContext } from "@tinycloud/sdk-core";
 import {
@@ -428,22 +430,22 @@ describe("node replication integration", () => {
     const delegateVerificationMethod = delegateManager.getDID(delegateKeyId);
     const delegateSpace = wasm.makeSpaceId(signed.address, signed.chainId, "shared");
     const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const token = [
-      encode({ alg: "EdDSA", typ: "JWT" }),
-      encode({
-        iss: `did:pkh:eip155:${signed.chainId}:${signed.address.toLowerCase()}`,
-        aud: delegateVerificationMethod,
-        exp: Math.floor(Date.now() / 1000) + 3_600,
-        prf: ["synthetic-parent-proof"],
-        att: {
-          [`${delegateSpace}/kv/notes/`]: {
-            "tinycloud.kv/get": null,
-            "tinycloud.kv/sync": null,
-          },
+    const header = encode({ alg: "EdDSA", typ: "JWT" });
+    const payload = encode({
+      iss: signed.proof.verificationMethod,
+      aud: delegateVerificationMethod,
+      exp: Math.floor(Date.now() / 1000) + 3_600,
+      prf: [signed.proof.delegationCid],
+      att: {
+        [`${delegateSpace}/kv/notes/`]: {
+          "tinycloud.kv/get": null,
+          "tinycloud.kv/sync": null,
         },
-      }),
-      "synthetic-signature",
-    ].join(".");
+      },
+    });
+    const signingKey = createPrivateKey({ key: signed.proof.jwk as JsonWebKey, format: "jwk" });
+    const signature = signEd25519(null, Buffer.from(`${header}.${payload}`), signingKey).toString("base64url");
+    const token = `${header}.${payload}.${signature}`;
     const opened: KVReplicaHandle[] = [];
     const closed: string[] = [];
     const storage: KVReplicaStorage = {
@@ -500,7 +502,7 @@ describe("node replication integration", () => {
       expect(opened).toHaveLength(1);
       await node.restoreSession({
         delegationHeader: { Authorization: `Bearer ${token}` },
-        delegationCid: "bafy-compact-session",
+        delegationCid: ucanCid(token),
         spaceId: delegateSpace,
         jwk: delegateJwk,
         verificationMethod: delegateVerificationMethod,
@@ -630,9 +632,19 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         event.reason === "hit"
       )).toBe(true);
 
+      const spaceKv = node.space(primarySpace).kv;
+      expect((await spaceKv.put("notes/space-ryw", "space-v1")).ok).toBe(true);
+      expect((await node.kv.get("notes/space-ryw")).data?.data).toBe("space-v1");
       const scoped = node.kvForSpace(primarySpace);
       expect((await scoped.put("notes/ryw", "scoped-v1")).ok).toBe(true);
       expect((await node.kv.get("notes/ryw")).data?.data).toBe("scoped-v1");
+      await node.replication!.sync();
+
+      const restoredSession = node.restorableSession!;
+      await node.restoreSession({ ...restoredSession, tinycloudHosts: [host] });
+      const restoredSpaceKv = node.space(primarySpace).kv;
+      expect((await restoredSpaceKv.put("notes/restored-ryw", "restored-v1")).ok).toBe(true);
+      expect((await node.kv.get("notes/restored-ryw")).data?.data).toBe("restored-v1");
       await node.replication!.sync();
 
       const serviceContext = (node as unknown as { _serviceContext: ServiceContext })._serviceContext;
@@ -645,6 +657,199 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     } finally {
       await node.replication?.close();
       await rm(replicaDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+  test("compact delegates stay inside their signed scope across shared replica partitions", async () => {
+    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-delegate-scope-"));
+    const storage = createSqliteReplicaStorage({ dir: replicaDir });
+    const config = (key: string, prefixes: string[]) => new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(key),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: { enabled: true, prefixes, storage, mode: "foreground" },
+    });
+    const owner = config(RESTORE_PRIVATE_KEY, ["notes/"]);
+    const otherOwner = config("6cbed15c177e29b05bd3d60c4e1dd63e172b4b3b0b34f5a38e7f92e2c79ef801", ["notes/"]);
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const keyId = manager.createSessionKey("scope-limited");
+    const delegateJwk = JSON.parse(manager.jwk(keyId)!);
+    const delegateVerificationMethod = manager.getDID(keyId);
+    const originalFetch = globalThis.fetch;
+    let delegatePosts = 0;
+    let ownerSpace = "";
+    let otherSpace = "";
+    let compact: {
+      delegationHeader: { Authorization: string };
+      delegationCid: string;
+      spaceId: string;
+      jwk: object;
+      verificationMethod: string;
+      tinycloudHosts: string[];
+    };
+    const delegateEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
+    const delegate = new TinyCloudNode({
+      host,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage,
+        mode: "foreground",
+        onEvent: (event) => delegateEvents.push(event),
+      },
+    });
+    const mismatched = new TinyCloudNode({
+      host,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+    });
+    try {
+      await owner.signIn();
+      ownerSpace = owner.restorableSession!.spaceId;
+      expect((await owner.kv.put("notes/secret", "owner-x")).ok).toBe(true);
+      expect((await owner.kv.put("other/x", "owner-x-other")).ok).toBe(true);
+      await owner.replication!.sync();
+
+      await otherOwner.signIn();
+      otherSpace = otherOwner.restorableSession!.spaceId;
+      expect(otherSpace).not.toBe(ownerSpace);
+      expect((await otherOwner.kv.put("notes/secret", "owner-y")).ok).toBe(true);
+      await otherOwner.replication!.sync();
+
+      const grant = await owner.delegateTo(delegateVerificationMethod.split("#")[0]!, [{
+        service: "tinycloud.kv",
+        space: ownerSpace,
+        path: "other/",
+        actions: ["tinycloud.kv/get"],
+      }]);
+      compact = {
+        delegationHeader: grant.delegation.delegationHeader,
+        delegationCid: grant.delegation.cid,
+        spaceId: ownerSpace,
+        jwk: delegateJwk,
+        verificationMethod: delegateVerificationMethod,
+        tinycloudHosts: [host],
+      };
+      await owner.replication!.close();
+      await otherOwner.replication!.close();
+
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/delegate")) delegatePosts++;
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      await delegate.restoreSession(compact);
+      const unauthorized = await delegate.kv.get("notes/secret");
+      expect(unauthorized.ok ? undefined : unauthorized.error.code).toBe("AUTH_UNAUTHORIZED");
+      expect(delegatePosts).toBe(0);
+      expect(delegateEvents.some((event) =>
+        event.type === "replication.read" && event.key === "notes/secret" &&
+        event.source === "replica" && event.reason === "hit"
+      )).toBe(false);
+
+      await mismatched.restoreSession({ ...compact, spaceId: otherSpace });
+      expect(await mismatched.replication!.status()).toMatchObject([{
+        prefix: "notes/",
+        state: "unavailable",
+        lastError: { code: "SESSION_SCOPE_MISMATCH" },
+      }]);
+      const crossOwner = await mismatched.kv.get("notes/secret");
+      expect(crossOwner.ok ? undefined : crossOwner.error.code).toBe("AUTH_UNAUTHORIZED");
+      expect(delegatePosts).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await Promise.all([owner.replication?.close(), otherOwner.replication?.close(), delegate.replication?.close(), mismatched.replication?.close()]);
+      await rm(replicaDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("compact delegate restore works offline and serves its covered replica scope", async () => {
+    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-delegate-offline-"));
+    const storage = createSqliteReplicaStorage({ dir: replicaDir });
+    const owner = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+    });
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const keyId = manager.createSessionKey("offline-delegate");
+    const compactSession = JSON.parse(manager.jwk(keyId)!);
+    const verificationMethod = manager.getDID(keyId);
+    const offlineEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
+    const offlineOptions = {
+      host,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage,
+        mode: "foreground" as const,
+        onEvent: (event: import("@tinycloud/sdk-services").ReplicationEvent) => offlineEvents.push(event),
+      },
+    };
+    const onlineDelegate = new TinyCloudNode(offlineOptions);
+    const offline = new TinyCloudNode(offlineOptions);
+    const originalFetch = globalThis.fetch;
+    try {
+      await owner.signIn();
+      const spaceId = owner.restorableSession!.spaceId;
+      expect((await owner.kv.put("notes/covered", "cached")).ok).toBe(true);
+      await owner.replication!.sync();
+      const grant = await owner.delegateTo(verificationMethod.split("#")[0]!, [{
+        service: "tinycloud.kv",
+        space: spaceId,
+        path: "notes/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+      }]);
+      await onlineDelegate.restoreSession({
+        delegationHeader: grant.delegation.delegationHeader,
+        delegationCid: grant.delegation.cid,
+        spaceId,
+        jwk: compactSession,
+        verificationMethod,
+        tinycloudHosts: [host],
+      });
+      await onlineDelegate.replication!.sync();
+      await onlineDelegate.replication!.close();
+      let delegatePosts = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/delegate")) delegatePosts++;
+        throw Object.assign(new TypeError("network unavailable"), { code: "ECONNREFUSED" });
+      }) as typeof fetch;
+      await offline.restoreSession({
+        delegationHeader: grant.delegation.delegationHeader,
+        delegationCid: grant.delegation.cid,
+        spaceId,
+        jwk: compactSession,
+        verificationMethod,
+        tinycloudHosts: [host],
+      });
+      expect(delegatePosts).toBe(0);
+      const read = await offline.kv.get("notes/covered");
+      expect(read.data?.data).toBe("cached");
+      expect(offlineEvents.some((event) =>
+        event.type === "replication.read" && event.key === "notes/covered" &&
+        event.source === "replica" && event.reason === "hit"
+      )).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await Promise.all([owner.replication?.close(), onlineDelegate.replication?.close(), offline.replication?.close()]);
     }
   }, 120_000);
 });

@@ -144,4 +144,75 @@ describe("node ReplicationRuntime binding", () => {
     expect(opened).toBe(2);
     await runtime.control.close();
   });
+
+  test("clearPending reaches the last identity store after unbind", async () => {
+    let pending: ReturnType<typeof createMemoryPendingStore> | undefined;
+    const storage = {
+      kind: "sqlite",
+      async open() { throw new Error("unexpected open"); },
+      async purge() {},
+      pendingWrites(identity: Parameters<typeof createMemoryPendingStore>[0]) {
+        pending = createMemoryPendingStore(identity);
+        return pending;
+      },
+    } as KVReplicaStorage;
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage }, clock);
+    await runtime.bind({
+      context: context("https://clear.example"),
+      session,
+      address,
+      chainId: 1,
+      authority,
+      primaryKV: [],
+    });
+    await pending!.update((state) => {
+      state.seq++;
+      state.records.push({
+        opId: "ambiguous",
+        seq: state.seq,
+        key: "notes/a",
+        op: "put",
+        state: "ambiguous",
+        epoch: null,
+        at: new Date(0).toISOString(),
+        settledAt: new Date(0).toISOString(),
+      });
+    });
+    await runtime.unbind();
+    expect(await runtime.control.clearPending()).toBe(1);
+    expect((await pending!.read()).records).toEqual([]);
+  });
+
+  test("purge requested during bind stops the controller before timers can start", async () => {
+    let timers = 0;
+    let purges = 0;
+    const scheduled: ReplicationScheduler = {
+      now: () => clock.now(),
+      setTimeout() {
+        timers++;
+        return () => { timers--; };
+      },
+    };
+    const storage: KVReplicaStorage = {
+      kind: "sqlite",
+      async open() { throw new Error("purged controller must not open"); },
+      async purge() { purges++; },
+      pendingWrites: createMemoryPendingStore,
+    };
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage, mode: "background" }, scheduled);
+    const binding = runtime.bind({
+      context: context("https://purge-bind.example"),
+      session,
+      address,
+      chainId: 1,
+      authority,
+      primaryKV: [],
+    });
+    const purging = runtime.control.purge();
+    expect(timers).toBe(0);
+    await Promise.all([binding, purging]);
+    expect(timers).toBe(0);
+    expect(purges).toBe(1);
+    await runtime.control.close();
+  });
 });
