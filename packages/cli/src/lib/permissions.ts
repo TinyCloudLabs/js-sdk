@@ -5,6 +5,7 @@ import {
   isPermissionRequestArtifact,
   type PermissionRequestArtifact,
 } from "@tinycloud/operations/artifacts";
+import type { OperationWarning } from "@tinycloud/operations/delegation-binding";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
@@ -211,6 +212,23 @@ export async function appendAdditionalDelegation(
   await appendAdditionalDelegations(profile, [entry]);
 }
 
+/** Remove every exact-CID row atomically, without rewriting a missing grant. */
+export async function removeStoredDelegations(profile: string, cid: string): Promise<number> {
+  return updateProfileStore<unknown, number>(profile, "additional-delegations", (records) => {
+    const remaining = records.filter((entry) => {
+      if (entry === null || typeof entry !== "object" || !("delegation" in entry)) return true;
+      const delegation = entry.delegation;
+      return delegation === null || typeof delegation !== "object" || !("cid" in delegation) ||
+        delegation.cid !== cid;
+    });
+    const removed = records.length - remaining.length;
+    if (removed === 0) {
+      throw new CLIError("GRANT_NOT_FOUND", `No stored grant with CID ${cid} exists for this profile.`, ExitCode.NOT_FOUND);
+    }
+    return { records: remaining, result: removed };
+  });
+}
+
 export async function loadPermissionRequestArtifacts(
   profile: string,
 ): Promise<StoredPermissionRequestArtifact[]> {
@@ -279,76 +297,24 @@ export async function getLastPermissionRequestArtifact(
 }
 
 /**
- * Reinstalls a profile's stored delegations on a fresh node. Compact-UCAN and
- * signed-login records follow the operations runtime's binding rule
- * (validated activation, and a request binding the signed capabilities fit
- * inside); `migrate` is true only when `node` holds the profile's own session,
- * so the one-time binding migration may run. Unbound signed-login records an
- * earlier release stored without a `siweProof` are installed as before; any
- * other record installs nothing.
+ * Replay a profile's stored grants through the same verified operations path
+ * as canonical calls. The caller supplies only the profile's restored session.
  */
 export async function replayAdditionalDelegations(
   node: TinyCloudNode,
   profile: string,
   options: { host: string; ownerSpace?: string; migrate: boolean },
-): Promise<void> {
+): Promise<readonly OperationWarning[]> {
   // Loaded on use, as in appendAdditionalDelegation.
-  const {
-    operationSpaceResolver,
-    prepareStoredDelegationReplay,
-    replayStoredDelegation,
-    storedDelegationKind,
-  } = await import("@tinycloud/operations/delegation-binding");
-  const activator = node as unknown as RuntimeDelegationActivator;
-  const migrated = await prepareStoredDelegationReplay(profile, activator, {
+  const { operationSpaceResolver, replayProfileDelegations } = await import(
+    "@tinycloud/operations/delegation-binding"
+  );
+  const { warnings } = await replayProfileDelegations(profile, node as unknown as RuntimeDelegationActivator, {
     host: options.host,
     migrate: options.migrate,
+    resolveSpace: operationSpaceResolver(node, options.ownerSpace),
   });
-  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
-  // Stored elements are untrusted: classify each before reading any field.
-  const entries: readonly unknown[] = await loadAdditionalDelegations(profile);
-  for (const stored of entries) {
-    const kind = storedDelegationKind(stored);
-    if (kind === "compact" || kind === "signed-login") {
-      const replay = await replayStoredDelegation(activator, stored, {
-        host: options.host,
-        migrated,
-        resolveSpace,
-      });
-      if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}\n`);
-      }
-      continue;
-    }
-    if (kind === "refused") {
-      if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write("[replay] skipping a malformed stored record or one bound to a request it cannot be held to\n");
-      }
-      continue;
-    }
-    // `other`: an object record with a delegation and a single string header.
-    const entry = stored as StoredAdditionalDelegation;
-    // Skip expired delegations rather than letting useRuntimeDelegation throw.
-    const expiry = entry.delegation.expiry instanceof Date
-      ? entry.delegation.expiry
-      : new Date(entry.delegation.expiry as unknown as string);
-    if (expiry.getTime() <= Date.now()) continue;
-    try {
-      // Only the one header `storedDelegationKind` read reaches the node.
-      await node.useRuntimeDelegation({
-        ...entry.delegation,
-        delegationHeader: { Authorization: entry.delegation.delegationHeader.Authorization },
-        expiry,
-      });
-    } catch (err) {
-      // A stored delegation can be invalid for several benign reasons (host
-      // unreachable, key rotated). Don't fail the whole CLI invocation —
-      // the user can re-run `tc auth request` to refresh the grant.
-      if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${(err as Error).message}\n`);
-      }
-    }
-  }
+  return warnings;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   canonicalHashHex,
   canonicalizeEncryptionJson,
   canonicalSignedResponse,
+  extractRecapAttenuations,
   parsePkhDid,
   principalDidEquals,
   verifyDidKeyEd25519Signature,
@@ -130,6 +131,7 @@ class LoopbackEncryptedNode {
     delegatedDecrypt: false,
     delegatedKvResources: [] as string[],
     delegations: 0,
+    delegationAttempts: 0,
     revocations: 0,
     revokedInvocations: 0,
     kvReads: 0,
@@ -145,6 +147,7 @@ class LoopbackEncryptedNode {
   private readonly revokedDelegationCids = new Set<string>();
   private readonly kvData = new Map<string, Map<string, unknown>>();
   private secretPresent = true;
+  private refuseRootRawCidAuthority = false;
   private browserCredentialBoundary?: {
     ownerDid: string;
     credentialsSpaceId: string;
@@ -244,6 +247,10 @@ class LoopbackEncryptedNode {
   rejectActivation(cid: string): void {
     this.rejectedActivationCids.add(cid);
   }
+  /** Emulate the node's refusal of raw-CID authority without a parent delegation. */
+  rejectRootRawCidActivations(refuse: boolean): void {
+    this.refuseRootRawCidAuthority = refuse;
+  }
 
   stop(): void {
     this.server.closeAllConnections();
@@ -316,6 +323,47 @@ class LoopbackEncryptedNode {
       authorization,
       proofCid: this.cidForAuthorization(authorization),
     };
+  }
+
+  /** Reject only a valid owner-signed CACAO granting raw-CID revoke without a UCAN parent. */
+  private async hasRootRawCidRevocation(authorization: string): Promise<boolean> {
+    const cacao = Cbor.decode<CacaoActivation>(decodeAuthorizationBytes(authorization));
+    const payload = cacao.p;
+    const signature = cacao.s?.s;
+    if (
+      cacao.h?.t !== "eip4361" || cacao.s?.t !== "eip191" ||
+      !payload || typeof payload.aud !== "string" || typeof payload.domain !== "string" ||
+      typeof payload.iat !== "string" || typeof payload.iss !== "string" ||
+      typeof payload.nonce !== "string" || typeof payload.version !== "number" ||
+      !(signature instanceof Uint8Array) || !Array.isArray(payload.resources) ||
+      payload.resources.some((resource) => typeof resource !== "string")
+    ) return false;
+    const owner = parsePkhDid(payload.iss);
+    if (!owner) return false;
+    const siwe = new SiweMessage({
+      domain: payload.domain,
+      address: owner.address,
+      uri: payload.aud,
+      version: String(payload.version),
+      chainId: owner.chainId,
+      nonce: payload.nonce,
+      issuedAt: payload.iat,
+      ...(typeof payload.exp === "string" ? { expirationTime: payload.exp } : {}),
+      ...(typeof payload.nbf === "string" ? { notBefore: payload.nbf } : {}),
+      ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}),
+      ...(typeof payload.statement === "string" ? { statement: payload.statement } : {}),
+      resources: payload.resources as string[],
+    });
+    const message = siwe.prepareMessage();
+    if (!await verifyEip191MessageSignature(
+      message,
+      `0x${Buffer.from(signature).toString("hex")}`,
+      owner.address,
+    )) return false;
+    return Object.entries(extractRecapAttenuations(message)).some(([resource, actions]) =>
+      resource.startsWith("urn:cid:") &&
+      Object.prototype.hasOwnProperty.call(actions, "tinycloud.delegation/revoke")
+    );
   }
 
   private targetsBrowserCredentials(payload: CompactPayload): boolean {
@@ -443,6 +491,7 @@ class LoopbackEncryptedNode {
       });
     }
     if (url.pathname === "/delegate" && request.method === "POST") {
+      this.observed.delegationAttempts += 1;
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       // Wallet-mode runtime grant activation uses a signed CACAO header;
@@ -451,6 +500,10 @@ class LoopbackEncryptedNode {
         ? verifiedCompactPayload(authorization)
         : {};
       if (!payload.iss) await this.activateBrowserSession(authorization);
+      if (!payload.iss && this.refuseRootRawCidAuthority &&
+        await this.hasRootRawCidRevocation(authorization)) {
+        return new Response("Cannot find parent delegation", { status: 401 });
+      }
       if (payload.iss) this.observed.signingIssuers.push(payload.iss);
       const cid = this.cidForAuthorization(authorization);
       if (this.rejectedActivationCids.has(cid)) {
@@ -461,6 +514,15 @@ class LoopbackEncryptedNode {
       this.activations.add(cid);
       this.delegationCids.add(cid);
       return this.json({ activated: [cid], skipped: [] });
+    }
+
+    if (url.pathname === "/delegation/query" && request.method === "POST") {
+      const authorization = request.headers.get("authorization");
+      if (!authorization) return new Response("missing authorization", { status: 401 });
+      verifiedCompactPayload(authorization);
+      // The owner fixture has no delegation/list authority. The CLI must use
+      // its CID-bound local artifact when that node query is forbidden.
+      return new Response("delegation list authority unavailable", { status: 403 });
     }
 
     if (url.pathname === "/revoke" && request.method === "POST") {
@@ -822,11 +884,13 @@ export interface HermeticEncryptedNode {
   readonly unrelatedAudience: string;
   nativeBearerStats(): Readonly<{
     delegations: number;
+    delegationAttempts: number;
     revocations: number;
     revokedInvocations: number;
     kvReads: number;
     kvWrites: number;
   }>;
+  rejectRootRawCidActivations(refuse: boolean): void;
   provisionKvSpace(spaceId: string): void;
   /** Serve the encrypted secret without minting a delegation, for grants authorized elsewhere. */
   provisionSecret(): void;
@@ -1037,11 +1101,13 @@ export async function createHermeticEncryptedNode(
     unrelatedAudience,
     nativeBearerStats: () => ({
       delegations: transport.observed.delegations,
+      delegationAttempts: transport.observed.delegationAttempts,
       revocations: transport.observed.revocations,
       revokedInvocations: transport.observed.revokedInvocations,
       kvReads: transport.observed.kvReads,
       kvWrites: transport.observed.kvWrites,
     }),
+    rejectRootRawCidActivations: (refuse) => transport.rejectRootRawCidActivations(refuse),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
     provisionSecret: () => transport.configure({
       spaceId,

@@ -8,7 +8,7 @@ import type {
   OperationSensitivity,
   TinyCloudPosture,
 } from "../contract.js";
-import { bindingMigrationRecorded, replayLimit, storedDelegationKind } from "../delegation-binding.js";
+import { replayLimit, storedDelegationKind } from "../delegation-binding.js";
 import { operationError } from "../errors.js";
 import {
   additionalDelegationsPath,
@@ -59,9 +59,8 @@ const StatusOutputSchema: z.ZodType<StatusOutput> = z.object({
     expiresAt: z.string().datetime({ offset: true }).nullable(),
   }).strict(),
   liveAdditionalDelegationCount: z.number().int().nonnegative().describe(
-    "Stored, unexpired delegations the replay rule accepts: compact-UCAN or signed-login records with a request " +
-      "binding, and unbound compact-UCAN records before the profile's one-time binding migration. Each is still " +
-      "validated, and checked against its binding, when a runtime installs it.",
+    "Stored, unexpired compact-UCAN or signed-login delegations with a valid request binding. " +
+      "Each still requires local proof validation and node activation before it grants authority.",
   ),
 }).strict();
 
@@ -186,16 +185,15 @@ async function countLiveAdditionalDelegations(profile: string): Promise<number> 
   if (!Array.isArray(rawDelegations)) throw new TypeError("Invalid additional delegation store.");
 
   const now = Date.now();
-  const migrated = await bindingMigrationRecorded(profile);
   let count = 0;
   for (const entry of rawDelegations) {
     // Elements replay refuses outright (not objects, no delegation, malformed
     // headers) never install, so they are not inspected either.
     if (storedDelegationKind(entry) === "refused") continue;
     const expiry = storedDelegationExpiry(entry);
-    // Records replay refuses outright (unbound after migration, malformed,
-    // or the CLI's own signed-login grants) are not runtime authority.
-    if (expiry.getTime() > now && replayLimit(entry, migrated) !== undefined) count += 1;
+    // Only valid bindings count; proof and signed authority are checked when
+    // replay installs the delegation into a restored session.
+    if (expiry.getTime() > now && replayLimit(entry) !== undefined) count += 1;
   }
   return count;
 }

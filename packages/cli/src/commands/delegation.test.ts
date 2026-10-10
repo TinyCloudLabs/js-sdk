@@ -20,7 +20,6 @@ let readGrantHistoryCalls: number;
 let historyReadError: Error | undefined;
 let artifactReadError: Error | undefined;
 let artifactReadCalls: number;
-const parsedAuthorizationCalls: unknown[][] = [];
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
@@ -44,16 +43,6 @@ mock.module("../lib/permissions.js", () => ({
     artifactReadCalls++;
     if (artifactReadError) throw artifactReadError;
     return storedDelegations.map(({ delegation }) => ({ delegationCid: delegation.cid, delegation }));
-  },
-}));
-mock.module("@tinycloud/sdk-core", () => ({
-  parseSignedCompactUcanAttenuation: (...args: unknown[]) => {
-    parsedAuthorizationCalls.push(args);
-    return {
-      payload: {
-        att: { [`${targetSpaceId}/kv/target`]: { "tinycloud.kv/get": [] } },
-      },
-    };
   },
 }));
 
@@ -138,7 +127,6 @@ beforeEach(() => {
   authorityError = undefined;
   artifactReadError = undefined;
   artifactReadCalls = 0;
-  parsedAuthorizationCalls.length = 0;
   storedDelegations = [];
   grantHistory = [{
     ts: "2026-01-01T00:00:00.000Z",
@@ -321,7 +309,7 @@ describe("tc delegation revoke authority", () => {
       authorityScopeReason: "The revoke authority is scoped to the exact delegation CID.",
     }]);
   });
-  test("falls back only to a matching owner-signed CID-bound space", async () => {
+  test("does not infer a fallback from unsigned portable metadata", async () => {
     authorityError = Object.assign(new Error("invalid ReCap resource URI urn:cid:bafy-device-grant"), {
       code: "RAW_RECAP_RESOURCE_UNSUPPORTED",
     });
@@ -337,25 +325,11 @@ describe("tc delegation revoke authority", () => {
 
     await runRevoke();
 
-    expect(authorityRequests.map((request) => (request as any).requested[0].space)).toEqual([
-      "urn:cid:bafy-device-grant",
-      "default",
+    expect(authorityRequests).toMatchObject([
+      { requested: [{ space: "urn:cid:bafy-device-grant" }] },
     ]);
-    expect(authorityRequests.every((request) => (request as any).persist === false)).toBe(true);
-    expect(parsedAuthorizationCalls).toEqual([["signed-target", "bafy-device-grant"]]);
-    expect(revokeCalls).toEqual([["bafy-device-grant", {
-      targetSpaceId,
-      authorityCid: "bafy-command-authority",
-    }]]);
-    expect(outputs).toEqual([{
-      cid: "bafy-device-grant",
-      revoked: true,
-      targetSpaceSource: "local-signed-grant-artifact",
-      authorityScopeSource: "local-signed-grant-artifact",
-      authorityScopeReason:
-        "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID.",
-    }]);
-    expect(errors).toEqual([]);
+    expect(revokeCalls).toEqual([]);
+    expect(errors[0]).toMatchObject({ code: "RAW_RECAP_RESOURCE_UNSUPPORTED" });
   });
 
   test("reports a target absent from node and local sources", async () => {

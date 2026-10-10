@@ -288,7 +288,10 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
+const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+
 mock.module("@tinycloud/node-sdk", () => ({
+  TinyCloudNode,
   grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
     recorded.grantedRequests.push(request);
     return {
@@ -382,6 +385,7 @@ mock.module("../lib/sdk.js", () => ({
       },
     };
   },
+  restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
 }));
 
 mock.module("../lib/permissions.js", () => ({
@@ -414,6 +418,8 @@ mock.module("../lib/permissions.js", () => ({
   },
   cliGrantRecord: async (_node: unknown, delegation: object, permissions: object[]) => ({ delegation, permissions }),
   compactPermission: () => "",
+  loadLocalGrantArtifacts: async () => [],
+  removeStoredDelegations: async () => 0,
   loadAdditionalDelegations: async () => [],
   loadManifestPermissions: async () => [],
   loadPermissionRequest: async () => [],
@@ -947,7 +953,27 @@ describe("CLI auth import command", () => {
     expect(importRecorded.bootstrappedDelegations).toEqual([]);
   });
 
-  test("installs a delegation that targets the active session key as a runtime grant", async () => {
+  test("refuses a proofless session-targeted import before restore, bootstrap or persistence", async () => {
+    const delegation = makePortableDelegation({
+      delegateDID: "did:key:z6MkSession",
+      cid: "bafy-proofless-session",
+    });
+    profiles.set("default", makeProfile({ sessionDid: "did:key:z6MkSession" }));
+    keys.set("default", { did: "did:key:z6MkSession" });
+    const source = join(tempDir, "proofless.json");
+    await writeFile(source, JSON.stringify(delegation), "utf8");
+    ensureAuthenticatedError = new Error("restore must not run");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 2 });
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.grantHistory).toEqual([]);
+  });
+
+  test("does not persist a proofless delegation targeting the active session key", async () => {
     const delegation = makePortableDelegation({
       delegateDID: "did:key:z6MkSession",
       cid: "bafy-self-session",
@@ -957,19 +983,15 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-self-session" }]);
-    expect(recorded.outputs[0]).toMatchObject({
-      imported: true,
-      activated: true,
-      delegationCid: "bafy-self-session",
-    });
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 2 });
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.grantHistory).toEqual([]);
   });
 
-  test("bootstraps a fresh delegate-session profile from its first imported delegation", async () => {
-    profiles.set("default", makeProfile({ posture: "delegate-session" }));
-    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "delegate", d: "private" });
+  test("refuses a proofless first delegate grant before bootstrap", async () => {
+    profiles.set("default", makeProfile({ posture: "delegate-session", sessionDid: "did:key:z6MkSession" }));
+    keys.set("default", { did: "did:key:z6MkSession" });
     ensureAuthenticatedError = new Error("Not authenticated");
     const delegation = makePortableDelegation({
       delegateDID: "did:key:z6MkSession",
@@ -980,10 +1002,10 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.bootstrappedDelegations).toEqual([{ cid: "bafy-first-delegation" }]);
-    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-first-delegation" }]);
-    expect(recorded.outputs[0]).toMatchObject({ imported: true, activated: true });
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 2 });
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
   });
 
   test("routes a v1 delegation artifact with an optional host and requestId canonically", async () => {
@@ -1388,10 +1410,10 @@ describe("CLI auth import command", () => {
     expect(importRecorded.appendedDelegations).toEqual([]);
   });
 
-  test("accepts a stored delegation wrapper from the legacy on-disk shape", async () => {
+  test("accepts a cross-user stored delegation wrapper without installing it", async () => {
     const source = join(tempDir, "stored-wrapper.json");
     await writeFile(source, JSON.stringify({
-      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkSession", cid: "bafy-stored-wrapper" }),
+      delegation: makePortableDelegation({ delegateDID: "did:pkh:eip155:1:0xAgent", cid: "bafy-stored-wrapper" }),
       permissions: [{
         service: "tinycloud.kv",
         space: "tinycloud:pkh:eip155:1:0xOwner:secrets",
@@ -1406,7 +1428,7 @@ describe("CLI auth import command", () => {
     expect(importRecorded.appendedDelegations[0]?.permissions).toEqual([
       expect.objectContaining({ service: "tinycloud.kv", path: "vault/secrets/ANTHROPIC_API_KEY" }),
     ]);
-    expect(recorded.outputs[0]).toMatchObject({ delegationCid: "bafy-stored-wrapper", activated: true });
+    expect(recorded.outputs[0]).toMatchObject({ delegationCid: "bafy-stored-wrapper", activated: false });
   });
 
   test("accepts a v1 permission artifact without the legacy command field", async () => {

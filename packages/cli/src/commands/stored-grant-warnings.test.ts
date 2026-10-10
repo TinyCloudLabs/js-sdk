@@ -5,13 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
-// Stored grants that cannot be used are reported as fixed codes inside the
-// CLI's JSON error, under both Bun (source) and Node (the built CLI). The
-// grants are real owner-signed CACAOs: one stored without its proof or a
-// request binding (as earlier releases did), one with its proof but no
-// binding, one whose stored host carries URL userinfo, one the node refuses
-// with a response body, and one whose stored CID is free text. Neither the
-// body, the host nor the free-text CID may reach the output.
+// The same untrusted store must produce the same fixed-code warnings through
+// canonical secrets get and the CLI's secrets list/KV read replay. All records
+// are real owner-signed CACAOs; only one valid proof reaches the refusing node.
 
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 const RESPONSE_CANARY = "tc-node-response-body-canary";
@@ -31,8 +27,9 @@ beforeAll(async () => {
   node = Bun.serve({
     port: 0,
     fetch(request) {
-      requests.push(`${request.method} ${new URL(request.url).pathname}`);
-      return new Response(`refused: ${RESPONSE_CANARY}`, { status: 403 });
+      const pathname = new URL(request.url).pathname;
+      requests.push(`${request.method} ${pathname}`);
+      return new Response(pathname === "/delegate" ? `refused: ${RESPONSE_CANARY}` : "read denied", { status: 403 });
     },
   });
   const wasm = new NodeWasmBindings();
@@ -92,13 +89,27 @@ beforeAll(async () => {
     jwk, address, chainId: 1, spaceId, verificationMethod: sessionDid,
     siwe: session.siwe, signature: session.signature, ownerDid, expiresAt, tinycloudHosts: [node.url.origin],
   });
-  const freeTextCid = await grant(node.url.origin);
+  const legacy = await grant(node.url.origin, "legacy");
+  const donor = await signed({ kv: { "vault/secrets/OTHER": ["tinycloud.kv/get"] } });
+  const swapped = await grant(node.url.origin);
+  swapped.delegation.siweProof = { siwe: donor.siwe, signature: donor.signature };
+  const flipped = await grant(node.url.origin);
+  const original = flipped.delegation.siweProof!.signature;
+  flipped.delegation.siweProof!.signature =
+    original.slice(0, -1) + (original.endsWith("0") ? "1" : "0");
+  const unbound = await grant(node.url.origin, "unbound");
+  const outside = await grant(node.url.origin);
+  outside.authorityRequest!.requested = [{
+    service: "tinycloud.kv", space: spaceId, path: "vault/secrets/OTHER", actions: ["tinycloud.kv/get"],
+  }];
+  const hostMismatch = await grant(`https://agent:${USERINFO_CANARY}@evil.example`);
+  const refused = await grant(node.url.origin);
+  const freeOne = await grant(node.url.origin);
+  const freeTwo = await grant(node.url.origin);
   await writeJsonAtomic(additionalDelegationsPath("owner"), [
-    await grant(node.url.origin, "legacy"),
-    await grant(node.url.origin, "unbound"),
-    await grant(`https://agent:${USERINFO_CANARY}@evil.example`),
-    await grant(node.url.origin),
-    { ...freeTextCid, delegation: { ...freeTextCid.delegation, cid: CID_CANARY } },
+    legacy, swapped, flipped, unbound, outside, hostMismatch, refused,
+    { ...freeOne, delegation: { ...freeOne.delegation, cid: CID_CANARY } },
+    { ...freeTwo, delegation: { ...freeTwo.delegation, cid: `${CID_CANARY}2` } },
   ]);
 });
 
@@ -114,36 +125,48 @@ const runtimes: Array<[string, string[]]> = [
   ["node", [process.env.NODE_BINARY ?? "node", join(import.meta.dir, "../../bin/tc")]],
 ];
 
-test.each(runtimes)("under %s, --json stderr is one parseable error carrying the skipped grants", async (_runtime, command) => {
+const expectedWarnings = () => [
+  { code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: grantCids[0] },
+  { code: "STORED_GRANT_SKIPPED", reason: "proof_invalid", grantCid: grantCids[1] },
+  { code: "STORED_GRANT_SKIPPED", reason: "proof_invalid", grantCid: grantCids[2] },
+  { code: "STORED_GRANT_SKIPPED", reason: "unbound", grantCid: grantCids[3] },
+  { code: "STORED_GRANT_SKIPPED", reason: "outside_request", grantCid: grantCids[4] },
+  { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: grantCids[5] },
+  { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: grantCids[6] },
+  { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
+  { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
+];
+
+const commands = [
+  ["secrets", "get", "KEY"],
+  ["secrets", "list"],
+  ["kv", "get", "vault/secrets/KEY"],
+];
+
+test.each(runtimes)("under %s, all three public commands emit identical fixed warnings", async (_runtime, command) => {
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
-  requests.length = 0;
-  const child = Bun.spawn([...command, "--quiet", "--json", "--profile", "owner", "secrets", "get", "KEY"], {
-    env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-
-  expect({ exitCode, stdout }).toEqual({ exitCode: 5, stdout: "" });
-  const parsed = JSON.parse(stderr) as { error: Record<string, unknown> };
-  expect(parsed.error).toMatchObject({
-    code: "PERMISSION_DENIED",
-    warnings: [
-      { code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: grantCids[1] },
-      { code: "STORED_GRANT_SKIPPED", reason: "unbound", grantCid: grantCids[2] },
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch", grantCid: grantCids[3] },
-      { code: "STORED_GRANT_SKIPPED", reason: "activation_rejected", grantCid: grantCids[4] },
-      { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
-    ],
-  });
-  expect(stderr).not.toContain(RESPONSE_CANARY);
-  expect(stderr).not.toContain(USERINFO_CANARY);
-  expect(stderr).not.toContain("evil.example");
-  expect(stderr).not.toContain(CID_CANARY);
-  // Only the grant that passed verification was offered to the node.
-  expect(requests).toEqual(["POST /delegate"]);
-});
+  for (const args of commands) {
+    requests.length = 0;
+    const child = Bun.spawn([...command, "--quiet", "--json", "--profile", "owner", ...args], {
+      env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect({ command: args, exitCode, stdout, stderr }).toMatchObject({
+      command: args, exitCode: expect.any(Number), stdout: "",
+    });
+    expect(exitCode).not.toBe(0);
+    const parsed = JSON.parse(stderr) as { error: { warnings: unknown[] } };
+    expect(parsed.error.warnings).toEqual(expectedWarnings());
+    expect(stderr).not.toContain(RESPONSE_CANARY);
+    expect(stderr).not.toContain(USERINFO_CANARY);
+    expect(stderr).not.toContain("evil.example");
+    expect(stderr).not.toContain(CID_CANARY);
+    expect(requests.filter((request) => request === "POST /delegate")).toEqual(["POST /delegate"]);
+  }
+}, 30_000);

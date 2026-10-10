@@ -5,6 +5,7 @@ import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operati
 import { operationWarnings, outputError } from "./formatter.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
+import { drainWarnings, mergeWarnings } from "./warnings.js";
 
 let activeProfileName: string | undefined;
 
@@ -170,7 +171,7 @@ export function handleError(error: unknown): never {
   }
   outputError(cliError.code, cliError.message, hint, {
     ...(Object.keys(meta).length ? { meta } : {}),
-    warnings: operationWarnings(cliError.metadata?.warnings),
+    warnings: mergeWarnings(drainWarnings(), operationWarnings(cliError.metadata?.warnings)),
   });
   process.exit(cliError.exitCode);
 }

@@ -6,7 +6,7 @@ import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
-import { BINDING_NOTES, bindingMigrationPath } from "./delegation-binding.js";
+import { BINDING_NOTES, bindingMigrationPath, inspectStoredDelegation } from "./delegation-binding.js";
 import { invokeOperation } from "./invoke.js";
 import { createInvocationRuntime } from "./runtime.js";
 import {
@@ -160,6 +160,85 @@ test("skipped-grant warnings publish fixed codes, never a node response or a sto
   }
 });
 
+test("refuses a compact grant with a corrupted signature and a matching recomputed CID", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    const parts = grant.delegationHeader.Authorization.split(".");
+    const signature = parts[2]!;
+    parts[2] = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+    const authorization = parts.join(".");
+    const tampered = {
+      ...grant,
+      cid: new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization),
+      delegationHeader: { Authorization: authorization },
+    };
+    await persistRuntimeDelegations(fixture, [tampered]);
+    const runtime = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(runtime)).toEqual([]);
+    expect(activations).not.toHaveBeenCalled();
+    expect(runtime.runtime.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "proof_invalid", grantCid: tampered.cid },
+    ]);
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("accepts a bound Bearer-prefixed compact grant and migrates an unbound one", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    const authorization = `Bearer ${grant.delegationHeader.Authorization}`;
+    const bearer = {
+      ...grant,
+      cid: new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization),
+      delegationHeader: { Authorization: authorization },
+    };
+    await persistRuntimeDelegations(fixture, [bearer]);
+    const first = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(first)).toEqual([bearer.cid]);
+    expect(first.runtime.warnings).toBeUndefined();
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation: bearer, permissions: [] }]);
+    await rm(bindingMigrationPath(fixture.profile), { force: true });
+    const second = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(second)).toEqual([bearer.cid]);
+    expect(second.runtime.warnings).toBeUndefined();
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [bearer.cid] });
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("local inspection verifies signed bytes and binding without installing a delegation", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [grant]);
+    const context = await authenticatedRuntime(fixture.profile);
+    const [entry] = await readAdditionalDelegations(fixture.profile);
+    activations.mockClear();
+    const inspected = await inspectStoredDelegation(entry, {
+      node: context.runtime.node as TinyCloudNode,
+      host: fixture.hermetic.host,
+      resolveSpace: (space) => space,
+    });
+    expect(inspected).toMatchObject({
+      local: "verified",
+      cid: grant.cid,
+      effectivePermissions: canonicalizeCapabilities(fixture.hermetic.permissions),
+    });
+    expect(activations).not.toHaveBeenCalled();
+    expect(await inspectStoredDelegation(entry)).toEqual({ local: "not_checked", because: "no_session" });
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
 test("replay refuses a compact record broader than its stored binding before activating it", async () => {
   const fixture = await createAuthRuntimeFixture();
   const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
@@ -245,7 +324,6 @@ test("migration binds an existing unbound compact record to its own signed autho
 
 test("a record a locked writer publishes while migration waits for the lock is bound by the next runtime", async () => {
   const fixture = await createAuthRuntimeFixture();
-  const original = TinyCloudNode.prototype.useRuntimeDelegation;
   const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
   try {
     const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
@@ -253,8 +331,8 @@ test("a record a locked writer publishes while migration waits for the lock is b
     const second = await fixture.hermetic.mintDelegation();
     await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation: first, permissions: [] }]);
 
-    // A writer holds the profile lock from before the runtime starts and
-    // publishes `second`, unbound, while the runtime replays `first`.
+    // A writer holds the profile lock throughout the first runtime, then
+    // publishes `second` for the next invocation's migration.
     let locked!: () => void;
     let release!: () => void;
     const holding = new Promise<void>((resolve) => { locked = resolve; });
@@ -271,16 +349,20 @@ test("a record a locked writer publishes while migration waits for the lock is b
       );
     });
     await holding;
-    activations.mockImplementation(async function (this: TinyCloudNode, delegation) {
+    // The lock remains held until the migration attempt defers.
+    let during!: RuntimeOperationContext;
+    try {
+      during = await authenticatedRuntime(fixture.profile);
+    } finally {
       release();
       await writer;
-      return original.call(this, delegation);
-    });
-
-    const during = await authenticatedRuntime(fixture.profile);
-    expect(installedCids(during)).toEqual([first.cid]);
+    }
+    expect(installedCids(during)).toEqual([]);
+    expect(during.runtime.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "unbound", grantCid: first.cid },
+    ]);
+    expect(activations).not.toHaveBeenCalled();
     activations.mockRestore();
-
     const after = await authenticatedRuntime(fixture.profile);
     expect(installedCids(after).sort()).toEqual([first.cid, second.cid].sort());
     expect((await readAdditionalDelegations<Record<string, unknown>>(fixture.profile)).map(
@@ -434,6 +516,8 @@ test("a local sign-in without the profile's stored session never runs the migrat
 
     const runtime = await createInvocationRuntime({ profile: fixture.ownerProfile });
     if (!runtime.ok) throw new Error(`expected a runtime: ${runtime.error.code}`);
+    expect(installedCids(runtime.context)).not.toContain(delegation.cid);
+    expect(runtime.context.runtime.warnings).toBeUndefined();
     expect(await readJson(bindingMigrationPath(fixture.ownerProfile))).toBeNull();
     expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([JSON.parse(JSON.stringify({
       delegation,

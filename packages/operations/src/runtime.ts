@@ -6,14 +6,12 @@ import type {
 import * as nodeSdk from "@tinycloud/node-sdk";
 
 import {
-  DELEGATION_CID_PATTERN,
   type InvocationTarget,
   type OperationContext,
+  type OperationWarning,
   type OperationRuntime,
   type OperationRuntimeRequirement,
-  type OperationWarning,
   type RuntimeOperationContext,
-  type StoredGrantSkipReason,
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
@@ -21,12 +19,11 @@ import { resolveInvocationProfile, resolvePosture } from "./profile.js";
 import { operationSpaceResolver } from "./secrets.js";
 import {
   profilePath,
-  readAdditionalDelegations,
   readJson,
   readProfile,
   readSession,
 } from "./state.js";
-import { prepareStoredDelegationReplay, replayStoredDelegation } from "./delegation-binding.js";
+import { replayProfileDelegations } from "./delegation-binding.js";
 
 export type InvocationRuntimeResolution =
   | Readonly<{ ok: true; context: OperationContext }>
@@ -189,41 +186,20 @@ export async function createInvocationRuntime(
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
     const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
-    const seenCids = new Set<string>();
     const warnings: OperationWarning[] = [];
-    // An explicit key is another identity: it neither replays nor migrates
-    // this profile's records.
-    if (!explicitPrivateKeyOverride) {
-      const activator = node as unknown as RuntimeDelegationActivator;
-      // Migration runs before the records are read, so the records replayed
-      // here and the migration marker agree.
-      const migrated = await prepareStoredDelegationReplay(profileName, activator, {
-        host: summary.host,
-        // Only the profile's own restored session; a local sign-in without
-        // one uses a fresh session key the stored records do not address.
-        migrate: activeSession !== undefined,
-      });
-      // Elements are untrusted and may not even be objects; the shared rule
-      // classifies each before reading any field.
-      for (const entry of await readAdditionalDelegations<unknown>(profileName)) {
-        const replay = await replayStoredDelegation(activator, entry, {
-          host: summary.host,
-          migrated,
-          resolveSpace,
-        });
-        if (replay.status === "installed") {
-          if (!seenCids.has(replay.delegation.cid)) {
-            seenCids.add(replay.delegation.cid);
-            livePermissions.push(...replay.delegation.effectivePermissions);
-          }
-        } else if (replay.status === "skipped") {
-          // A skipped record never grants authority. Skipping (not failing)
-          // keeps one stale record from blocking what the session or other
-          // grants cover; the result says which grant and why, in fixed
-          // codes only. An expired grant is routine and is not reported.
-          warnings.push(skippedGrantWarning(node, entry, replay.reason));
-        }
+    // A local sign-in without a persisted session has a fresh session key.
+    // Neither that key nor an explicit private-key override may inherit this
+    // profile's stored grants.
+    if (!explicitPrivateKeyOverride && activeSession !== undefined) {
+      const replay = await replayProfileDelegations(
+        profileName,
+        node as unknown as RuntimeDelegationActivator,
+        { host: summary.host, migrate: true, resolveSpace },
+      );
+      for (const installed of replay.installed) {
+        livePermissions.push(...installed.effectivePermissions);
       }
+      warnings.push(...replay.warnings);
     }
 
     const runtime: OperationRuntime = {
@@ -255,33 +231,6 @@ export async function createInvocationRuntime(
     ));
   }
 }
-
-/**
- * A stored CID is published only when it is the CID of the stored
- * authorization bytes, recomputed here. Any other value (free text, or a
- * well-formed CID of different bytes) is caller-controlled data and is omitted.
- */
-function skippedGrantWarning(node: unknown, entry: unknown, reason: StoredGrantSkipReason): OperationWarning {
-  const grantCid = verifiedStoredCid(node, entry);
-  return { code: "STORED_GRANT_SKIPPED", reason, ...(grantCid === undefined ? {} : { grantCid }) };
-}
-
-function verifiedStoredCid(node: unknown, entry: unknown): string | undefined {
-  const delegation = isRecord(entry) && isRecord(entry.delegation) ? entry.delegation : undefined;
-  const header = isRecord(delegation?.delegationHeader) ? delegation.delegationHeader : undefined;
-  const cid = delegation?.cid;
-  const computeDelegationCid = isRecord(node) ? node.computeDelegationCid : undefined;
-  if (typeof cid !== "string" || typeof header?.Authorization !== "string" || typeof computeDelegationCid !== "function") {
-    return undefined;
-  }
-  try {
-    return computeDelegationCid.call(node, header.Authorization) === cid && DELEGATION_CID.test(cid) ? cid : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-const DELEGATION_CID = new RegExp(DELEGATION_CID_PATTERN);
 
 function spaceForAuthenticatedPrincipal(principal: string | undefined): string | undefined {
   if (principal === undefined) return undefined;
