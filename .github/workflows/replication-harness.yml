@@ -1,0 +1,316 @@
+name: Replication harness
+
+# TC-893 replication gate. All gate logic lives in the harness CLI
+# (tests/replication-harness); this file only calls the CONTRACTS.md commands.
+# Triggers: manual dispatch (gate, tier, backends, SUT mode/versions, image)
+# and pull_request labelled `replication` (G1: tc858-phase1-workspace).
+# There is no schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      gate:
+        type: choice
+        options: [none, tc858-phase1-workspace, tc858-phase1-beta]
+        default: none
+      tier:
+        type: choice
+        options: [core, edge, speed, tc12, all]
+        default: core
+      set:
+        description: "companion set, e.g. phase1-companion"
+        type: string
+        default: ""
+      backends:
+        description: "JSON array or comma list of backends"
+        type: string
+        default: '["sqlite","pg16"]'
+      clients:
+        description: "SUT mode"
+        type: choice
+        options: [workspace, published]
+        default: workspace
+      cli_version:
+        description: "exact semver; required when clients=published"
+        type: string
+        default: ""
+      node_sdk_version:
+        description: "exact semver; required when clients=published"
+        type: string
+        default: ""
+      node_image:
+        description: "image ref; gates force prod"
+        type: string
+        default: prod
+      only:
+        description: "comma list of scenario ids; rejected when gate != none"
+        type: string
+        default: ""
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: "tc893-${{ (github.event.action == 'labeled' && github.event.label.name != 'replication') && github.run_id || github.event.pull_request.number || github.run_id }}"
+  cancel-in-progress: true
+
+env:
+  # GitHub runners run docker rootless-capable without sudo; the harness
+  # honours DOCKER (default `sudo -n docker` for the dev host).
+  DOCKER: docker
+  # Production runtime module: registers the S1/S2 gate runtime services
+  # (SUT/image resolvers, topology factory, run-environment builder). It is
+  # supplied by the runtime-assembly slice, not by this workflow.
+  TC893_RUNTIME_MODULE: ${{ github.workspace }}/tests/replication-harness/runtime.ts
+
+jobs:
+  resolve:
+    name: Resolve inputs and matrix
+    if: github.event_name == 'workflow_dispatch' || (github.event.action == 'labeled' && github.event.label.name == 'replication') || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'replication'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      core-matrix: ${{ steps.split.outputs.core-matrix }}
+      companion-matrix: ${{ steps.split.outputs.companion-matrix }}
+      has-companion: ${{ steps.split.outputs.has-companion }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the workspace SUT
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/replica build
+          bun run --cwd packages/cli build
+
+      - name: Resolve inputs and matrix
+        id: r
+        env:
+          DISPATCH_INPUTS: ${{ github.event_name == 'workflow_dispatch' && toJSON(github.event.inputs) || '{}' }}
+        run: >
+          bun run --cwd tests/replication-harness harness resolve
+          --event-file "$GITHUB_EVENT_PATH" --dispatch-inputs "$DISPATCH_INPUTS"
+          --out "$RUNNER_TEMP/tc893/in"
+
+      - name: Split the matrix into core and companion legs
+        id: split
+        run: |
+          jq -c '{include:[.include[] | select(.set == null)]}' "$RUNNER_TEMP/tc893/in/matrix.json" \
+            | sed 's/^/core-matrix=/' >> "$GITHUB_OUTPUT"
+          jq '[.include[] | select(.set != null)] | length > 0' "$RUNNER_TEMP/tc893/in/matrix.json" \
+            | sed 's/^/has-companion=/' >> "$GITHUB_OUTPUT"
+          jq -c '{include:[.include[] | select(.set != null)]}' "$RUNNER_TEMP/tc893/in/matrix.json" \
+            | sed 's/^/companion-matrix=/' >> "$GITHUB_OUTPUT"
+
+      - name: Upload resolved inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc893-inputs
+          path: ${{ runner.temp }}/tc893/in
+          retention-days: 90
+
+  leg-core:
+    name: Leg ${{ matrix.name }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ contains(matrix.tiers, 'speed') && 150 || contains(matrix.tiers, 'edge') && 90 || 45 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.core-matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download resolved inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: tc893-inputs
+          path: ${{ runner.temp }}/tc893/in
+
+      - name: Run the leg
+        env:
+          IN: ${{ runner.temp }}/tc893/in
+        run: >
+          bun run --cwd tests/replication-harness harness run
+          --inputs "$IN/inputs.json" --leg "${{ matrix.name }}"
+          --results "$RUNNER_TEMP/tc893/leg"
+
+      - name: Append the leg report to the step summary
+        if: always()
+        run: cat "$RUNNER_TEMP/tc893/leg/report.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the leg report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc893-leg-${{ matrix.name }}
+          path: ${{ runner.temp }}/tc893/leg
+          retention-days: 30
+
+  leg-companion:
+    name: Companion ${{ matrix.name }}
+    needs: resolve
+    if: needs.resolve.outputs.has-companion == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.companion-matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download resolved inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: tc893-inputs
+          path: ${{ runner.temp }}/tc893/in
+
+      - name: Run the leg
+        env:
+          IN: ${{ runner.temp }}/tc893/in
+        run: >
+          bun run --cwd tests/replication-harness harness run
+          --inputs "$IN/inputs.json" --leg "${{ matrix.name }}"
+          --results "$RUNNER_TEMP/tc893/leg"
+
+      - name: Append the leg report to the step summary
+        if: always()
+        run: cat "$RUNNER_TEMP/tc893/leg/report.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the leg report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc893-leg-${{ matrix.name }}
+          path: ${{ runner.temp }}/tc893/leg
+          retention-days: 30
+
+  aggregate:
+    name: Aggregate
+    needs: [resolve, leg-core, leg-companion]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download resolved inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: tc893-inputs
+          path: ${{ runner.temp }}/tc893/in
+
+      - name: Download every leg report
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tc893-leg-*
+          path: ${{ runner.temp }}/legs-dl
+          merge-multiple: false
+
+      - name: Lay out the legs directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/legs"
+          for dir in "$RUNNER_TEMP"/legs-dl/tc893-leg-*; do
+            [ -d "$dir" ] || continue
+            mv "$dir" "$RUNNER_TEMP/legs/${dir##*/tc893-leg-}"
+          done
+
+      - name: Aggregate
+        env:
+          IN: ${{ runner.temp }}/tc893/in
+          CORE_RESULT: ${{ needs.leg-core.result }}
+          COMPANION_RESULT: ${{ needs.leg-companion.result }}
+        run: >
+          bun run --cwd tests/replication-harness harness aggregate
+          --inputs "$IN/inputs.json" --legs "$RUNNER_TEMP/legs"
+          --leg-core-conclusion "$CORE_RESULT"
+          --leg-companion-conclusion "$COMPANION_RESULT"
+          --out "$RUNNER_TEMP/agg"
+
+      - name: Append the aggregate to the step summary
+        if: always()
+        run: cat "$RUNNER_TEMP/agg/aggregate.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the aggregate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc893-aggregate
+          path: ${{ runner.temp }}/agg
+          retention-days: 90

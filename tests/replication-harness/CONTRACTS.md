@@ -57,6 +57,7 @@ selects that matrix entry from the resolve artefacts and writes
 `<results>/report.json` and `report.md`. `aggregate --legs` reads one
 `<leg-name>/report.json` directory per matrix leg, recomputes the registry
 manifests, and writes `aggregate.json` and `aggregate.md` under `--out`.
+When the matrix lists no companion legs, `aggregate` treats a `skipped` `--leg-companion-conclusion` as `success` (the `leg-companion` job is skipped via `has-companion`); with companion legs in the matrix, `skipped` still fails.
 
 `manifest --inputs "$IN/inputs.json" --out "$RUNNER_TEMP/tc893/manifest"`
 recomputes and writes `manifest-core.json`; add `--set phase1-companion` to
@@ -80,9 +81,16 @@ conclusion even if every serialized row says `pass`.
 
 
 `aggregate` exits 0 when the core gate passes, 3 when it fails, and 1 when
-a non-gate run has any non-passing or quarantined row. Companion verdicts do
-not alter the core gate exit status; `verify-aggregate` maps companion failure
-to the separate escalation status 5.
+a non-gate run has any non-passing or quarantined row, a failed or
+cancelled leg-job conclusion, or missing, unreadable, or mismatched
+matrix evidence (a leg absent from the matrix, an extra leg, an
+unparseable or schema-invalid `report.json`, or a mismatched
+`inputsSha256`). An invalid leg report never aborts aggregation: it
+fails the conclusion and verdict for its set (`MISSING_LEG`), so a
+gate run exits 3 with `gate.passed=false`. Companion verdicts do not
+alter the core gate exit
+status; `verify-aggregate` maps companion failure to the separate
+escalation status 5.
 
 ### D1 fail-fast production smoke
 

@@ -14,6 +14,7 @@ import { scenarioRegistry, expandScenarios, validateRegistry, type ProbeRequirem
 import { createRunReportBase, runRowsWithInterrupt } from "../src/runner/run";
 import { createScenarioExecutor } from "../src/runner/executor";
 import { ResolvedImageSchema, RunInputsSchema } from "../src/schemas/gate";
+import { RunReportSchema, type ValidatedRunReport } from "../src/schemas/report";
 import { aggregate, aggregateExitCode, type LegEvidence } from "../src/gate/aggregate";
 import { createManifest, type ManifestRegistry } from "../src/gate/manifest";
 import { resolveInputs, readResolveEvent, subjectFromEvent } from "../src/gate/resolve";
@@ -292,12 +293,17 @@ export async function runLegCommand(args: { options: Record<string, string | tru
   if (reportConclusion([evidence]) !== "success") process.exitCode = 1;
 }
 
+function validReport(value: unknown): ValidatedRunReport | null {
+  const parsed = RunReportSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 function reportConclusion(legs: readonly LegEvidence[]): "success" | "failure" | "cancelled" | "skipped" {
   if (!legs.length) return "failure";
   for (const leg of legs) {
-    const report = leg.report as Partial<RunReport>;
-    if (report.interrupted || report.results?.some((row) => row.reason === "INTERRUPTED" || (row.status as string) === "cancelled")) return "cancelled";
-    if (!report.results || report.results.some((row) => row.status !== "pass")) return "failure";
+    const report = validReport(leg.report);
+    if (!report) return "failure";
+    if (report.interrupted || report.results.some((row) => row.reason === "INTERRUPTED" || (row.status as string) === "cancelled")) return "cancelled";
+    if (report.results.some((row) => row.status !== "pass")) return "failure";
   }
   return "success";
 }
@@ -334,11 +340,25 @@ export async function aggregateCommand(args: { options: Record<string, string | 
     const directory = join(legsRoot, item.name);
     try {
       const bytes = await readFile(join(directory, "report.json"));
-      legs.push({ name: item.name, directory, report: JSON.parse(bytes.toString("utf8")), reportSha256: createHash("sha256").update(bytes).digest("hex") });
+      let report: unknown = null;
+      let parseError: string | undefined;
+      try {
+        report = JSON.parse(bytes.toString("utf8"));
+      } catch (error) {
+        parseError = error instanceof Error ? error.message : String(error);
+      }
+      legs.push({ name: item.name, directory, report, reportSha256: createHash("sha256").update(bytes).digest("hex"), ...(parseError ? { parseError } : {}) });
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
     }
   }
+  const legSet = (leg: LegEvidence): SetId | null | "companion" => {
+    const report = validReport(leg.report);
+    if (report) return report.invocation.set;
+    const expected = expectedLegs.find((entry) => entry.name === leg.name);
+    if (expected) return expected.set;
+    return leg.name.startsWith("companion-") ? "companion" : null;
+  };
   const coreManifest = inputs.gate ? await readManifestFor(inputsPath, null) : null;
   const companionManifests = new Map<SetId, Manifest>();
   for (const set of inputs.sets) {
@@ -348,17 +368,20 @@ export async function aggregateCommand(args: { options: Record<string, string | 
   const recomputedCoreManifest = inputs.gate ? await recomputeManifest(null, inputs) : null;
   const recomputedCompanionManifests = new Map<SetId, Manifest>();
   for (const set of inputs.sets) recomputedCompanionManifests.set(set, await recomputeManifest(set, inputs));
-  const coreLegs = legs.filter((leg) => (leg.report as Partial<RunReport>).invocation?.set === null);
-  const companionLegs = legs.filter((leg) => (leg.report as Partial<RunReport>).invocation?.set !== null);
+  const coreLegs = legs.filter((leg) => legSet(leg) === null);
+  const companionLegs = legs.filter((leg) => legSet(leg) !== null);
   const coreFromReport = expectedLegs.some((leg) => leg.set === null) ? reportConclusion(coreLegs) : "success";
   const companionFromReport = expectedLegs.some((leg) => leg.set !== null) ? reportConclusion(companionLegs) : "success";
   const coreFromFlags = conclusionFlag(option(args.options, "leg-core-conclusion"), coreFromReport);
   const companionFromFlags = conclusionFlag(option(args.options, "leg-companion-conclusion"), companionFromReport);
+  // leg-companion is skipped when the matrix lists no companion legs; that is
+  // not a failure. When companion legs are expected, "skipped" still fails.
+  const companionFlag = !expectedLegs.some((leg) => leg.set !== null) && companionFromFlags === "skipped" ? "success" : companionFromFlags;
   const aggregateConclusion = (reported: ReturnType<typeof reportConclusion>, flagged: ReturnType<typeof conclusionFlag>) =>
     reported === "success" ? flagged : reported;
   const report = await aggregate({ inputs, coreManifest, companionManifests, recomputedCoreManifest, recomputedCompanionManifests, expectedLegs, legs,
     legCoreConclusion: aggregateConclusion(coreFromReport, coreFromFlags),
-    legCompanionConclusion: aggregateConclusion(companionFromReport, companionFromFlags) });
+    legCompanionConclusion: aggregateConclusion(companionFromReport, companionFlag) });
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, "aggregate.json"), `${JSON.stringify(report, null, 2)}\n`);
   await writeFile(join(outDir, "aggregate.md"), renderAggregateMarkdown(report));

@@ -8,7 +8,7 @@ import { AggregateReportSchema, RunReportSchema } from "../schemas/report";
 import { canonicalSha256 } from "./canonical-json";
 import { validateJunitPrecondition } from "./resolve";
 import { verifyLegInputs } from "./leg-inputs";
-export interface LegEvidence { name: string; directory: string; report: unknown; reportSha256?: string }
+export interface LegEvidence { name: string; directory: string; report: unknown; reportSha256?: string; parseError?: string }
 export interface AggregateOptions {
   inputs: RunInputs;
   coreManifest: Manifest | null;
@@ -57,7 +57,7 @@ async function validateRowArtifacts(leg: LegEvidence, result: ValidatedRunReport
 
 
 
-async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest | null, manifest: Manifest | null, selectedLegs: LegEvidence[], conclusion: AggregateReport["legCoreConclusion"], companion: boolean): Promise<Verdict> {
+async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest | null, manifest: Manifest | null, selectedLegs: LegEvidence[], invalidLegs: readonly { evidence: LegEvidence; detail: string }[], conclusion: AggregateReport["legCoreConclusion"], companion: boolean): Promise<Verdict> {
   const reasons: GateReason[] = [];
   if (!manifest) {
     reason(reasons, "MANIFEST_MISMATCH", "aggregate checkout could not recompute the manifest");
@@ -67,6 +67,7 @@ async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest
   if (!resolveManifest || !manifestHashMatches(resolveManifest) || resolveManifest.manifestSha256 !== manifest.manifestSha256) reason(reasons, "MANIFEST_MISMATCH", "recomputed full manifest differs from resolve manifest");
   const expectedBackends = companion ? manifest.rows.length ? ["sqlite"] : [] : options.inputs.gate ? ["sqlite", "pg16"] : options.inputs.backends;
   const reports: { leg: LegEvidence; report: ValidatedRunReport }[] = [];
+  for (const invalid of invalidLegs) reason(reasons, "MISSING_LEG", `leg report is not valid evidence: ${invalid.detail}`, { leg: invalid.evidence.name });
   for (const selected of selectedLegs) {
     const parsed = RunReportSchema.safeParse(selected.report);
     if (parsed.success && parsed.data.kind === "leg") reports.push({ leg: selected, report: parsed.data });
@@ -138,9 +139,24 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
   const coreLegs: LegEvidence[] = [];
   const companionLegs = new Map<SetId, LegEvidence[]>();
   const parsedLegs: { evidence: LegEvidence; report: ValidatedRunReport }[] = [];
+  const invalidLegs = new Map<SetId | "core" | "companion", { evidence: LegEvidence; detail: string }[]>();
+  const failIfPassing = (conclusion: AggregateReport["legCoreConclusion"]) => conclusion === "success" ? "failure" as const : conclusion;
   for (const evidence of options.legs) {
     const parsed = RunReportSchema.safeParse(evidence.report);
-    if (!parsed.success || parsed.data.kind !== "leg") continue;
+    const emptyBackends = parsed.success && parsed.data.invocation.backends.length === 0;
+    if (!parsed.success || parsed.data.kind !== "leg" || emptyBackends) {
+      const detail = evidence.parseError
+        ? `report.json is not valid JSON (${evidence.parseError})`
+        : emptyBackends && parsed.success
+          ? `leg report declares no invocation backends`
+          : parsed.success
+            ? `report kind ${JSON.stringify(parsed.data.kind)} is not "leg"`
+            : `report fails schema validation (${parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : "invalid"})`;
+      const expected = options.expectedLegs?.find((entry) => entry.name === evidence.name);
+      const set: SetId | "core" | "companion" = expected ? (expected.set ?? "core") : evidence.name.startsWith("companion-") ? "companion" : "core";
+      invalidLegs.set(set, [...(invalidLegs.get(set) ?? []), { evidence, detail }]);
+      continue;
+    }
     parsedLegs.push({ evidence, report: parsed.data });
     if (parsed.data.invocation.set === null) coreLegs.push(evidence);
     else {
@@ -150,8 +166,9 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
   }
   let legCoreConclusion = options.legCoreConclusion;
   let legCompanionConclusion = options.legCompanionConclusion;
+  if (invalidLegs.has("core")) legCoreConclusion = failIfPassing(legCoreConclusion);
+  for (const set of invalidLegs.keys()) if (set !== "core") legCompanionConclusion = failIfPassing(legCompanionConclusion);
   if (!options.inputs.gate) {
-    const failIfPassing = (conclusion: AggregateReport["legCoreConclusion"]) => conclusion === "success" ? "failure" as const : conclusion;
     if (!options.expectedLegs?.length) legCoreConclusion = failIfPassing(legCoreConclusion);
     else {
       for (const expected of options.expectedLegs) {
@@ -163,14 +180,33 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
           else legCompanionConclusion = failIfPassing(legCompanionConclusion);
         }
       }
+      for (const { evidence, report } of parsedLegs) {
+        const inMatrix = options.expectedLegs.some((expected) => expected.name === evidence.name
+          && report.invocation.backends.length === 1 && report.invocation.backends[0] === expected.backend
+          && report.invocation.set === expected.set);
+        const mismatchedInputs = report.inputsSha256 !== options.inputs.inputsSha256;
+        if (!inMatrix || mismatchedInputs) {
+          if (report.invocation.set === null) legCoreConclusion = failIfPassing(legCoreConclusion);
+          else legCompanionConclusion = failIfPassing(legCompanionConclusion);
+        }
+      }
+      for (const evidence of options.legs) {
+        if (options.expectedLegs.some((expected) => expected.name === evidence.name)) continue;
+        const parsed = parsedLegs.find((leg) => leg.evidence === evidence)?.report;
+        const companion = parsed ? parsed.invocation.set !== null : evidence.name.startsWith("companion-");
+        if (companion) legCompanionConclusion = failIfPassing(legCompanionConclusion);
+        else legCoreConclusion = failIfPassing(legCoreConclusion);
+      }
     }
   }
-  const core = options.inputs.gate ? await buildVerdict(options, options.coreManifest, options.recomputedCoreManifest, coreLegs, legCoreConclusion, false) : null;
+  const core = options.inputs.gate ? await buildVerdict(options, options.coreManifest, options.recomputedCoreManifest, coreLegs, invalidLegs.get("core") ?? [], legCoreConclusion, false) : null;
   const companion: AggregateReport["companion"] = [];
+  const unknownCompanion = invalidLegs.get("companion") ?? [];
   const companionSets = new Set<SetId>([...options.inputs.sets, ...options.companionManifests.keys(), ...options.recomputedCompanionManifests.keys(), ...companionLegs.keys()]);
   for (const set of companionSets) {
     const manifest = options.recomputedCompanionManifests.get(set) ?? null;
-    const verdict = await buildVerdict(options, options.companionManifests.get(set) ?? null, manifest, companionLegs.get(set) ?? [], legCompanionConclusion, true);
+    const verdict = await buildVerdict(options, options.companionManifests.get(set) ?? null, manifest, companionLegs.get(set) ?? [],
+      [...(invalidLegs.get(set) ?? []), ...unknownCompanion], legCompanionConclusion, true);
     companion.push({ set, manifestSha256: manifest?.manifestSha256 ?? "", ...verdict });
   }
   const gate = core && options.inputs.gate && options.recomputedCoreManifest
