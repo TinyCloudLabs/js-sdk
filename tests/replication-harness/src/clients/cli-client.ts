@@ -287,6 +287,9 @@ const profileCoordinators = new Map<string, ProfileEventCoordinator>();
 function profileDirectory(home: string, profile: string): string {
   return join(resolve(home), ".tinycloud", "profiles", profile);
 }
+function hostProfileName(host: string): string {
+  return `host-${createHash("sha256").update(host).digest("hex").slice(0, 16)}`;
+}
 function coordinatorFor(home: string, profile: string): ProfileEventCoordinator {
   const directory = profileDirectory(home, profile);
   let coordinator = profileCoordinators.get(directory);
@@ -563,7 +566,7 @@ export class CliClientImpl implements CliClient {
       cliEntry: this.entry,
       node: this.nodeExecutable,
       host,
-      profile: `host-${createHash("sha256").update(host).digest("hex").slice(0, 16)}`,
+      profile: hostProfileName(host),
       hostProfileSource: this.profileName,
       hostAliases: this.hostAliases,
       replication: this.replication,
@@ -594,6 +597,19 @@ export class CliClientImpl implements CliClient {
     const localLogin = args[0] === "auth" && args[1] === "login" && args.some((arg, index) => arg === "--method" && args[index + 1] === "local");
     if (localLogin) await this.registerOwnerIdentity();
   }
+  private async recordImportedAuthority(args: string[], exitCode: number | null, output: Buffer): Promise<void> {
+    if (exitCode !== 0 || args[0] !== "auth" || args[1] !== "import") return;
+    let imported: Record<string, unknown>;
+    try { imported = JSON.parse(output.toString("utf8")) as Record<string, unknown>; }
+    catch { return; }
+    const rawExpiry = imported.expiry;
+    const expiresAt = typeof rawExpiry === "number" && Number.isFinite(rawExpiry)
+      ? rawExpiry
+      : typeof rawExpiry === "string" && Number.isFinite(Date.parse(rawExpiry)) ? Date.parse(rawExpiry) : undefined;
+    if (expiresAt === undefined) return;
+    await writeFile(join(this.homePath, ".tc893-authority.json"), JSON.stringify({ sessionExpiresAt: expiresAt, grantExpiresAt: expiresAt }), { mode: 0o600 });
+  }
+
 
   private ensureHostProfile(): Promise<void> {
     this.hostProfilePromise ??= this.prepareHostProfile();
@@ -729,7 +745,10 @@ export class CliClientImpl implements CliClient {
         json: parseJson(output),
       };
       if (deadlineExceeded) Object.defineProperty(result, DEADLINE_EXCEEDED, { value: true });
-      if (activeProfile === this.profileName) await this.registerAfterOwnerKeySetup(args, processResult.code);
+      if (activeProfile === this.profileName) {
+        await this.recordImportedAuthority(args, processResult.code, output);
+        await this.registerAfterOwnerKeySetup(args, processResult.code);
+      }
       return result;
     } finally {
       clearTimeout(deadlineTimer);
@@ -738,13 +757,31 @@ export class CliClientImpl implements CliClient {
     }
   }
 
-  async tc(args: string[], options?: CliCallOptions): Promise<CliResult> { return this.run(resolveCliAuthPaths(this.homePath, args), options); }
+  async tc(args: string[], options?: CliCallOptions): Promise<CliResult> {
+    const result = await this.run(resolveCliAuthPaths(this.homePath, args), options);
+    if (result.exit !== 0 || args[0] !== "replica" || args[1] !== "report" || !args.includes("--json") || (options?.profile !== undefined && options.profile !== this.profileName)) return result;
+    const report = result.json && typeof result.json === "object" && !Array.isArray(result.json) ? result.json as Record<string, unknown> : undefined;
+    if (!report || !Object.keys(this.hostAliases).length) return result;
+    const partitions = Array.isArray(report.partitions) ? [...report.partitions] : [];
+    for (const host of new Set(Object.values(this.hostAliases))) {
+      const profile = hostProfileName(host);
+      if (profile === this.profileName) continue;
+      try { await stat(join(profileDirectory(this.homePath, profile), "profile.json")); }
+      catch { continue; }
+      const additional = await this.run(["replica", "report", "--json"], { ...options, profile, omitHost: true });
+      if (additional.exit !== 0) return { ...result, exit: additional.exit, signal: additional.signal, stderr: `${result.stderr}${additional.stderr}` };
+      const hostReport = additional.json && typeof additional.json === "object" && !Array.isArray(additional.json) ? additional.json as Record<string, unknown> : undefined;
+      if (Array.isArray(hostReport?.partitions)) partitions.push(...hostReport.partitions);
+    }
+    const combined = { ...report, partitions };
+    return { ...result, json: combined, stdout: Buffer.from(JSON.stringify(combined)) };
+  }
   private async op(args: string[], options: CliCallOptions = {}): Promise<InternalCliResult> { return this.run(args, options); }
   async get(key: string, options: CliCallOptions & GetOptions = {}): Promise<GetResult> {
-    if (options.source !== undefined) unsupportedOption("network-only reads");
     if (options.maxResponseBytes !== undefined) unsupportedOption("maxResponseBytes");
     if (options.space !== undefined) unsupportedOption("space selection");
-    const result = await this.op(["kv", "get", key, "--raw"], options);
+    const invocationOptions = options.source === "network" ? { ...options, flag: "off" as const } : options;
+    const result = await this.op(["kv", "get", key, "--raw"], invocationOptions);
     if (result[DEADLINE_EXCEEDED]) {
       return { ...result, ok: false, found: false, code: "DEADLINE_EXCEEDED" };
     }
@@ -797,7 +834,8 @@ export class CliClientImpl implements CliClient {
       const expiry = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : typeof value === "string" && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
       const siweExpiry = typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time: (.+)$/m)?.[1] : undefined;
       const posture = profile.posture === "delegate-session" ? "delegate-session" : "owner";
-      const sessionExpiry = session.expiresAt ?? session.expiry ?? session.expirationTime ?? siweExpiry;
+      const explicitSessionExpiry = session.expiresAt ?? session.expiry ?? session.expirationTime ?? siweExpiry;
+      const sessionExpiry = explicitSessionExpiry ?? (posture === "delegate-session" ? metadata.sessionExpiresAt ?? metadata.grantExpiresAt : undefined);
       const grantExpiry = session.grantExpiresAt ?? session.delegationExpiry ?? grant.expiresAt ?? grant.expiry ?? profile.grantExpiresAt ?? metadata.grantExpiresAt ?? (posture === "delegate-session" ? sessionExpiry : undefined);
       return { posture, sessionExpiresAt: expiry(sessionExpiry), grantExpiresAt: posture === "delegate-session" ? expiry(grantExpiry) : null };
     } catch {

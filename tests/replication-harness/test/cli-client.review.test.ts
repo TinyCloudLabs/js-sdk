@@ -119,10 +119,10 @@ console.log(JSON.stringify({ release: process.release.name, version: process.ver
       }
     }
   });
-  test("applies ClientSpec replication configuration to CLI operations", async () => {
+  test("applies ClientSpec replication configuration and network-only reads to CLI operations", async () => {
     const root = await temporaryDirectory();
     const home = join(root, "home");
-    const entry = await cliEntry(root, `console.log(JSON.stringify(process.argv.slice(2)));`);
+    const entry = await cliEntry(root, `import { writeFile } from "node:fs/promises"; import { join } from "node:path"; const args = process.argv.slice(2); await writeFile(join(process.env.TC_HOME, "args.json"), JSON.stringify(args)); console.log(JSON.stringify(args));`);
     const cli = new CliClientImpl({
       id: "configured-replication",
       home,
@@ -132,7 +132,51 @@ console.log(JSON.stringify({ release: process.release.name, version: process.ver
     });
     const result = await cli.tc(["kv", "get", "notes/key"]);
     expect(JSON.parse(Buffer.from(result.stdout).toString("utf8"))).toContain("--replication");
+    const networkOnly = await cli.get("notes/key", { source: "network" });
+    const networkArgs = JSON.parse(await readFile(join(home, "args.json"), "utf8")) as string[];
+    expect(networkArgs).toContain("--no-replication");
+    expect(networkArgs).not.toContain("--replication");
   });
+  test("records expiry returned by a direct delegate grant import", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const profile = join(home, ".tinycloud", "profiles", "delegate");
+    const expiresAt = Date.now() + 60_000;
+    await mkdir(profile, { recursive: true });
+    await writeFile(join(profile, "profile.json"), JSON.stringify({ posture: "delegate-session" }), { mode: 0o600 });
+    await writeFile(join(profile, "session.json"), "{}", { mode: 0o600 });
+    const entry = await cliEntry(root, `console.log(JSON.stringify({ expiry: ${JSON.stringify(new Date(expiresAt).toISOString())} }));`);
+    const cli = new CliClientImpl({ id: "delegate", home, profile: "delegate", cliEntry: entry, host: "http://node.example" });
+    const imported = await cli.tc(["auth", "import", "grant.json"]);
+    expect(imported.exit).toBe(0);
+    expect(await cli.authority()).toEqual({ posture: "delegate-session", sessionExpiresAt: expiresAt, grantExpiresAt: expiresAt });
+  });
+  test("replica report includes partitions from established withHost profiles", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const sourceProfile = join(home, ".tinycloud", "profiles", "owner");
+    await mkdir(sourceProfile, { recursive: true });
+    await writeFile(join(sourceProfile, "profile.json"), JSON.stringify({ posture: "local-owner-key" }), { mode: 0o600 });
+    const entry = await cliEntry(root, `
+const args = process.argv.slice(2);
+const profile = args[args.indexOf("--profile") + 1];
+const host = args[args.indexOf("--host") + 1] ?? profile;
+console.log(JSON.stringify({ replicas: [], partitions: [{ idHash: profile, host, space: "owner-space", pinned: 0 }] }));
+`);
+    const cli = new CliClientImpl({
+      id: "multi-host-report", home, profile: "owner", cliEntry: entry, host: "http://node-a.example",
+      hostAliases: { b: "http://node-b.example" },
+    });
+    const hostB = cli.withHost("b");
+    const hostBProfile = join(home, ".tinycloud", "profiles", hostB.profile());
+    await mkdir(hostBProfile, { recursive: true });
+    await writeFile(join(hostBProfile, "profile.json"), JSON.stringify({ posture: "local-owner-key" }), { mode: 0o600 });
+    await writeFile(join(hostBProfile, "session.json"), "{}", { mode: 0o600 });
+    const report = await cli.tc(["replica", "report", "--json"]);
+    const combined = report.json as { partitions?: { idHash: string }[] };
+    expect(new Set(combined.partitions?.map((partition) => partition.idHash)).size).toBe(2);
+  });
+
 
   test("rejects a CLI Node runtime below v22.13 before the SUT starts", async () => {
     const root = await temporaryDirectory();
