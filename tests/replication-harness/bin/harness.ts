@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 import { scenarioRegistry, validateRegistry } from "../src/runner/registry";
+import { dockerDoctor, gc } from "../src/topology/gc";
+import { realClock } from "../src/contracts/clock";
+import type { RunEnvironment } from "../src/contracts/lifecycle";
 export const commands = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"] as const;
 export type Command = typeof commands[number];
 export interface ParsedArgs { command: Command; positionals: string[]; options: Record<string, string | true> }
@@ -34,6 +37,22 @@ export async function runCommand(args: string[]): Promise<void> {
     console.log(`Usage: harness ${parsed.command} [options]`);
     return;
   }
+  if (parsed.command === "doctor") {
+    const result = await dockerDoctor();
+    console.log(JSON.stringify({ docker: result }, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  if (parsed.command === "gc") {
+    const base = process.env.TC893_RESULTS ?? "results";
+    const now = new Date();
+    const environment = { runId: now.toISOString().replace(/[^0-9A-Za-z-]/g, "-"), resultsDir: base, clock: realClock, docker: process.env.DOCKER ? process.env.DOCKER.split(/\s+/) : ["sudo", "-n", "docker"], sut: {} as RunEnvironment["sut"], image: () => { throw new Error("gc does not resolve node images"); }, slackMs: 3000, teardownMs: 60_000 } satisfies RunEnvironment;
+    const older = parsed.options["older-than"] === undefined ? 2 * 60 * 60_000 : parseDuration(String(parsed.options["older-than"]));
+    const result = await gc(environment, { olderThanMs: older });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.errors.length) process.exitCode = 1;
+    return;
+  }
   if (parsed.command === "list") {
     validateRegistry(scenarioRegistry);
     const tier = typeof parsed.options.tier === "string" ? parsed.options.tier.split(",") : undefined;
@@ -62,6 +81,11 @@ export async function runCommand(args: string[]): Promise<void> {
     manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b", doctor: "S1", gc: "S1",
   };
   throw new Error(`${parsed.command} is owned by ${owner[parsed.command]}`);
+}
+function parseDuration(value: string): number {
+  const match = /^(\d+)(ms|s|m|h|d)$/.exec(value);
+  if (!match) throw new Error(`invalid duration ${value}; expected e.g. 2h`);
+  return Number(match[1]) * ({ ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const)[match[2] as "ms" | "s" | "m" | "h" | "d"];
 }
 if (import.meta.main) {
   try { await runCommand(Bun.argv.slice(2)); }
