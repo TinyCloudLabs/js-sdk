@@ -8,9 +8,71 @@ The `src/contracts/` interfaces follow §4 of `tc893-harness-plan.md`; schema fi
 - **Shared identity fixture:** `ClientSpec.endpoint`, `storageRoot`, and `deviceProof` carry explicit client overrides. `prepareSharedEndpointStorageDeviceSpec` patches the two SDK client specs before `createTopology`; it requires the same identity and replication enabled, sets one canonical endpoint and replica root, foreground mode, and distinct device proofs. The S2/S6 fixture factory receives a topology-creation callback and returns the topology plus both clients. Reopening A requires `refresh: false`.
 - **Restart semantics:** every `KvClient.restart` call explicitly selects `auth: "restore"` or `auth: "fresh-sign-in"`. Restore opens a fresh process on the same storage with the saved session/delegation proof (including the combined device proof); fresh sign-in is an owner re-authentication in a fresh process on that same storage. Neither mode falls back to the other. Initial construction signs in; EDGE-31 explicitly restores the same saved grant.
 - **Gate job conclusions:** core runs in `leg-core`, companion runs in `leg-companion`. `gate.passed` is true iff `legCoreConclusion === "success"` and the core verdict has no reason codes. Companion verdicts and conclusions never affect that predicate.
-- **JUnit evidence:** inputs carry a versioned `tc893.junit-precondition/v1` record for G1. Version 1 requires named suites `cli-acceptance-sqlite` (≥1), `cli-acceptance-pg16` (≥1), `node-sdk-real-node-sqlite` (≥3), and `node-sdk-real-node-pg16` (≥3); every suite must exist, exit successfully, and have zero skips. The PR number, head SHA, and base SHA must exactly equal the inputs subject association. Dispatch evidence must match its subject event, ref, and SHA. Local diagnostics carry no junit precondition.
-- **Capture artefacts:** every required capture file must exist and have the SHA-256 declared by the leg report. A zero-byte capture is valid; no events or diagnostics are manufactured to satisfy the manifest.
+- **JUnit evidence:** inputs carry a versioned `tc893.junit-precondition/v1` record for G1. Version 1 requires named suites `cli-acceptance-sqlite` (≥1), `cli-acceptance-pg16` (≥1), `node-sdk-real-node-sqlite` (≥10), and `node-sdk-real-node-pg16` (≥10); every suite must exist, exit successfully, and have zero skips. The PR number, head SHA, and base SHA must exactly equal the inputs subject association. Dispatch evidence must match its subject event, ref, and SHA. Local diagnostics carry no junit precondition.
+- **Capture artefacts:** every required capture file must exist and have the SHA-256 declared by the leg report. Zero-byte log and JSONL captures are valid; other required captures must be non-empty.
 - **Aggregate output:** `verify-aggregate --print cli.version` writes only an exact SemVer 2.0.0 version to stdout; diagnostics go to stderr. Ranges, tags, a `v` prefix, and invalid numeric prerelease identifiers are rejected.
 - **Topology validation:** validate identities, references, prefix shape/overlap, SDK-only options, grant issuer order/identity/posture, and minimum expiry. Alias ids are globally unique against node/client ids and other aliases.
 - **Image pin detail:** the plan abbreviates the previous image digest (`781434c5…`), so S0 records its exact 1.19.2-dstack tag without inventing a digest; S1 resolves and records the digest before use. The plan's default digest and CI pin are recorded as given.
 - **Serialized aggregate evidence vs manifest completeness:** when `gate.passed` is true, the schema requires exactly one core leg for each input backend, matching `inputsSha256`, and every serialized core row to pass without quarantine or missing artefacts. The schema can only validate rows present in the aggregate; S3b recomputes the full manifest to catch rows omitted entirely and verifies downloaded file existence and hashes.
+
+## CI commands for S5
+
+The workflow calls the harness commands directly; CI YAML contains no gate logic.
+
+```sh
+# resolve job (uploads tc893-inputs, including the matrix output)
+bun run --cwd tests/replication-harness harness resolve \
+  --event-file "$GITHUB_EVENT_PATH" --dispatch-inputs "$DISPATCH_INPUTS" \
+  --out "$RUNNER_TEMP/tc893/in"
+
+# leg-core job; its matrix is the core-* entries, one leg per backend
+bun run --cwd tests/replication-harness harness run \
+  --inputs "$IN/inputs.json" --leg "${{ matrix.name }}" \
+  --results "$RUNNER_TEMP/tc893/leg"
+
+# leg-companion job; its matrix is the companion-* entries
+bun run --cwd tests/replication-harness harness run \
+  --inputs "$IN/inputs.json" --leg "${{ matrix.name }}" \
+  --results "$RUNNER_TEMP/tc893/leg"
+
+# aggregate job downloads all legs and receives independent job conclusions
+bun run --cwd tests/replication-harness harness aggregate \
+  --inputs "$IN/inputs.json" --legs "$RUNNER_TEMP/legs" \
+  --leg-core-conclusion "$CORE_RESULT" \
+  --leg-companion-conclusion "$COMPANION_RESULT" \
+  --out "$RUNNER_TEMP/agg"
+```
+
+The matrix emitted by `resolve` has `{name, backend, set}` entries such as
+`core-sqlite`, `core-pg16`, and (when the set applies) `companion-sqlite`.
+`harness run --gate` uses the same resolve → in-process leg hook → aggregate
+sequence locally; its aggregate is diagnostic, not canonical CI evidence.
+
+`aggregate` exits 0 when the core gate passes, 3 when it fails, and 1 when
+a non-gate run has any non-passing or quarantined row. Companion verdicts do
+not alter the core gate exit status; `verify-aggregate` maps companion failure
+to the separate escalation status 5.
+
+### D1 fail-fast production smoke
+
+`verify-aggregate --print cli.version` writes only the exact CLI SemVer to
+stdout. It exits 3 for a gate failure, 4 for production version drift, and 5
+when the core gate passes but a companion verdict fails (stop and escalate).
+All diagnostics go to stderr.
+
+```bash
+set -euo pipefail
+RUN=<G2 run id>
+gh run download "$RUN" -R tinycloudlabs/js-sdk -n tc893-aggregate -D g2
+ver=$(bun run --cwd tests/replication-harness harness verify-aggregate \
+  "$PWD/g2/aggregate.json" --gate tc858-phase1-beta --run-id "$RUN" \
+  --print cli.version) || exit 1
+node -e 'const v=process.argv[1]; const m=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(v); const p=m?.[4]?.split(".")??[]; if(!m||p.some(x=>/^\d+$/.test(x)&&x.length>1&&x[0]==="0"))process.exit(1)' "$ver" || {
+  printf 'verify-aggregate returned a non-exact SemVer: %s\n' "$ver" >&2
+  exit 1
+}
+scripts/replication/rc1-prod-smoke-cli.sh "$ver"
+```
+
+The smoke receives a checked, explicit version only. Empty output, tags, ranges,
+and values with a `v` prefix are rejected before the smoke can run.
