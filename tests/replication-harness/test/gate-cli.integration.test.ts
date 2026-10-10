@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +16,22 @@ function command(args: string[], env: Record<string, string>): ReturnType<typeof
     cwd: repoRoot, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe",
   });
 }
+async function writeJunitFixtures(root: string): Promise<void> {
+  const suites = [
+    ["tc858-junit-sqlite", "cli-flag.xml", "cli-acceptance-sqlite", 1],
+    ["tc858-junit-pg16", "cli-flag.xml", "cli-acceptance-pg16", 1],
+    ["tc858-junit-sqlite", "cli-replica-e2e.xml", "cli-replica-sqlite", 1],
+    ["tc858-junit-pg16", "cli-replica-e2e.xml", "cli-replica-pg16", 1],
+    ["tc858-junit-sqlite", "node-sdk.xml", "node-sdk-real-node-sqlite", 10],
+    ["tc858-junit-pg16", "node-sdk.xml", "node-sdk-real-node-pg16", 10],
+  ] as const;
+  for (const [artifact, fileName, name, count] of suites) {
+    const file = join(root, artifact, fileName);
+    const cases = Array.from({ length: count }, (_, index) => `<testcase name="case-${index}"/>`).join("");
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, `<testsuite name="${name}" tests="${count}" failures="0" errors="0" skipped="0">${cases}</testsuite>`);
+  }
+}
 
 describe("executable gate CLI adapters", () => {
   test("runs resolve, manifests, core and companion legs, aggregate, verify, and run --gate on fixture topology", async () => {
@@ -25,11 +42,13 @@ describe("executable gate CLI adapters", () => {
     const inputDir = join(root, "in");
     const legsDir = join(root, "legs");
     const aggregateDir = join(root, "aggregate");
+    const junitDir = join(root, "junit");
     const event = {
       repository: { full_name: "TinyCloudLabs/js-sdk" },
       pull_request: { number: 474, head: { sha: "a".repeat(40), ref: "feat/tc-893-harness-s3b" }, base: { sha: "b".repeat(40), ref: "master" } },
     };
     await writeFile(eventFile, JSON.stringify(event));
+    await writeJunitFixtures(junitDir);
     const env = {
       TC893_RUNTIME_MODULE: runtimeModule,
       GITHUB_EVENT_NAME: "pull_request",
@@ -41,7 +60,7 @@ describe("executable gate CLI adapters", () => {
     };
     const dispatchInputs = JSON.stringify({ gate: "tc858-phase1-workspace", clients: "workspace", set: "phase1-companion", tier: "core", backends: '["sqlite","pg16"]' });
 
-    const resolved = command(["resolve", "--event-file", eventFile, "--dispatch-inputs", dispatchInputs, "--out", inputDir], env);
+    const resolved = command(["resolve", "--event-file", eventFile, "--dispatch-inputs", dispatchInputs, "--junit-dir", junitDir, "--out", inputDir], env);
     expect(resolved.exitCode).toBe(0);
     const matrix = JSON.parse(resolved.stdout?.toString() ?? "") as { include: { name: string; backend: string; set: string | null }[] };
     expect(matrix.include.map(({ name }) => name)).toEqual(["core-sqlite", "core-pg16", "companion-sqlite"]);
@@ -65,6 +84,12 @@ describe("executable gate CLI adapters", () => {
       expect(report.image.role).toBe("prod");
       expect(report.inputsSha256).toBe(JSON.parse(await readFile(join(inputDir, "inputs.json"), "utf8")).inputsSha256);
       expect(await readFile(join(legResults, "report.md"), "utf8")).toContain(event.pull_request.head.sha);
+      for (const row of report.results) {
+        const resultArtifact = row.artefacts.find((file: { path: string }) => file.path === "result.json");
+        expect(resultArtifact).toBeDefined();
+        const resultBytes = await readFile(join(legResults, row.artefactDir, "result.json"));
+        expect(resultArtifact.sha256).toBe(createHash("sha256").update(resultBytes).digest("hex"));
+      }
     }
 
     const aggregated = command(["aggregate", "--inputs", join(inputDir, "inputs.json"), "--legs", legsDir, "--leg-core-conclusion", "success", "--leg-companion-conclusion", "success", "--out", aggregateDir], env);

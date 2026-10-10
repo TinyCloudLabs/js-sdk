@@ -37,9 +37,16 @@ export interface SdkClientOptions {
   auth?: "restore" | "fresh-sign-in" | "session-only"; delegation?: unknown; hosts?: string[]; hostAliases?: Record<string, string>;
 }
 interface Pending { resolve(value: unknown): void; reject(error: Error): void; timer?: ReturnType<typeof setTimeout>; op: RpcOp }
-function assertSdkOptions(options: OpOptions): void {
+function assertSdkCallOptions(options: Pick<OpOptions, "fault" | "flag" | "debug">): void {
   if (options.fault !== undefined) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK client does not support fetch faults");
-  if (options.replication !== undefined || options.flag !== undefined || options.debug !== undefined) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK replication is configured per client, not per operation");
+  if (options.flag !== undefined || options.debug !== undefined) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK client does not support per-operation flag or debug overrides");
+}
+function assertSdkOptions(options: OpOptions): void {
+  assertSdkCallOptions(options);
+  if (options.replication !== undefined) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK replication is configured per client, not per operation");
+}
+function assertSdkRestartOptions(options: Omit<OpOptions, "replication">): void {
+  assertSdkCallOptions(options);
 }
 function sdkRpcValueProblem(op: RpcOp, value: unknown): string | undefined {
   if (op === "replication.status") return Array.isArray(value) ? undefined : "SDK driver returned a malformed replication.status result";
@@ -477,16 +484,24 @@ export class SdkClientImpl implements SdkClient {
       grantExpiresAt: delegate ? toMillis(delegation.expiresAt ?? delegation.expiry ?? delegation.expiration) : null,
     };
   }
-  async restart(options: { auth?: "restore" | "fresh-sign-in"; replication?: ReplicationSpec | false } & OpOptions = {}): Promise<void> {
-    assertSdkOptions(options);
+  async restart(options: { auth?: "restore" | "fresh-sign-in"; replication?: Partial<ReplicationSpec> | false } & Omit<OpOptions, "replication"> = {}): Promise<void> {
+    assertSdkRestartOptions(options);
     if (options.signal?.aborted) throw new HarnessError("ABORTED", "SDK restart was aborted", options.signal.reason);
     if (options.auth === "fresh-sign-in" && !this.options.privateKeyHex && this.options.delegation === undefined) {
       throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK delegate fresh sign-in requires the original ClientSpec delegation");
     }
+    let nextReplication: SdkClientOptions["replication"] | undefined;
+    if (options.replication === false) nextReplication = false;
+    else if (options.replication) {
+      const current = this.options.replication || undefined;
+      const prefixes = options.replication.prefixes ?? current?.prefixes;
+      if (!prefixes) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "SDK restart replication requires prefixes or an existing replication configuration");
+      nextReplication = { ...current, ...options.replication, prefixes, storageDir: this.options.storageDir };
+    }
     await this.stopProcess(options.deadlineMs ?? 5_000, options.signal);
     if (options.signal?.aborted) throw new HarnessError("ABORTED", "SDK restart was aborted", options.signal.reason);
     if (options.replication !== undefined) {
-      this.options.replication = options.replication ? { ...options.replication, storageDir: this.options.storageDir } : false;
+      this.options.replication = nextReplication;
       this.initArgs = undefined;
     }
     this.failure = undefined;

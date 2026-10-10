@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
-import { scenarioRegistry, validateRegistry } from "../src/runner/registry";
+import { scenarioRegistry, validateRegistry, registerScenarios } from "../src/runner/registry";
+import { coreScenarios } from "../src/scenarios/core";
+import { runHarnessCommand } from "../src/runner/run-command";
 import { dockerDoctor, gc } from "../src/topology/gc";
 import { realClock } from "../src/contracts/clock";
 import type { RunEnvironment } from "../src/contracts/lifecycle";
@@ -10,6 +12,7 @@ import { runGateLocally, type LocalGateHooks } from "../src/gate/local-run";
 import { aggregateCommand, createGateHooks, manifestCommand, resolveCommand, runLegCommand, verifyAggregateCommandFile } from "./gate-adapters";
 
 export { exactSemver };
+registerScenarios(...coreScenarios);
 export const commands = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"] as const;
 export type Command = typeof commands[number];
 export interface ParsedArgs { command: Command; positionals: string[]; options: Record<string, string | true> }
@@ -143,9 +146,10 @@ export async function runCommand(args: string[]): Promise<void> {
       return;
     }
     if (parsed.options.inputs !== undefined) return runLegCommand(parsed);
-    if (handlers.run) return handlers.run(parsed);
-    if (runHandler) return runHandler(parsed);
-    throw new Error("run requires the S3a runner hook or --inputs/--leg");
+    if (handlers.run) await handlers.run(parsed);
+    else if (runHandler) await runHandler(parsed);
+    else await runHarnessCommand(parsed);
+    return;
   }
 }
 function parseDuration(value: string): number {

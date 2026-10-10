@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJunitPrecondition } from "../../src/gate/junit";
 import { configureGateRuntime } from "../../bin/gate-adapters";
-import { registerScenarios } from "../../src/runner/registry";
+import { registerScenarios, scenarioRegistry } from "../../src/runner/registry";
 import type { Scenario } from "../../src/contracts/scenario";
 import type { RunEnvironment, Topology, TopologyFactory } from "../../src/contracts/lifecycle";
 import { realClock } from "../../src/contracts/clock";
@@ -14,6 +15,7 @@ async function fixturePreflight(ctx: Parameters<Scenario["run"]>[0]): Promise<vo
   process.kill(process.pid, "SIGINT");
   await ctx.clock.sleep(1000, ctx.signal);
 }
+scenarioRegistry.splice(0, scenarioRegistry.length);
 registerScenarios(
   { id: "CORE-00", title: "Fixture preflight", tier: "core", timeoutMs: 10_000, topology: emptyTopology, run: fixturePreflight },
   { id: "EDGE-12", title: "Fixture companion", tier: "edge", sets: ["phase1-companion"], backends: ["sqlite"], timeoutMs: 10_000, topology: emptyTopology, run: async () => {} },
@@ -65,13 +67,16 @@ export function registerGateRuntime(configure: typeof configureGateRuntime): voi
       image: () => inputs.image, slackMs: 0, teardownMs: 100,
     }),
     fetchInfo: async () => ({ version: "1.20.0", features: ["replication-v1"] }),
-    junitPrecondition: async (subject) => {
+    junitPrecondition: async (subject, directory) => {
+      if (directory) return readJunitPrecondition(directory, subject);
       if (subject.event === "pull_request") return {
         schema: "tc893.junit-precondition/v1", minimumsVersion: 1, testedSha: subject.headSha!,
         association: { prNumber: subject.prNumber!, headSha: subject.headSha!, baseSha: subject.baseSha! },
         suites: [
           { name: "cli-acceptance-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "cli-acceptance-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "node-sdk-real-node-sqlite", present: true, exitCode: 0, skipped: 0, tests: 10 },
           { name: "node-sdk-real-node-pg16", present: true, exitCode: 0, skipped: 0, tests: 10 },
         ],
@@ -82,6 +87,8 @@ export function registerGateRuntime(configure: typeof configureGateRuntime): voi
         suites: [
           { name: "cli-acceptance-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "cli-acceptance-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "node-sdk-real-node-sqlite", present: true, exitCode: 0, skipped: 0, tests: 10 },
           { name: "node-sdk-real-node-pg16", present: true, exitCode: 0, skipped: 0, tests: 10 },
         ],

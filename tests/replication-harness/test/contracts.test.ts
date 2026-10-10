@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { exactSemver, parseArgs, type Command } from "../bin/harness";
 import { HarnessError } from "../src/contracts/common";
 import { realClock, waitFor } from "../src/contracts/clock";
@@ -154,12 +156,24 @@ describe("serialized contracts", () => {
     expect(validAggregate.companion[0].passed).toBe(false);
   });
 
-  test("CLI accepts every declared subcommand and parses verify options", () => {
+  test("CLI parses every declared subcommand", () => {
     const expected = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"];
     for (const command of expected as Command[]) expect(parseArgs([command]).command).toBe(command);
     expect(parseArgs(["gc", "--older-than", "2h"])).toEqual({ command: "gc", positionals: [], options: { "older-than": "2h" } });
     expect(parseArgs(["verify-aggregate", "aggregate.json", "--gate", "tc858-phase1-beta", "--print", "cli.version"]))
       .toEqual({ command: "verify-aggregate", positionals: ["aggregate.json"], options: { gate: "tc858-phase1-beta", print: "cli.version" } });
+  });
+
+  test("CLI fails non-zero when the injected runtime cannot load", () => {
+    const runtimePath = join(tmpdir(), "tc893-runtime-missing.ts");
+    const result = Bun.spawnSync(["bun", "bin/harness.ts", "resolve", "--event-file", join(tmpdir(), "tc893-missing-event.json"), "--out", join(tmpdir(), "tc893-runtime-output")], {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: { ...process.env, TC893_RUNTIME_MODULE: runtimePath },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(`${result.stdout.toString()}${result.stderr.toString()}`).toContain(runtimePath);
   });
 
   test("CLI list executes successfully", () => {

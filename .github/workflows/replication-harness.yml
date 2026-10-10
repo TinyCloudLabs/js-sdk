@@ -52,6 +52,7 @@ on:
 permissions:
   contents: read
   packages: read
+  actions: read
 
 concurrency:
   group: "tc893-${{ (github.event.action == 'labeled' && github.event.label.name != 'replication') && github.run_id || github.event.pull_request.number || github.run_id }}"
@@ -78,6 +79,8 @@ jobs:
       has-companion: ${{ steps.split.outputs.has-companion }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -113,14 +116,32 @@ jobs:
           bun run --cwd packages/replica build
           bun run --cwd packages/cli build
 
+      - name: Download TC-858 JUnit evidence for the subject SHA
+        if: github.event_name == 'pull_request' || inputs.gate == 'tc858-phase1-workspace'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          RUN_ID="$(gh run list --workflow replica-e2e.yml --commit "$SUBJECT_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -z "$RUN_ID" ]; then
+            echo "no successful replica-e2e run for $SUBJECT_SHA" >&2
+            exit 1
+          fi
+          gh run download "$RUN_ID" --name tc858-junit-sqlite --dir "$RUNNER_TEMP/tc893/junit/tc858-junit-sqlite"
+          gh run download "$RUN_ID" --name tc858-junit-pg16 --dir "$RUNNER_TEMP/tc893/junit/tc858-junit-pg16"
       - name: Resolve inputs and matrix
         id: r
         env:
           DISPATCH_INPUTS: ${{ github.event_name == 'workflow_dispatch' && toJSON(github.event.inputs) || '{}' }}
-        run: >
-          bun run --cwd tests/replication-harness harness resolve
-          --event-file "$GITHUB_EVENT_PATH" --dispatch-inputs "$DISPATCH_INPUTS"
-          --out "$RUNNER_TEMP/tc893/in"
+          INPUTS_GATE: ${{ inputs.gate }}
+        run: |
+          JUNIT_ARGS=()
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" || "$INPUTS_GATE" == "tc858-phase1-workspace" ]]; then
+            JUNIT_ARGS=(--junit-dir "$RUNNER_TEMP/tc893/junit")
+          fi
+          bun run --cwd tests/replication-harness harness resolve \
+            --event-file "$GITHUB_EVENT_PATH" --dispatch-inputs "$DISPATCH_INPUTS" "${JUNIT_ARGS[@]}" \
+            --out "$RUNNER_TEMP/tc893/in"
 
       - name: Split the matrix into core and companion legs
         id: split
@@ -149,6 +170,8 @@ jobs:
       matrix: ${{ fromJSON(needs.resolve.outputs.core-matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -158,8 +181,31 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
+
+      - name: Build the workspace SUT
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/replica build
+          bun run --cwd packages/cli build
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -205,6 +251,8 @@ jobs:
       matrix: ${{ fromJSON(needs.resolve.outputs.companion-matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -214,8 +262,31 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
+
+      - name: Build the workspace SUT
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/replica build
+          bun run --cwd packages/cli build
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -258,6 +329,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:

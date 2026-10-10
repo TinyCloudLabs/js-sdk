@@ -66,6 +66,8 @@ export function validateJunitPrecondition(evidence: JunitPrecondition | null | u
   const minimums: Record<string, number> = {
     "cli-acceptance-sqlite": 1,
     "cli-acceptance-pg16": 1,
+    "cli-replica-sqlite": 1,
+    "cli-replica-pg16": 1,
     "node-sdk-real-node-sqlite": 10,
     "node-sdk-real-node-pg16": 10,
   };
@@ -83,8 +85,9 @@ export function validateJunitPrecondition(evidence: JunitPrecondition | null | u
 async function preflight(sut: RunInputs["sut"]): Promise<RunInputs["preflight"]> {
   let hasSqliteReplicaStorage = false;
   try {
-    // The entry is selected by the resolved SUT (not known at build time), so runtime import is required for preflight.
-    const resolvedModule = await import(pathToFileURL(sut.nodeSdk.entry).href);
+    // S2 resolves SDK entries as file URLs; preserve those URLs and convert plain paths.
+    const entry = sut.nodeSdk.entry.startsWith("file:") ? sut.nodeSdk.entry : pathToFileURL(sut.nodeSdk.entry).href;
+    const resolvedModule = await import(entry);
     hasSqliteReplicaStorage = typeof resolvedModule.sqliteReplicaStorage === "function";
   } catch (error) {
     return { passed: false, checks: [{ name: "sqliteReplicaStorage", ok: false, detail: String(error) }] };
