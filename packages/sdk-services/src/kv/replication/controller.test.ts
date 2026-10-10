@@ -13,8 +13,8 @@ const identity = canonicalReplicationIdentity({ host: "https://node.example", sp
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, afterPendingRead, statusImpl }: {
-  durable?: boolean;
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl }: {
+  pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
   statusOverrides?: Partial<LocalReplicaStatus>;
@@ -28,7 +28,8 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
   sessionOnly?: boolean;
   sessionRefused?: boolean;
   setTimeoutImpl?: (fn: () => void, ms: number) => () => void;
-  afterPendingRead?: () => void;
+  beforePendingRead?: () => void | Promise<void>;
+  afterPendingRead?: () => void | Promise<void>;
   statusImpl?: (call: number) => Promise<LocalReplicaStatus> | LocalReplicaStatus;
 } = {}) {
   let now = 1_000_000;
@@ -41,11 +42,14 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
   let networkCalls = 0;
   const events: ReplicationEvent[] = [];
   const memory = createMemoryPendingStore(identity);
-  const pending = durable ? ({ ...memory, durable: true } as PendingWriteStore) : memory;
+  const pending = pendingStore ?? (durable ? ({ ...memory, durable: true } as PendingWriteStore) : memory);
   const pendingRead = pending.read.bind(pending);
+  let pendingReads = 0;
   pending.read = async () => {
+    pendingReads++;
+    await beforePendingRead?.();
     const snapshot = await pendingRead();
-    afterPendingRead?.();
+    await afterPendingRead?.();
     return snapshot;
   };
   const handle = {
@@ -809,6 +813,68 @@ describe("A2 lifecycle review regressions", () => {
     expect(env.counters().networkCalls).toBe(1);
     expect(env.events.some((event) => event.type === "replication.read" && event.reason === "REPLICA_BEHIND_OWN_WRITES")).toBe(true);
   });
+  test("first-page LIST fences a committed write cleared by a peer controller", async () => {
+    for (const mode of ["foreground", "background"] as const) {
+      const shared = createMemoryPendingStore(identity);
+      const pendingStore = () => ({ ...shared, durable: true } as PendingWriteStore);
+      const env = setup({ mode, syncOutcome: "network_error", pendingStore: pendingStore() });
+      const peer = setup({ pendingStore: pendingStore() });
+      const write = await peer.controller.write({
+        op: "put",
+        space: identity.space,
+        entries: [{ path: "notes/a", body: "peer value" }],
+        signal: new AbortController().signal,
+        network: async () => ok({}),
+      });
+      expect(write.ok).toBe(true);
+      await peer.controller.sync();
+      expect((await env.pending.read()).records).toHaveLength(0);
+      env.setNow(1_200_001);
+      let networkCalls = 0;
+      const result = await env.controller.list({
+        ...listRequest(undefined, async () => {
+          networkCalls++;
+          return ok({ keys: ["notes/server"], truncated: false });
+        }),
+      });
+      expect(result.ok && result.data.keys).toEqual(["notes/server"]);
+      expect(env.listReads()).toBe(0);
+      expect(networkCalls).toBe(1);
+      expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+        type: "replication.read", source: "network", reason: "REPLICA_BEHIND_OWN_WRITES",
+      });
+    }
+  });
+
+  test("first-page LIST rechecks committed epoch after pending-store read", async () => {
+    for (const mode of ["foreground", "background"] as const) {
+      let pendingReads = 0;
+      let pending!: PendingWriteStore;
+      const env = setup({
+        mode,
+        afterPendingRead: async () => {
+          pendingReads++;
+          if (pendingReads === 2) await pending.update((state) => { state.committedEpoch = 1; });
+        },
+      });
+      pending = env.pending;
+      let networkCalls = 0;
+      const result = await env.controller.list({
+        ...listRequest(undefined, async () => {
+          networkCalls++;
+          return ok({ keys: ["notes/server"], truncated: false });
+        }),
+      });
+      expect(result.ok && result.data.keys).toEqual(["notes/server"]);
+      expect(env.listReads()).toBe(0);
+      expect(networkCalls).toBe(1);
+      expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+        type: "replication.read", source: "network", reason: "REPLICA_BEHIND_OWN_WRITES",
+      });
+    }
+  });
+
+
 
 
 

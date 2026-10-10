@@ -538,6 +538,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const pendingRange = state.records.find((record) => kvPrefixCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
     const behind = fresh.status.syncedThroughEpoch < state.committedEpoch;
     if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid" || (!pending.durable && !inProcessProof.has(prefix)))) return restart();
+    if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
     if (fresh.failure) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "stale", result.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError }); return result; }
     if (pendingRange) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "pending_write", result.ok ? "found" : "error", started, { pendingState: pendingRange.state }); return result; }
     if (!pending.durable && !inProcessProof.has(prefix)) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_UNPROVEN_SINCE_START", result.ok ? "found" : "error", started); return result; }
