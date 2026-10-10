@@ -13,7 +13,7 @@ const identity = canonicalReplicationIdentity({ host: "https://node.example", sp
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined }: {
+function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, afterPendingRead, statusImpl }: {
   durable?: boolean;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -28,6 +28,8 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
   sessionOnly?: boolean;
   sessionRefused?: boolean;
   setTimeoutImpl?: (fn: () => void, ms: number) => () => void;
+  afterPendingRead?: () => void;
+  statusImpl?: (call: number) => Promise<LocalReplicaStatus> | LocalReplicaStatus;
 } = {}) {
   let now = 1_000_000;
   let listReads = 0;
@@ -35,10 +37,17 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
   let localReads = 0;
   let syncs = 0;
   let opens = 0;
+  let statusCalls = 0;
   let networkCalls = 0;
   const events: ReplicationEvent[] = [];
   const memory = createMemoryPendingStore(identity);
   const pending = durable ? ({ ...memory, durable: true } as PendingWriteStore) : memory;
+  const pendingRead = pending.read.bind(pending);
+  pending.read = async () => {
+    const snapshot = await pendingRead();
+    afterPendingRead?.();
+    return snapshot;
+  };
   const handle = {
     spec: { identity, space: identity.space, prefix: "notes", allowSecrets: false }, deviceDid: identity.principal,
     async get(key: string) {
@@ -48,7 +57,7 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
       if (localGetStatus !== "present") return { status: localGetStatus, key, meta };
       return { status: "present" as const, key, value: new TextEncoder().encode('"local"'), etag: '"blake3-local"', metadata: { "content-type": "application/json" }, meta };
     },
-    async list() { listReads++; return { keys: ["notes/a"], meta: { asOf: new Date(now).toISOString(), coverage: "complete" as const, authority: "valid" as const, syncedThroughEpoch: localStatus.syncedThroughEpoch } }; },
+    async list() { listReads++; return { keys: ["notes/a"], meta: { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch } }; },
     async grant() { return localStatus.grant; }, async installGrant() { return localStatus.grant!; },
     async sync({ signal, syncStartEpoch }: { signal: AbortSignal; syncStartEpoch: number }) {
       syncs++;
@@ -58,7 +67,7 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
       localStatus = { ...localStatus, syncedThroughEpoch: syncStartEpoch, lastSyncAt: new Date(now).toISOString() };
       return { status: "synced" as const, pages: 1, changes: 1, deleted: 0, fetched: 1, contentMissing: 0, coverage: "complete" as const, syncedThroughEpoch: syncStartEpoch };
     },
-    async status() { return localStatus; }, async close() {},
+    async status() { statusCalls++; return statusImpl ? statusImpl(statusCalls) : localStatus; }, async close() {},
   } as unknown as KVReplicaHandle;
   const storage: KVReplicaStorage = { kind: "sqlite", async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; }, async purge(target) { await purgeImpl?.(target); }, pendingWrites() { return pending; } };
   const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime", parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" }); }, async mint(_deviceDid, _prefix, signal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
@@ -444,6 +453,134 @@ describe("A2 lifecycle review regressions", () => {
     await unavailable.controller.get(readRequest(unavailable.network));
     expect(unavailable.counters().opens).toBe(2);
     expect(unavailable.events.filter((event) => event.type === "replication.read").at(-1)).toMatchObject({ reason: "replica_unavailable", code: "STORAGE_ERROR" });
+  });
+  test("read-time coverage metadata refuses GET, LIST, and tcr1 continuation after a pending-store interleaving", async () => {
+    for (const coverage of ["empty", "bootstrapping"] as const) {
+      for (const op of ["get", "list", "cursor"] as const) {
+        let changed = false;
+        let pendingReads = 0;
+        let networkCalls = 0;
+        const env = setup({
+          afterPendingRead: () => {
+            pendingReads++;
+            if (pendingReads !== 2) return;
+            changed = true;
+            env.setStatus({ ...status(), coverage });
+          },
+        });
+        const result = op === "get"
+          ? await env.controller.get(readRequest(env.network))
+          : await env.controller.list({
+            space: identity.space,
+            listPath: "notes",
+            options: op === "cursor" ? { cursor: encodeTcr1(identity.space, "notes", "notes/a") } : undefined,
+            signal: new AbortController().signal,
+            network: async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); },
+          });
+        expect(changed).toBe(true);
+        if (op === "cursor") {
+          expect(result.ok).toBe(false);
+          expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
+          expect(networkCalls).toBe(0);
+        } else {
+          expect(result.ok && (op === "get" ? result.data.data : result.data.keys[0])).toBe(op === "get" ? "network" : "notes/server");
+          expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(1);
+          if (op === "get") expect(env.counters().networkCalls).toBe(1);
+          else expect(networkCalls).toBe(1);
+        }
+      }
+    }
+  });
+  test("read-time authority metadata refuses local GET and LIST", async () => {
+    for (const op of ["get", "list"] as const) {
+      let pendingReads = 0;
+      let networkCalls = 0;
+      const env = setup({
+        afterPendingRead: () => {
+          pendingReads++;
+          if (pendingReads !== 2) return;
+          env.setStatus({ ...status(), authority: { state: "expired", expiresAt: null } });
+        },
+      });
+      const result = op === "get"
+        ? await env.controller.get(readRequest(env.network))
+        : await env.controller.list({ ...listRequest(undefined, async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); }) });
+      expect(result.ok).toBe(true);
+      expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(1);
+      expect(op === "get" ? env.counters().networkCalls : networkCalls).toBe(1);
+    }
+  });
+  test("post-drain status failures are bounded admission failures and preserve caller deadlines", async () => {
+    for (const op of ["get", "list"] as const) {
+      for (const failure of ["throw", "hang"] as const) {
+        for (const callerTimeout of [false, true]) {
+          const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+          let syncStarted!: () => void;
+          const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+          let statusRefreshStarted!: () => void;
+          const statusStarted = new Promise<void>((resolve) => { statusRefreshStarted = resolve; });
+          let rejectStatusRefresh: (() => void) | undefined;
+          let networkCalls = 0;
+          const env = setup({
+            onSync: (_epoch, signal) => {
+              syncStarted();
+              return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+            },
+            statusImpl: (call) => {
+              if (call === 1) return status();
+              statusRefreshStarted();
+              if (failure === "throw") return new Promise<LocalReplicaStatus>((_resolve, reject) => {
+                rejectStatusRefresh = () => reject(Object.assign(new Error("status unavailable"), { code: "STATUS_FAILURE" }));
+              });
+              return new Promise<LocalReplicaStatus>(() => {});
+            },
+            setTimeoutImpl: (fn, ms) => {
+              const timer = { fn, ms, cancelled: false };
+              timers.push(timer);
+              return () => { timer.cancelled = true; };
+            },
+          });
+          env.setNow(1_200_001);
+          const requestAbort = new AbortController();
+          const request = op === "get"
+            ? env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal })
+            : env.controller.list({
+              space: identity.space,
+              listPath: "notes",
+              options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+              signal: requestAbort.signal,
+              network: async () => { networkCalls++; return ok({ keys: ["network/a"], truncated: false }); },
+            });
+          await started;
+          const staleTimer = timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled);
+          expect(timers.map((timer) => timer.ms)).toContain(options.staleSyncTimeoutMs);
+          staleTimer!.fn();
+          await statusStarted;
+          if (callerTimeout) {
+            requestAbort.abort(new RequestTimeoutError(20));
+            rejectStatusRefresh?.();
+          } else if (failure === "hang") timers.find((timer) => timer.ms === 3_000 && !timer.cancelled)!.fn();
+          else rejectStatusRefresh?.();
+          const result = await request;
+          if (callerTimeout) {
+            expect(result.ok).toBe(false);
+            expect(!result.ok && result.error.code).toBe("TIMEOUT");
+            expect(networkCalls).toBe(0);
+            expect(env.counters().localReads).toBe(0);
+          } else if (op === "list") {
+            expect(result.ok).toBe(false);
+            expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
+            expect(networkCalls).toBe(0);
+          } else {
+            expect(result.ok && result.data.data).toBe("network");
+            expect(env.counters().networkCalls).toBe(1);
+            expect(env.counters().localReads).toBe(0);
+            expect(env.events.findLast((event) => event.type === "replication.read" && event.source === "network")).toMatchObject({ code: failure === "throw" ? "STATUS_FAILURE" : "STATUS_TIMEOUT" });
+          }
+          expect(timers.every((timer) => timer.cancelled)).toBe(true);
+        }
+      }
+    }
   });
   test("stale sync timeout drains the abort and serves offline get and list", async () => {
     for (const op of ["get", "list"] as const) {

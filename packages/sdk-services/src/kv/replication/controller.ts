@@ -7,9 +7,10 @@ import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, pin
 import { localGet, type LocalGetResponse } from "./localResponse";
 import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
-import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 
 const CLOSE_TIMEOUT_MS = 3_000;
+const STATUS_REFRESH_TIMEOUT_MS = CLOSE_TIMEOUT_MS;
 type SyncAbortCause = "timeout" | "caller" | "close" | "purge";
 interface SyncContext { abortCause?: SyncAbortCause }
 interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; syncContext?: SyncContext; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean }
@@ -179,6 +180,32 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return drained;
     } finally { cancel(); }
   }
+  function validateReadMeta(meta: LocalReadMeta): void {
+    if (meta.coverage !== "complete") throw Object.assign(new Error("Replica coverage changed before the local read"), { code: "COVERAGE_INCOMPLETE" });
+    if (meta.authority !== "valid") {
+      const code = meta.authority === "expired" ? "GRANT_EXPIRED" : meta.authority === "revoked" ? "GRANT_REVOKED" : "GRANT_NOT_YET_VALID";
+      throw Object.assign(new Error("Replica authority changed before the local read"), { code });
+    }
+  }
+  function reasonForReadMetaCode(code: string): ReplicationReason {
+    if (code === "COVERAGE_INCOMPLETE") return "coverage_incomplete";
+    if (code === "GRANT_EXPIRED") return "grant_expired";
+    if (code === "GRANT_REVOKED") return "grant_revoked";
+    if (code === "GRANT_NOT_YET_VALID") return "grant_not_yet_valid";
+    return "replica_error";
+  }
+  async function statusAfterDrain(handle: KVReplicaHandle, signal: AbortSignal): Promise<LocalReplicaStatus> {
+    let cancel = () => {};
+    const timeout = new Promise<never>((_resolve, reject) => {
+      cancel = scheduler.setTimeout(
+        () => reject(Object.assign(new Error("Replica status refresh timed out"), { code: "STATUS_TIMEOUT" })),
+        STATUS_REFRESH_TIMEOUT_MS,
+      );
+    });
+    try {
+      return await raceSignal(Promise.race([handle.status(), timeout]), signal);
+    } finally { cancel(); }
+  }
   function staleSyncOutcome(outcome: { result: LocalSyncResult } | { error: unknown }, timedOut: boolean, currentStatus: LocalReplicaStatus): { status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" } {
     if ("error" in outcome) {
       const code = errorCode(outcome.error);
@@ -244,7 +271,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         const drained = syncController ? await drainForegroundSync(prefix, sync) : undefined;
         if (signal.aborted) return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
         if (drained && !drained.settled) return { status: currentStatus, syncedBeforeRead: false, syncError: "DRAIN_TIMEOUT", failure: "error" };
-        currentStatus = await handle.status();
+        try { currentStatus = await statusAfterDrain(handle, signal); }
+        catch (error) {
+          if (signal.aborted) return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal), failure: "error" };
+          return { status: currentStatus, syncedBeforeRead: false, syncError: errorCode(error), failure: "error" };
+        }
         const timeoutAbort = syncContext.abortCause === "timeout";
         return staleSyncOutcome(
           drained?.settled ? ("result" in drained ? { result: drained.result } : { error: drained.error }) : { error: Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }) },
@@ -420,6 +451,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (fresh.status.coverage !== "complete") { const value = await r.network(); readEvent("get", r.path, prefix, "network", "coverage_incomplete", value.ok ? "found" : "error", started); return value; }
     try {
       const local = await raceSignal(handle.get(r.path), r.signal);
+      try { validateReadMeta(local.meta); }
+      catch (error) {
+        const code = errorCode(error);
+        const value = await r.network();
+        readEvent("get", r.path, prefix, "network", reasonForReadMetaCode(code), value.ok ? "found" : "error", started, { code });
+        return value;
+      }
       if (local.status === "coverage_incomplete" || local.status === "not_covered" || local.status === "content_missing") { const value = await r.network(); readEvent("get", r.path, prefix, "network", local.status === "content_missing" ? "content_missing" : local.status === "coverage_incomplete" ? "coverage_incomplete" : "not_covered", value.ok ? "found" : "error", started); return value; }
       if (local.status === "present" && r.options?.maxResponseBytes !== undefined && local.value.byteLength > r.options.maxResponseBytes) {
         const value = await r.network();
@@ -503,11 +541,10 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (fresh.failure) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "stale", result.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError }); return result; }
     if (pendingRange) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "pending_write", result.ok ? "found" : "error", started, { pendingState: pendingRange.state }); return result; }
     if (!pending.durable && !inProcessProof.has(prefix)) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_UNPROVEN_SINCE_START", result.ok ? "found" : "error", started); return result; }
-    if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
-    if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "coverage_incomplete", result.ok ? "found" : "error", started); return result; }
+    if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", fresh.status.coverage !== "complete" ? "coverage_incomplete" : fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid", result.ok ? "found" : "error", started); return result; }
     try {
       const signalHandle = { list: (o: { prefix: string; after?: string; limit?: number }) => raceSignal(handle.list(o), r.signal) };
-      const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor), r.signal);
+      const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta), r.signal);
       const event = {
         count: page.keys.length,
         syncedBeforeRead: fresh.syncedBeforeRead,
@@ -519,9 +556,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return ok(page);
     } catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
+      const code = errorCode(error);
       if (cursor && decoded) return restart();
+      const reason = reasonForReadMetaCode(code);
       const result = await r.network();
-      readEvent("list", r.listPath, prefix, "network", "replica_error", result.ok ? "found" : "error", started, { code: errorCode(error) });
+      readEvent("list", r.listPath, prefix, "network", reason, result.ok ? "found" : "error", started, { code });
       return result;
     }
   }
