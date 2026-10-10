@@ -127,18 +127,18 @@ jobs:
           set -euo pipefail
           deadline=$(( $(date +%s) + TC893_JUNIT_WAIT_MINUTES * 60 ))
           while true; do
-            runs="$(gh run list --workflow replica-e2e.yml --commit "$SUBJECT_SHA" --limit 20 --json databaseId,status,conclusion,createdAt)"
-            RUN_ID="$(jq -r 'map(select(.conclusion == "success")) | .[0].databaseId // empty' <<<"$runs")"
-            if [ -n "$RUN_ID" ]; then
-              break
-            fi
+            runs="$(gh run list --workflow replica-e2e.yml --commit "$SUBJECT_SHA" --limit 20 --json databaseId,status,conclusion,updatedAt)"
             pending="$(jq -r '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' <<<"$runs")"
             if [ "$pending" -eq 0 ]; then
-              latest="$(jq -r '.[0] // empty | "\(.databaseId) concluded \(.conclusion)"' <<<"$runs")"
+              RUN_ID="$(jq -r 'sort_by(.updatedAt) | last // empty | select(.conclusion == "success") | .databaseId' <<<"$runs")"
+              if [ -n "$RUN_ID" ]; then
+                break
+              fi
+              latest="$(jq -r 'sort_by(.updatedAt) | last // empty | "\(.databaseId) concluded \(.conclusion)"' <<<"$runs")"
               if [ -n "$latest" ]; then
-                echo "replica-e2e run $latest for $SUBJECT_SHA" >&2
+                echo "newest completed replica-e2e run $latest for $SUBJECT_SHA" >&2
               else
-                echo "no successful replica-e2e run for $SUBJECT_SHA" >&2
+                echo "no replica-e2e run for $SUBJECT_SHA" >&2
               fi
               exit 1
             fi
