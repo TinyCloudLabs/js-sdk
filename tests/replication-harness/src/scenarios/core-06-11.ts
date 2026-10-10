@@ -194,12 +194,17 @@ const core09: Scenario<Variant> = {
       const profile = join(readerCli.home(), ".tinycloud", "profiles", readerCli.profile());
       const legacyDir = join(profile, "replicas", "legacy");
       const replicaRoot = readerCli.replicaDir();
-      let sourceStore: string | undefined;
-      for (const entry of await readdir(replicaRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const candidate = join(replicaRoot, entry.name);
-        try { await access(join(candidate, "replica.db")); sourceStore = candidate; break; } catch { /* try the next replica partition */ }
-      }
+      const findReplicaStore = async (directory: string): Promise<string | undefined> => {
+        try { await access(join(directory, "replica.db")); return directory; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        for (const entry of await readdir(directory, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const found = await findReplicaStore(join(directory, entry.name));
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const sourceStore = await findReplicaStore(replicaRoot);
       if (!sourceStore) throw new Error("warm reader has no initialized replica store to seed the legacy path");
       await mkdir(join(profile, "replicas"), { recursive: true });
       await cp(sourceStore, legacyDir, { recursive: true });
