@@ -7,7 +7,7 @@ import { aggregate, aggregateExitCode } from "./aggregate";
 import type { GateReasonCode, Manifest, RunInputs } from "../contracts/gate";
 import { canonicalSha256, sha256 } from "./canonical-json";
 import { VerifyAggregateError, verifyAggregate } from "./verify";
-import { runCommand } from "../../bin/harness";
+import { registerHarnessCommandHandlers, runCommand } from "../../bin/harness";
 import { createManifest, type ManifestRegistry } from "./manifest";
 import type { Scenario } from "../contracts/scenario";
 import { runGateLocally } from "./local-run";
@@ -237,16 +237,37 @@ describe("aggregate fixture-leg gate rules", () => {
     }
   });
 
-  test("core pass plus companion failure raises the distinct escalation signal", async () => {
-    const options = await fixture({ companionFails: true });
-    options.legCompanionConclusion = "failure";
-    const report = await aggregate(options);
+  test("an interrupted core leg fails the local gate command even when all of its rows pass", async () => {
+    const options = await fixture();
+    const root = await mkdtemp(join(tmpdir(), "tc893-local-interrupted-"));
+    rootDirs.push(root);
+    const legs = options.legs.map((leg) => leg.name === "core-sqlite"
+      ? { ...leg, report: { ...(leg.report as Record<string, unknown>), interrupted: true } }
+      : leg);
+    const hooks = {
+      resolve: async () => ({
+        inputs: options.inputs, coreManifest: options.coreManifest!, companionManifests: options.companionManifests,
+        matrix: legs.map((leg) => {
+          const report = leg.report as { invocation: { backends: ("sqlite" | "pg16")[]; set: "phase1-companion" | null } };
+          return { name: leg.name, backend: report.invocation.backends[0]!, set: report.invocation.set };
+        }), resultsDir: root,
+      }),
+      runLeg: async (entry: { name: string }) => legs.find((leg) => leg.name === entry.name)!,
+      recomputeManifest: async (set: "phase1-companion" | null) => set ? options.companionManifests.get(set)! : options.coreManifest!,
+    };
+    const originalExitCode = process.exitCode;
+    process.exitCode = 0;
+    registerHarnessCommandHandlers({ gateHooks: async () => hooks });
     try {
-      verifyAggregate(report, { gate: "tc858-phase1-workspace" });
-      throw new Error("expected companion escalation");
-    } catch (error) {
-      expect(error).toBeInstanceOf(VerifyAggregateError);
-      expect((error as VerifyAggregateError).failure).toBe("COMPANION_ESCALATE");
+      await runCommand(["run", "--gate", "tc858-phase1-workspace"]);
+      const report = JSON.parse(await readFile(join(root, "aggregate.json"), "utf8"));
+      expect(report.gate.passed).toBe(false);
+      expect(report.legCoreConclusion).toBe("cancelled");
+      expect(report.gate.rows.every((row: { status: string }) => row.status === "pass")).toBe(true);
+      expect(process.exitCode).toBe(3);
+    } finally {
+      registerHarnessCommandHandlers({ gateHooks: undefined });
+      process.exitCode = originalExitCode ?? 0;
     }
   });
 

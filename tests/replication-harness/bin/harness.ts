@@ -7,6 +7,7 @@ import { verifyAggregateFile, VerifyAggregateError, type PrintedAggregateValue }
 import { exactSemver } from "../src/gate/semver";
 import type { GateId } from "../src/contracts/common";
 import { runGateLocally, type LocalGateHooks } from "../src/gate/local-run";
+import { aggregateCommand, createGateHooks, manifestCommand, resolveCommand, runLegCommand, verifyAggregateCommandFile } from "./gate-adapters";
 
 export { exactSemver };
 export const commands = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"] as const;
@@ -70,7 +71,7 @@ async function verifyCommand(parsed: ParsedArgs): Promise<void> {
     ...(printValue ? { print: printValue as PrintedAggregateValue } : {}),
   };
   try {
-    const result = await verifyAggregateFile(aggregatePath, options);
+    const result = await verifyAggregateCommandFile(aggregatePath, options);
     if (printValue) {
       if (printValue === "cli.version" && !exactSemver(result.output)) throw new Error("CLI version was not exact SemVer");
       process.stdout.write(`${result.output}\n`);
@@ -129,21 +130,23 @@ export async function runCommand(args: string[]): Promise<void> {
     return;
   }
   if (parsed.command === "verify-aggregate") return verifyCommand(parsed);
+  if (parsed.command === "resolve") return (handlers.resolve ?? resolveCommand)(parsed);
+  if (parsed.command === "manifest") return (handlers.manifest ?? manifestCommand)(parsed);
+  if (parsed.command === "aggregate") return (handlers.aggregate ?? aggregateCommand)(parsed);
   if (parsed.command === "run") {
-    if (parsed.options.gate === undefined) {
-      if (!runHandler) throw new Error("run requires the topology runner to be configured");
-      return runHandler(parsed);
+    if (parsed.options.gate !== undefined) {
+      const result = await runGateLocally(await (handlers.gateHooks ? handlers.gateHooks(parsed) : createGateHooks(parsed)));
+      const companionPassed = result.aggregate.companion.every((item) => item.passed);
+      console.log(JSON.stringify({ gatePassed: result.aggregate.gate?.passed ?? false, companionPassed }));
+      if (!result.aggregate.gate?.passed) process.exitCode = 3;
+      else if (!companionPassed) process.exitCode = 5;
+      return;
     }
-    if (!handlers.gateHooks) throw new Error("run --gate requires the S3a runner hook");
-    const result = await runGateLocally(await handlers.gateHooks(parsed));
-    console.log(JSON.stringify({ gatePassed: result.aggregate.gate?.passed ?? false, companionPassed: result.aggregate.companion.every((item) => item.passed) }));
-    if (!result.aggregate.gate?.passed) process.exitCode = 3;
-    else if (!result.aggregate.companion.every((item) => item.passed)) process.exitCode = 5;
-    return;
+    if (parsed.options.inputs !== undefined) return runLegCommand(parsed);
+    if (handlers.run) return handlers.run(parsed);
+    if (runHandler) return runHandler(parsed);
+    throw new Error("run requires the S3a runner hook or --inputs/--leg");
   }
-  const handler = handlers[parsed.command];
-  if (!handler) throw new Error(`${parsed.command} requires its harness runtime command hook`);
-  return handler(parsed);
 }
 function parseDuration(value: string): number {
   const match = /^(\d+)(ms|s|m|h|d)$/.exec(value);

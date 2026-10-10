@@ -50,6 +50,34 @@ groups non-speed tiers per backend, and emits speed as a separate
 `speed-<backend>` leg.
 `harness run --gate` uses the same resolve → in-process leg hook → aggregate
 sequence locally; its aggregate is diagnostic, not canonical CI evidence.
+`resolve` writes `inputs.json`, `matrix.json`, and the core/companion manifests
+to `--out`; it prints the compact matrix JSON and appends `matrix=<JSON>` to
+`$GITHUB_OUTPUT` when running under Actions. `run --inputs ... --leg ...`
+selects that matrix entry from the resolve artefacts and writes
+`<results>/report.json` and `report.md`. `aggregate --legs` reads one
+`<leg-name>/report.json` directory per matrix leg, recomputes the registry
+manifests, and writes `aggregate.json` and `aggregate.md` under `--out`.
+
+`manifest --inputs "$IN/inputs.json" --out "$RUNNER_TEMP/tc893/manifest"`
+recomputes and writes `manifest-core.json`; add `--set phase1-companion` to
+write the companion manifest. The command adapters use S3a's `scenarioRegistry`
+for manifest recomputation and leg selection.
+
+Runtime services that are owned by S1/S2 are injected, not mocked in
+production. The module named by `TC893_RUNTIME_MODULE` must export
+`registerGateRuntime(configureGateRuntime)` and register the frozen SUT/image
+resolvers, SUT artefact exporter, topology factory, and run-environment
+builder. The builder verifies the downloaded workspace dist or published
+install against `RunInputs` before returning; the runner adapter also rejects
+a different SUT identity or image digest. It may also supply production
+`/info`, junit evidence, and requirement probes. This keeps topology and
+client construction replaceable while the gate CLI and aggregation remain
+executable.
+
+`harness run --gate <id>` invokes the same resolve → S3a runner → aggregate
+hooks locally. An interrupted or cancelled core leg fails the local core
+conclusion even if every serialized row says `pass`.
+
 
 `aggregate` exits 0 when the core gate passes, 3 when it fails, and 1 when
 a non-gate run has any non-passing or quarantined row. Companion verdicts do
