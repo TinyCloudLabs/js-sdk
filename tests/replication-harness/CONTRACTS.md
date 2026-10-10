@@ -28,11 +28,11 @@ The `src/contracts/` interfaces follow §4 of `tc893-harness-plan.md`; schema fi
 The workflow calls the harness commands directly; CI YAML contains no gate logic.
 
 ```sh
-# resolve job (uploads tc893-inputs, including the matrix output)
+# resolve job (workspace gate supplies JUnit artefacts associated with the subject SHA)
 bun run --cwd tests/replication-harness harness resolve \
   --event-file "$GITHUB_EVENT_PATH" --dispatch-inputs "$DISPATCH_INPUTS" \
+  --junit-dir "$RUNNER_TEMP/tc893/junit" \
   --out "$RUNNER_TEMP/tc893/in"
-
 # leg-core job; its matrix is the core-* entries, one leg per backend
 bun run --cwd tests/replication-harness harness run \
   --inputs "$IN/inputs.json" --leg "${{ matrix.name }}" \
@@ -66,6 +66,14 @@ selects that matrix entry from the resolve artefacts and writes
 `<leg-name>/report.json` directory per matrix leg, recomputes the registry
 manifests, and writes `aggregate.json` and `aggregate.md` under `--out`.
 When the matrix lists no companion legs, `aggregate` treats a `skipped` `--leg-companion-conclusion` as `success` (the `leg-companion` job is skipped via `has-companion`); with companion legs in the matrix, `skipped` still fails.
+For the workspace gate, CI selects the latest successful `replica-e2e.yml`
+run for the subject head SHA and downloads `tc858-junit-sqlite` and
+`tc858-junit-pg16`; missing runs or artefacts fail resolve. Every leg checks
+out that same subject SHA and runs the workspace build before the adapter
+verifies the recorded Git SHA and `distSha256`. Published legs install from the
+resolve-exported `package-lock.json` and verify its hash and both package
+integrities.
+
 
 `manifest --inputs "$IN/inputs.json" --out "$RUNNER_TEMP/tc893/manifest"`
 recomputes and writes `manifest-core.json`; add `--set phase1-companion` to
@@ -76,12 +84,13 @@ Runtime services that are owned by S1/S2 are injected, not mocked in
 production. The module named by `TC893_RUNTIME_MODULE` must export
 `registerGateRuntime(configureGateRuntime)` and register the frozen SUT/image
 resolvers, SUT artefact exporter, topology factory, and run-environment
-builder. The builder verifies the downloaded workspace dist or published
-install against `RunInputs` before returning; the runner adapter also rejects
-a different SUT identity or image digest. It may also supply production
-`/info`, junit evidence, and requirement probes. This keeps topology and
-client construction replaceable while the gate CLI and aggregation remain
-executable.
+builder. Workspace legs rebuild the subject checkout and verify its Git SHA
+and `distSha256`; published legs install from the resolve-exported lockfile
+and verify lockfile and package integrity against `RunInputs`. The runner
+adapter also rejects a different SUT identity or image digest. It may also
+supply production `/info`, JUnit evidence, and requirement probes. This keeps
+topology and client construction replaceable while gate CLI and aggregation
+remain executable.
 
 `harness run --gate <id>` invokes the same resolve → S3a runner → aggregate
 hooks locally. An interrupted or cancelled core leg fails the local core

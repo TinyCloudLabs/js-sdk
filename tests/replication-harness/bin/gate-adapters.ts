@@ -260,8 +260,9 @@ export function assertLegSutMatches(expected: RunInputs["sut"], actual: RunEnvir
     return;
   }
   if (expected.lockfileSha256 !== actual.lockfileSha256) throw new Error(`SUT_LOCKFILE_SHA256_MISMATCH: expected ${expected.lockfileSha256}, got ${actual.lockfileSha256}`);
-  if (expected.cli.integrity !== actual.cli.integrity || expected.nodeSdk.integrity !== actual.nodeSdk.integrity) {
-    throw new Error("SUT_PACKAGE_INTEGRITY_MISMATCH: installed CLI or node-sdk integrity differs from resolved inputs");
+  if (expected.cli.version !== actual.cli.version || expected.nodeSdk.version !== actual.nodeSdk.version
+    || expected.cli.integrity !== actual.cli.integrity || expected.nodeSdk.integrity !== actual.nodeSdk.integrity) {
+    throw new Error("SUT_PACKAGE_INTEGRITY_MISMATCH: installed CLI or node-sdk version/integrity differs from resolved inputs");
   }
 }
 
@@ -275,7 +276,8 @@ async function runS3aLeg(entry: LocalGatePlan["matrix"][number], inputs: RunInpu
   const rows = expandScenarios(scenarioRegistry, { tiers, set: selected.set, backends: [selected.backend] }, context, services.probeRequirement);
   const images = await resolveScenarioImages(rows, inputs, services);
   const createdEnvironment = await services.createRunEnvironment(inputs, resultsDir, dirname(inputsPath));
-  assertLegSutMatches(inputs.sut, createdEnvironment.sut);
+  try { assertLegSutMatches(inputs.sut, createdEnvironment.sut); }
+  catch (error) { await services.disposeRunEnvironment?.(createdEnvironment); throw error; }
   const env: RunEnvironment = { ...createdEnvironment, image: (ref) => {
     const expected = images.get(imageRefKey(ref));
     if (!expected) throw new Error(`image was not pre-resolved: ${imageRefKey(ref)}`);

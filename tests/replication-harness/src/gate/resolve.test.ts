@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import type { JunitPrecondition, Subject } from "../contracts/gate";
 import type { ResolvedImage, ResolvedSut } from "../contracts/lifecycle";
@@ -78,7 +79,7 @@ describe("G1 junit precondition", () => {
       const sut: ResolvedSut = {
         source: "published", lockfileSha256: "a".repeat(64),
         cli: { version: "1.2.3-beta.4", packageJson: "/cli/package.json", entry: "/cli/index.js", integrity: "sha512-cli" },
-        nodeSdk: { version: "3.4.5-beta.6", packageJson: "/sdk/package.json", entry: sdkEntry, condition: "import", integrity: "sha512-sdk" },
+        nodeSdk: { version: "3.4.5-beta.6", packageJson: "/sdk/package.json", entry: pathToFileURL(sdkEntry).href, condition: "import", integrity: "sha512-sdk" },
       };
       const image: ResolvedImage = { role: "custom", ref: "prod-tag", digest: `sha256:${"b".repeat(64)}`, pinned: `node@sha256:${"b".repeat(64)}`, nodeVersion: "1.20.0", features: ["kv-sync-v1"] };
       const coreScenario = {
