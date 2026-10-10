@@ -44,6 +44,31 @@ describe("replication diagnostics", () => {
     }
   });
 
+  test("warns once per missing-grant prefix in an invocation", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-replication-log-grant-warning-"));
+    roots.push(root);
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    const sink = createReplicationEventSink(root, { debug: false, quiet: true });
+    const missingGrant: Extract<ReplicationEvent, { type: "replication.state" }> = {
+      type: "replication.state",
+      at: new Date().toISOString(),
+      space: "default",
+      replica: "notes",
+      state: "grant_missing",
+      code: "SESSION_LACKS_SYNC",
+    };
+    try {
+      sink(missingGrant);
+      sink(missingGrant);
+      const output = write.mock.calls.map(([message]) => String(message)).join("");
+      expect(output.match(/Warning:/g)).toHaveLength(1);
+      expect(output).toContain("SESSION_LACKS_SYNC");
+      expect(output).toContain("reads use the network");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test("debug sync events report the pending-clear count", () => {
     const root = mkdtempSync(join(tmpdir(), "tc-replication-log-sync-"));
     roots.push(root);

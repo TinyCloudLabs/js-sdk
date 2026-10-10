@@ -218,6 +218,32 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       expect(caughtUp.stdout.toString()).toBe("v2");
       expect(caughtUp.stderr).toMatch(/pendingCleared:[1-9]\d*/);
     }
+    const heldSyncPreload = join(home, "held-sync.cjs");
+    await writeFile(heldSyncPreload, `const original = globalThis.fetch; let held = false; globalThis.fetch = (...args) => { if (!held && String(args[0]).endsWith("/invoke")) { const signal = args[1]?.signal ?? args[0]?.signal; if (signal) { held = true; return new Promise((_, reject) => { const abort = () => reject(signal.reason ?? new Error("held sync aborted")); if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); } } return original(...args); };`);
+    expect((await put("notes/held-sync", Buffer.from("before"), "owner", "off")).code).toBe(0);
+    expect((await put("notes/held-sync", Buffer.from("committed"), "owner", "on")).code).toBe(0);
+    const pendingDuringHeldSync = await tc(["kv", "get", "notes/held-sync", "--raw"], {
+      profile: "owner",
+      preload: heldSyncPreload,
+      replication: "on",
+      extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(pendingDuringHeldSync.code).toBe(0);
+    expect(pendingDuringHeldSync.stdout.toString()).toBe("committed");
+    expect(pendingDuringHeldSync.stdout.toString()).not.toBe("before");
+    expect(pendingDuringHeldSync.stderr).toContain("network pending_write");
+    expect(pendingDuringHeldSync.stderr).not.toContain("replica hit");
+    const recoveredPendingSync = await tc(["kv", "get", "notes/held-sync", "--raw"], {
+      profile: "owner",
+      replication: "on",
+      extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(recoveredPendingSync.code).toBe(0);
+    expect(recoveredPendingSync.stdout.toString()).toBe("committed");
+    expect(recoveredPendingSync.stderr).toMatch(/pendingCleared:[1-9]\d*/);
+
+
+
     const deleted = await tc(["kv", "delete", "notes/b.json"], { profile: "owner", replication: "on" });
     expect(deleted.code).toBe(0);
     expect((await tc(["kv", "get", "notes/b.json"], { profile: "owner", replication: "on" })).code).toBe(4);
@@ -269,13 +295,27 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(offlineOutside.stderr).toContain("NETWORK_ERROR");
     await startNode();
 
-    // 7. Foreground termination drains the active replication controller before process exit.
-    const stalledPreload = join(home, "stalled-sync.cjs");
-    await writeFile(stalledPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => { if (!String(args[0]).includes("/invoke")) return original(...args); const signal = args[1]?.signal ?? args[0]?.signal; if (!signal) return original(...args); return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("synthetic fetch timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 5000); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); };`);
-    const timed = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", preload: stalledPreload, replication: "on", extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" } });
-    expect(timed.code).toBe(1);
-    expect(timed.stderr).toContain("KV request timed out");
-    expect((await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } })).stderr).not.toContain("busy");
+    // 7. A held stale sync serves offline; SIGINT still drains the active controller.
+    // The next invocation must complete a real sync, not only escape a busy state.
+    const stalled = await tc(["kv", "get", "notes/a.txt", "--raw"], {
+      profile: "owner",
+      preload: heldSyncPreload,
+      replication: "on",
+      extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(stalled.code).toBe(0);
+    expect(stalled.stdout.toString()).toBe("v4");
+    expect(stalled.stderr).toContain("replica hit");
+    expect(stalled.stderr).toContain("syncError");
+    const recoveredSync = await tc(["kv", "get", "notes/a.txt", "--raw"], {
+      profile: "owner",
+      replication: "on",
+      extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(recoveredSync.code).toBe(0);
+    expect(recoveredSync.stdout.toString()).toBe("v4");
+    expect(recoveredSync.stderr).toContain("sync notes ok");
+    expect(recoveredSync.stderr).toContain("replica hit");
 
     const interruptPreload = join(home, "interrupt-sync.cjs");
     await writeFile(interruptPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => { if (!String(args[0]).includes("/invoke")) return original(...args); setImmediate(() => process.kill(process.pid, "SIGINT")); const signal = args[1]?.signal ?? args[0]?.signal; if (!signal) return original(...args); return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("synthetic fetch timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 5000); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); };`);
@@ -320,6 +360,42 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     // 9. Node 20 is refused; compact-delegate revocation was exercised above (TC-721).
     const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", preload: NODE20, replication: "on" });
     expect(unsupported.stderr).toContain("runtime_unsupported");
+    // Grant edge cases use the real node and fail closed at the login boundary.
+    await ok(["init", "--name", "owner-no-prefix", "--key-only"], "owner-no-prefix");
+    await ok(["auth", "login", "--method", "local"], "owner-no-prefix");
+    expect((await put("notes/no-sync", Buffer.from("network-only"), "owner-no-prefix", "off")).code).toBe(0);
+    const noPrefixProfilePath = join(home, ".tinycloud", "profiles", "owner-no-prefix", "profile.json");
+    const noPrefixProfile = JSON.parse(await readFile(noPrefixProfilePath, "utf8")) as Record<string, unknown>;
+    await writeFile(noPrefixProfilePath, JSON.stringify({ ...noPrefixProfile, replication: { prefixes: ["notes"] } }, null, 2));
+    const missingGrant = await tc(["kv", "get", "notes/no-sync", "--raw"], {
+      profile: "owner-no-prefix",
+      replication: "on",
+      extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(missingGrant.code).toBe(0);
+    expect(missingGrant.stdout.toString()).toBe("network-only");
+    expect(missingGrant.stderr).toContain("grant_missing");
+    expect(missingGrant.stderr.match(/Warning:/g) ?? []).toHaveLength(1);
+
+    await ok(["init", "--name", "outside-scope", "--key-only"], "outside-scope");
+    const outsideManifest = join(home, "outside-scope-manifest.json");
+    await writeFile(outsideManifest, JSON.stringify({ permissions: [
+      { service: "tinycloud.kv", space: "default", path: "other/", actions: ["tinycloud.kv/get"] },
+    ] }));
+    const outsideLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", outsideManifest, "--replication-prefix", "notes"], { profile: "outside-scope" });
+    expect(outsideLogin.code).toBe(2);
+    expect(outsideLogin.stderr).toContain("REPLICATION_PREFIX_OUTSIDE_SCOPE");
+    expect((JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "outside-scope", "profile.json"), "utf8")) as { replication?: unknown }).replication).toBeUndefined();
+
+    await ok(["init", "--name", "caveated-scope", "--key-only"], "caveated-scope");
+    const caveatedManifest = join(home, "caveated-scope-manifest.json");
+    await writeFile(caveatedManifest, JSON.stringify({ permissions: [
+      { service: "tinycloud.kv", space: "default", path: "notes/", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+    ] }));
+    const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes"], { profile: "caveated-scope" });
+    expect(caveatedLogin.code).toBe(2);
+    expect(caveatedLogin.stderr).toContain("REPLICATION_PREFIX_CAVEATED");
+    expect((JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "caveated-scope", "profile.json"), "utf8")) as { replication?: unknown }).replication).toBeUndefined();
 
     const alias = host.replace("127.0.0.1", "localhost");
     const primaryWrite = await tc(["kv", "put", "notes/partition", "primary-value"], { profile: "owner", replication: "on" });

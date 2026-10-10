@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { closeReplication, registerReplication, registeredReplications } from "./replication-registry.js";
 import type { ReplicationControl } from "@tinycloud/node-sdk";
 
@@ -10,13 +10,17 @@ const delayedScheduler = (callbacks: Array<() => void>) => (callback: () => void
 };
 
 describe("replication registry shutdown", () => {
-  test("closes a registration made at the drain-settlement boundary", async () => {
+  test("closes a registration made between drain settlement and close finalization", async () => {
     let lateClosed = false;
-    registerReplication("first", control(() => {
-      registerReplication("late", control(() => { lateClosed = true; }));
-    }));
+    registerReplication("first", control(() => undefined));
+    const closing = closeReplication();
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
 
-    expect(await closeReplication()).toBe(false);
+    registerReplication("late", control(() => { lateClosed = true; }));
+    const repeatedClose = closeReplication();
+
+    expect(repeatedClose).toBe(closing);
+    expect(await closing).toBe(false);
     expect(lateClosed).toBe(true);
     expect(registeredReplications().size).toBe(0);
   });

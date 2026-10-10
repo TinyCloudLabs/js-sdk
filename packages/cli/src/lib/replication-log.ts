@@ -40,9 +40,18 @@ export function createReplicationEventSink(
   options: { debug: boolean; quiet: boolean },
 ): (event: ReplicationEvent) => void {
   const pinnedNotices = new Set<string>();
+  const missingGrantWarnings = new Set<string>();
 
   return (event) => {
     appendProfileReplicationEvent(profileRoot, event);
+    if (event.type === "replication.state" && event.state === "grant_missing") {
+      const prefix = event.replica ?? event.space ?? "configured prefix";
+      const key = `${event.space ?? ""}\u0000${event.replica ?? ""}`;
+      if (!missingGrantWarnings.has(key)) {
+        missingGrantWarnings.add(key);
+        process.stderr.write(`[replication] Warning: no usable kv/get+sync grant for ${prefix}; reads use the network (${event.code ?? "grant_missing"}).\n`);
+      }
+    }
     if (options.debug) {
       if (event.type === "replication.read") {
         const detail = event.source === "replica" ? "replica hit" : `${event.source} ${event.reason}`;

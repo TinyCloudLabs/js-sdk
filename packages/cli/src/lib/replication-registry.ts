@@ -65,38 +65,67 @@ export function registeredReplications(): ReadonlyMap<string, ReplicationControl
 export function closeReplication(schedule: ReplicationCloseScheduler = scheduleTimeout): Promise<boolean> {
   if (state.closing) return state.closing;
   removeSignalHandlers();
-  state.closing = (async () => {
-    let timedOut = false;
+
+  let resolveClosing!: (timedOut: boolean) => void;
+  let rejectClosing!: (error: unknown) => void;
+  const closing = new Promise<boolean>((resolve, reject) => {
+    resolveClosing = resolve;
+    rejectClosing = reject;
+  });
+  state.closing = closing;
+
+  void (async () => {
     let timeout!: NodeJS.Timeout;
-    const bounded = new Promise<boolean>((resolve) => {
+    const deadline = new Promise<boolean>((resolve) => {
       timeout = schedule(() => resolve(true), CLOSE_TIMEOUT_MS);
     });
+    let timedOut = false;
+
+    const abandonQueuedControls = (): void => {
+      for (const control of state.allControls) {
+        void Promise.resolve().then(() => control.close()).catch(() => undefined);
+      }
+      state.controls.clear();
+      state.allControls.clear();
+    };
+
     try {
-      while (state.allControls.size > 0) {
-        const generation = state.generation;
-        const pending = [...state.allControls];
-        state.controls.clear();
-        state.allControls.clear();
-        const drained = Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close())))
-          .then(() => false);
-        timedOut ||= await Promise.race([drained, bounded]);
-        if (timedOut) {
-          // Keep closing registrations made during the drain, but never wait beyond the shared deadline.
-          for (const control of state.allControls) void Promise.resolve().then(() => control.close()).catch(() => undefined);
+      while (!timedOut) {
+        while (state.allControls.size > 0) {
+          const generation = state.generation;
+          const pending = [...state.allControls];
           state.controls.clear();
           state.allControls.clear();
-          break;
+          const drained = Promise.allSettled(pending.map((control) => Promise.resolve().then(() => control.close())))
+            .then(() => false);
+          timedOut ||= await Promise.race([drained, deadline]);
+          if (timedOut) {
+            abandonQueuedControls();
+            break;
+          }
+          if (state.generation === generation && state.allControls.size === 0) break;
         }
-        // A registration in the drain's settlement microtask is another generation and must be drained.
-        if (state.generation === generation && state.allControls.size === 0) break;
+
+        if (timedOut) break;
+        // Keep the shared close promise pending through this turn. A registration
+        // arriving after a generation settles is picked up before shutdown resolves.
+        const turn = new Promise<boolean>((resolve) => setImmediate(() => resolve(false)));
+        timedOut ||= await Promise.race([turn, deadline]);
+        if (timedOut) abandonQueuedControls();
+        else if (state.allControls.size === 0) break;
       }
-      return timedOut;
+
+      state.closing = undefined;
+      if (state.allControls.size === 0) removeSignalHandlers();
+      resolveClosing(timedOut);
+    } catch (error) {
+      state.closing = undefined;
+      if (state.allControls.size === 0) removeSignalHandlers();
+      rejectClosing(error);
     } finally {
       clearTimeout(timeout);
     }
-  })().finally(() => {
-    state.closing = undefined;
-    if (state.allControls.size === 0) removeSignalHandlers();
-  });
-  return state.closing;
+  })();
+
+  return closing;
 }

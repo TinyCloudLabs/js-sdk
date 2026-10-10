@@ -17,6 +17,7 @@ on:
       - "packages/node-sdk/**"
       - "packages/sdk-core/**"
       - "packages/sdk-services/src/**"
+      - "packages/operations/src/state.ts"
       - "packages/web-sdk/**"
       - ".github/scripts/**"
       - ".github/workflows/replica-e2e.yml"
