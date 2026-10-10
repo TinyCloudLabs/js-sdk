@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
@@ -700,6 +701,42 @@ test("rejects a delegate profile with local owner material before sign-in or run
   }
 });
 
+async function persistImportedSession(profile: string, expSecs: number): Promise<string> {
+  const wasm = new NodeWasmBindings();
+  const manager = wasm.createSessionManager();
+  const sessionDid = manager.getDID("default");
+  const module = await import(new URL("../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href) as {
+    mintCompactDelegation(options: { audience: string; expSecs: number }): Promise<{
+      delegation: { delegationHeader: { Authorization: string }; cid: string };
+      ownerDid: string;
+      spaceId: string;
+    }>;
+  };
+  const imported = await module.mintCompactDelegation({ audience: sessionDid.split("#", 1)[0]!, expSecs });
+  await writeJsonAtomic(profileConfigPath(profile), {
+    name: profile,
+    host: "https://node.example",
+    chainId: 1,
+    spaceName: "secrets",
+    did: sessionDid,
+    sessionDid,
+    ownerDid: imported.ownerDid,
+    spaceId: imported.spaceId,
+    posture: "delegate-session",
+    operatorType: "agent",
+    authMethod: "openkey",
+    createdAt: new Date().toISOString(),
+  });
+  await writeJsonAtomic(join(profilePath(profile), "key.json"), JSON.parse(manager.jwk("default")!));
+  await writeJsonAtomic(sessionPath(profile), {
+    delegationHeader: imported.delegation.delegationHeader,
+    delegationCid: imported.delegation.cid,
+    spaceId: imported.spaceId,
+    jwk: JSON.parse(manager.jwk("default")!),
+    verificationMethod: sessionDid,
+  });
+  return sessionDid.split("#", 1)[0]!;
+}
 test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED before any node request", async () => {
   await persistExpiredSignedSession("expired-agent");
   const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
@@ -721,6 +758,46 @@ test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED 
 
     const read = await invokeOperation("tinycloud.secrets.get", 1, { profile: "expired-agent" }, { name: "KEY" });
     expect(read).toMatchObject({ status: "error", error: expired });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+// TC-674 regression: fails before the fix
+test("an expired imported session returns AUTH_REQUIRED through runtime and operation without a fetch", async () => {
+  await persistImportedSession("expired-import", Math.floor(Date.now() / 1000) - 60);
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
+    throw new Error("an expired imported session must not reach the node");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  const expired = {
+    code: "AUTH_REQUIRED",
+    message: "The stored session has expired or is no longer valid. Sign in again.",
+    retryable: false,
+  };
+  try {
+    const runtime = await createInvocationRuntime({ profile: "expired-import" });
+    expect(runtime).toMatchObject({ ok: false, error: expired });
+    const read = await invokeOperation("tinycloud.secrets.get", 1, { profile: "expired-import" }, { name: "KEY" });
+    expect(read).toMatchObject({ status: "error", error: expired });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+// TC-674 control: passes before and after
+test("an unexpired imported session restores as its delegate without a fetch", async () => {
+  const sessionDid = await persistImportedSession("live-import", Math.floor(Date.now() / 1000) + 3600);
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
+    throw new Error("restore must not fetch");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  try {
+    const runtime = await createInvocationRuntime({ profile: "live-import" });
+    expect(runtime).toMatchObject({
+      ok: true,
+      context: { summary: { sessionDid } },
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   } finally {
     fetchSpy.mockRestore();

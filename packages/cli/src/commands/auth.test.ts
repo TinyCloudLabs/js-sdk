@@ -313,8 +313,8 @@ mock.module("@tinycloud/node-sdk", () => ({
       };
     }
   },
+  signedCompactUcanExpiry: () => undefined,
 }));
-
 const operationRecorded = {
   calls: [] as Array<{
     operationId: string;

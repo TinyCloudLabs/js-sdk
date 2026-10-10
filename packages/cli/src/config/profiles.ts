@@ -268,9 +268,9 @@ export class ProfileManager {
    * Local-node discovery (TC-106) only runs when no explicit host was given
    * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
    * after DID verification against the profile's pinned identity, prefers one
-   * over the stored/default host. Loopback requires an explicit `localNodeUrl`.
-   * Disable discovery per profile with
-   * `autoDiscoverLocalNode: false` in profile.json.
+   * over the stored/default host. For session-using commands, it verifies the
+   * stored session locally before probing. Loopback requires an explicit
+   * `localNodeUrl`; disable discovery with `autoDiscoverLocalNode: false`.
    */
   static async resolveContext(options: {
     profile?: string;
@@ -278,7 +278,8 @@ export class ProfileManager {
     verbose?: boolean;
     noCache?: boolean;
     quiet?: boolean;
-  }): Promise<CLIContext> {
+    privateKey?: string;
+  }, settings: { readonly storedSession?: "unused" } = {}): Promise<CLIContext> {
     // Resolve profile name
     const config = await ProfileManager.getConfig();
     const profile =
@@ -298,12 +299,15 @@ export class ProfileManager {
 
     const explicitHost = options.host ?? process.env.TC_HOST;
     let host = explicitHost ?? profileHost ?? DEFAULT_HOST;
+    let localDiscovery: CLIContext["localDiscovery"];
     if (explicitHost === undefined) {
       const { discoverLocalNodeHost } = await import("../lib/host.js");
-      const localHost = await discoverLocalNodeHost(profile);
-      if (localHost) {
-        host = localHost;
-      }
+      const explicitKey = Boolean(options.privateKey || process.env.TC_PRIVATE_KEY);
+      const discovered = await discoverLocalNodeHost(profile, {
+        awaitStoredSession: settings.storedSession !== "unused" && !explicitKey,
+      });
+      if (discovered.host !== null) host = discovered.host;
+      if (discovered.deferred) localDiscovery = { deferredFrom: host };
     }
 
     setActiveProfileName(profile);
@@ -314,6 +318,7 @@ export class ProfileManager {
       verbose: options.verbose ?? false,
       noCache: options.noCache ?? false,
       quiet: options.quiet ?? false,
+      ...(localDiscovery === undefined ? {} : { localDiscovery }),
     };
   }
 }

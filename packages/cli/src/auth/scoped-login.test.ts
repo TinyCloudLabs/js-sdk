@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { withRecapCaveat } from "./test-support/recap-caveat.js";
+const { mintCompactDelegation } = await import(new URL("../../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href) as {
+  mintCompactDelegation(options: { audience: string; expSecs: number }): Promise<{
+    delegation: { delegationHeader: { Authorization: string }; cid: string };
+    spaceId: string;
+  }>;
+};
 
 const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-scoped-login-"));
@@ -11,7 +17,7 @@ process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { loadManifestPermissions } = await import("../lib/permissions.js");
-const { declinedPermissions, permissionTuples, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
+const { declinedPermissions, permissionTuples, sessionExpiresAt, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
 const host = "https://node.example.test";
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -181,6 +187,75 @@ describe("scoped first login", () => {
 
   const baseProfile = () => ({ name: "scoped", host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString() });
   const liveAppSession = () => ({ spaceId: wasm.makeSpaceId(address, 1, "tinychat"), expiresAt: new Date(Date.now() + 86_400_000).toISOString() });
+
+  async function persistImportedSession(expSecs: number, extras: Record<string, unknown> = {}) {
+    const imported = await mintCompactDelegation({
+      audience: did.split("#", 1)[0]!,
+      expSecs,
+    });
+    await ProfileManager.setProfile("scoped", {
+      ...baseProfile(),
+      posture: "delegate-session",
+      authMethod: "openkey",
+    });
+    const session = {
+      delegationHeader: imported.delegation.delegationHeader,
+      delegationCid: imported.delegation.cid,
+      spaceId: imported.spaceId,
+      jwk: key,
+      verificationMethod: did,
+      ...extras,
+    };
+    await ProfileManager.setSession("scoped", session);
+    return session;
+  }
+
+  // TC-674 regression: fails before the fix
+  test("an expired imported session does not block scoped paste login", async () => {
+    const exp = Math.floor(Date.now() / 1000) - 60;
+    const session = await persistImportedSession(exp);
+    expect(sessionExpiresAt(session)).toBe(new Date(exp * 1000).toISOString());
+    let calls = 0;
+    await refreshOpenKeySession("scoped", host, {
+      permissions: requested,
+      openKeyAcquisition: async () => { calls++; return proof(); },
+    });
+    expect(calls).toBe(1);
+    expect(await ProfileManager.getSession("scoped")).toMatchObject({ spaceId });
+  });
+
+  // TC-674 control: passes before and after
+  test("an unexpired imported session still blocks a scoped paste login", async () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const session = await persistImportedSession(exp);
+    const before = await ProfileManager.getSession("scoped");
+    expect(sessionExpiresAt(session)).toBe(new Date(exp * 1000).toISOString());
+    let calls = 0;
+    await expect(refreshOpenKeySession("scoped", host, {
+      permissions: requested,
+      openKeyAcquisition: async () => { calls++; return proof(); },
+    })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(calls).toBe(0);
+    expect(await ProfileManager.getSession("scoped")).toEqual(before);
+  });
+
+  // TC-674 control: passes before and after
+  test("proof metadata prevents expiry fallback for imported-shaped sessions", async () => {
+    const exp = Math.floor(Date.now() / 1000) - 60;
+    for (const extras of [{ signature: "0x00" }, { address, chainId: 1 }]) {
+      const session = await persistImportedSession(exp, extras);
+      const before = await ProfileManager.getSession("scoped");
+      expect(sessionExpiresAt(session)).toBeNull();
+      let calls = 0;
+      await expect(refreshOpenKeySession("scoped", host, {
+        permissions: requested,
+        openKeyAcquisition: async () => { calls++; return proof(); },
+      })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+      expect(calls).toBe(0);
+      expect(await ProfileManager.getSession("scoped")).toEqual(before);
+      await ProfileManager.clearSession("scoped");
+    }
+  });
 
   test("scoped browser login keeps another app's live session unless --replace-session", async () => {
     const app = liveAppSession();

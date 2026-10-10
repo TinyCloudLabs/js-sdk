@@ -1,11 +1,12 @@
-import { TinyCloudNode, type PortableDelegation } from "@tinycloud/node-sdk";
+import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
-import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
+import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
 import { recordWarnings } from "../output/warnings.js";
+import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
 /**
  * Returns true when a JWK carries the private-key parameter required by the
@@ -55,6 +56,13 @@ function signerJwkForProfile(
       hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
     },
   );
+}
+
+/** Whether the compact UCAN behind `delegation` signs an expiry that has passed by this machine's clock. */
+function signedLifetimePassed(delegation: PortableDelegation): boolean {
+  const authorization = delegation.delegationHeader?.Authorization;
+  const expiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
+  return expiry !== undefined && expiry.getTime() <= Date.now();
 }
 
 /**
@@ -129,6 +137,33 @@ export async function restoreProfileSessionNode(
       return { unavailable: "session_expired" };
     }
     return { unavailable: "session_invalid" };
+  }
+}
+
+/**
+ * Whether the profile's stored session, when `createSDKInstance` would restore
+ * it, passes the same local verification, run here in a throwaway node: no
+ * request is sent and nothing is written. `true` when there is none to restore.
+ */
+export async function storedSessionVerifiesLocally(profileName: string): Promise<boolean> {
+  const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  if (profile === null) return true;
+  const local = profile.authMethod === "local" && typeof profile.privateKey === "string";
+  try {
+    const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+    if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" ||
+      session.delegationHeader === null || typeof session.delegationHeader !== "object" ||
+      !("Authorization" in session.delegationHeader) ||
+      typeof session.delegationHeader.Authorization !== "string") return true;
+    const key = await ProfileManager.getKey(profileName);
+    const node = new TinyCloudNode({
+      host: profile.host ?? DEFAULT_HOST,
+      ...(local ? { privateKey: profile.privateKey } : {}),
+    });
+    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -265,7 +300,6 @@ export async function bootstrapDelegatedSession(
         ExitCode.PERMISSION_DENIED,
       );
     }
-
     if (await ProfileManager.getSession(ctx.profile) !== null) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
@@ -273,6 +307,9 @@ export async function bootstrapDelegatedSession(
         ExitCode.ERROR,
       );
     }
+    // A delegation whose signed lifetime has passed would only become a
+    // session every command refuses: report the delegation, write nothing.
+    if (signedLifetimePassed(delegation)) throw delegationExpiredError();
 
     const jwk = signerJwkForProfile(ctx.profile, undefined, await ProfileManager.getKey(ctx.profile));
     const session = {
@@ -293,6 +330,12 @@ export async function bootstrapDelegatedSession(
   });
 
   const abandon = async (cause: unknown): Promise<never> => {
+    // The delegation expired after the check above and a restore of it was
+    // refused (this bootstrap's, or the request-bound import's runtime):
+    // report the delegation, as that check would have. Rollback is unchanged.
+    const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation)
+      ? delegationExpiredError()
+      : cause;
     const note = await ProfileManager.withLock(ctx.profile, async () => {
       const profile = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
         if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
@@ -310,7 +353,7 @@ export async function bootstrapDelegatedSession(
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) =>
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`);
-    throw annotate(cause, note);
+    throw annotate(reported, note);
   };
 
   let node: TinyCloudNode;

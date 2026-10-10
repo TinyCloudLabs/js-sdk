@@ -82,6 +82,7 @@ import { theme } from "../output/theme.js";
 import { registerAuthGrantsCommand } from "./auth-grants.js";
 import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
 import { withSignInHint } from "../auth/session-expired.js";
+import { delegationExpiredError, isActivationExpiry } from "../auth/delegation-expiry.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendLocalGrantArtifact,
@@ -173,7 +174,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
@@ -261,7 +262,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
         await ProfileManager.clearSession(ctx.profile);
@@ -286,7 +287,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         await rotateAuthKey(ctx.profile, ctx.host, {
           paste: options.paste,
           noPopup: options.popup === false,
@@ -302,7 +303,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const hasKey = await ProfileManager.getKey(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile);
@@ -377,7 +378,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        // Without --grant, the request records the host it is for and no session is restored.
+        const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
         const profile = await ProfileManager.getProfile(ctx.profile);
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
@@ -879,7 +881,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile);
@@ -1074,7 +1076,7 @@ type AuthImportOutput = {
 };
 
 async function importRequestBoundDelegationWithBootstrap(
-  ctx: { profile: string; host: string },
+  ctx: CLIContext,
   artifact: unknown,
 ): Promise<void> {
   const session = await ProfileManager.getSession(ctx.profile);

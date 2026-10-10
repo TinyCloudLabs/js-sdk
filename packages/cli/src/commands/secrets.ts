@@ -30,6 +30,7 @@ import { ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { withSignInHint } from "../auth/session-expired.js";
+import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
@@ -237,6 +238,9 @@ async function ensureSecretsNode(
           { hint: scopedSecretLoginHint(ctx.profile) },
         );
       }
+      // The refresh replaces the refused session; it targets the node discovery picks.
+      const { completeDeferredLocalDiscovery } = await import("../lib/host.js");
+      await completeDeferredLocalDiscovery(ctx);
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
         () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition }),
@@ -971,10 +975,8 @@ function isStoredSessionExpired(session: object): boolean {
   const record = session as Record<string, unknown>;
   const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
   if (direct) return direct.getTime() <= Date.now();
-  if (typeof record.siwe !== "string") return false;
-  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  const expiry = match ? parseDate(match[1].trim()) : null;
-  return expiry !== null && expiry.getTime() <= Date.now();
+  const signedOrSiweExpiry = sessionExpiresAt(record);
+  return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
 }
 
 function parseDate(value: unknown): Date | null {

@@ -271,6 +271,25 @@ function compactUcanPayload(authorization: string): Record<string, unknown> {
   }
 }
 
+/**
+ * The expiry a compact UCAN authorization signs: its payload's `exp`. Reads
+ * the bytes the issuer's signature covers without verifying that signature,
+ * which the node does. `undefined` when `authorization` is not a compact UCAN
+ * or its payload has no finite numeric `exp`; then no local expiry decision
+ * can be made (activation refuses such a UCAN).
+ */
+export function signedCompactUcanExpiry(authorization: string): Date | undefined {
+  let payload: Record<string, unknown>;
+  try {
+    payload = compactUcanPayload(authorization);
+  } catch {
+    return undefined;
+  }
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return undefined;
+  const expiry = new Date(payload.exp * 1000);
+  return Number.isNaN(expiry.getTime()) ? undefined : expiry;
+}
+
 function canonicalPermissionEntries(
   permissions: PermissionEntry[],
 ): PermissionEntry[] {

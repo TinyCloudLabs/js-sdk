@@ -61,6 +61,8 @@ jobs:
           bun test packages/cli/src/commands/secrets-owner-retry.test.ts
           bun test packages/cli/src/commands/expired-session.test.ts
           bun test packages/cli/src/commands/secrets-grant-replay.test.ts
+          bun test packages/cli/src/commands/import-expiry-race.test.ts
+          bun test packages/cli/src/lib/host.discovery.test.ts
           bun test packages/cli/src/commands/stored-grant-warnings.test.ts
           bun test packages/cli/src/commands/auth-grants.test.ts
           bun test packages/cli/src/commands/auth-import-signed.test.ts

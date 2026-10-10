@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 
 import {
   principalDidEquals,
@@ -13,6 +13,7 @@ import { activateValidatedRuntimeDelegation } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
 
 const RESTORE_HOST = "http://127.0.0.1:1";
@@ -799,6 +800,71 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       fixture.assertNarrowDelegatedReadAndDecrypt(activated, restored.sessionDid);
     } finally {
       fixture.stop();
+    }
+  });
+  // TC-674 regression: fails before the fix
+  test("refuses an expired imported session at the signed expiry before fetching", async () => {
+    const originalNow = Date.now();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("unexpected node request");
+    });
+    try {
+      const exp = Math.floor(originalNow / 1000) + 3600;
+      const wasm = new NodeWasmBindings();
+      const manager = wasm.createSessionManager();
+      const delegateDid = manager.getDID("default").split("#", 1)[0]!;
+      const imported = await mintCompactDelegation({ audience: delegateDid, expSecs: exp, host: RESTORE_HOST });
+      const data = {
+        delegationHeader: imported.delegation.delegationHeader,
+        delegationCid: imported.delegation.cid,
+        spaceId: imported.spaceId,
+        jwk: JSON.parse(manager.jwk("default")!),
+        verificationMethod: delegateDid,
+      };
+      const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: wasm });
+      await expect(node.restoreSession(data)).resolves.toBeUndefined();
+      const sessionDid = node.sessionDid;
+
+      setSystemTime(new Date(exp * 1000));
+      await expect(node.restoreSession(data)).rejects.toMatchObject({
+        name: "InvalidRestoredSessionError",
+        code: "AUTH_EXPIRED",
+      });
+      expect(node.sessionDid).toBe(sessionDid);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      setSystemTime(originalNow);
+      fetchSpy.mockRestore();
+    }
+  });
+
+  // TC-674 control: passes before and after
+  test("restores an imported session one millisecond before its signed expiry without fetching", async () => {
+    const originalNow = Date.now();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("unexpected node request");
+    });
+    try {
+      const exp = Math.floor(originalNow / 1000) + 3600;
+      const wasm = new NodeWasmBindings();
+      const manager = wasm.createSessionManager();
+      const delegateDid = manager.getDID("default").split("#", 1)[0]!;
+      const imported = await mintCompactDelegation({ audience: delegateDid, expSecs: exp, host: RESTORE_HOST });
+      const data = {
+        delegationHeader: imported.delegation.delegationHeader,
+        delegationCid: imported.delegation.cid,
+        spaceId: imported.spaceId,
+        jwk: JSON.parse(manager.jwk("default")!),
+        verificationMethod: delegateDid,
+      };
+      setSystemTime(new Date(exp * 1000 - 1));
+      const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: wasm });
+      await expect(node.restoreSession(data)).resolves.toBeUndefined();
+      expect(node.isSessionOnly).toBe(true);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      setSystemTime(originalNow);
+      fetchSpy.mockRestore();
     }
   });
 });

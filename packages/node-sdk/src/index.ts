@@ -240,6 +240,7 @@ export {
   grantAuthRequest,
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
+  signedCompactUcanExpiry,
   RUNTIME_DELEGATION_REJECTIONS,
   RuntimeDelegationRejectedError,
 } from "./delegation";

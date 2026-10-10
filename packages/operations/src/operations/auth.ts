@@ -358,7 +358,11 @@ async function importRequestBoundDelegation(
         delegation,
         { host },
       );
-    } catch {
+    } catch (error) {
+      // Validated activation read an expiry that has passed: the delegation expired, it was not otherwise refused.
+      if (typeof error === "object" && error !== null && "reason" in error && error.reason === "expired") {
+        return expiredDelegation();
+      }
       return operationFailure(
         "DELEGATION_REJECTED",
         "The delegation was rejected by the TinyCloud runtime.",

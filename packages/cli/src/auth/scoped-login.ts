@@ -1,4 +1,4 @@
-import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
@@ -111,13 +111,19 @@ export function expectedOwnerFor(profileName: string, profile: ProfileConfig | n
   return pinned ?? requested;
 }
 
-/** Expiry recorded in a saved session (explicit fields, else the SIWE message). */
+/** Expiry recorded in a saved session: explicit fields, else the SIWE message, else, for the proof-free session `tc auth import` bootstraps, the expiry its compact UCAN signs. */
 export function sessionExpiresAt(session: Record<string, unknown> | null): string | null {
   if (session === null) return null;
   const candidates = [session.expiresAt, session.expiry, session.expirationTime,
     typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : undefined];
   const value = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
-  return typeof value === "string" ? new Date(value).toISOString() : null;
+  if (typeof value === "string") return new Date(value).toISOString();
+  // Restore verifies a session by its delegation's signed `exp` alone only when it carries none of the
+  // SIWE proof fields; a record with any of them is a signed (or damaged) session, never read this way.
+  if (["siwe", "signature", "address", "chainId"].some((field) => session[field] !== undefined)) return null;
+  const header = session.delegationHeader;
+  const authorization = typeof header === "object" && header !== null ? (header as { Authorization?: unknown }).Authorization : undefined;
+  return typeof authorization === "string" ? signedCompactUcanExpiry(authorization)?.toISOString() ?? null : null;
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
