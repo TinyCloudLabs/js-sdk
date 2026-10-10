@@ -90,6 +90,10 @@ export const SpaceServiceConfigSchema = z.object({
   sharingService: z.unknown().optional(),
   /** Factory function to create delegations using SIWE-based flow */
   createDelegation: z.function().optional(),
+  /** Best-effort hook after the SDK discovers or creates a space */
+  onSpaceRegistered: z.function().optional(),
+  /** True once the owner's storage is known full; list() then skips registration */
+  isStorageFull: z.function().optional(),
 });
 
 export type SpaceServiceConfig = z.infer<typeof SpaceServiceConfigSchema>;

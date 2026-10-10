@@ -155,6 +155,9 @@ export {
   storageLimitReachedError,
   storageRejectionError,
   parseStorageQuotaBytes,
+  parseStorageRejection,
+  type StorageAccountUsage,
+  type StorageRejectionDetails,
   isStorageFullError,
   STORAGE_FULL_MESSAGE,
   STORAGE_WRITE_TOO_LARGE_MESSAGE,
@@ -267,7 +270,25 @@ export type {
   HookStreamRetryConfig,
 } from "./hooks";
 
-// Quota
+// Storage status and the single storage.full event
+export {
+  StorageFullMonitor,
+  STORAGE_MANAGE_URL,
+  STORAGE_NEARLY_FULL_RATIO,
+  parseStorageStatus,
+  storageUsageState,
+} from "./storage";
+export type {
+  IStorageService,
+  StorageFullEvent,
+  StorageFullHandler,
+  StorageStatus,
+  StorageStatusOptions,
+  StorageUsage,
+  StorageUsageState,
+} from "./storage";
+
+// Quota (deprecated: use storage.status() and on("storage.full"))
 export { TinyCloudQuota } from "./quota";
 export type { QuotaConfig, QuotaStatus } from "./quota";
 

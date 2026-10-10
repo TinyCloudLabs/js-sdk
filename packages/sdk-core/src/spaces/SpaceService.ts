@@ -143,6 +143,12 @@ export interface SpaceServiceConfig {
   createDelegation?: CreateDelegationFunction;
   /** Optional best-effort hook after the SDK discovers or creates a space. */
   onSpaceRegistered?: (space: SpaceInfo) => void | Promise<void>;
+  /**
+   * True once a write was rejected because the owner's storage is full.
+   * `list()` then skips registering the spaces it lists, since every such
+   * write would be rejected too.
+   */
+  isStorageFull?: () => boolean;
 }
 
 /**
@@ -385,6 +391,7 @@ export class SpaceService implements ISpaceService {
   private sharingService?: ISharingService;
   private createDelegationFn?: CreateDelegationFunction;
   private onSpaceRegisteredFn?: (space: SpaceInfo) => void | Promise<void>;
+  private isStorageFullFn?: () => boolean;
 
   /** Cache of created Space objects */
   private spaceCache: Map<string, ISpace> = new Map();
@@ -413,6 +420,7 @@ export class SpaceService implements ISpaceService {
     this.sharingService = config.sharingService;
     this.createDelegationFn = config.createDelegation;
     this.onSpaceRegisteredFn = config.onSpaceRegistered;
+    this.isStorageFullFn = config.isStorageFull;
   }
 
   /**
@@ -431,6 +439,7 @@ export class SpaceService implements ISpaceService {
     if (config.sharingService) this.sharingService = config.sharingService;
     if (config.createDelegation) this.createDelegationFn = config.createDelegation;
     if (config.onSpaceRegistered) this.onSpaceRegisteredFn = config.onSpaceRegistered;
+    if (config.isStorageFull) this.isStorageFullFn = config.isStorageFull;
 
     // Clear caches when config changes
     this.spaceCache.clear();
@@ -502,8 +511,12 @@ export class SpaceService implements ISpaceService {
 
       // Remove duplicates (prefer owned over delegated)
       const uniqueSpaces = this.deduplicateSpaces(spaces);
-      for (const space of uniqueSpaces) {
-        this.notifySpaceRegistered(space);
+      // Listing is a read: once storage is known full, registering would only
+      // send writes the node rejects.
+      if (!this.isStorageFullFn?.()) {
+        for (const space of uniqueSpaces) {
+          this.notifySpaceRegistered(space);
+        }
       }
 
       return ok(uniqueSpaces);

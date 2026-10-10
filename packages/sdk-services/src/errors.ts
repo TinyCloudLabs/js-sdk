@@ -459,10 +459,76 @@ export function parseStorageQuotaBytes(
 }
 
 /**
+ * Account-wide storage totals the node attaches to a storage rejection when
+ * billing supplied them. `limitBytes` is the plan budget shared by all the
+ * owner's spaces, so this is the number to show the user, not the space's.
+ */
+export interface StorageAccountUsage {
+  usedBytes: number;
+  limitBytes: number;
+  /** Plan tier id, e.g. `free` or `paid`. */
+  plan?: string;
+}
+
+/** What a node storage rejection says about the space and the account. */
+export interface StorageRejectionDetails {
+  usedBytes?: number;
+  limitBytes?: number;
+  account?: StorageAccountUsage;
+}
+
+const STORAGE_REJECTION_BODY_ERRORS: Record<string, true> = {
+  storage_quota_exceeded: true,
+  storage_limit_reached: true,
+};
+
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function byteCountsOf(value: unknown): { usedBytes: number; limitBytes: number } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { usedBytes, limitBytes } = value as Record<string, unknown>;
+  return isByteCount(usedBytes) && isByteCount(limitBytes) ? { usedBytes, limitBytes } : undefined;
+}
+
+/**
+ * Parse a node storage rejection. The node sends a JSON body
+ * (`{error, message, space: {usedBytes, limitBytes}, account?: {usedBytes,
+ * limitBytes, plan}}`); older nodes send only the plain-text message. Returns
+ * undefined when the body is neither, e.g. a proxy's own 413 page.
+ */
+export function parseStorageRejection(responseText: string): StorageRejectionDetails | undefined {
+  let body: unknown;
+  try {
+    body = JSON.parse(responseText);
+  } catch {
+    return parseStorageQuotaBytes(responseText);
+  }
+  if (typeof body !== "object" || body === null) return undefined;
+  const record = body as Record<string, unknown>;
+  const message = typeof record.message === "string" ? record.message : "";
+  const space = byteCountsOf(record.space) ?? parseStorageQuotaBytes(message);
+  const isStorageBody = typeof record.error === "string" && STORAGE_REJECTION_BODY_ERRORS[record.error] === true;
+  if (!space && !isStorageBody) {
+    return undefined;
+  }
+  const details: StorageRejectionDetails = { ...space };
+  const account = byteCountsOf(record.account);
+  if (account) {
+    const plan = (record.account as Record<string, unknown>).plan;
+    details.account = typeof plan === "string" && plan !== "" ? { ...account, plan } : account;
+  }
+  return details;
+}
+
+/**
  * Build the error for a write the node rejected for storage: 402 when storage
  * is already full, 413 when this write is larger than what is left. KV, SQL
  * and DuckDB all report it with the same codes and message so an app can
  * detect "storage full" in one place with {@link isStorageFullError}.
+ * `meta.usedBytes`/`meta.limitBytes` describe the space; `meta.account`
+ * carries the account totals when the node sent them.
  */
 export function storageRejectionError(
   service: string,
@@ -470,7 +536,7 @@ export function storageRejectionError(
   meta: Record<string, unknown>,
   responseText: string
 ): ServiceError {
-  const quotaMeta = { ...meta, ...parseStorageQuotaBytes(responseText) };
+  const quotaMeta = { ...meta, ...parseStorageRejection(responseText) };
   return status === 402
     ? storageQuotaExceededError(service, STORAGE_FULL_MESSAGE, quotaMeta)
     : storageLimitReachedError(service, STORAGE_WRITE_TOO_LARGE_MESSAGE, quotaMeta);

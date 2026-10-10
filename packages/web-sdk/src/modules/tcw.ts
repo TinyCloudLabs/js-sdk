@@ -67,6 +67,8 @@ import {
   ACCOUNT_MANIFEST_PERMISSIONS,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
+  type StorageFullEvent,
+  type IStorageService,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
@@ -324,6 +326,7 @@ export class TinyCloudWeb {
   private _secrets = new Map<string, ISecretsService>();
   private _credentialsService?: CredentialsService;
   private _shareReceiverService?: ShareReceiverService;
+  private readonly storageFullHandlers = new Set<(event: StorageFullEvent) => void>();
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -457,6 +460,15 @@ export class TinyCloudWeb {
     nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler(this.config);
 
     this._node = new TinyCloudNode(nodeConfig);
+    this._node.on("storage.full", (event) => {
+      for (const handler of this.storageFullHandlers) {
+        try {
+          handler(event);
+        } catch (error) {
+          console.error('Error in "storage.full" handler:', error);
+        }
+      }
+    });
   }
 
   /**
@@ -506,6 +518,25 @@ export class TinyCloudWeb {
   get bootstrapSkipped(): boolean { return this.node.bootstrapSkipped; }
   /** Outcome of the last signIn()'s account-bootstrap attempt. */
   get bootstrapStatus(): { skipped: boolean; reason?: string; warnings?: BootstrapWarning[] } { return this.node.bootstrapStatus; }
+
+  /**
+   * Subscribe to `storage.full`. It fires once, on the first write any
+   * service had rejected because the owner's TinyCloud storage is full, so an
+   * app can show one read-only banner. Reads keep working. Safe to call before
+   * initialization finishes. Returns the unsubscribe function.
+   */
+  on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void {
+    if (event !== "storage.full") {
+      throw new Error(`Unknown TinyCloud event: ${String(event)}`);
+    }
+    this.storageFullHandlers.add(handler);
+    return () => {
+      this.storageFullHandlers.delete(handler);
+    };
+  }
+
+  /** The owner's TinyCloud storage; `storage.status()` reads usage and plan from the node. */
+  get storage(): IStorageService { return this.node.storage; }
 
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }

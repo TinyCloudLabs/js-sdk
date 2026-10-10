@@ -21,6 +21,7 @@ import {
   wrapError,
   parseAuthError,
   storageRejectionError,
+  parseStorageRejection,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -544,9 +545,14 @@ export class SQLService extends BaseService implements ISQLService {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
 
-    // The node answers a write-class request on a full space with 402.
+    // The node answers a write-class request on a full space with 402, and a
+    // write larger than what is left with a storage 413. A 413 without the
+    // node's storage body (a response too large, a proxy limit) is not storage.
     if (response.status === 402) {
       return err(storageRejectionError("sql", 402, meta, errorText));
+    }
+    if (response.status === 413 && parseStorageRejection(errorText)) {
+      return err(storageRejectionError("sql", 413, meta, errorText));
     }
 
     const errorBody = parseServiceErrorBody(errorText);

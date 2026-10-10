@@ -60,6 +60,8 @@ export interface PermissionHint {
 
 /**
  * Storage quota information returned with quota-related errors.
+ * @deprecated Read `usedBytes`, `limitBytes` and `account` from the error's
+ * `meta`, or use `StorageFullEvent` from `tc.on("storage.full", handler)`.
  */
 export interface StorageQuotaInfo {
   usedBytes: number;
@@ -110,6 +112,8 @@ export const ErrorCodes = {
   // Storage quota errors
   STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
   STORAGE_LIMIT_REACHED: "STORAGE_LIMIT_REACHED",
+  /** The node answered the usage read without usage numbers (it predates the read). */
+  STORAGE_STATUS_UNAVAILABLE: "STORAGE_STATUS_UNAVAILABLE",
 
   // DuckDB-specific errors
   DUCKDB_ERROR: "DUCKDB_ERROR",
@@ -435,6 +439,8 @@ export const TelemetryEvents = {
   SERVICE_RETRY: "service.retry",
   SESSION_CHANGED: "session.changed",
   SESSION_EXPIRED: "session.expired",
+  /** Emitted once, on the first write rejected because storage is full. */
+  STORAGE_FULL: "storage.full",
 } as const;
 
 // =============================================================================
