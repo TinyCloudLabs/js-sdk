@@ -445,57 +445,133 @@ describe("A2 lifecycle review regressions", () => {
     expect(unavailable.counters().opens).toBe(2);
     expect(unavailable.events.filter((event) => event.type === "replication.read").at(-1)).toMatchObject({ reason: "replica_unavailable", code: "STORAGE_ERROR" });
   });
-  test("bounds a foreground cancellation drain for get and list", async () => {
-    const cases = [
-      { cancellation: "caller abort", code: "ABORTED" },
-      { cancellation: "request deadline", code: "TIMEOUT" },
-      { cancellation: "stale-sync timeout", code: "TIMEOUT" },
-    ] as const;
+  test("stale sync timeout drains the abort and serves offline get and list", async () => {
     for (const op of ["get", "list"] as const) {
-      for (const scenario of cases) {
-        const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
-        const fire = (ms: number) => {
-          const timer = timers.find((candidate) => candidate.ms === ms && !candidate.cancelled);
-          expect(timer).toBeDefined();
-          timer!.cancelled = true;
-          timer!.fn();
-        };
-        let started!: () => void;
-        const syncStarted = new Promise<void>((resolve) => { started = resolve; });
-        const env = setup({
-          onSync: () => {
-            started();
-            return new Promise<void>(() => {});
-          },
-          setTimeoutImpl: (fn, ms) => {
-            const timer = { fn, ms, cancelled: false };
-            timers.push(timer);
-            return () => { timer.cancelled = true; };
-          },
-        });
-        env.setNow(1_200_001);
-        const requestAbort = new AbortController();
-        const request = op === "get"
-          ? env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal })
-          : env.controller.list({ ...listRequest(undefined, async () => ok({ keys: [], truncated: false })), signal: requestAbort.signal });
-        await syncStarted;
-        if (scenario.cancellation === "caller abort") requestAbort.abort();
-        else if (scenario.cancellation === "request deadline") requestAbort.abort(new RequestTimeoutError(20));
-        else fire(options.staleSyncTimeoutMs);
-        for (let tick = 0; tick < 10 && !timers.some((timer) => timer.ms === 3_000 && !timer.cancelled); tick++) await Promise.resolve();
-        fire(3_000);
-        const result = await request;
-        expect(result.ok).toBe(false);
-        expect(!result.ok && result.error.code).toBe(scenario.code);
-        expect(env.events.some((event) => event.type === "replication.sync" && event.code === "DRAIN_TIMEOUT")).toBe(true);
-
-        const closing = env.controller.close();
-        await Promise.resolve();
-        fire(3_000);
-        await closing;
-      }
+      const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+      let syncStarted!: () => void;
+      const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+      const env = setup({
+        onSync: (_epoch, signal) => {
+          syncStarted();
+          return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+        },
+        setTimeoutImpl: (fn, ms) => {
+          const timer = { fn, ms, cancelled: false };
+          timers.push(timer);
+          return () => { timer.cancelled = true; };
+        },
+      });
+      env.setNow(1_200_001);
+      const request = op === "get"
+        ? env.controller.get(readRequest(env.network))
+        : env.controller.list(listRequest(undefined, async () => ok({ keys: [], truncated: false })));
+      await started;
+      const timeout = timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled);
+      expect(timeout).toBeDefined();
+      timeout!.fn();
+      const result = await request;
+      expect(result.ok).toBe(true);
+      expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(op === "get" ? 1 : 2);
+      expect(env.counters().networkCalls).toBe(0);
+      expect(env.events.some((event) => event.type === "replication.read" && event.source === "replica" && event.syncError === "TIMEOUT")).toBe(true);
     }
   });
+
+  test("a sync that misses the abort drain bound goes to the network", async () => {
+    const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+    let syncStarted!: () => void;
+    const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+    const env = setup({
+      onSync: () => { syncStarted(); return new Promise<void>(() => {}); },
+      setTimeoutImpl: (fn, ms) => {
+        const timer = { fn, ms, cancelled: false };
+        timers.push(timer);
+        return () => { timer.cancelled = true; };
+      },
+    });
+    env.setNow(1_200_001);
+    const request = env.controller.get(readRequest(env.network));
+    await started;
+    timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled)!.fn();
+    for (let tick = 0; tick < 10 && !timers.some((timer) => timer.ms === 3_000 && !timer.cancelled); tick++) await Promise.resolve();
+    timers.find((timer) => timer.ms === 3_000 && !timer.cancelled)!.fn();
+    const result = await request;
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters().localReads).toBe(0);
+    expect(env.counters().networkCalls).toBe(1);
+    expect(env.events.some((event) => event.type === "replication.read" && event.source === "network" && event.code === "DRAIN_TIMEOUT")).toBe(true);
+  });
+
+  test("caller deadline during stale sync still returns TIMEOUT", async () => {
+    let syncStarted!: () => void;
+    const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+    const env = setup({ onSync: (_epoch, signal) => {
+      syncStarted();
+      return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } });
+    env.setNow(1_200_001);
+    const requestAbort = new AbortController();
+    const request = env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal });
+    await started;
+    requestAbort.abort(new RequestTimeoutError(20));
+    const result = await request;
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("TIMEOUT");
+    expect(env.counters().localReads).toBe(0);
+  });
+
+  test("caller timeout remains TIMEOUT when the foreground sync exceeds the drain bound", async () => {
+    const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+    let syncStarted!: () => void;
+    const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+    const env = setup({
+      onSync: () => { syncStarted(); return new Promise<void>(() => {}); },
+      setTimeoutImpl: (fn, ms) => {
+        const timer = { fn, ms, cancelled: false };
+        timers.push(timer);
+        return () => { timer.cancelled = true; };
+      },
+    });
+    env.setNow(1_200_001);
+    const requestAbort = new AbortController();
+    const request = env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal });
+    await started;
+    requestAbort.abort(new RequestTimeoutError(20));
+    for (let tick = 0; tick < 10 && !timers.some((timer) => timer.ms === 3_000 && !timer.cancelled); tick++) await Promise.resolve();
+    timers.find((timer) => timer.ms === 3_000 && !timer.cancelled)!.fn();
+    const result = await request;
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("TIMEOUT");
+    expect(env.counters().localReads).toBe(0);
+  });
+
+  test("a replica behind its own committed write never serves offline", async () => {
+    const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+    let syncStarted!: () => void;
+    const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+    const env = setup({
+      onSync: (_epoch, signal) => {
+        syncStarted();
+        return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      },
+      setTimeoutImpl: (fn, ms) => {
+        const timer = { fn, ms, cancelled: false };
+        timers.push(timer);
+        return () => { timer.cancelled = true; };
+      },
+    });
+    await env.pending.update((state) => { state.committedEpoch = 1; });
+    env.setNow(1_200_001);
+    const request = env.controller.get(readRequest(env.network));
+    await started;
+    timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled)!.fn();
+    const result = await request;
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters().localReads).toBe(0);
+    expect(env.counters().networkCalls).toBe(1);
+    expect(env.events.some((event) => event.type === "replication.read" && event.reason === "REPLICA_BEHIND_OWN_WRITES")).toBe(true);
+  });
+
 
 
   test("foreground stale-read cancellation drains sync and preserves TIMEOUT or ABORTED", async () => {

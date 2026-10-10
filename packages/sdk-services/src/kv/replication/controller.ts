@@ -151,15 +151,16 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     state.sync = job;
     try { return await job; } finally { if (state.sync === job) state.sync = undefined; }
   }
-  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<void> {
+  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<boolean> {
     let cancel = () => {};
-    const timeout = new Promise<"timeout">((resolve) => {
-      cancel = scheduler.setTimeout(() => resolve("timeout"), CLOSE_TIMEOUT_MS);
+    const settled = sync.then(() => true, () => true);
+    const timeout = new Promise<false>((resolve) => {
+      cancel = scheduler.setTimeout(() => resolve(false), CLOSE_TIMEOUT_MS);
     });
     try {
-      if (await Promise.race([sync.then(() => "settled" as const, () => "settled" as const), timeout]) === "timeout") {
-        emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
-      }
+      const drained = await Promise.race([settled, timeout]);
+      if (!drained) emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
+      return drained;
     } finally { cancel(); }
   }
   async function freshness(prefix: string, handle: KVReplicaHandle, signal: AbortSignal): Promise<{ status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" }> {
@@ -179,7 +180,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const timeout = new Promise<{ timeout: true }>((resolve) => {
         cancelTimeout = scheduler.setTimeout(() => {
           timedOut = true;
-          syncController?.abort(Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }));
           resolve({ timeout: true });
         }, options.staleSyncTimeoutMs);
       });
@@ -209,12 +209,16 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
       }
       if ("timeout" in outcome) {
-        if (syncController) await drainForegroundSync(prefix, sync);
+        syncController?.abort(Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }));
+        const drained = syncController ? await drainForegroundSync(prefix, sync) : true;
+        if (signal.aborted) return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
+        if (!drained) return { status: currentStatus, syncedBeforeRead: false, syncError: "DRAIN_TIMEOUT", failure: "error" };
+        currentStatus = await handle.status();
         return { status: currentStatus, syncedBeforeRead: false, syncError: "TIMEOUT" };
       }
       if ("error" in outcome) {
         const code = errorCode(outcome.error);
-        if (code === "NETWORK_ERROR" || code === "TIMEOUT" || code === "ABORTED") return { status: currentStatus, syncedBeforeRead: false, syncError: timedOut ? "TIMEOUT" : code };
+        if (code === "NETWORK_ERROR" || (timedOut && code === "ABORTED")) return { status: currentStatus, syncedBeforeRead: false, syncError: timedOut ? "TIMEOUT" : code };
         return { status: currentStatus, syncedBeforeRead: false, syncError: code, failure: "error" };
       }
       if (outcome.result.status === "busy") return { status: currentStatus, syncedBeforeRead: false, failure: "busy" };
@@ -367,7 +371,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return value;
     }
     if (r.signal.aborted) return abortedResult(r.signal);
-    if (fresh.syncError === ErrorCodes.TIMEOUT) return err(serviceError(ErrorCodes.TIMEOUT, "KV request timed out", "kv"));
     if (fresh.failure) { const value = await r.network(); readEvent("get", r.path, prefix, "network", fresh.failure === "busy" ? "stale" : "stale", value.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError, syncedBeforeRead: fresh.syncedBeforeRead }); return value; }
     let pendingState: PendingWriteState;
     try { pendingState = await raceSignal(pending.read(), r.signal); }
@@ -453,7 +456,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return result;
     }
     if (r.signal.aborted) return abortedResult(r.signal);
-    if (fresh.syncError === ErrorCodes.TIMEOUT) return err(serviceError(ErrorCodes.TIMEOUT, "KV request timed out", "kv"));
     let state: PendingWriteState;
     try { state = await raceSignal(pending.read(), r.signal); }
     catch (error) {
