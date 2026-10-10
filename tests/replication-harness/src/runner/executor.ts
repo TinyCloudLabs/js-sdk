@@ -68,12 +68,39 @@ type CaptureClient = {
   redactionSecrets?: () => readonly string[] | Promise<readonly string[]>;
 };
 
-function sensitiveValues(value: unknown, parentKey = "", values: string[] = [], inherited = false): string[] {
-  const sensitive = inherited || /(?:private|secret|token|jwk|proof|delegation|authorization|credential|session|key)/i.test(parentKey);
-  if (typeof value === "string" && sensitive) values.push(value);
+const MIN_SECRET_LENGTH = 16;
+const PUBLIC_JWK_FIELDS = new Set(["kty", "crv", "x", "y", "kid", "alg", "use", "n", "e", "key_ops", "ext", "x5c", "x5t", "x5t#s256"]);
+const PRIVATE_JWK_FIELDS = new Set(["d", "p", "q", "dp", "dq", "qi", "oth", "k", "r", "t"]);
+
+function isJwkObject(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && typeof (value as Record<string, unknown>).kty === "string";
+}
+
+function sensitiveValues(value: unknown, parentKey = "", values: string[] = [], inherited = false, inJwk = false): string[] {
+  const key = parentKey.toLowerCase();
+  const currentIsJwk = inJwk || key === "jwk" || key === "jwks" || isJwkObject(value);
+  if (currentIsJwk) {
+    if (typeof value === "string") {
+      if ((PRIVATE_JWK_FIELDS.has(key) || key === "jwk" || key === "jwks") && value.length >= MIN_SECRET_LENGTH) values.push(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) sensitiveValues(item, parentKey, values, false, true);
+    } else if (value !== null && typeof value === "object") {
+      for (const [childKey, item] of Object.entries(value)) {
+        const lowered = childKey.toLowerCase();
+        if (PUBLIC_JWK_FIELDS.has(lowered)) continue;
+        if (PRIVATE_JWK_FIELDS.has(lowered) || isJwkObject(item) || lowered === "jwk" || lowered === "jwks") {
+          sensitiveValues(item, childKey, values, PRIVATE_JWK_FIELDS.has(lowered), true);
+        }
+      }
+    }
+    return values;
+  }
+  const sensitive = inherited || /(?:private|secret|token|proof|delegation|authorization|credential|session|key)/i.test(parentKey);
+  if (typeof value === "string" && sensitive && value.length >= MIN_SECRET_LENGTH) values.push(value);
   else if (Array.isArray(value)) for (const item of value) sensitiveValues(item, parentKey, values, sensitive);
   else if (value !== null && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) sensitiveValues(item, key, values, sensitive);
+    for (const [childKey, item] of Object.entries(value)) sensitiveValues(item, childKey, values, sensitive);
   }
   return values;
 }
@@ -99,7 +126,7 @@ async function collectHomeSecrets(client: CaptureClient): Promise<string[]> {
   for (const path of candidates) {
     try {
       const content = await readFile(path, "utf8");
-      secrets.push(content);
+      if (content.length >= MIN_SECRET_LENGTH) secrets.push(content);
       try { secrets.push(...sensitiveValues(JSON.parse(content))); } catch { /* the raw credential file is still registered */ }
     } catch { /* optional credential files are created by the client API */ }
   }
@@ -111,7 +138,8 @@ async function registerClientSecrets(topology: Topology, secrets: string[], coll
     const client = topology.client(spec.id);
     const supplied = await (client as CaptureClient).redactionSecrets?.() ?? [];
     const external = collect ? await collect(client, spec, runId) : [];
-    secrets.push(...sensitiveValues(spec), ...supplied, ...external, ...await collectHomeSecrets(client as CaptureClient));
+    const values = [...sensitiveValues(spec), ...supplied, ...external, ...await collectHomeSecrets(client as CaptureClient)];
+    secrets.push(...values.filter((value) => value.length >= MIN_SECRET_LENGTH));
   }
 }
 

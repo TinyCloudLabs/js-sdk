@@ -14,10 +14,10 @@ import { initialResult, summarize } from "./status";
 import { installInterruptHandler, type InterruptTarget } from "./signals";
 
 export type RunRowsOptions = {
-  rows: readonly ScenarioRow[]; clock: Clock; concurrency: number; abortGraceMs?: number; runSignal?: AbortSignal;
+  rows: readonly ScenarioRow[]; clock: Clock; concurrency: number; abortGraceMs?: number; finalizeTimeoutMs?: number; runSignal?: AbortSignal;
   executeRow(row: ScenarioRow, signal: AbortSignal): Promise<ScenarioResult>;
   quarantine?: readonly QuarantineEntry[]; report: Omit<RunReport, "results" | "summary" | "quarantined" | "interrupted" | "finishedAt" | "durationMs">;
-  reportDirectory: string; secrets?: readonly string[]; finalizeRow?(row: ScenarioRow, result: ScenarioResult): Promise<void>;
+  reportDirectory: string; secrets?: readonly string[]; finalizeRow?(row: ScenarioRow, result: ScenarioResult, signal: AbortSignal): Promise<void>;
 };
 export type RunRowsOutput = { report: RunReport; interrupted: boolean };
 
@@ -71,8 +71,17 @@ export async function runRows(options: RunRowsOptions): Promise<RunRowsOutput> {
       result.reason = "CORE_STATUS_FORBIDDEN";
     }
     if (options.finalizeRow) {
-      try { await options.finalizeRow(row, result); }
-      catch (error) {
+      const finalizeTimeoutMs = options.finalizeTimeoutMs ?? 60_000;
+      try {
+        const finalized = await runWithDeadline(options.clock, finalizeTimeoutMs, options.abortGraceMs ?? 5000, options.runSignal,
+          (signal) => options.finalizeRow!(row, result, signal));
+        if (finalized.timedOut) {
+          interrupted ||= finalized.cancelled;
+          result.status = "error";
+          result.reason = finalized.cancelled ? "INTERRUPTED" : `FINALIZE_FAILED: deadline exceeded after ${finalizeTimeoutMs}ms`;
+          result.teardown.errors.push(result.reason);
+        }
+      } catch (error) {
         result.status = "error";
         result.reason = `FINALIZE_FAILED: ${error instanceof Error ? error.message : String(error)}`;
         result.teardown.errors.push(result.reason);

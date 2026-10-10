@@ -5,11 +5,13 @@ import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import type { Scenario } from "../src/contracts/scenario";
 import type { ScenarioResult } from "../src/contracts/report";
 import type { RunContextView } from "../src/contracts/scenario";
 import { realClock } from "../src/contracts/clock";
 import { RunReportSchema } from "../src/schemas/report";
+import { redactText } from "../src/runner/redact";
 import { expandScenarios, validateRegistry, type ScenarioRow } from "../src/runner/registry";
 import { validateQuarantine } from "../src/runner/quarantine";
 import { createScenarioContext, writeScenarioArtefacts, type ScenarioContextState } from "../src/runner/context";
@@ -175,8 +177,25 @@ describe("S3a scenario expansion", () => {
         finalizeRow: async () => { lateController.abort(); } });
       expect(late.interrupted).toBe(true);
       expect(late.report.interrupted).toBe(true);
-      expect(late.report.results[0]?.status).toBe("pass");
+      expect(late.report.results[0]?.status).toBe("error");
+      expect(late.report.results[0]?.reason).toBe("INTERRUPTED");
       expect(JSON.parse(await readFile(join(dir, "late", "report.json"), "utf8")).interrupted).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  test("a stalled row finalizer is bounded and still writes a FINALIZE_FAILED report", async () => {
+    const dir = await tempDir();
+    const [row] = expandScenarios([scenario("EDGE-13", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
+    try {
+      const started = Date.now();
+      const output = await runRows({ rows: [row!], clock: realClock, concurrency: 1, finalizeTimeoutMs: 20, abortGraceMs: 10,
+        report: reportBase(dir), reportDirectory: dir, executeRow: async (selected) => result(selected),
+        finalizeRow: async () => new Promise<void>(() => {}) });
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(output.report.results[0]?.status).toBe("error");
+      expect(output.report.results[0]?.reason).toBe("FINALIZE_FAILED: deadline exceeded after 20ms");
+      const reportText = await readFile(join(dir, "report.json"), "utf8");
+      expect(reportText).toContain("FINALIZE_FAILED: deadline exceeded after 20ms");
+      expect(RunReportSchema.safeParse(JSON.parse(reportText)).success).toBe(true);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
@@ -225,6 +244,8 @@ describe("S3a scenario expansion", () => {
     const dir = await tempDir();
     const secret = JSON.stringify({ kty: "EC", crv: "P-256", d: "synthetic-jwk-private-value", x: "synthetic-public-x", y: "synthetic-public-y" });
     const wrappedSecret = secret.replace(/(.{12})/g, "$1\n");
+    const jwkPrivateD = "private-jwk-member-material-0123456789";
+    const longJwkKid = "public-key-id-that-must-remain-visible";
     const runId = "test-run";
     const sourceRoot = await mkdtemp(join(tmpdir(), "tc893-client-capture-fixture-"));
     const home = join(sourceRoot, "homes", "c1");
@@ -232,18 +253,22 @@ describe("S3a scenario expansion", () => {
       clients: [{ id: "c1", kind: "cli", node: "n1", identity: "owner", auth: { posture: "owner" } }] });
     const fixtureScenario = scenario("EDGE-10", "edge", { topology: spec, run: async (ctx) => {
       ctx.log(`client log ${secret}`);
+      ctx.log(`JWK public identifiers default and ${longJwkKid}; private d ${jwkPrivateD}`);
+      ctx.check("JWK public metadata remains visible", true, { kid: "default", longKid: longJwkKid, privateD: jwkPrivateD });
       ctx.check("key detail", false, { privateKey: secret, logLine: `client log ${secret}` });
     } });
     try {
       const profileDir = join(home, ".tinycloud", "profiles", "owner");
       await mkdir(profileDir, { recursive: true });
-      await writeFile(join(profileDir, "key.json"), JSON.stringify({ privateKey: secret }));
+      await writeFile(join(profileDir, "key.json"), JSON.stringify({ privateKey: secret, jwk: {
+        kty: "OKP", crv: "Ed25519", kid: "default", d: jwkPrivateD, x: "long-public-coordinate-value",
+      }, secondary: { kty: "OKP", crv: "Ed25519", kid: longJwkKid, d: "another-private-member-material" } }));
       const factory: TopologyFactory = { create: async (env, topologySpec, options) => {
         const captureDir = join(env.resultsDir, env.runId, options.topoId, "clients", "c1");
         await mkdir(captureDir, { recursive: true });
         await writeFile(join(captureDir, "stderr.log"), `client stderr ${secret}\n`);
         await writeFile(join(captureDir, "events.jsonl"), `${JSON.stringify({ token: secret })}\n`);
-        const client = { id: "c1", kind: "cli", capabilities: new Set(), home: () => home, artifactDirectoryPath: () => captureDir } as unknown as KvClient;
+        const client = { id: "c1", kind: "cli", capabilities: new Set(), home: () => home, profile: () => "owner", artifactDirectoryPath: () => captureDir } as unknown as KvClient;
         return { id: options.topoId, backend: options.backend, spec: topologySpec, client: (id: string) => id === "c1" ? client : undefined,
           collectArtefacts: async (outputDir: string) => {
             const nodeLog = join(outputDir, "nodes/n1.log");
@@ -267,6 +292,9 @@ describe("S3a scenario expansion", () => {
       expect(json).not.toContain(secret);
       expect(markdown).not.toContain(secret);
       expect(json).toContain("[REDACTED]");
+      expect(json).toContain("default");
+      expect(json).toContain(longJwkKid);
+      expect(json).not.toContain(jwkPrivateD);
       expect(markdown).toContain("[REDACTED]");
       expect(RunReportSchema.safeParse(JSON.parse(json)).success).toBe(true);
       const row = output.report.results[0]!;
@@ -337,6 +365,20 @@ describe("S3a scenario expansion", () => {
       { key: "CORE-01[sdk>cli]@sqlite", ticket: "TC-893", reason: "known issue" },
       { key: "CORE-01[cli>sdk]@pg16", ticket: "TC-893", reason: "known issue" },
     ]).map((entry) => entry.key)).toEqual(["CORE-01[sdk>cli]@sqlite", "CORE-01[cli>sdk]@pg16"]);
+  });
+
+  test("redacts a 15 KB line-wrapped secret in under 100 ms", () => {
+    const secret = "private-key-material-☃".repeat(682);
+    const wrapped = secret.match(/.{1,48}/g)!.join("\r\n");
+    const input = `prefix\r\n${wrapped}\r\nsuffix`;
+    const secrets = [secret];
+    const started = performance.now();
+    const redacted = redactText(input, secrets);
+    const elapsedMs = performance.now() - started;
+    expect(secret.length).toBeGreaterThanOrEqual(15_000);
+    expect(redacted).toBe("prefix\r\n[REDACTED]\r\nsuffix");
+    expect(elapsedMs).toBeLessThan(100);
+    expect(redactText(input, secrets)).toBe(redacted);
   });
 
   test("redacts serialized and binary secrets without changing equality or leaking either leg report", async () => {

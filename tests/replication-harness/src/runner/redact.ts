@@ -1,6 +1,17 @@
 import { Buffer } from "node:buffer";
 
 const REDACTED = "[REDACTED]";
+const MIN_SECRET_LENGTH = 16;
+
+type RedactionForms = { text: string[]; bytes: Uint8Array[]; multiline: string[] };
+type FormCache = {
+  seen: Set<string>;
+  text: Set<string>;
+  bytes: Map<string, Uint8Array>;
+  multiline: Set<string>;
+  compiled: RedactionForms;
+};
+const formCache = new WeakMap<readonly string[], FormCache>();
 
 function encodedForms(value: string): string[] {
   const encoded = Buffer.from(value, "utf8").toString("base64");
@@ -11,7 +22,7 @@ function hexForms(value: Uint8Array): string[] {
   const hex = Buffer.from(value).toString("hex");
   return hex ? [hex, hex.toUpperCase()] : [];
 }
-function secretForms(secret: string): { text: string[]; bytes: Uint8Array[]; multiline: string[] } {
+function secretForms(secret: string): RedactionForms {
   const text = new Set<string>();
   for (const source of [secret, JSON.stringify(secret).slice(1, -1)]) {
     for (const form of encodedForms(source)) text.add(form);
@@ -34,34 +45,84 @@ function secretForms(secret: string): { text: string[]; bytes: Uint8Array[]; mul
     }
   }
   const unique = new Map(bytes.map((value) => [Buffer.from(value).toString("hex"), value]));
-  return { text: [...text].filter((form) => form.length > 0).sort((a, b) => b.length - a.length),
-    bytes: [...unique.values()].sort((a, b) => b.length - a.length), multiline: [...multiline].filter(Boolean) };
+  return { text: [...text].filter(Boolean), bytes: [...unique.values()], multiline: [...multiline].filter(Boolean) };
 }
-function allForms(secrets: readonly string[]): { text: string[]; bytes: Uint8Array[]; multiline: string[] } {
-  const text = new Set<string>();
-  const bytes = new Map<string, Uint8Array>();
-  const multiline = new Set<string>();
-  for (const secret of new Set(secrets)) {
-    if (!secret) continue;
-    const forms = secretForms(secret);
-    for (const form of forms.text) text.add(form);
-    for (const form of forms.bytes) bytes.set(Buffer.from(form).toString("hex"), form);
-    for (const form of forms.multiline) multiline.add(form);
+
+function allForms(secrets: readonly string[]): RedactionForms {
+  let cached = formCache.get(secrets);
+  if (!cached) {
+    cached = { seen: new Set(), text: new Set(), bytes: new Map(), multiline: new Set(), compiled: { text: [], bytes: [], multiline: [] } };
+    formCache.set(secrets, cached);
   }
-  return { text: [...text].sort((a, b) => b.length - a.length), bytes: [...bytes.values()].sort((a, b) => b.length - a.length),
-    multiline: [...multiline].sort((a, b) => b.length - a.length) };
+  let changed = false;
+  for (const secret of secrets) {
+    if (secret.length < MIN_SECRET_LENGTH || cached.seen.has(secret)) continue;
+    cached.seen.add(secret);
+    const forms = secretForms(secret);
+    for (const form of forms.text) cached.text.add(form);
+    for (const value of forms.bytes) cached.bytes.set(Buffer.from(value).toString("hex"), value);
+    for (const form of forms.multiline) cached.multiline.add(form);
+    changed = true;
+  }
+  if (changed) {
+    cached.compiled = {
+      text: [...cached.text].sort((a, b) => b.length - a.length),
+      bytes: [...cached.bytes.values()].sort((a, b) => b.length - a.length),
+      multiline: [...cached.multiline].sort((a, b) => b.length - a.length),
+    };
+  }
+  return cached.compiled;
 }
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function stripLineBreaks(input: string): { text: string; originalIndices: number[] } {
+  const characters: string[] = [];
+  const originalIndices: number[] = [];
+  for (let index = 0; index < input.length; index++) {
+    const character = input[index]!;
+    if (character === "\r" || character === "\n") continue;
+    characters.push(character);
+    originalIndices.push(index);
+  }
+  return { text: characters.join(""), originalIndices };
 }
+
+function redactMultiline(input: string, patterns: readonly string[]): string {
+  const strippedInput = stripLineBreaks(input);
+  if (strippedInput.text.length === input.length || strippedInput.text.length === 0) return input;
+  const spans: { start: number; end: number }[] = [];
+  for (const pattern of patterns) {
+    const needle = stripLineBreaks(pattern).text;
+    if (!needle) continue;
+    let offset = 0;
+    while (offset <= strippedInput.text.length - needle.length) {
+      const index = strippedInput.text.indexOf(needle, offset);
+      if (index < 0) break;
+      spans.push({ start: strippedInput.originalIndices[index]!, end: strippedInput.originalIndices[index + needle.length - 1]! + 1 });
+      offset = index + needle.length;
+    }
+  }
+  if (!spans.length) return input;
+  spans.sort((left, right) => left.start - right.start || right.end - left.end);
+  const merged: { start: number; end: number }[] = [];
+  for (const span of spans) {
+    const previous = merged.at(-1);
+    if (previous && span.start < previous.end) previous.end = Math.max(previous.end, span.end);
+    else merged.push({ ...span });
+  }
+  let output = "";
+  let offset = 0;
+  for (const span of merged) {
+    output += input.slice(offset, span.start) + REDACTED;
+    offset = span.end;
+  }
+  return output + input.slice(offset);
+}
+
 export function redactText(input: string, secrets: readonly string[]): string {
   const forms = allForms(secrets);
   let result = input;
   for (const form of forms.text) result = result.split(form).join(REDACTED);
-  if (result.includes("\n") || result.includes("\r")) for (const form of forms.multiline) {
-    const pattern = form.split("").map(escapeRegExp).join("(?:\\r?\\n)*");
-    result = result.replace(new RegExp(pattern, "g"), REDACTED);
-  }
+  if (result.includes("\n") || result.includes("\r")) result = redactMultiline(result, forms.multiline);
   return result;
 }
 function replaceBytes(input: Uint8Array, patterns: readonly Uint8Array[]): Uint8Array {

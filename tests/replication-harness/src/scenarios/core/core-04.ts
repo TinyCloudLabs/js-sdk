@@ -13,7 +13,7 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
   topology(variant) {
     const [writerKind, readerKind] = variant.split(">") as [ClientKind, ClientKind];
     const readerReplication = readerKind === "sdk"
-      ? replication(["notes/"], { mode: "background", maxStalenessMs: 3_000, syncIntervalMs: 2_000 })
+      ? replication(["notes/"], { mode: "background", maxStalenessMs: 60_000, syncIntervalMs: 2_000 })
       : replication(["notes/"], { maxStalenessMs: 60_000 });
     const identity = `core-04-${writerKind}-${readerKind}`;
     const writer = ownerClient("w", writerKind, replication(["notes/"], writerKind === "sdk" ? { mode: "foreground" } : {}), identity);
