@@ -64,7 +64,7 @@ env:
   # Production runtime module: registers the S1/S2 gate runtime services
   # (SUT/image resolvers, topology factory, run-environment builder). It is
   # supplied by the runtime-assembly slice, not by this workflow.
-  TC893_RUNTIME_MODULE: tests/replication-harness/runtime.ts
+  TC893_RUNTIME_MODULE: ${{ github.workspace }}/tests/replication-harness/runtime.ts
 
 jobs:
   resolve:

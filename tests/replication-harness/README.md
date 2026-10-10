@@ -31,7 +31,9 @@ the repository root.
 - **`HARNESS_DOCKER=1`** opts the Docker-dependent tests in; without it the
   topology tests skip.
 - **Gate commands inject a runtime module.** `resolve`, `run`, `aggregate`,
-  and `run --gate` load the module named by `TC893_RUNTIME_MODULE`, which must
+  and `run --gate` load the module named by `TC893_RUNTIME_MODULE`, which is
+  resolved against the harness package directory — pass an absolute path or
+  one relative to `tests/replication-harness`. The module must
   export `registerGateRuntime(configureGateRuntime)` and register the SUT and
   image resolvers, the SUT artefact exporter, the topology factory, and the
   run-environment builder (see CONTRACTS.md). The production module is

@@ -163,6 +163,23 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
           else legCompanionConclusion = failIfPassing(legCompanionConclusion);
         }
       }
+      for (const { evidence, report } of parsedLegs) {
+        const inMatrix = options.expectedLegs.some((expected) => expected.name === evidence.name
+          && report.invocation.backends.length === 1 && report.invocation.backends[0] === expected.backend
+          && report.invocation.set === expected.set);
+        const mismatchedInputs = report.inputsSha256 !== options.inputs.inputsSha256;
+        if (!inMatrix || mismatchedInputs) {
+          if (report.invocation.set === null) legCoreConclusion = failIfPassing(legCoreConclusion);
+          else legCompanionConclusion = failIfPassing(legCompanionConclusion);
+        }
+      }
+      for (const evidence of options.legs) {
+        if (options.expectedLegs.some((expected) => expected.name === evidence.name)) continue;
+        const parsed = parsedLegs.find((leg) => leg.evidence === evidence)?.report;
+        const companion = parsed ? parsed.invocation.set !== null : evidence.name.startsWith("companion-");
+        if (companion) legCompanionConclusion = failIfPassing(legCompanionConclusion);
+        else legCoreConclusion = failIfPassing(legCoreConclusion);
+      }
     }
   }
   const core = options.inputs.gate ? await buildVerdict(options, options.coreManifest, options.recomputedCoreManifest, coreLegs, legCoreConclusion, false) : null;

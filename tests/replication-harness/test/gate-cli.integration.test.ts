@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,5 +153,62 @@ describe("executable gate CLI adapters", () => {
     const report = JSON.parse(await readFile(join(outputDir, "aggregate.json"), "utf8"));
     expect(report.adhoc.rows).toEqual([]);
     expect(report.legCoreConclusion).toBe("failure");
+  });
+  test("non-gate aggregation rejects extra legs and mismatched inputsSha256", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc893-extra-"));
+    roots.push(root);
+    const eventFile = join(root, "dispatch-event.json");
+    const inputDir = join(root, "in");
+    const legsDir = join(root, "legs");
+    const event = { repository: { full_name: "TinyCloudLabs/js-sdk" }, ref: "refs/heads/adhoc", after: "e".repeat(40) };
+    await writeFile(eventFile, JSON.stringify(event));
+    await mkdir(legsDir, { recursive: true });
+    const dispatchInputs = JSON.stringify({ gate: "none", clients: "workspace", tier: "core", backends: '["sqlite"]' });
+    const env = {
+      TC893_RUNTIME_MODULE: runtimeModule,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: event.ref,
+      GITHUB_SHA: event.after,
+      GITHUB_RUN_ID: "12345",
+      GITHUB_RUN_ATTEMPT: "1",
+    };
+    const resolved = command(["resolve", "--event-file", eventFile, "--dispatch-inputs", dispatchInputs, "--out", inputDir], env);
+    expect(resolved.exitCode).toBe(0);
+    const matrix = JSON.parse(resolved.stdout?.toString() ?? "") as { include: { name: string }[] };
+    expect(matrix.include.map(({ name }) => name)).toEqual(["core-sqlite"]);
+    const inputs = JSON.parse(await readFile(join(inputDir, "inputs.json"), "utf8")) as { inputsSha256: string };
+
+    const legResults = join(legsDir, "core-sqlite");
+    const run = command(["run", "--inputs", join(inputDir, "inputs.json"), "--leg", "core-sqlite", "--results", legResults], env);
+    expect(run.exitCode).toBe(0);
+
+    const aggregateArgs = (outDir: string, legs: string) =>
+      ["aggregate", "--inputs", join(inputDir, "inputs.json"), "--legs", legs,
+        "--leg-core-conclusion", "success", "--leg-companion-conclusion", "success", "--out", outDir];
+    const clean = command(aggregateArgs(join(root, "clean-aggregate"), legsDir), env);
+    expect(clean.exitCode).toBe(0);
+
+    const extraLegsDir = join(root, "extra-legs");
+    await mkdir(extraLegsDir, { recursive: true });
+    await cp(legResults, join(extraLegsDir, "core-sqlite"), { recursive: true });
+    await mkdir(join(extraLegsDir, "rogue-sqlite"), { recursive: true });
+    const rogue = JSON.parse(await readFile(join(legResults, "report.json"), "utf8")) as { subject: unknown };
+    rogue.subject = { ...(rogue.subject as object), runId: "rogue" };
+    await writeFile(join(extraLegsDir, "rogue-sqlite", "report.json"), JSON.stringify(rogue));
+    const extra = command(aggregateArgs(join(root, "extra-aggregate"), extraLegsDir), env);
+    expect(extra.exitCode).toBe(1);
+    const extraReport = JSON.parse(await readFile(join(root, "extra-aggregate", "aggregate.json"), "utf8"));
+    expect(extraReport.legCoreConclusion).toBe("failure");
+
+    const driftLegsDir = join(root, "drift-legs");
+    await mkdir(join(driftLegsDir, "core-sqlite"), { recursive: true });
+    const drifted = JSON.parse(await readFile(join(legResults, "report.json"), "utf8")) as { inputsSha256: string };
+    drifted.inputsSha256 = "0".repeat(64);
+    expect(drifted.inputsSha256).not.toBe(inputs.inputsSha256);
+    await writeFile(join(driftLegsDir, "core-sqlite", "report.json"), JSON.stringify(drifted));
+    const drift = command(aggregateArgs(join(root, "drift-aggregate"), driftLegsDir), env);
+    expect(drift.exitCode).toBe(1);
+    const driftReport = JSON.parse(await readFile(join(root, "drift-aggregate", "aggregate.json"), "utf8"));
+    expect(driftReport.legCoreConclusion).toBe("failure");
   });
 });
