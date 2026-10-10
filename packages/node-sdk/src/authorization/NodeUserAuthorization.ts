@@ -51,6 +51,9 @@ import {
   ENCRYPTION,
   type CapabilityPresentationEnvelopeV1,
 } from "@tinycloud/sdk-core";
+import type { ReplicationOptions } from "@tinycloud/sdk-core";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
 import {
   SignStrategy,
   SignRequest,
@@ -225,6 +228,14 @@ export interface NodeUserAuthorizationConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include canonical account registry read/create-update/list permissions when composing `manifest` and plain sign-in. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /**
+   * Replication sign-in augmentation (TC-858 §4.1): prefixes whose reads a
+   * local replica may serve. For each prefix the session request gains one
+   * `kv` entry `{get, sync}` on the primary space — but only where an
+   * unrestricted `get` covering it is already requested. Storage and
+   * scheduling never reach this layer.
+   */
+  replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -286,6 +297,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly expectedNodeDid?: string;
   private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
+  private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
   private readonly wasm: IWasmBindings;
@@ -365,6 +377,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.siweConfig = config.siweConfig;
     this.includeAccountRegistryPermissions =
       config.includeAccountRegistryPermissions ?? true;
+    this.replication =
+      config.replication?.enabled === true ? config.replication : undefined;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
@@ -620,6 +634,166 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return makePkhSpaceId(address, chainId, space);
   }
 
+  /**
+   * The plain-session primary abilities: `defaultActions` (the shared table)
+   * unless the primary space IS the account space, where account-registry
+   * permissions merge into a private clone so the shared table is never
+   * mutated. Shared between `resolveSignInCapabilities` and
+   * `signInPermissionInputs` so sign-in and `replicationSignInEntries`
+   * can't disagree (§4.6).
+   */
+  private primaryActionsForSignIn(): AbilitiesMap {
+    const primaryActions =
+      this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE
+        ? cloneAbilitiesMap(this.defaultActions)
+        : this.defaultActions;
+    if (this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE) {
+      const accountAbilities = resourceCapabilitiesToAbilitiesMap(
+        ACCOUNT_MANIFEST_PERMISSIONS,
+      );
+      for (const [service, paths] of Object.entries(accountAbilities)) {
+        const existingPaths = primaryActions[service] ?? (primaryActions[service] = {});
+        for (const [path, actions] of Object.entries(paths)) {
+          const existingActions = existingPaths[path] ?? (existingPaths[path] = []);
+          for (const action of actions) {
+            if (!existingActions.includes(action)) existingActions.push(action);
+          }
+        }
+      }
+    }
+    return primaryActions;
+  }
+  /**
+   * The abilities a `spacePrefix: "secrets"` plain session actually requests
+   * for its primary space: the vault-secrets subtree only — the
+   * `defaultActions` root `get` is REPLACED, not merged (sign-in installs
+   * this map under the primary space id). Shared between
+   * `resolveSignInCapabilities` and `signInPermissionInputs` so the
+   * replication augmentation measures coverage against the effective
+   * pre-replication request, never the uninstalled `primaryActions` (§4.1).
+   */
+  private secretsPrimaryAbilities(): AbilitiesMap {
+    return {
+      kv: {
+        "vault/secrets/": [
+          KV.GET,
+          KV.PUT,
+          KV.DEL,
+          KV.LIST,
+          KV.METADATA,
+        ],
+      },
+    };
+  }
+
+
+  /**
+   * The effective sign-in request as `PermissionEntry`s plus the resolved
+   * primary space id — the inputs to the replication augmentation (§4.1).
+   * `resolveSignInCapabilities` merges the augmented entries into its
+   * abilities; `replicationSignInEntries()` returns them verbatim, so the
+   * entries the SIWE recap carries and the restore check sees are the same.
+   */
+  private signInPermissionInputs(
+    address: string,
+    chainId: number,
+  ): { entries: PermissionEntry[]; primarySpaceId: string } {
+    const request = this.getCapabilityRequest();
+    if (request === undefined) {
+      const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
+      const effectivePrimary =
+        this.spacePrefix === "secrets"
+          ? this.secretsPrimaryAbilities()
+          : this.primaryActionsForSignIn();
+      const kvPaths = effectivePrimary["kv"] ?? {};
+      return {
+        primarySpaceId,
+        entries: Object.entries(kvPaths).map(([path, actions]) => ({
+          service: "tinycloud.kv",
+          space: primarySpaceId,
+          path,
+          actions: [...actions],
+        })),
+      };
+    }
+    const spaceResources = request.resources.filter(
+      (entry) => entry.service !== ENCRYPTION_PERMISSION_SERVICE,
+    );
+    const primarySpaceName =
+      spaceResources.find((entry) => entry.space !== "account")?.space ??
+      DEFAULT_MANIFEST_SPACE;
+    const primarySpaceId = this.resolveSpaceName(
+      primarySpaceName,
+      address,
+      chainId,
+    );
+    return {
+      primarySpaceId,
+      entries: spaceResources.map((entry) => ({
+        service: entry.service,
+        space: this.resolveSpaceName(entry.space, address, chainId),
+        path: entry.path,
+        actions: [...entry.actions],
+      })),
+    };
+  }
+
+  /**
+   * Merge replication augmentation entries into a space's abilities map
+   * without mutating shared tables (`defaultActions` may back the base map):
+   * the primary entry in `spaceAbilities` is replaced with a copy whose `kv`
+   * paths gain `get`/`sync`. Returns the merged map for `abilities`.
+   */
+  private mergeReplicationEntries(
+    spaceAbilities: Record<string, AbilitiesMap>,
+    primarySpaceId: string,
+    abilities: AbilitiesMap,
+    entries: PermissionEntry[],
+  ): AbilitiesMap {
+    // No augmentation → return the base map untouched; never fabricate a
+    // spaceAbilities entry for a space the request doesn't name.
+    if (entries.length === 0) {
+      return abilities;
+    }
+    const base = spaceAbilities[primarySpaceId] ?? abilities;
+    const kv: Record<string, string[]> = {};
+    for (const [path, actions] of Object.entries(base["kv"] ?? {})) {
+      kv[path] = [...actions];
+    }
+    for (const entry of entries) {
+      const list = (kv[entry.path] ??= []);
+      for (const action of entry.actions) {
+        if (!list.includes(action)) list.push(action);
+      }
+    }
+    const merged = { ...base, kv };
+    spaceAbilities[primarySpaceId] = merged;
+    return merged;
+  }
+
+  /**
+   * The replication entries this authorization's sign-in request carries
+   * for the signed-in or restored address (TC-858 §4.1/§4.6): the output of
+   * the same augmentation `resolveSignInCapabilities` runs — one
+   * `{tinycloud.kv, primarySpace, prefix, [get, sync]}` per configured
+   * prefix that already has an unrestricted covering `get` and passes the
+   * secrets opt-in gate. Empty when replication is off or no address is
+   * known. Pure.
+   */
+  replicationSignInEntries(): PermissionEntry[] {
+    if (this.replication === undefined) return [];
+    const address = this._address ?? this._tinyCloudSession?.address;
+    const chainId = this._chainId ?? this._tinyCloudSession?.chainId;
+    if (address === undefined || chainId === undefined) return [];
+    const { entries, primarySpaceId } = this.signInPermissionInputs(address, chainId);
+    return augmentSignInEntriesWithReplication({
+      entries,
+      primarySpaceId,
+      replication: this.replication,
+    });
+  }
+
+
   private defaultEncryptionNetworkId(address: string, chainId: number): string {
     return `urn:tinycloud:encryption:${pkhDid(address, chainId)}:default`;
   }
@@ -638,23 +812,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
       const secretsSpaceId = makePkhSpaceId(address, chainId, "secrets");
-      const primaryActions =
-        this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE
-          ? cloneAbilitiesMap(this.defaultActions)
-          : this.defaultActions;
+      const primaryActions = this.primaryActionsForSignIn();
       const spaceAbilities: Record<string, AbilitiesMap> = {
         [primarySpaceId]: primaryActions,
-        [secretsSpaceId]: {
-          kv: {
-            "vault/secrets/": [
-              KV.GET,
-              KV.PUT,
-              KV.DEL,
-              KV.LIST,
-              KV.METADATA,
-            ],
-          },
-        },
+        [secretsSpaceId]: this.secretsPrimaryAbilities(),
       };
       // Plain sessions receive the canonical account-manifest permissions in
       // the signer-derived account space. Do not duplicate the space object
@@ -666,22 +827,22 @@ export class NodeUserAuthorization implements IUserAuthorization {
       ) {
         spaceAbilities[makePkhSpaceId(address, chainId, ACCOUNT_REGISTRY_SPACE)] =
           resourceCapabilitiesToAbilitiesMap(ACCOUNT_MANIFEST_PERMISSIONS);
-      } else if (this.includeAccountRegistryPermissions) {
-        const accountAbilities = resourceCapabilitiesToAbilitiesMap(
-          ACCOUNT_MANIFEST_PERMISSIONS,
-        );
-        for (const [service, paths] of Object.entries(accountAbilities)) {
-          const existingPaths = primaryActions[service] ?? (primaryActions[service] = {});
-          for (const [path, actions] of Object.entries(paths)) {
-            const existingActions = existingPaths[path] ?? (existingPaths[path] = []);
-            for (const action of actions) {
-              if (!existingActions.includes(action)) existingActions.push(action);
-            }
-          }
-        }
       }
+      // Replication augmentation (TC-858 §4.1): one {get, sync} entry per
+      // configured prefix the plain request already covers with an
+      // unrestricted get. Merged into a copy — `primaryActions` may be the
+      // shared `defaultActions` table.
+      const mergedPrimary = this.mergeReplicationEntries(
+        spaceAbilities,
+        primarySpaceId,
+        primaryActions,
+        augmentSignInEntriesWithReplication({
+          ...this.signInPermissionInputs(address, chainId),
+          replication: this.replication,
+        }),
+      );
       return {
-        abilities: primaryActions,
+        abilities: mergedPrimary,
         spaceId: primarySpaceId,
         spaceAbilities,
         rawAbilities: {
@@ -723,10 +884,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
       spaceAbilities[this.resolveSpaceName(space, address, chainId)] = abilities;
     }
 
+    // Replication augmentation (TC-858 §4.1): merged into the resolved
+    // primary space's abilities only where an unrestricted covering get is
+    // already requested. The request object itself is never mutated.
+    const mergedPrimaryAbilities = this.mergeReplicationEntries(
+      spaceAbilities,
+      primarySpaceId,
+      spaceAbilities[primarySpaceId] ?? resourceCapabilitiesToAbilitiesMap([]),
+      augmentSignInEntriesWithReplication({
+        ...this.signInPermissionInputs(address, chainId),
+        replication: this.replication,
+      }),
+    );
+
     return {
-      abilities:
-        spaceAbilities[primarySpaceId] ??
-        resourceCapabilitiesToAbilitiesMap([]),
+      abilities: mergedPrimaryAbilities,
       spaceId: primarySpaceId,
       spaceAbilities,
       rawAbilities:
@@ -802,6 +974,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private async hostSpace(
     targetSpaceId?: string,
     purpose?: SignRequest["purpose"],
+    signal?: AbortSignal,
   ): Promise<SpaceHostResult> {
     if (!this._tinyCloudSession || !this._address || !this._chainId) {
       throw new Error("Must be signed in to host space");
@@ -812,7 +985,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
 
     // Get peer ID from TinyCloud server
-    const peerId = await fetchPeerId(host, spaceId);
+    const peerId = await fetchPeerId(host, spaceId, signal);
 
     // Generate host SIWE message
     const siwe = this.wasm.generateHostSIWEMessage({
@@ -824,12 +997,32 @@ export class NodeUserAuthorization implements IUserAuthorization {
       peerId,
     });
 
-    // Sign the message
-    const signature = await this.signMessage(siwe, purpose);
-
+    if (signal?.aborted) throw signal.reason;
+    const signing = this.signMessage(siwe, purpose);
+    let signature: string;
+    if (!signal) {
+      signature = await signing;
+    } else {
+      let rejectOnAbort!: (reason?: unknown) => void;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        rejectOnAbort = reject;
+      });
+      const onAbort = () => rejectOnAbort(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      try {
+        // The wallet prompt itself has no AbortSignal API. Stop awaiting it on
+        // deadline; the post-sign check below prevents a late signature from
+        // starting the host-delegation write.
+        signature = await Promise.race([signing, aborted]);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    }
+    if (signal?.aborted) throw signal.reason;
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
-    return submitHostDelegation(host, headers);
+    return submitHostDelegation(host, headers, signal);
   }
 
   /**
@@ -859,8 +1052,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async hostOwnedSpaceResult(
     spaceId: string,
     purpose?: SignRequest["purpose"],
+    signal?: AbortSignal,
   ): Promise<SpaceHostResult> {
-    return this.hostSpace(spaceId, purpose);
+    return this.hostSpace(spaceId, purpose, signal);
   }
 
   /**

@@ -95,7 +95,7 @@ export function registerDelegationCommand(program: Command): void {
           expiry: expiry.toISOString(),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -138,7 +138,7 @@ export function registerDelegationCommand(program: Command): void {
           count: delegations.length,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -158,7 +158,7 @@ export function registerDelegationCommand(program: Command): void {
 
         outputJson(result.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -339,7 +339,7 @@ export function registerDelegationCommand(program: Command): void {
         }
         outputJson({ cid, revoked: true, targetSpaceSource, authorityScopeSource, authorityScopeReason });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

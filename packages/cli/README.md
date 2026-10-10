@@ -124,7 +124,28 @@ network grant` takes the short name, resolves the network, and grants
 -q, --quiet             Suppress non-essential output
     --json              Force JSON output
     --no-cache          Disable caching
+    --replication       Enable read-through replication (or TC_REPLICATION=1)
+    --no-replication    Disable replication for this invocation
+    --replication-debug Write replication diagnostics to stderr
 ```
+
+Replication is off by default. `--replication` enables it for one invocation;
+`--no-replication` overrides `TC_REPLICATION=1`, and `--replication-debug`
+writes diagnostics to stderr. Save explicit login prefixes with
+`tc auth login --replication-prefix notes`; saved prefixes are reapplied on
+later logins and rotation. Only an unrestricted covering `get` can receive added
+`sync` authority. `--replication-allow-secrets` is required for a `secrets`
+space or `vault` prefix and stores ciphertext only.
+Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
+prints a warning because later commits can be read as stale until a subsequent
+sync. `auth logout` removes both legacy replicas and the flag-owned
+`replication/` root; `auth logout --keep-replicas` keeps both. B-int release
+acceptance must verify the OpenKey `tc auth request --grant` fallback against
+a real OpenKey using a test account and no production writes: approve the
+request, confirm the grant is stored, start a fresh process, and verify the
+saved prefixes are replayed and the covered read is served locally. If OpenKey
+rejects explicit `kv/get` plus `sync`, stop before release and resolve the
+protocol contract.
 
 ## Output Modes
 
@@ -185,7 +206,8 @@ file.
 | Variable | Description |
 |----------|-------------|
 | `TC_HIDE_BANNER` | Set to `1` to suppress the startup banner |
-| `TC_OPENKEY_HOST` | Override the active profile's OpenKey base URL for this invocation. |
+| `TC_REPLICATION` | Set to `1` to enable replication by default; `--no-replication` overrides it. |
+| `TC_REPLICATION_DEBUG` | Set to `1` to enable replication diagnostics on stderr. |
 
 ## Development
 

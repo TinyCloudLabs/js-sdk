@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
-import { removeProfileReplicas } from "../lib/profile-replicas.js";
+import { removeProfileReplicasAndReplication } from "../lib/profile-replicas.js";
 import { ProfileManager } from "../config/profiles.js";
 import {
   outputJson,
@@ -105,6 +105,7 @@ import {
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
+import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
 export type OpenKeyAcquisition = typeof startAuthFlow;
@@ -154,6 +155,8 @@ export function registerAuthCommand(program: Command): void {
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
+    .option("--replication-prefix <prefix>", "Add replication get+sync authority for this prefix (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
+    .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
@@ -176,6 +179,18 @@ export function registerAuthCommand(program: Command): void {
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
           : undefined;
+        const profileConfig = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
+          if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return undefined;
+          throw error;
+        });
+        const replicationOptions: ReplicationLoginOptions = {
+          prefixes: options.replicationPrefix ?? profileConfig?.replication?.prefixes ?? [],
+          ...(options.replicationAllowSecrets === true || profileConfig?.replication?.allowSecrets === true ? { allowSecrets: true } : {}),
+          ...(owner === undefined ? {} : { ownerDid: owner }),
+        };
+        const loginPermissions = permissions === undefined
+          ? undefined
+          : buildReplicationLoginRequest(permissions, replicationOptions);
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
         // discovered local node stay one-off.
@@ -186,13 +201,15 @@ export function registerAuthCommand(program: Command): void {
             profileName: ctx.profile,
             nodeOrigin: ctx.host,
             shareOrigin: DEFAULT_SHARE_ORIGIN,
-            permissions: permissions!,
+            permissions: loginPermissions!,
             ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
           });
+          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
           reportDeclined(result.declined);
           outputJson({
             authenticated: true,
@@ -235,20 +252,26 @@ export function registerAuthCommand(program: Command): void {
         }
 
         if (method === "local") {
-          await handleLocalAuth(ctx.profile, ctx.host);
+          buildReplicationLoginRequest(undefined, replicationOptions);
+          await handleLocalAuth(ctx.profile, ctx.host, { replication: replicationOptions });
+          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
           await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
-            permissions,
+            permissions: loginPermissions,
+            replication: replicationOptions,
             expiry: parseExpiryOption(options.expiry),
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
           });
+          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -263,7 +286,9 @@ export function registerAuthCommand(program: Command): void {
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
         await ProfileManager.clearSession(ctx.profile);
-        const replicasRemoved = options.keepReplicas ? [] : await removeProfileReplicas(ctx.profile);
+        const replicasRemoved = options.keepReplicas
+          ? []
+          : await removeProfileReplicasAndReplication(ctx.profile);
         outputJson({
           profile: ctx.profile,
           authenticated: false,
@@ -272,7 +297,7 @@ export function registerAuthCommand(program: Command): void {
           warning: "Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.",
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -290,7 +315,7 @@ export function registerAuthCommand(program: Command): void {
           noPopup: options.popup === false,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -348,7 +373,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -532,7 +557,7 @@ export function registerAuthCommand(program: Command): void {
           expiry,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -643,7 +668,7 @@ export function registerAuthCommand(program: Command): void {
           expiry: imported.delegation.expiry.toISOString(),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -697,7 +722,7 @@ export function registerAuthCommand(program: Command): void {
         });
         outputJson(grant);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -755,7 +780,7 @@ export function registerAuthCommand(program: Command): void {
           command: isPermissionRequestArtifact(artifact) ? artifact.command ?? null : null,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -827,7 +852,7 @@ export function registerAuthCommand(program: Command): void {
           ) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -874,7 +899,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Authenticated", authenticated) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }
@@ -1032,7 +1057,7 @@ type AuthImportOutput = {
 };
 
 async function importRequestBoundDelegationWithBootstrap(
-  ctx: { profile: string; host: string },
+  ctx: CLIContext,
   artifact: unknown,
 ): Promise<void> {
   const session = await ProfileManager.getSession(ctx.profile);
@@ -1565,8 +1590,13 @@ async function rotateAuthKey(
 
   // One transaction: a concurrent login commit either lands before (and this
   // rotation then discards its session) or sees the new key and refuses.
+  let permissions: PermissionEntry[] | undefined;
   await ProfileManager.withLock(profileName, async () => {
     const current = await ProfileManager.getProfile(profileName);
+    if (current.replication?.prefixes.length) {
+      const previousSession = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+      if (Array.isArray(previousSession?.permissions)) permissions = previousSession.permissions as PermissionEntry[];
+    }
     await ProfileManager.setKey(profileName, jwk);
     await ProfileManager.clearSession(profileName);
     await ProfileManager.setProfile(profileName, {
@@ -1583,6 +1613,7 @@ async function rotateAuthKey(
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
     noPopup: options.noPopup,
+    permissions,
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }
@@ -1647,7 +1678,7 @@ type LocalAuthResult = {
 async function handleLocalAuth(
   profileName: string,
   host: string,
-  options: { emitOutput?: boolean; forceSessionKey?: boolean } = {},
+  options: { emitOutput?: boolean; forceSessionKey?: boolean; replication?: ReplicationLoginOptions } = {},
 ): Promise<LocalAuthResult> {
   const snapshot = await readProfileSnapshot(profileName);
   const profile = snapshot.profile;
@@ -1658,7 +1689,7 @@ async function handleLocalAuth(
   let did: string;
   let sessionDid = profile?.sessionDid;
 
-  if ((profile?.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
+  if (profile && (profile.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
     // Reuse existing local key
     privateKey = profile.privateKey;
     address = profile.address ?? await deriveAddress(privateKey);
@@ -1703,7 +1734,12 @@ async function handleLocalAuth(
 
   // Sign in using the private key
   const sessionResult = await withSpinner("Signing in...", async () => {
-    return localKeySignIn({ privateKey, host });
+    const replication = options.replication ?? profile?.replication;
+    return localKeySignIn({
+      privateKey,
+      host,
+      ...(replication?.prefixes.length ? { profile: profileName, replication } : {}),
+    });
   });
 
   const session = {
@@ -1801,12 +1837,31 @@ function reportDeclined(declined: PermissionEntry[], signed?: PermissionEntry[])
     process.stderr.write(`${theme.warn("OpenKey signed decrypt inside the space; the TinyCloud node refuses that. The OpenKey deployment is too old for agent secret reads.")}\n`);
   }
 }
+async function persistReplicationLogin(profileName: string, settings: ReplicationLoginOptions): Promise<void> {
+  await ProfileManager.updateProfile(profileName, (profile) => {
+    const { replication: _previous, ...rest } = profile;
+    return settings.prefixes.length === 0
+      ? rest
+      : {
+          ...rest,
+          replication: {
+            prefixes: [...settings.prefixes],
+            ...(settings.allowSecrets === true ? { allowSecrets: true } : {}),
+          },
+        };
+  });
+}
+
+function writeReplicationSecretsWarning(): void {
+  process.stderr.write(`${theme.warn("Warning:")} replication copies encrypted secret material to this device. The allow-secrets option does not grant decrypt.\n`);
+}
 
 interface OpenKeyLoginOptions {
   paste?: boolean;
   noPopup?: boolean;
   /** Manifest scope for first login: one space, verified before persistence. */
   permissions?: PermissionEntry[];
+  replication?: ReplicationLoginOptions;
   expiry?: string | number;
   expectedOwner?: string;
   /** Scoped login: replace a live session the approved scope would narrow. */
@@ -1833,17 +1888,28 @@ export async function refreshOpenKeySession(
       ExitCode.AUTH_REQUIRED,
     );
   }
-  // The requested scope: the manifest plus the capability read OpenKey needs to sign it.
-  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
-  const permissions = options.permissions === undefined ? undefined : scopedLoginPermissions(options.permissions);
-  if (permissions !== undefined) {
-    assertNotLocalOwner(profileName, profile, "Scoped browser login");
-  }
-  // Resolve before consent so an invalid --expiry, owner conflict or live
-  // session in use never opens OpenKey.
+  // Resolve before consent so an invalid scope, --expiry, owner conflict or
+  // live session in use never opens OpenKey.
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
   const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
   const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
+  const replication = options.replication ?? profile.replication ?? { prefixes: [] };
+  const previousSession = options.replication === undefined && profile.replication?.prefixes.length
+    ? await ProfileManager.getSession(profileName) as Record<string, unknown> | null
+    : null;
+  const rememberedPermissions = Array.isArray(previousSession?.permissions)
+    ? previousSession.permissions as PermissionEntry[]
+    : undefined;
+  const baseRequest = options.permissions ?? rememberedPermissions;
+  const requested = buildReplicationLoginRequest(baseRequest, {
+    ...replication,
+    ...(expectedOwner === undefined ? {} : { ownerDid: expectedOwner }),
+  });
+  if (requested !== undefined) validateLoginPermissions(requested);
+  const permissions = requested === undefined ? undefined : scopedLoginPermissions(requested);
+  if (permissions !== undefined) {
+    assertNotLocalOwner(profileName, profile, "Scoped browser login");
+  }
   if (permissions !== undefined && options.replaceSession !== true) {
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);

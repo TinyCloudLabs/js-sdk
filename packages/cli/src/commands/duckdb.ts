@@ -49,7 +49,7 @@ export function registerDuckdbCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -77,7 +77,7 @@ export function registerDuckdbCommand(program: Command): void {
 
         outputJson({ changes: result.data.changes });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -133,7 +133,7 @@ export function registerDuckdbCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -168,7 +168,7 @@ export function registerDuckdbCommand(program: Command): void {
           sizeHuman: formatBytes(blob.size),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -201,7 +201,7 @@ export function registerDuckdbCommand(program: Command): void {
           imported: true,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

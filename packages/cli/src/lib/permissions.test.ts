@@ -403,6 +403,33 @@ describe("loadManifestPermissions", () => {
       ]),
     );
   });
+  test("preserves caveats from scoped app-manifest permissions", async () => {
+    const permissions = await loadManifestPermissions(
+      manifestSource({
+        app_id: "tc858-caveated-scope",
+        space: "default",
+        permissions: [
+          {
+            service: "tinycloud.kv",
+            path: "notes",
+            skipPrefix: true,
+            actions: ["tinycloud.kv/get"],
+            caveats: [{ tenant: "alpha" }],
+          },
+        ],
+      }),
+      "default",
+      { allowLogicalSpaces: true },
+    );
+
+    expect(permissions).toContainEqual({
+      service: "tinycloud.kv",
+      space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:default`,
+      path: "notes",
+      actions: ["tinycloud.kv/get"],
+      caveats: [{ tenant: "alpha" }],
+    });
+  });
 
   test("checksums recorded and explicit lowercase owners in the default secrets network", async () => {
     const source = manifestSource({

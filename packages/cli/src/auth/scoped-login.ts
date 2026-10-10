@@ -125,6 +125,17 @@ export function ownerSpaceId(space: string, ownerDid: string): string {
   return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;
 }
 
+/** Compare login spaces, normalizing owner-qualified aliases before validating scope. */
+export function sameLoginSpace(left: string, right: string, ownerDid?: string): boolean {
+  const normalizedLeft = normalizePkhIdentifier(ownerDid === undefined ? left : ownerSpaceId(left, ownerDid));
+  const normalizedRight = normalizePkhIdentifier(ownerDid === undefined ? right : ownerSpaceId(right, ownerDid));
+  if (normalizedLeft === normalizedRight) return true;
+  if (ownerDid !== undefined) return false;
+  if (left.startsWith("tinycloud:") && !right.startsWith("tinycloud:")) return left.split(":").at(-1) === right;
+  if (right.startsWith("tinycloud:") && !left.startsWith("tinycloud:")) return right.split(":").at(-1) === left;
+  return false;
+}
+
 /** Canonical one-action tuples, so permission sets compare independently of grouping or casing. Caveats are not part of a tuple. */
 export function permissionTuples(permissions: readonly PermissionEntry[], ownerDid: string): Set<string> {
   return new Set(permissions.flatMap((permission) => actionTuples(permission, ownerDid)));

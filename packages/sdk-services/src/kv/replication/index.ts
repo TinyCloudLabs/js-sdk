@@ -1,0 +1,43 @@
+export type {
+  AuthorityRefusal,
+  KVListPage,
+  KVReadThrough,
+  KVReplicaHandle,
+  KVReplicaSpec,
+  KVReplicaStorage,
+  KVReplicationController,
+  KVReplicationDeps,
+  LocalGetResult,
+  LocalListResult,
+  LocalReadMeta,
+  LocalReplicaStatus,
+  LocalSyncResult,
+  PendingWriteRecord,
+  PendingWriteState,
+  PendingWriteStore,
+  PinnedKey,
+  PurgeTarget,
+  ReplicaAuthorityState,
+  ReplicaCoverage,
+  ReplicaDevice,
+  ReplicaGrantInfo,
+  ReplicaState,
+  ReplicaStatusEntry,
+  ReplicationAuthority,
+  ReplicationControl,
+  ReplicationEvent,
+  ReplicationIdentity,
+  ReplicationOptions,
+  ReplicationPurgeReport,
+  ReplicationReason,
+  ReplicationScheduler,
+  ResolvedReplicationOptions,
+} from "./types";
+export { CLEAR_PENDING_WARNING } from "./constants";
+export {
+  canonicalReplicationIdentity,
+  replicationIdentityKey,
+} from "./identity";
+export { kvPrefixCovers, requiresSecretsOptIn } from "./scope";
+export { createKVReplication } from "./controller";
+export { createMemoryPendingStore } from "./memoryPendingStore";

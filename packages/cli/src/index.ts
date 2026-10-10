@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
+import { closeReplication } from "./lib/replication-registry.js";
 
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
@@ -37,7 +38,10 @@ program
   .option("-v, --verbose", "Enable verbose output")
   .option("--no-cache", "Disable caching")
   .option("-q, --quiet", "Suppress non-essential output")
-  .option("--json", "Force JSON output");
+  .option("--json", "Force JSON output")
+  .option("--replication", "Enable read-through replication for this invocation")
+  .option("--no-replication", "Disable read-through replication for this invocation")
+  .option("--replication-debug", "Write replication diagnostics to stderr")
 
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
@@ -89,7 +93,8 @@ function firstCommandToken(values: readonly string[]): string | undefined {
     if (value === "--") return values[index + 1];
     if (globalOptionsWithValues.has(value)) { index += 1; continue; }
     if (value.startsWith("--profile=") || value.startsWith("--host=")) continue;
-    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json") continue;
+    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json" ||
+        value === "--replication" || value === "--no-replication" || value === "--replication-debug") continue;
     if (value.startsWith("-")) continue;
     return value;
   }
@@ -130,6 +135,16 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 
 try {
   await program.parseAsync(process.argv);
+  if (await closeReplication()) {
+    process.exitCode = 0;
+    const stdoutFlushed = Promise.withResolvers<void>();
+    process.stdout.write("", () => stdoutFlushed.resolve());
+    await stdoutFlushed.promise;
+    const stderrFlushed = Promise.withResolvers<void>();
+    process.stderr.write("", () => stderrFlushed.resolve());
+    await stderrFlushed.promise;
+    process.exit();
+  }
 } catch (error) {
-  handleError(error);
+  await handleError(error);
 }

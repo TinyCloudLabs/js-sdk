@@ -1,6 +1,7 @@
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
+import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
 
 let wasmInitialized = false;
 
@@ -82,6 +83,8 @@ export async function generateLocalIdentity(chainId: number = 1): Promise<{
 export async function localKeySignIn(options: {
   privateKey: string;
   host: string;
+  profile?: string;
+  replication?: ProfileReplicationSettings;
 }): Promise<{
   spaceId: string;
   address: string;
@@ -94,11 +97,19 @@ export async function localKeySignIn(options: {
   signature?: string;
 }> {
   const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+  const profile = options.profile ?? "default";
+  const replication = createCliReplicationConfig(
+    profile,
+    options.replication,
+    { debug: false, quiet: true },
+    options.replication !== undefined,
+  );
 
   const node = new TinyCloudNode({
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,
+    ...(replication ? { replication } : {}),
   });
 
   await node.signIn();

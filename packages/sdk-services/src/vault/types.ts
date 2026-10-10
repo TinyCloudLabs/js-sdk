@@ -53,8 +53,10 @@ export interface VaultGetOptions<T = unknown> {
   deserialize?: (data: Uint8Array) => T;
   /** Return raw decrypted bytes without deserialization */
   raw?: boolean;
+  /** Force the underlying KV read to bypass replica read-through. */
+  source?: "network";
   /** Delegated KV service for reading from the grantor's space (used by getShared) */
-  kv?: { get<V>(key: string, options?: { raw?: boolean }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
+  kv?: { get<V>(key: string, options?: { raw?: boolean; source?: "network" }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
 }
 
 /**
@@ -63,8 +65,9 @@ export interface VaultGetOptions<T = unknown> {
 export interface VaultListOptions {
   /** Prefix filter for key names */
   prefix?: string;
-  /** Remove prefix from returned keys */
   removePrefix?: boolean;
+  /** Force the underlying KV list to bypass replica read-through. */
+  source?: "network";
   /** Maximum number of keys to return. */
   limit?: number;
   /** Opaque cursor returned by a prior bounded page. */

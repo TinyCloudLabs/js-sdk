@@ -18,6 +18,26 @@
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js",
       "require": "./dist/core.cjs"
+    },
+    "./replication/runtime": {
+      "import": {
+        "types": "./dist/replication/runtime.d.ts",
+        "default": "./dist/replication/runtime.js"
+      },
+      "require": {
+        "types": "./dist/replication/runtime.d.cts",
+        "default": "./dist/replication/runtime.cjs"
+      }
+    },
+    "./replication/authority": {
+      "import": {
+        "types": "./dist/replication/authority.d.ts",
+        "default": "./dist/replication/authority.js"
+      },
+      "require": {
+        "types": "./dist/replication/authority.d.cts",
+        "default": "./dist/replication/authority.cjs"
+      }
     }
   },
   "engines": {
@@ -30,9 +50,11 @@
     "build": "tsup",
     "clean": "rm -rf dist",
     "test": "bun test src/",
+    "typecheck:replica-contract": "tsc --noEmit -p tsconfig.replica-contract.json",
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {
+    "@tinycloud/replica": "0.1.0",
     "@tinycloud/sdk-services": "3.1.0",
     "@tinycloud/sdk-core": "3.1.0",
     "@tinycloud/node-sdk-wasm": "1.7.7",

@@ -1,0 +1,29 @@
+{
+  "baselineRef": "44d7d06bdeff12f0c47d4fb9430a9df41b5761a5",
+  "baselineToolchain": {
+    "node": "22.23.2",
+    "bun": "1.3.14",
+    "rustc": "1.99.0 (b940084d7 2026-09-28)",
+    "wasmPack": "wasm-pack 0.13.1",
+    "build": "replica-e2e package build chain; bun run --cwd packages/web-sdk build",
+    "gzip": "gzip -9 -c dist/<format>"
+  },
+  "index.mjs": 1447966,
+  "index.cjs": 1383756,
+  "webSdkTestBaseline": {
+    "ref": "44d7d06bdeff12f0c47d4fb9430a9df41b5761a5",
+    "unhandledErrors": 3,
+    "failingNames": [
+      "packages/web-sdk/tests/coordinationos-vendor.test.ts::the generated manifest and ESM namespace expose exactly the contract",
+      "packages/web-sdk/tests/siwe-signature-init.test.js::should apply extension capabilities during message generation",
+      "packages/web-sdk/tests/siwe-signature-init.test.js::should handle extensions without namespace",
+      "packages/web-sdk/tests/siwe-signature-init.test.js::should apply multiple extensions in order",
+      "packages/web-sdk/tests/openkey-session.test.ts::real TinyCloudWeb forwards disabled auto-bootstrap into TinyCloudNode"
+    ],
+    "unhandledSignatures": [
+      "Cannot find package 'eth-testing'",
+      "paired OpenCredentials worktree not found",
+      "ReferenceError: HTMLElement is not defined"
+    ]
+  }
+}

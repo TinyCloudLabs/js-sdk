@@ -114,6 +114,7 @@ function makeFakeWasmBindings(): IWasmBindings {
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 const SPACE_URI = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+const ACCOUNT_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 
 function siweFor(): string {
   return `tinycloud.test wants you to sign in with your Ethereum account:
@@ -165,14 +166,378 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
     },
   };
 
+  Reflect.set(node, "_address", ADDRESS);
+  Reflect.set(node, "_chainId", 1);
   const syncAccessible = mock(async () => ({ ok: true, data: [] }));
   (node as any)._account = {
     index: { ensure: mock(async () => ({ ok: true, data: undefined })) },
     spaces: { syncAccessible },
   };
+  const context = new ServiceContext({
+    invoke: () => ({ Authorization: "registry" }),
+    hosts: ["https://tinycloud.test"],
+    fetch: async () => new Response(null, { status: 200 }),
+  });
+  context.setSession({
+    delegationHeader: { Authorization: "registry" },
+    delegationCid: "registry",
+    spaceId: SPACE_URI,
+    verificationMethod: "did:key:default",
+    jwk: {},
+  });
+  (node as any)._serviceContext = context;
+  (node as any).createAccountRegistryServices = (operationContext: ServiceContext) => ({
+    account: (node as any)._account,
+    contexts: [operationContext],
+  });
 
   return { node, wasm, syncAccessible };
 }
+
+describe("sign-in account registry barrier", () => {
+  test("waits for queued registry writes before resolving", async () => {
+    const { node } = makeNode();
+    const registry = Promise.withResolvers<void>();
+    const scheduled = Promise.withResolvers<void>();
+    const core = Reflect.get(node, "tc");
+    if (core === null || typeof core !== "object") throw new Error("TinyCloud core is unavailable");
+    const auth = Reflect.get(node, "auth");
+    if (auth === null || typeof auth !== "object") throw new Error("Node authorization is unavailable");
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+    Reflect.set(node, "scheduleAccountRegistrySync", () => {
+      Reflect.set(node, "accountRegistryTail", registry.promise);
+      scheduled.resolve();
+    });
+
+    let settled = false;
+    const signIn = node.signIn().then(() => {
+      settled = true;
+    });
+    await scheduled.promise;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    registry.resolve();
+    await signIn;
+    expect(settled).toBe(true);
+  });
+  test("aborts a hung registry request at its real-time deadline before sign-in resolves", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 40);
+    const requestSignals: AbortSignal[] = [];
+    const requestStarted = Promise.withResolvers<void>();
+    const context = new ServiceContext({
+      invoke: () => ({ Authorization: "registry" }),
+      hosts: ["https://tinycloud.test"],
+      fetch: async (_input, init) => {
+        const { promise, reject } = Promise.withResolvers<Response>();
+        const signal = init?.signal;
+        if (!signal) throw new Error("Registry request did not receive an AbortSignal");
+        requestSignals.push(signal);
+        requestStarted.resolve();
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        return promise;
+      },
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "registry" },
+      delegationCid: "registry",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_account", {
+      index: {
+        ensure: async () => {
+          const sql = node.sqlForSpace(SPACE_URI);
+          const result = await sql.execute("CREATE TABLE registry_deadline (id INTEGER)");
+          return result.ok
+            ? { ok: true, data: undefined }
+            : { ok: false, error: result.error };
+        },
+      },
+      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+    });
+    Reflect.set(node, "_serviceContext", context);
+    Reflect.deleteProperty(node, "createAccountRegistryServices");
+    const scheduleRegistry = Reflect.get(node, "scheduleAccountRegistrySync");
+    if (typeof scheduleRegistry !== "function") throw new Error("Registry scheduler is unavailable");
+    Reflect.set(node, "accountRegistryTail", Promise.resolve());
+    // Start a registry queue with the same session and service graph sign-in drains.
+    scheduleRegistry.call(node);
+    expect(Reflect.get(node, "pendingAccountRegistrySync")).toBeDefined();
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => true);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    // This integration test deliberately uses the platform clock: the property
+    // under test is that native AbortSignal cancellation beats a hung fetch.
+    // Exercise signIn while the SQL request is already hung on the wire.
+    await requestStarted.promise;
+    const started = Date.now();
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await node.signIn();
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnedWith(warnSpy, "deadline exceeded")).toBe(true);
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(requestSignals).toHaveLength(1);
+    expect(requestSignals[0]?.aborted).toBe(true);
+  });
+  test("aborts a hung manifest registry KV write and permits an ordinary KV call afterward", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(node, "_address", ADDRESS);
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 40);
+    const signals: AbortSignal[] = [];
+    let requests = 0;
+    const requestStarted = Promise.withResolvers<void>();
+    const fetchRegistry = async (_input: string, init?: { signal?: AbortSignal }): Promise<Response> => {
+      requests += 1;
+      const signal = init?.signal;
+      if (!signal) throw new Error("Registry KV request did not receive an AbortSignal");
+      signals.push(signal);
+      if (requests > 1) return new Response(null, { status: 200 });
+      requestStarted.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const context = new ServiceContext({
+      invoke: () => ({ Authorization: "registry" }),
+      hosts: ["https://tinycloud.test"],
+      fetch: fetchRegistry,
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "registry" },
+      delegationCid: "registry",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_serviceContext", context);
+    Reflect.set(node, "createAccountRegistryServices", (
+      operationContext: ServiceContext,
+      signal: AbortSignal,
+    ) => {
+      const operationKVContext = new ServiceContext({
+        invoke: operationContext.invoke,
+        hosts: operationContext.hosts,
+        fetch: operationContext.fetch,
+      });
+      operationKVContext.setOperationAbortSignal(signal);
+      operationKVContext.setSession({
+        delegationHeader: { Authorization: "registry" },
+        delegationCid: "registry",
+        spaceId: ACCOUNT_SPACE,
+        verificationMethod: "did:key:default",
+        jwk: {},
+      });
+      const operationKV = new KVService({});
+      operationKV.initialize(operationKVContext);
+      const operationAccount = new AccountService({
+        getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
+        getHost: () => "https://tinycloud.test",
+        getPrimarySpaceId: () => SPACE_URI,
+        getAccountSpaceId: () => ACCOUNT_SPACE,
+        getSpaces: () => ({ get: () => ({ kv: operationKV }) }) as unknown as ISpaceService,
+        getAccountDb: () => undefined,
+      });
+      return { account: operationAccount, contexts: [operationContext, operationKVContext] };
+    });
+    const createScopedKV = Reflect.get(node, "createSpaceScopedKVService") as (spaceId: string) => KVService;
+    const registryKV = createScopedKV.call(node, ACCOUNT_SPACE);
+    Reflect.set(node, "_account", new AccountService({
+      getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
+      getHost: () => "https://tinycloud.test",
+      getPrimarySpaceId: () => SPACE_URI,
+      getAccountSpaceId: () => ACCOUNT_SPACE,
+      getSpaces: () => ({ get: () => ({ kv: registryKV }) }) as unknown as ISpaceService,
+      getAccountDb: () => undefined,
+    }));
+    Reflect.set(auth, "capabilityRequest", composeManifestRequest([{
+      app_id: "com.example.registry",
+      name: "Registry",
+      defaults: false,
+      permissions: [{ service: "tinycloud.kv", space: "applications", path: "com.example.registry/", actions: ["put"] }],
+    }]));
+    const schedule = Reflect.get(node, "scheduleAccountRegistrySync");
+    schedule.call(node);
+    Reflect.set(node, "initializeServices", async () => {
+      const activeContext = new ServiceContext({
+        invoke: () => ({ Authorization: "registry" }),
+        hosts: ["https://tinycloud.test"],
+        fetch: fetchRegistry,
+      });
+      activeContext.setSession({
+        delegationHeader: { Authorization: "registry" },
+        delegationCid: "registry",
+        spaceId: SPACE_URI,
+        verificationMethod: "did:key:default",
+        jwk: {},
+      });
+      Reflect.set(node, "_serviceContext", activeContext);
+    });
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => true);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    await requestStarted.promise;
+    const started = Date.now();
+    await node.signIn();
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(requests).toBe(1);
+
+    const ordinaryKV = createScopedKV.call(node, ACCOUNT_SPACE);
+    const ordinary = await ordinaryKV.put("after-sign-in", { ok: true });
+    expect(ordinary.ok).toBe(true);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(requests).toBe(2);
+  });
+
+  test("aborts while a registry SQL error body is still being read", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 40);
+    const signals: AbortSignal[] = [];
+    let requests = 0;
+    const requestStarted = Promise.withResolvers<void>();
+    const context = new ServiceContext({
+      invoke: () => ({ Authorization: "registry" }),
+      hosts: ["https://tinycloud.test"],
+      fetch: async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("Registry SQL request did not receive an AbortSignal");
+        signals.push(signal);
+        requests += 1;
+        requestStarted.resolve();
+        return {
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { get: () => null },
+          json: async () => ({}),
+          text: () => new Promise<string>((_resolve, reject) => {
+            if (signal.aborted) reject(signal.reason);
+            else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+          arrayBuffer: async () => new ArrayBuffer(0),
+          blob: async () => new Blob(),
+        };
+      },
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "registry" },
+      delegationCid: "registry",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_serviceContext", context);
+    Reflect.deleteProperty(node, "createAccountRegistryServices");
+    Reflect.set(node, "_account", {
+      index: {
+        ensure: async () => {
+          const sql = node.sqlForSpace(SPACE_URI);
+          const result = await sql.execute("CREATE TABLE registry_deadline (id INTEGER)");
+          return result.ok ? { ok: true, data: undefined } : { ok: false, error: result.error };
+        },
+      },
+      applications: { register: async () => ({ ok: true, data: undefined }) },
+      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+    });
+    const schedule = Reflect.get(node, "scheduleAccountRegistrySync");
+    schedule.call(node);
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => true);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    await requestStarted.promise;
+    const started = Date.now();
+    await node.signIn();
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(requests).toBe(1);
+  });
+
+
+  // Use the real retry delays: a transient registry rejection must warn only
+  // after its bounded attempts and must not reject the sign-in promise.
+  test("ordinary registry rejection warns and sign-in succeeds", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 4_000);
+    Reflect.set(node, "_account", {
+      index: { ensure: async () => { throw new Error("registry unavailable"); } },
+      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+    });
+    const serviceContext = Reflect.get(node, "_serviceContext");
+    Reflect.set(node, "initializeServices", async () => {
+      Reflect.set(node, "_serviceContext", serviceContext);
+    });
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await node.signIn();
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
+  }, 5_000);
+});
 
 describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
   test("default non-manifest recap (no space entry) → skips syncAccessible", async () => {
@@ -255,7 +620,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     const warnSpy = mock(() => {});
     console.warn = warnSpy as any;
     try {
-      await (node as any).withAccountRegistryRetry(task);
+      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
     } finally {
       console.warn = originalWarn;
     }
@@ -274,7 +639,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     const warnSpy = mock(() => {});
     console.warn = warnSpy as any;
     try {
-      await (node as any).withAccountRegistryRetry(task);
+      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
     } finally {
       console.warn = originalWarn;
     }
@@ -483,7 +848,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     const warnSpy = mock(() => {});
     console.warn = warnSpy as any;
     try {
-      await (node as any).withAccountRegistryRetry(task);
+      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
     } finally {
       console.warn = originalWarn;
     }

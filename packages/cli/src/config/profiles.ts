@@ -278,6 +278,9 @@ export class ProfileManager {
     verbose?: boolean;
     noCache?: boolean;
     quiet?: boolean;
+    replication?: boolean;
+    noReplication?: boolean;
+    replicationDebug?: boolean;
   }): Promise<CLIContext> {
     // Resolve profile name
     const config = await ProfileManager.getConfig();
@@ -289,13 +292,24 @@ export class ProfileManager {
 
     // Resolve host — try profile config if it exists, but don't fail if it doesn't
     let profileHost: string | undefined;
+    let profileConfig: ProfileConfig | undefined;
     try {
-      const profileConfig = await ProfileManager.getProfile(profile);
+      profileConfig = await ProfileManager.getProfile(profile);
       profileHost = profileConfig.host;
     } catch {
       // Profile may not exist yet (e.g., during `tc init`)
     }
 
+    const envReplication = process.env.TC_REPLICATION?.toLowerCase();
+    const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
+    const explicitEnvOff = envReplication === "0" || envReplication === "false" || envReplication === "off";
+    if (envReplication !== undefined && !envEnabled && !explicitEnvOff) {
+      throw new CLIError("INVALID_ARGUMENT", "TC_REPLICATION must be one of 1, true, on, 0, false or off.", ExitCode.USAGE_ERROR);
+    }
+    const explicitOff = options.noReplication === true || options.replication === false;
+    const replication = options.replication === true ? true
+      : explicitOff ? false
+        : envEnabled;
     const explicitHost = options.host ?? process.env.TC_HOST;
     let host = explicitHost ?? profileHost ?? DEFAULT_HOST;
     if (explicitHost === undefined) {
@@ -314,6 +328,8 @@ export class ProfileManager {
       verbose: options.verbose ?? false,
       noCache: options.noCache ?? false,
       quiet: options.quiet ?? false,
+      replication,
+      replicationDebug: options.replicationDebug === true || process.env.TC_REPLICATION_DEBUG === "1",
     };
   }
 }
