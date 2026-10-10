@@ -75,6 +75,8 @@ export function registerGateRuntime(configure: typeof configureGateRuntime): voi
         suites: [
           { name: "cli-acceptance-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "cli-acceptance-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "node-sdk-real-node-sqlite", present: true, exitCode: 0, skipped: 0, tests: 10 },
           { name: "node-sdk-real-node-pg16", present: true, exitCode: 0, skipped: 0, tests: 10 },
         ],
@@ -85,6 +87,8 @@ export function registerGateRuntime(configure: typeof configureGateRuntime): voi
         suites: [
           { name: "cli-acceptance-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "cli-acceptance-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
+          { name: "cli-replica-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
           { name: "node-sdk-real-node-sqlite", present: true, exitCode: 0, skipped: 0, tests: 10 },
           { name: "node-sdk-real-node-pg16", present: true, exitCode: 0, skipped: 0, tests: 10 },
         ],

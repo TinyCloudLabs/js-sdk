@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -26,6 +27,15 @@ function topologyId(runId: string, row: ScenarioRow): string {
 function artifactPath(row: ScenarioRow): string {
   return row.key.replaceAll(/[^A-Za-z0-9_.-]/g, "_");
 }
+function redactCollectedContent(bytes: Buffer, secrets: readonly string[]): Buffer {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return Buffer.from(redactText(text, secrets));
+  } catch {
+    return Buffer.from(redactBytes(bytes, secrets));
+  }
+}
+
 async function indexCollectedArtefacts(files: readonly ScenarioArtefactFile[], directory: string, secrets: readonly string[]): Promise<ScenarioArtefactFile[]> {
   const indexed: ScenarioArtefactFile[] = [];
   const seen = new Set<string>();
@@ -42,7 +52,7 @@ async function indexCollectedArtefacts(files: readonly ScenarioArtefactFile[], d
       await mkdir(dirname(target), { recursive: true });
       await rename(source, target);
     }
-    const bytes = redactBytes(await readFile(target), secrets);
+    const bytes = redactCollectedContent(await readFile(target), secrets);
     await writeFile(target, bytes);
     indexed.push({ path: safeName, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") });
   }

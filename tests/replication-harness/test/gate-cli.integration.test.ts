@@ -18,13 +18,15 @@ function command(args: string[], env: Record<string, string>): ReturnType<typeof
 }
 async function writeJunitFixtures(root: string): Promise<void> {
   const suites = [
-    ["tc858-junit-sqlite", "cli-acceptance-sqlite", 1],
-    ["tc858-junit-pg16", "cli-acceptance-pg16", 1],
-    ["tc858-junit-sqlite", "node-sdk-real-node-sqlite", 10],
-    ["tc858-junit-pg16", "node-sdk-real-node-pg16", 10],
+    ["tc858-junit-sqlite", "cli-flag.xml", "cli-acceptance-sqlite", 1],
+    ["tc858-junit-pg16", "cli-flag.xml", "cli-acceptance-pg16", 1],
+    ["tc858-junit-sqlite", "cli-replica-e2e.xml", "cli-replica-sqlite", 1],
+    ["tc858-junit-pg16", "cli-replica-e2e.xml", "cli-replica-pg16", 1],
+    ["tc858-junit-sqlite", "node-sdk.xml", "node-sdk-real-node-sqlite", 10],
+    ["tc858-junit-pg16", "node-sdk.xml", "node-sdk-real-node-pg16", 10],
   ] as const;
-  for (const [artifact, name, count] of suites) {
-    const file = join(root, artifact, `${name}.xml`);
+  for (const [artifact, fileName, name, count] of suites) {
+    const file = join(root, artifact, fileName);
     const cases = Array.from({ length: count }, (_, index) => `<testcase name="case-${index}"/>`).join("");
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, `<testsuite name="${name}" tests="${count}" failures="0" errors="0" skipped="0">${cases}</testsuite>`);

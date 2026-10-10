@@ -157,6 +157,29 @@ describe("S3a scenario expansion", () => {
       expect(await readFile(join(dir, "report.json"), "utf8")).toContain("\"interrupted\": true");
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
+  test("marks both early and final aborted-signal reports interrupted", async () => {
+    const dir = await tempDir();
+    try {
+      const [row] = expandScenarios([scenario("EDGE-12", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
+      const earlyController = new AbortController();
+      earlyController.abort();
+      const early = await runRows({ rows: [row!], clock: realClock, concurrency: 1, report: reportBase(dir),
+        reportDirectory: join(dir, "early"), runSignal: earlyController.signal, executeRow: async () => { throw new Error("must not execute"); } });
+      expect(early.interrupted).toBe(true);
+      expect(early.report.interrupted).toBe(true);
+      expect(early.report.results[0]?.reason).toBe("INTERRUPTED");
+
+      const lateController = new AbortController();
+      const late = await runRows({ rows: [row!], clock: realClock, concurrency: 1, report: reportBase(dir),
+        reportDirectory: join(dir, "late"), runSignal: lateController.signal, executeRow: async (selected) => result(selected),
+        finalizeRow: async () => { lateController.abort(); } });
+      expect(late.interrupted).toBe(true);
+      expect(late.report.interrupted).toBe(true);
+      expect(late.report.results[0]?.status).toBe("pass");
+      expect(JSON.parse(await readFile(join(dir, "late", "report.json"), "utf8")).interrupted).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
 
 
   test("speed rows run alone after normal rows, and quarantine/report output preserves gate evidence while redacting secrets", async () => {
@@ -188,13 +211,20 @@ describe("S3a scenario expansion", () => {
       expect(mdText).not.toContain(secret);
       expect(jsonText).toContain("[REDACTED]");
       expect(RunReportSchema.safeParse(JSON.parse(jsonText)).success).toBe(true);
+      const reportRow = JSON.parse(jsonText).results.find((row: { id: string }) => row.id === "EDGE-03");
+      const rowResult = output.report.results.find((row) => row.id === "EDGE-03")!;
+      const resultJson = JSON.parse(await readFile(join(dir, rowResult.artefactDir, "result.json"), "utf8"));
+      expect(resultJson.status).toBe(reportRow.status);
+      expect(resultJson.reason).toBe(reportRow.reason);
+      expect(resultJson.reason).toContain("quarantined (TC-900: known issue)");
       expect(mdText).toContain("EDGE-03@sqlite");
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
   test("executor redacts client assertion, log, and capture secrets while indexing capture hashes", async () => {
     const dir = await tempDir();
-    const secret = "synthetic-client-private-key";
+    const secret = JSON.stringify({ kty: "EC", crv: "P-256", d: "synthetic-jwk-private-value", x: "synthetic-public-x", y: "synthetic-public-y" });
+    const wrappedSecret = secret.replace(/(.{12})/g, "$1\n");
     const runId = "test-run";
     const sourceRoot = await mkdtemp(join(tmpdir(), "tc893-client-capture-fixture-"));
     const home = join(sourceRoot, "homes", "c1");
@@ -218,7 +248,7 @@ describe("S3a scenario expansion", () => {
           collectArtefacts: async (outputDir: string) => {
             const nodeLog = join(outputDir, "nodes/n1.log");
             await mkdir(dirname(nodeLog), { recursive: true });
-            await writeFile(nodeLog, `node secret ${secret}\n`);
+            await writeFile(nodeLog, `node secret ${wrappedSecret}\n`);
             const bytes = await readFile(nodeLog);
             return { dir: outputDir, files: [{ path: "nodes/n1.log", bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") }] };
           },

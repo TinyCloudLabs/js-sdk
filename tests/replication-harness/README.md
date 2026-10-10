@@ -140,6 +140,10 @@ tests also run.
   label. A labelled PR always resolves `gate=tc858-phase1-workspace`,
   `set=phase1-companion`, `clients=workspace`, image `prod` (G1).
 
+
+The `replication` label is reserved for G1 on the TC-858 Phase 1
+integration-to-master PR. Harness-only PRs targeting `master` are not labelled
+`replication` until Phase 1 is on `master`.
 There is no schedule. Core legs and companion legs are separate jobs;
 `aggregate` receives `--leg-core-conclusion` and `--leg-companion-conclusion`
 independently (`--leg-jobs-conclusion` was removed). `gate.passed` is

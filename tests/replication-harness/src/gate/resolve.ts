@@ -66,6 +66,8 @@ export function validateJunitPrecondition(evidence: JunitPrecondition | null | u
   const minimums: Record<string, number> = {
     "cli-acceptance-sqlite": 1,
     "cli-acceptance-pg16": 1,
+    "cli-replica-sqlite": 1,
+    "cli-replica-pg16": 1,
     "node-sdk-real-node-sqlite": 10,
     "node-sdk-real-node-pg16": 10,
   };

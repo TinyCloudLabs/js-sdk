@@ -124,7 +124,7 @@ jobs:
         run: |
           RUN_ID="$(gh run list --workflow replica-e2e.yml --commit "$SUBJECT_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
           if [ -z "$RUN_ID" ]; then
-            echo "No successful replica-e2e.yml run found for subject SHA $SUBJECT_SHA" >&2
+            echo "no successful replica-e2e run for $SUBJECT_SHA" >&2
             exit 1
           fi
           gh run download "$RUN_ID" --name tc858-junit-sqlite --dir "$RUNNER_TEMP/tc893/junit/tc858-junit-sqlite"
@@ -329,6 +329,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:

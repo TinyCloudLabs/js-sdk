@@ -75,7 +75,13 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
     const afterVisibility = await reader.get("notes/b", { ...callOptions, ...flagOn(reader), ...replicationBound(reader, 3_000) });
     ctx.check("post-visibility read succeeds", afterVisibility.ok && afterVisibility.found, afterVisibility);
     ctx.eq("reader never regresses after v2", text(afterVisibility.value), "v2");
-    if (visibleAt !== undefined) ctx.metric("writeToVisibleMs", visibleAt - writeAt, "ms");
+    if (visibleAt !== undefined) {
+      const writeToVisibleMs = visibleAt - writeAt;
+      const deadlineMs = ctx.deadline(reader);
+      ctx.check("v2 became visible within the reader deadline", Number.isFinite(writeToVisibleMs) && writeToVisibleMs <= deadlineMs,
+        { writeToVisibleMs, deadlineMs });
+      ctx.metric("writeToVisibleMs", writeToVisibleMs, "ms");
+    }
     ctx.log(`CORE-04 ${writerKind}→${variant.split(">")[1]} observed v2`);
   },
 };
