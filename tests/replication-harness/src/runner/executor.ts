@@ -65,12 +65,13 @@ type CaptureClient = {
   stderrArtifactPath?: string;
   eventsArtifactPath?: string;
   profile?: () => string;
+  replicaDir?: () => string;
   redactionSecrets?: () => readonly string[] | Promise<readonly string[]>;
 };
 
 const MIN_SECRET_LENGTH = 16;
 const PUBLIC_JWK_FIELDS = new Set(["kty", "crv", "x", "y", "kid", "alg", "use", "n", "e", "key_ops", "ext", "x5c", "x5t", "x5t#s256"]);
-const PRIVATE_JWK_FIELDS = new Set(["d", "p", "q", "dp", "dq", "qi", "oth", "k", "r", "t"]);
+const PRIVATE_JWK_FIELDS = new Set(["d", "p", "q", "dp", "dq", "qi", "oth", "k", "r", "t", "privatekey", "seed"]);
 
 function isJwkObject(value: unknown): boolean {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -96,7 +97,7 @@ function sensitiveValues(value: unknown, parentKey = "", values: string[] = [], 
     }
     return values;
   }
-  const sensitive = inherited || /(?:private|secret|token|proof|delegation|authorization|credential|session|key)/i.test(parentKey);
+  const sensitive = inherited || /(?:private|secret|token|proof|delegation|authorization|credential|session|key|seed)/i.test(parentKey);
   if (typeof value === "string" && sensitive && value.length >= MIN_SECRET_LENGTH) values.push(value);
   else if (Array.isArray(value)) for (const item of value) sensitiveValues(item, parentKey, values, sensitive);
   else if (value !== null && typeof value === "object") {
@@ -118,9 +119,16 @@ async function collectHomeSecrets(client: CaptureClient): Promise<string[]> {
       if (/^\.tc893-(?:auth-|delegation|authority|grant|request).*\.json$/i.test(entry)) candidates.add(join(root, entry));
     }
   } catch { /* a missing home has no persisted secrets */ }
-  if (client.profile) {
-    const profile = join(root, ".tinycloud", "profiles", client.profile());
-    for (const name of ["key.json", "profile.json", "session.json"]) candidates.add(join(profile, name));
+  const profilesRoot = join(root, ".tinycloud", "profiles");
+  const profiles = new Set<string>(client.profile ? [client.profile()] : []);
+  try {
+    for (const entry of await readdir(profilesRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) profiles.add(entry.name);
+    }
+  } catch { /* a client without profiles has no profile credentials */ }
+  for (const profile of profiles) {
+    const directory = join(profilesRoot, profile);
+    for (const name of ["key.json", "profile.json", "session.json"]) candidates.add(join(directory, name));
   }
   const secrets: string[] = [];
   for (const path of candidates) {
@@ -133,15 +141,38 @@ async function collectHomeSecrets(client: CaptureClient): Promise<string[]> {
   return secrets;
 }
 
+async function collectReplicaSecrets(client: CaptureClient): Promise<string[]> {
+  if (!client.replicaDir) return [];
+  const secrets: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile() && entry.name === "device.jwk") {
+        const contents = await readFile(path, "utf8");
+        if (contents.length >= MIN_SECRET_LENGTH) secrets.push(contents);
+        try { secrets.push(...sensitiveValues(JSON.parse(contents))); }
+        catch { throw new Error("invalid replica device.jwk; refusing to collect artefacts"); }
+      }
+    }
+  };
+  await visit(resolve(client.replicaDir()));
+  return secrets;
+}
+
 async function registerClientSecrets(topology: Topology, secrets: string[], collect?: (client: KvClient, spec: ClientSpec, runId: string) => Promise<readonly string[]>, runId = ""): Promise<void> {
   for (const spec of topology.spec.clients) {
     const client = topology.client(spec.id);
     const supplied = await (client as CaptureClient).redactionSecrets?.() ?? [];
     const external = collect ? await collect(client, spec, runId) : [];
-    const values = [...sensitiveValues(spec), ...supplied, ...external, ...await collectHomeSecrets(client as CaptureClient)];
+    const captureClient = client as CaptureClient;
+    const values = [...sensitiveValues(spec), ...supplied, ...external, ...await collectHomeSecrets(captureClient), ...await collectReplicaSecrets(captureClient)];
     secrets.push(...values.filter((value) => value.length >= MIN_SECRET_LENGTH));
   }
 }
+
 
 function clientCapturePaths(client: CaptureClient): { name: string; path: string }[] {
   if (client.stderrArtifactPath && client.eventsArtifactPath) return [
@@ -200,7 +231,11 @@ export function createScenarioExecutor(options: { factory: TopologyFactory; env:
       } finally {
         await registerClientSecrets(topology, secrets, options.collectClientSecrets, options.env.runId);
       }
-      await row.scenario.run(createScenarioContext(row, topology, options.clock, signal, options.env, state), row.variant ?? "");
+      try {
+        await row.scenario.run(createScenarioContext(row, topology, options.clock, signal, options.env, state), row.variant ?? "");
+      } finally {
+        await registerClientSecrets(topology, secrets, options.collectClientSecrets, options.env.runId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       result.status = error instanceof AssertionFailure ? "fail" : error instanceof ScenarioSkip ? error.status : "error";

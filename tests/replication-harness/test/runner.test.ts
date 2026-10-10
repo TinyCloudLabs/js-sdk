@@ -240,35 +240,66 @@ describe("S3a scenario expansion", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-  test("executor redacts client assertion, log, and capture secrets while indexing capture hashes", async () => {
+  test("executor redacts credential fields from owner, host, and replica captures", async () => {
     const dir = await tempDir();
     const secret = JSON.stringify({ kty: "EC", crv: "P-256", d: "synthetic-jwk-private-value", x: "synthetic-public-x", y: "synthetic-public-y" });
     const wrappedSecret = secret.replace(/(.{12})/g, "$1\n");
     const jwkPrivateD = "private-jwk-member-material-0123456789";
     const longJwkKid = "public-key-id-that-must-remain-visible";
+    const privateKeySecret = "profile-private-key-material-012345";
+    const keySeed = "key-file-seed-material-0123456789";
+    const sessionSeed = "session-json-seed-material-0123456789";
+    const jwkPrivateKey = "jwk-privateKey-field-material-012345";
+    const jwkSeed = "jwk-seed-field-material-0123456789";
+    const hostPrivateKey = "host-profile-private-key-material-012345";
+    const hostSeed = "host-profile-session-seed-material-012345";
+    const hostJwkD = "host-profile-jwk-private-material-012345";
+    const hostSessionSeed = "host-session-json-seed-material-012345";
+    const deviceD1 = "replica-partition-one-device-private-d";
+    const deviceD2 = "replica-partition-two-device-private-d";
+    const publicX = "public-coordinate-value-must-remain-visible";
+    const discoveredSecrets = [secret, jwkPrivateD, privateKeySecret, keySeed, sessionSeed, jwkPrivateKey, jwkSeed,
+      hostPrivateKey, hostSeed, hostJwkD, hostSessionSeed, deviceD1, deviceD2];
     const runId = "test-run";
     const sourceRoot = await mkdtemp(join(tmpdir(), "tc893-client-capture-fixture-"));
     const home = join(sourceRoot, "homes", "c1");
+    const replicaRoot = join(sourceRoot, "replicas", "c1");
+    let captureDir = "";
     const spec: Scenario["topology"] = () => ({ name: "capture-fixture", nodes: [{ id: "n1" }],
-      clients: [{ id: "c1", kind: "cli", node: "n1", identity: "owner", auth: { posture: "owner" } }] });
+      clients: [{ id: "c1", kind: "sdk", node: "n1", identity: "owner", auth: { posture: "owner" } }] });
     const fixtureScenario = scenario("EDGE-10", "edge", { topology: spec, run: async (ctx) => {
-      ctx.log(`client log ${secret}`);
-      ctx.log(`JWK public identifiers default and ${longJwkKid}; private d ${jwkPrivateD}`);
-      ctx.check("JWK public metadata remains visible", true, { kid: "default", longKid: longJwkKid, privateD: jwkPrivateD });
-      ctx.check("key detail", false, { privateKey: secret, logLine: `client log ${secret}` });
+      await mkdir(join(replicaRoot, "partition-a", "nested"), { recursive: true });
+      await mkdir(join(replicaRoot, "partition-b"), { recursive: true });
+      await writeFile(join(replicaRoot, "partition-a", "nested", "device.jwk"), JSON.stringify({ kty: "OKP", crv: "Ed25519", d: deviceD1, x: publicX }));
+      await writeFile(join(replicaRoot, "partition-b", "device.jwk"), JSON.stringify({ kty: "OKP", crv: "Ed25519", d: deviceD2, x: publicX }));
+      const logValues = [...discoveredSecrets, "default", publicX, longJwkKid].join(" | ");
+      ctx.log(`synthetic replica and host credential line ${logValues}`);
+      ctx.check("credential values in assertion detail", true, { values: discoveredSecrets, publicX, kid: "default", longKid: longJwkKid });
+      await writeFile(join(captureDir, "stderr.log"), `client stderr ${logValues}\n`);
+      await writeFile(join(captureDir, "events.jsonl"), `${JSON.stringify({ detail: logValues, token: secret })}\n`);
+      throw new Error(`synthetic diagnostic with credentials ${logValues}`);
     } });
     try {
       const profileDir = join(home, ".tinycloud", "profiles", "owner");
+      const hostProfileDir = join(home, ".tinycloud", "profiles", "host-nodeb");
       await mkdir(profileDir, { recursive: true });
-      await writeFile(join(profileDir, "key.json"), JSON.stringify({ privateKey: secret, jwk: {
-        kty: "OKP", crv: "Ed25519", kid: "default", d: jwkPrivateD, x: "long-public-coordinate-value",
+      await mkdir(hostProfileDir, { recursive: true });
+      await writeFile(join(profileDir, "key.json"), JSON.stringify({ privateKey: privateKeySecret, seed: keySeed, sessionProof: secret, jwk: {
+        kty: "OKP", crv: "Ed25519", kid: "default", d: jwkPrivateD, x: publicX, privateKey: jwkPrivateKey, seed: jwkSeed,
       }, secondary: { kty: "OKP", crv: "Ed25519", kid: longJwkKid, d: "another-private-member-material" } }));
+      await writeFile(join(profileDir, "session.json"), JSON.stringify({ session: { seed: sessionSeed, jwk: { kty: "OKP", crv: "Ed25519", d: "owner-session-jwk-private-material", x: publicX } } }));
+      await writeFile(join(hostProfileDir, "key.json"), JSON.stringify({ privateKey: hostPrivateKey, seed: hostSeed,
+        jwk: { kty: "OKP", crv: "Ed25519", d: hostJwkD, x: publicX } }));
+      await writeFile(join(hostProfileDir, "session.json"), JSON.stringify({ session: { seed: hostSessionSeed } }));
       const factory: TopologyFactory = { create: async (env, topologySpec, options) => {
-        const captureDir = join(env.resultsDir, env.runId, options.topoId, "clients", "c1");
+        captureDir = join(env.resultsDir, env.runId, options.topoId, "clients", "c1");
         await mkdir(captureDir, { recursive: true });
         await writeFile(join(captureDir, "stderr.log"), `client stderr ${secret}\n`);
         await writeFile(join(captureDir, "events.jsonl"), `${JSON.stringify({ token: secret })}\n`);
-        const client = { id: "c1", kind: "cli", capabilities: new Set(), home: () => home, profile: () => "owner", artifactDirectoryPath: () => captureDir } as unknown as KvClient;
+        const client = {
+          id: "c1", kind: "sdk", capabilities: new Set(), home: () => home, profile: () => "owner",
+          replicaDir: () => replicaRoot, artifactDirectoryPath: () => captureDir, rpc: async () => ({ driver: "test" }),
+        } as unknown as KvClient;
         return { id: options.topoId, backend: options.backend, spec: topologySpec, client: (id: string) => id === "c1" ? client : undefined,
           collectArtefacts: async (outputDir: string) => {
             const nodeLog = join(outputDir, "nodes/n1.log");
@@ -283,17 +314,19 @@ describe("S3a scenario expansion", () => {
       const env: RunEnvironment = { runId, resultsDir: dir, clock: realClock, docker: ["docker"], sut: view.sut,
         image: () => view.image, slackMs: 1, teardownMs: 100 };
       const secrets: string[] = [];
-      const executor = createScenarioExecutor({ factory, env, clock: realClock, artefactRoot: dir, clientArtifactsRoot: sourceRoot,
-        secrets, collectClientSecrets: async () => [secret] });
+      const executor = createScenarioExecutor({ factory, env, clock: realClock, artefactRoot: dir, clientArtifactsRoot: sourceRoot, secrets });
       const output = await runRows({ rows, clock: realClock, concurrency: 1, report: reportBase(dir), reportDirectory: dir,
         secrets, executeRow: executor.executeRow, finalizeRow: executor.finalizeRow });
       const json = await readFile(join(dir, "report.json"), "utf8");
       const markdown = await readFile(join(dir, "report.md"), "utf8");
-      expect(json).not.toContain(secret);
-      expect(markdown).not.toContain(secret);
+      for (const value of discoveredSecrets) {
+        expect(json).not.toContain(value);
+        expect(markdown).not.toContain(value);
+      }
       expect(json).toContain("[REDACTED]");
       expect(json).toContain("default");
       expect(json).toContain(longJwkKid);
+      expect(json).toContain(publicX);
       expect(json).not.toContain(jwkPrivateD);
       expect(markdown).toContain("[REDACTED]");
       expect(RunReportSchema.safeParse(JSON.parse(json)).success).toBe(true);
@@ -302,18 +335,17 @@ describe("S3a scenario expansion", () => {
       expect(captures.map((file) => file.path).sort()).toEqual(["clients/c1/events.jsonl", "clients/c1/stderr.log"]);
       for (const file of captures) {
         const bytes = await readFile(join(dir, row.artefactDir, file.path));
-        expect(bytes.toString("utf8")).not.toContain(secret);
+        for (const value of discoveredSecrets) expect(bytes.toString("utf8")).not.toContain(value);
         expect(file.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
       }
-      expect(await readFile(join(dir, row.artefactDir, "clients/c1/stderr.log"), "utf8")).toContain("[REDACTED]");
       const nodeLogEntry = row.artefacts.find((file) => file.path === "nodes/n1.log");
       expect(nodeLogEntry).toBeDefined();
       const nodeLog = await readFile(join(dir, row.artefactDir, "nodes/n1.log"));
-      expect(nodeLog.toString("utf8")).not.toContain(secret);
+      for (const value of discoveredSecrets) expect(nodeLog.toString("utf8")).not.toContain(value);
       expect(nodeLog.toString("utf8")).toContain("[REDACTED]");
       expect(nodeLogEntry?.sha256).toBe(createHash("sha256").update(nodeLog).digest("hex"));
       const scenarioLog = await readFile(join(dir, row.artefactDir, "scenario.log"), "utf8");
-      expect(scenarioLog).not.toContain(secret);
+      for (const value of discoveredSecrets) expect(scenarioLog).not.toContain(value);
       expect(scenarioLog).toContain("[REDACTED]");
       expect(home.startsWith(dir)).toBe(false);
     } finally {

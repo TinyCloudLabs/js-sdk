@@ -30,7 +30,7 @@ class TinyCloudNode {
     this.restorableSession = undefined;
     this.sessionKeyJwk = { kty: "OKP", x: randomUUID(), d: randomUUID() };
     this.sessionDid = "did:key:" + this.sessionKeyJwk.x + "#key-1";
-    record({ kind: "init", privateKeyProvided: options.privateKey !== undefined, host: options.host });
+    record({ kind: "init", privateKeyProvided: options.privateKey !== undefined, host: options.host, replication: options.replication === false ? false : options.replication ? { prefixes: options.replication.prefixes, maxStalenessMs: options.replication.maxStalenessMs } : undefined });
     this.kv = {
       get: async (key, options = {}) => {
         record({ kind: "get", key, space: options.space });
@@ -229,7 +229,10 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     expect(bootsAfterCrash).toHaveLength(1);
 
     process.env.HARNESS_NODE = "node";
-    await owner.restart({ auth: "restore" });
+    await owner.restart({ auth: "restore", replication: { maxStalenessMs: 3000 } });
+    const restartInit = (await readFile(join(ownerHome, "observations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { kind: string; replication?: { prefixes?: string[]; maxStalenessMs?: number } }).filter((item) => item.kind === "init").at(-1);
+    expect(restartInit?.replication).toMatchObject({ prefixes: ["notes/"], maxStalenessMs: 3000 });
+    await expect(owner.get("per-call-replication", { replication: { maxStalenessMs: 3000 } })).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_OPTION" });
     await waitForFileContents(stderrArtifactPath, (contents) => (contents.match(/sdk-driver-stderr-canary/g) ?? []).length >= 2);
     expect((await readFile(owner.stderrArtifactPath, "utf8")).match(/sdk-driver-stderr-canary/g)).toHaveLength(3);
     expect(owner.stderr.match(/sdk-driver-stderr-canary/g)).toHaveLength(2);

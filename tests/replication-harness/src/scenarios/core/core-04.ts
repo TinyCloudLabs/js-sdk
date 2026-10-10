@@ -22,7 +22,7 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
     return oneNode(`core-04-${writerKind}-${readerKind}`, clients);
   },
   async run(ctx, variant) {
-    const writerKind = variant.split(">")[0] as ClientKind;
+    const [writerKind, readerKind] = variant.split(">") as [ClientKind, ClientKind];
     const writer = ctx.topo.client("w");
     const reader = ctx.topo.client("r");
     const callOptions = { signal: ctx.signal };
@@ -51,6 +51,11 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
       ctx.check("immediate v1 is within 60s staleness bound", Number.isFinite(defaultRead.read?.stalenessMs) && Number(defaultRead.read?.stalenessMs) <= 60_000, defaultRead.read);
     } else if (defaultRead.read?.source === "network") {
       ctx.eq("network read returns v2", immediateValue, "v2");
+    }
+    if (readerKind === "sdk") {
+      const remainingMs = Math.max(1, ctx.deadline(reader) - (ctx.clock.now() - writeAt));
+      await reader.restart({ auth: "restore", signal: ctx.signal, deadlineMs: remainingMs,
+        replication: { prefixes: ["notes/"], mode: "background", maxStalenessMs: 3_000, syncIntervalMs: 2_000 } });
     }
 
     let sawV2 = immediateValue === "v2";
