@@ -11,7 +11,7 @@ import { createRunReportBase, runRowsWithInterrupt } from "./run";
 import { createScenarioExecutor } from "./executor";
 import { expandScenarios, scenarioRegistry } from "./registry";
 import { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./runtime";
-
+import { createRequirementProbe } from "./requirements";
 export interface RunCommandArgs { options: Record<string, string | true>; positionals: string[] }
 
 function option(options: RunCommandArgs["options"], name: string, fallback?: string): string | undefined {
@@ -86,7 +86,7 @@ export async function runHarnessCommand(parsed: RunCommandArgs): Promise<void> {
   const setOption = option(parsed.options, "set");
   if (setOption !== undefined && setOption !== "phase1-companion") throw new Error(`unknown scenario set ${setOption}`);
   const set: SetId | null = setOption === "phase1-companion" ? "phase1-companion" : null;
-  const rows = expandScenarios(scenarioRegistry, { tiers, backends, only, variants, set }, run);
+  const rows = expandScenarios(scenarioRegistry, { tiers, backends, only, variants, set }, run, createRequirementProbe());
   if (!rows.length) throw new Error("no scenarios selected");
   const harnessRoot = process.cwd();
   const harnessSha = await git(harnessRoot, "rev-parse", "HEAD");

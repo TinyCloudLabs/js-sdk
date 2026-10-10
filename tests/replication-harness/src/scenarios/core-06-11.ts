@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CliClient, GetResult, KvClient, SdkClient, WriteResult } from "../contracts/client";
 import type { EventEnvelope } from "../contracts/events";
@@ -7,8 +7,8 @@ import type { Backend, ClientKind } from "../contracts/common";
 import type { Scenario, ScenarioContext } from "../contracts/scenario";
 import type { ClientSpec, TopologySpec } from "../contracts/topology";
 import { registerScenarios } from "../runner/registry";
-import { createCliDelegation } from "./cli-delegation";
-import { acceptsOfflineCliExpiry } from "./core-07-expiry";
+import { createCliDelegation } from "../clients/cli-client";
+import { acceptsOfflineCliExpiry, hasCliErrorEnvelopeCode } from "./core-07-expiry";
 
 const PREFIX = "notes/";
 const key = "notes/a.txt";
@@ -24,11 +24,11 @@ function comparableResult(result: object): Record<string, unknown> {
 }
 type Variant = "cli" | "sdk";
 
-function client(id: string, kind: ClientKind, node: string, replication: ClientSpec["replication"], identity = "owner"): ClientSpec {
+function client(id: string, kind: ClientKind, node: string, replication: ClientSpec["replication"], identity: string): ClientSpec {
   return { id, kind, node, identity, auth: { posture: "owner" }, replication };
 }
 function baseTopology(name: string, kind: ClientKind, replica: ClientSpec["replication"]): TopologySpec {
-  return { name, nodes: [{ id: "a" }], clients: [client("reader", kind, "a", replica)] };
+  return { name, nodes: [{ id: "a" }], clients: [client("reader", kind, "a", replica, `${name}-${kind}`)] };
 }
 function replication(kind: ClientKind, maxStalenessMs = 0) {
   return { prefixes: [PREFIX], ...(kind === "sdk" ? { mode: "foreground" as const } : {}), maxStalenessMs };
@@ -89,7 +89,7 @@ const core06: Scenario<Variant> = {
     await ctx.topo.proxy("client:reader->a").disable({ signal: ctx.signal });
 
     const covered = await reader.get(key, replicationOptions(reader, ctx.signal));
-    ctx.check("offline covered get is served from replica with sync error", covered.ok && covered.found && covered.read?.source === "replica" && Boolean(covered.read.syncError), covered.read);
+    ctx.check("offline covered get is served from replica with sync error", covered.ok && covered.found && Buffer.from(covered.value ?? []).toString() === VALUE && covered.read?.source === "replica" && Boolean(covered.read.syncError), covered.read);
     const listing = await reader.list(PREFIX, replicationOptions(reader, ctx.signal));
     ctx.check("offline covered list succeeds", listing.ok && listing.keys?.includes(key) === true, { ok: listing.ok, keys: listing.keys, code: listing.code });
     const uncovered = await reader.get(otherKey, replicationOptions(reader, ctx.signal));
@@ -102,10 +102,9 @@ const core06: Scenario<Variant> = {
     ctx.check("offline write did not change the network value", control.ok && control.found && Buffer.from(control.value ?? []).toString() === "unchanged", { ok: control.ok, found: control.found, code: control.code, stderr: control.stderr });
     const recovered = await reader.sync({ prefix: PREFIX, ...replicationOptions(reader, ctx.signal) });
     ctx.check("sync recovers after connectivity returns", recovered.ok && recovered.syncs.some((event) => event.outcome === "ok"), recovered.syncs);
-    if (covered.read) ctx.check("offline read metadata reports sync error", Boolean(covered.read.syncError), covered.read);
     // TC-897 tracks the pre-existing CLI exit 1; require exit 6 again once its fix lands.
     if (variant === "cli") {
-      const networkErrorReported = uncovered.code === "NETWORK_ERROR" || uncovered.stderr?.includes("NETWORK_ERROR") === true;
+      const networkErrorReported = hasCliErrorEnvelopeCode(uncovered.stderr ?? "", new Set(["NETWORK_ERROR"]));
       const noReplicaRead = uncovered.read?.source !== "replica" && !uncovered.events.some((item) => item.event.type === "replication.read" && item.event.source === "replica");
       ctx.check("offline uncovered CLI get is refused with NETWORK_ERROR and no replica read event",
         !uncovered.ok && uncovered.exit !== undefined && uncovered.exit !== null && uncovered.exit !== 0 && networkErrorReported && noReplicaRead,
@@ -122,15 +121,15 @@ const core07: Scenario<Variant> = {
     const kind = variant === "cli" ? "cli" : "sdk";
     const replica = replication(kind);
     const sharedEndpoint = { endpoint: DELEGATION_ENDPOINT };
-    const writer: ClientSpec = { ...client("writer", kind, "a", replication(kind)), ...sharedEndpoint };
+    const writer: ClientSpec = { ...client("writer", kind, "a", replication(kind), `core-07-${variant}`), ...sharedEndpoint };
     const reader: ClientSpec = {
-      ...client("reader", kind, "a", replica),
+      ...client("reader", kind, "a", replica, `core-07-${variant}`),
       ...sharedEndpoint,
       ...(kind === "cli" ? {
         auth: { posture: "delegate-session", grant: { issuer: "writer", caps: [{ prefix: PREFIX, actions: [...ACTIONS] }], expiresInMs: 75_000 } },
       } : { auth: { posture: "owner", sessionExpiryMs: 70_000 } }),
     };
-    const control: ClientSpec = { ...client("control", kind, "a", false), ...sharedEndpoint };
+    const control: ClientSpec = { ...client("control", kind, "a", false, `core-07-${variant}`), ...sharedEndpoint };
     return { name: "core-07", nodes: [{ id: "a" }], clients: [writer, reader, control] };
   },
   async run(ctx, variant) {
@@ -141,7 +140,7 @@ const core07: Scenario<Variant> = {
     if (variant === "cli") {
       const space = seeded.events.find((item) => item.event.type === "replication.write")?.event.space;
       if (typeof space !== "string") throw new Error("owner write did not report its space");
-      await createCliDelegation(cli(ctx, "writer"), cli(ctx, "reader"), { space, prefix: PREFIX, actions: ACTIONS, expires: "75s" });
+      await createCliDelegation({ owner: cli(ctx, "writer"), device: cli(ctx, "reader"), space, prefix: PREFIX, actions: [...ACTIONS], expiry: "75s" });
     }
     await warm(ctx, reader);
     const authority = await reader.authority();
@@ -163,6 +162,9 @@ const core07: Scenario<Variant> = {
     if (variant === "cli") {
       // TC-674 restores the strict exit 3/5 contract for expired imported delegate sessions.
       const delegateExpiryProbe = ctx.probeRequirement("tc674:delegate-session-expiry");
+      if (delegateExpiryProbe !== true && (offline.exit === 3 || offline.exit === 5)) {
+        ctx.log(`Loose CORE-07 CLI expiry path observed strict TC-674 exit ${offline.exit} before capability pin (${delegateExpiryProbe})`);
+      }
       ctx.check(delegateExpiryProbe === true ? "offline CLI expiry uses supported refusal" : "offline CLI expiry without TC-674 is refused with a code and no local read",
         acceptsOfflineCliExpiry(offline, delegateExpiryProbe), { probe: delegateExpiryProbe, exit: offline.exit, code: offline.code, stderr: offline.stderr, read: offline.read, events: operationEvents(offline) });
     }
@@ -172,8 +174,8 @@ const core07: Scenario<Variant> = {
 
 function core09Topology(variant: Variant): TopologySpec {
   const kind = variant === "cli" ? "cli" : "sdk";
-  const clients = [client("reader", kind, "a", replication(kind))];
-  if (variant === "cli") clients.push(client("keep", "cli", "a", replication("cli"), "keep-owner"));
+  const clients = [client("reader", kind, "a", replication(kind), `core-09-${variant}`)];
+  if (variant === "cli") clients.push(client("keep", "cli", "a", replication("cli"), "core-09-keep"));
   return { name: "core-09", nodes: [{ id: "a" }], clients };
 }
 const core09: Scenario<Variant> = {
@@ -188,14 +190,17 @@ const core09: Scenario<Variant> = {
     const hit = await reader.get(key, replicationOptions(reader));
     ctx.check("sentinel is warm before logout or purge", hit.ok && hit.found && hit.read?.source === "replica", hit.read);
     if (variant === "cli") {
+      const profile = join(cli(ctx, "reader").home(), ".tinycloud", "profiles", cli(ctx, "reader").profile());
+      const legacyDir = join(profile, "replicas", "legacy");
+      await mkdir(legacyDir, { recursive: true });
+      await writeFile(join(legacyDir, "sentinel"), sentinel, { mode: 0o600 });
       const command = await cli(ctx, "reader").tc(["auth", "logout"], { signal: ctx.signal });
       ctx.check("CLI logout succeeds", command.exit === 0, { exit: command.exit, stderr: command.stderr });
-      const profile = join(cli(ctx, "reader").home(), ".tinycloud", "profiles", cli(ctx, "reader").profile());
       let replicationExists = true;
-      let legacyExists = true;
       try { await access(join(profile, "replication")); } catch { replicationExists = false; }
-      try { await access(join(profile, "replicas")); } catch { legacyExists = false; }
-      ctx.check("CLI logout removes replication directories", !replicationExists && !legacyExists, { replicationExists, legacyExists });
+      let legacyRemovalCode: string | undefined;
+      try { await access(legacyDir); } catch (error) { legacyRemovalCode = (error as NodeJS.ErrnoException).code; }
+      ctx.check("CLI logout removes replication and seeded legacy directories", !replicationExists && legacyRemovalCode === "ENOENT", { replicationExists, legacyRemovalCode });
       const scan = cli(ctx, "reader") as CliClient & { scanReplica(needle: Uint8Array): Promise<string[]> };
       const residual = await scan.scanReplica(sentinel);
       ctx.check("CLI logout removes sentinel bytes", residual.length === 0, residual);
@@ -222,11 +227,11 @@ const core09: Scenario<Variant> = {
       const scan = reader as SdkClient & { scanReplica(needle: Uint8Array): Promise<string[]> };
       const residual = await scan.scanReplica(sentinel);
       ctx.check("SDK purge removes sentinel bytes", residual.length === 0, residual);
-      const status = await reader.status({ signal: ctx.signal });
       await ctx.topo.proxy("client:reader->a").disable({ signal: ctx.signal });
       const later = await reader.get(key, { signal: ctx.signal });
       ctx.check("SDK read after purge is not locally served", !later.ok && later.read?.source !== "replica", { ok: later.ok, read: later.read, code: later.code });
-      ctx.check("SDK status is closed after purge", status.length === 0 || status.every((entry) => entry.state === "closed"), status);
+      const disabled = await reader.sync({ prefix: PREFIX, signal: ctx.signal });
+      ctx.check("SDK sync reports replication disabled after purge", disabled.code === "REPLICATION_DISABLED", { code: disabled.code });
     }
   },
 };
@@ -235,8 +240,9 @@ const core10: Scenario<Variant> = {
   id: "CORE-10", title: "Independent node replicas remain isolated", tier: "core", variants: ["cli", "sdk"], timeoutMs: 120_000,
   topology(variant) {
     const kind = variant === "cli" ? "cli" : "sdk";
-    const reader = { ...client("reader", kind, "a", replication(kind)), extraHosts: [{ alias: "b", node: "nodeb" }] };
-    const writerB = client("writerb", kind, "nodeb", false);
+    const identity = `core-10-${variant}`;
+    const reader = { ...client("reader", kind, "a", replication(kind), identity), extraHosts: [{ alias: "b", node: "nodeb" }] };
+    const writerB = client("writerb", kind, "nodeb", false, identity);
     return { name: "core-10", nodes: [{ id: "a" }, { id: "nodeb" }], clients: [reader, writerB] };
   },
   async run(ctx) {
@@ -270,7 +276,7 @@ const core10: Scenario<Variant> = {
     await ctx.topo.node("nodeb").stop({ signal: ctx.signal });
     const stillA = await reader.get(key, replicationOptions(reader, ctx.signal));
     ctx.check("reader on node a observes A", readA.ok && readA.found && Buffer.from(readA.value ?? []).toString() === "A", readA.read);
-    ctx.check("node-b-only key is absent through node a replica or network", localAbsence.ok && !localAbsence.found && (localAbsence.read?.source === "replica" || localAbsence.read?.source === "network"), localAbsence.read);
+    ctx.check("node-b-only key is absent through node a replica", localAbsence.ok && !localAbsence.found && localAbsence.read?.source === "replica", localAbsence.read);
     if (partitionReport) ctx.check("CLI report lists two distinct node partitions", partitionReport.ok, partitionReport.detail);
     ctx.check("node a and b have distinct proxy endpoints", endpointsDistinct);
     ctx.check("stopping b does not affect reads via a", stillA.ok && stillA.found && Buffer.from(stillA.value ?? []).toString() === "A", { ok: stillA.ok, read: stillA.read });
@@ -283,19 +289,18 @@ const core11: Scenario<Variant> = {
   id: "CORE-11", title: "Replication flag-off parity", tier: "core", variants: ["cli", "sdk"], timeoutMs: 120_000,
   topology(variant) {
     const kind = variant === "cli" ? "cli" : "sdk";
+    const identity = `core-11-${variant}`;
     return { name: "core-11", nodes: [{ id: "a" }], clients: [
-      client("off", kind, "a", false), client("on", kind, "a", replication(kind)),
+      client("off", kind, "a", false, identity), client("on", kind, "a", replication(kind), identity),
     ] };
   },
   async run(ctx, variant) {
     if (variant === "sdk") {
       const off = sdk(ctx, "off");
       const on = sdk(ctx, "on");
-      const spec = ctx.topo.spec.clients.find((item) => item.id === "off");
-      ctx.check("SDK replication is absent without configuration", !spec?.replication);
-      const directory = join(ctx.env.resultsDir, ctx.env.runId, ctx.topo.id, "clients", "off", "home", "replica");
-      const offStatus = await off.status({ signal: ctx.signal });
-      ctx.check("SDK flag-off has no replication status", offStatus.length === 0, offStatus);
+      const directory = off.replicaDir();
+      const disabledBefore = await off.sync({ prefix: PREFIX, signal: ctx.signal });
+      ctx.check("SDK flag-off sync is disabled before operations", disabledBefore.code === "REPLICATION_DISABLED", { code: disabledBefore.code });
       let exists = true;
       try { await stat(directory); } catch { exists = false; }
       ctx.check("SDK flag-off leaves storageDir untouched", !exists, directory);
@@ -314,8 +319,8 @@ const core11: Scenario<Variant> = {
       const offRun = await script(off);
       const onRun = await script(on);
       ctx.eq("SDK flag-on and flag-off operation script outputs, exits, and values match", offRun.outputs, onRun.outputs);
-      const finalStatus = await off.status({ signal: ctx.signal });
-      ctx.check("SDK flag-off still has no replication instance", finalStatus.length === 0, finalStatus);
+      const disabledAfter = await off.sync({ prefix: PREFIX, signal: ctx.signal });
+      ctx.check("SDK flag-off sync remains disabled after operations", disabledAfter.code === "REPLICATION_DISABLED", { code: disabledAfter.code });
       let storageExists = true;
       try { await stat(directory); } catch { storageExists = false; }
       ctx.check("SDK flag-off leaves storageDir untouched after script", !storageExists, directory);

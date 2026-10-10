@@ -40,4 +40,4 @@ export interface KvClient {
 export interface CliCallOptions extends OpOptions { stdin?: Uint8Array; profile?: string; omitHost?: boolean }
 export interface CliResult extends OpMeta { exit: number | null; signal: string | null; stdout: Uint8Array; stderr: string; json?: unknown }
 export interface CliClient extends KvClient { tc(args: string[], o?: CliCallOptions): Promise<CliResult>; home(): string; profile(): string; eventsFile(): string }
-export interface SdkClient extends KvClient { rpc<O extends RpcOp>(op: O, args: RpcOps[O]["args"], o?: CallOptions): Promise<RpcOps[O]["value"]> }
+export interface SdkClient extends KvClient { replicaDir(): string; rpc<O extends RpcOp>(op: O, args: RpcOps[O]["args"], o?: CallOptions): Promise<RpcOps[O]["value"]> }

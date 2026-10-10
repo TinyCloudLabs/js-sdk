@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
+import { access, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { CliClient } from "../contracts/client";
 import type { Scenario, ScenarioContext } from "../contracts/scenario";
 import type { TopologySpec } from "../contracts/topology";
+import { createCliDelegation } from "../clients/cli-client";
 import { registerScenarios } from "../runner/registry";
-import { createCliDelegation } from "./cli-delegation";
-
 const PREFIX = "notes/";
 const key = `${PREFIX}a.txt`;
 const ACTIONS = ["get", "list", "metadata", "sync"] as const;
@@ -21,8 +22,8 @@ function topology(): TopologySpec {
     name: "core-08",
     nodes: [{ id: "a" }],
     clients: [
-      { id: "owner", kind: "cli", node: "a", identity: "owner", endpoint: DELEGATION_ENDPOINT, auth: { posture: "owner" }, replication: { prefixes: [PREFIX] } },
-      { id: "reader", kind: "cli", node: "a", identity: "owner", endpoint: DELEGATION_ENDPOINT, auth: { posture: "delegate-session", grant: {
+      { id: "owner", kind: "cli", node: "a", identity: "core-08", endpoint: DELEGATION_ENDPOINT, auth: { posture: "owner" }, replication: { prefixes: [PREFIX] } },
+      { id: "reader", kind: "cli", node: "a", identity: "core-08", endpoint: DELEGATION_ENDPOINT, auth: { posture: "delegate-session", grant: {
         issuer: "owner", caps: [{ prefix: PREFIX, actions: ["get", "list", "metadata", "sync"] }], expiresInMs: 30 * 24 * 60 * 60_000,
       } }, replication: { prefixes: [PREFIX], maxStalenessMs: 0 } },
     ],
@@ -33,6 +34,16 @@ function opEvents(result: { events: { attribution: string; event: { type: string
 }
 function parseJson(bytes: Uint8Array): Record<string, unknown> {
   try { return JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>; } catch { return {}; }
+}
+function grantCid(value: unknown): string | undefined {
+  if (Array.isArray(value)) return value.map(grantCid).find((item) => item !== undefined);
+  if (typeof value !== "object" || value === null) return undefined;
+  for (const [name, nested] of Object.entries(value)) {
+    if (/^(cid|delegationCid|grantCid)$/i.test(name) && typeof nested === "string") return nested;
+    const found = grantCid(nested);
+    if (found) return found;
+  }
+  return undefined;
 }
 const scenario: Scenario<"cli"> = {
   id: "CORE-08", title: "Revoked grant is discovered and purged", tier: "core", variants: ["cli"], timeoutMs: 150_000,
@@ -46,12 +57,14 @@ const scenario: Scenario<"cli"> = {
     const space = put.events.find((item) => item.event.type === "replication.write")?.event.space;
     ctx.check("owner write reports its authority space", typeof space === "string");
     if (typeof space !== "string") throw new Error("owner write did not report its space");
-    const delegation = await createCliDelegation(owner, reader, { space, prefix: PREFIX, actions: ACTIONS, expires: "30d" });
-    ctx.check("delegation CID is available to revoke", typeof delegation.cid === "string" && delegation.cid.length > 0);
-    if (!delegation.cid) throw new Error("CLI grant response did not expose a delegation CID");
+    const delegation = await createCliDelegation({ owner, device: reader, space, prefix: PREFIX, actions: [...ACTIONS], expiry: "30d" });
+    const grantJson = parseJson(delegation.grant.stdout);
+    const cid = grantCid(grantJson);
+    ctx.check("delegation CID is available to revoke", typeof cid === "string" && cid.length > 0);
+    if (!cid) throw new Error("CLI grant response did not expose a delegation CID");
     const warm = await reader.get(key, { replication: { maxStalenessMs: 0 }, signal: ctx.signal });
     ctx.check("delegate serves a warm replica hit", warm.ok && warm.found && warm.read?.source === "replica" && warm.read.reason === "hit", warm.read);
-    const revoke = await owner.tc(["delegation", "revoke", delegation.cid, "--yes"], { signal: ctx.signal });
+    const revoke = await owner.tc(["delegation", "revoke", cid, "--yes"], { signal: ctx.signal });
     ctx.check("owner revokes device grant", revoke.exit === 0, { exit: revoke.exit, stderr: revoke.stderr });
 
     const afterRevoke = await reader.get(key, { replication: { maxStalenessMs: 0 }, signal: ctx.signal });
@@ -74,8 +87,8 @@ const scenario: Scenario<"cli"> = {
     let purged = false;
     while (ctx.clock.now() < end) {
       const state = await report();
-      const entries: unknown[] = Array.isArray(state.json.replicas) ? state.json.replicas : Array.isArray(state.json.prefixes) ? state.json.prefixes : [];
-      const revokedOrAbsent = state.exit === 0 && !entries.some((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).prefix === PREFIX && (entry as Record<string, unknown>).state !== "revoked");
+      const entries = Array.isArray(state.json.replicas) ? state.json.replicas : undefined;
+      const revokedOrAbsent = state.exit === 0 && entries !== undefined && !entries.some((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).prefix === PREFIX && (entry as Record<string, unknown>).state !== "revoked");
       lastReport = state;
       const residual = await scanClient.scanReplica(sentinel);
       lastResidual = residual;

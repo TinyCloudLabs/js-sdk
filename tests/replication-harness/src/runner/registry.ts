@@ -1,9 +1,9 @@
 import type { Backend, SetId, Tier } from "../contracts/common";
 import type { Requirement, RunContextView, Scenario } from "../contracts/scenario";
 
-export type ScenarioRow = { key: string; id: string; variant: string | null; backend: Backend; tier: Tier; sets: SetId[]; scenario: Scenario; probeRequirement?: ProbeRequirement; reason?: string; unavailableStatus?: "skipped" | "unsupported"; forcedUnsupported?: boolean };
+export type ScenarioRow = { key: string; id: string; variant: string | null; backend: Backend; tier: Tier; sets: SetId[]; scenario: Scenario; probeRequirement?: (requirement: Requirement) => true | string; reason?: string; unavailableStatus?: "skipped" | "unsupported"; forcedUnsupported?: boolean };
 export type RegistryFilters = { tiers?: readonly Tier[]; set?: SetId | null; only?: readonly string[]; variants?: readonly string[]; backends: readonly Backend[]; forceUnsupported?: boolean };
-export type ProbeRequirement = (requirement: Requirement) => true | string;
+export type ProbeRequirement = (requirement: Requirement, run: RunContextView) => true | string;
 const expectedUnsupportedRequirements = new Set<Requirement>(["tc12:host-sync", "tc674:delegate-session-expiry"]);
 export const scenarioRegistry: Scenario[] = [];
 export function registerScenarios(...scenarios: Scenario[]): void {
@@ -51,7 +51,7 @@ export function expandScenarios(scenarios: readonly Scenario[], filters: Registr
       }
       const requirementFailure = scenario.requires?.map((requirement) => ({
         requirement,
-        result: probe ? probe(requirement) : `requirement probe unavailable: ${requirement}`,
+        result: probe ? probe(requirement, run) : `requirement probe unavailable: ${requirement}`,
         missingProbe: !probe,
       })).find(({ result }) => result !== true);
       const isExpectedUnsupported = requirementFailure !== undefined && expectedUnsupportedRequirements.has(requirementFailure.requirement);
@@ -60,7 +60,7 @@ export function expandScenarios(scenarios: readonly Scenario[], filters: Registr
         if (!filters.backends.includes(backend)) continue;
         const key = `${scenario.id}${variant === null ? "" : `[${variant}]`}@${backend}`;
         rows.push({ key, id: scenario.id, variant, backend, tier: scenario.tier, sets: [...(scenario.sets ?? [])], scenario,
-          ...(probe ? { probeRequirement: probe } : {}),
+          ...(probe ? { probeRequirement: (requirement: Requirement) => probe(requirement, run) } : {}),
           ...(requirementFailure && !forceUnsupported ? { reason: requirementFailure.result as string,
             unavailableStatus: requirementFailure.missingProbe || isExpectedUnsupported ? "unsupported" as const : "skipped" as const } : {}),
           ...(forceUnsupported ? { forcedUnsupported: true } : {}) });
