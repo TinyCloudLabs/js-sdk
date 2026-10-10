@@ -31,15 +31,30 @@ export function addReplicationLoginEntries(
       path: prefix,
       actions: ["tinycloud.kv/get"],
     };
-    const covering = request.filter((entry) => {
+    const requiredPaths = prefix.endsWith("/") ? [prefix] : [prefix, `${prefix}/`];
+    const required = requiredPaths.map((path) => ({ ...requested, path }));
+    const matching = request.filter((entry) =>
+      sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid),
+    );
+    const authority = matching.map((entry) => {
       const { caveats: _caveats, ...grant } = entry;
-      return sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid) &&
-        isCapabilitySubset([requested], [{ ...grant, space: primarySpace }]).subset;
+      return { ...grant, space: primarySpace };
     });
-    if (!covering.length) {
+    if (!isCapabilitySubset(required, authority).subset) {
+      const caveatedAtRequestedPath = matching.filter((entry) => !unconstrained(entry.caveats)).map((entry) => {
+        const { caveats: _caveats, ...grant } = entry;
+        return { ...grant, space: primarySpace };
+      });
+      if (isCapabilitySubset([requested], caveatedAtRequestedPath).subset) {
+        throw new CLIError("REPLICATION_PREFIX_CAVEATED", `Replication prefix ${JSON.stringify(prefix)} is covered only by caveated get authority.`, ExitCode.USAGE_ERROR);
+      }
       throw new CLIError("REPLICATION_PREFIX_OUTSIDE_SCOPE", `Replication prefix ${JSON.stringify(prefix)} has no covering get in the login request.`, ExitCode.USAGE_ERROR);
     }
-    if (!covering.some((entry) => unconstrained(entry.caveats))) {
+    const unrestricted = matching.filter((entry) => unconstrained(entry.caveats)).map((entry) => {
+      const { caveats: _caveats, ...grant } = entry;
+      return { ...grant, space: primarySpace };
+    });
+    if (!isCapabilitySubset(required, unrestricted).subset) {
       throw new CLIError("REPLICATION_PREFIX_CAVEATED", `Replication prefix ${JSON.stringify(prefix)} is covered only by caveated get authority.`, ExitCode.USAGE_ERROR);
     }
     const service = "tinycloud.kv";

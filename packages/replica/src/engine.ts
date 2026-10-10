@@ -2,7 +2,7 @@ import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex } from "@noble/hashes/utils";
 
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
-import { assertReadable, effectiveAuthority, hashFromEtag, isInstant, kvPrefixCovers } from "./scope.js";
+import { assertReadable, effectiveAuthority, hashFromEtag, isInstant, kvPrefixCovers, selectorCoversListRange } from "./scope.js";
 import type {
   AuthorityState,
   AuthorityWindow,
@@ -210,8 +210,8 @@ export class Replica {
     const state = await this.#state();
     this.#readMeta(state);
     const scope = state.config.prefix;
-    const prefix = options.prefix ?? "";
-    if (prefix !== "" && !scope.startsWith(prefix) && !kvPrefixCovers(scope, prefix)) {
+    const prefix = options.prefix ?? scope;
+    if (!selectorCoversListRange(scope, prefix)) {
       throw new ReplicaError(
         ReplicaErrorCode.NOT_COVERED,
         `${JSON.stringify(prefix)} is outside the replica's prefix ${JSON.stringify(scope)}.`,

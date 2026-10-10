@@ -1,7 +1,7 @@
 import { wrapError } from "../../errors";
 import { ErrorCodes, err, ok, serviceError, type Result } from "../../types";
 import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
-import { kvPrefixCovers, requiresSecretsOptIn } from "./scope";
+import { kvPrefixCovers, listRangeCovers, requiresSecretsOptIn } from "./scope";
 import { classifyWriteOutcome } from "./outcome";
 import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, emptyPendingState, pinnedKeys, settle } from "./pendingWrites";
 import { localGet, type LocalGetResponse } from "./localResponse";
@@ -552,7 +552,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       readEvent("list", r.listPath, prefix, "network", "replica_unavailable", result.ok ? "found" : "error", started, { code: errorCode(error) });
       return result;
     }
-    const pendingRange = state.records.find((record) => kvPrefixCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
+    const pendingRange = state.records.find((record) => listRangeCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
     const behind = fresh.status.syncedThroughEpoch < state.committedEpoch;
     if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid" || (!pending.durable && !inProcessProof.has(prefix)))) return restart();
     if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
@@ -562,7 +562,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", fresh.status.coverage !== "complete" ? "coverage_incomplete" : fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid", result.ok ? "found" : "error", started); return result; }
     try {
       const signalHandle = { list: (o: { prefix: string; after?: string; limit?: number }) => raceSignal(handle.list(o), r.signal) };
-      const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta, prefix), r.signal);
+      const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta), r.signal);
       const event = {
         count: page.keys.length,
         syncedBeforeRead: fresh.syncedBeforeRead,

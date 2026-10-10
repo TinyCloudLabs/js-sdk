@@ -586,16 +586,14 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       replication: replicationConfig({ prefixes: ["notes", "other"] }),
     });
     await (node.auth as NodeUserAuthorization).signIn();
-
     const entries = node.replicationSignInEntries();
-    expect(entries.map((entry) => entry.path)).toEqual(["notes"]);
+
+    expect(entries).toEqual([]);
     const spaceAbilities = captured[0]!.spaceAbilities as Record<
       string,
       { kv?: Record<string, string[]> }
     >;
-    expect(spaceAbilities[SPACE_ID]?.kv?.notes).toEqual(
-      expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
-    );
+    expect(spaceAbilities[SPACE_ID]?.kv?.notes).not.toContain("tinycloud.kv/sync");
     expect(spaceAbilities[SPACE_ID]?.kv?.other).toBeUndefined();
   });
 

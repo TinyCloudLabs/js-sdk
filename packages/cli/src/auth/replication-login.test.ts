@@ -56,19 +56,18 @@ describe("replication login scope", () => {
     expect(buildReplicationLoginRequest([get("notes/")], { prefixes: ["notes/"] }))
       .toContainEqual(expect.objectContaining({ path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] }));
   });
-  test("replication eligibility follows exact and trailing-slash containment", () => {
-    for (const prefix of ["notes/", "notes/private", "notesX"]) {
-      expect(codeOf(() => buildReplicationLoginRequest([get("notes")], { prefixes: [prefix] })))
-        .toBe("REPLICATION_PREFIX_OUTSIDE_SCOPE");
-    }
-    expect(codeOf(() => buildReplicationLoginRequest([get("notes")], { prefixes: ["notes"] }))).toBeUndefined();
-    for (const prefix of ["notes/a", "notes/a/b"]) {
-      expect(codeOf(() => buildReplicationLoginRequest([get("notes/")], { prefixes: [prefix] })))
-        .toBeUndefined();
-    }
+  test("replication eligibility covers the complete selected namespace", () => {
+    expect(codeOf(() => buildReplicationLoginRequest([get("notes")], { prefixes: ["notes"] })))
+      .toBe("REPLICATION_PREFIX_OUTSIDE_SCOPE");
     expect(codeOf(() => buildReplicationLoginRequest([get("notes/")], { prefixes: ["notes"] })))
       .toBe("REPLICATION_PREFIX_OUTSIDE_SCOPE");
+    expect(codeOf(() => buildReplicationLoginRequest([get("")], { prefixes: ["notes"] }))).toBeUndefined();
+    expect(codeOf(() => buildReplicationLoginRequest([get("parent/")], { prefixes: ["parent/notes"] }))).toBeUndefined();
+    expect(codeOf(() => buildReplicationLoginRequest([get("notes")], { prefixes: ["notes/"] })))
+      .toBe("REPLICATION_PREFIX_OUTSIDE_SCOPE");
+    expect(codeOf(() => buildReplicationLoginRequest([get("notes"), get("notes/")], { prefixes: ["notes"] }))).toBeUndefined();
   });
+
 
 
   test("keeps a narrow manifest narrow and normalizes matching short and full spaces", () => {

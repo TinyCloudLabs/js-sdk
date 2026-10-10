@@ -15,8 +15,9 @@ export function hasUnrestrictedGetCoverage(
   spaceId: string,
   prefix: string,
 ): boolean {
+  const requiredPaths = prefix.endsWith("/") ? [prefix] : [prefix, `${prefix}/`];
   return isCapabilitySubset(
-    [{ service: KV_SERVICE, space: spaceId, path: prefix, actions: [KV_GET] }],
+    requiredPaths.map((path) => ({ service: KV_SERVICE, space: spaceId, path, actions: [KV_GET] })),
     [...entries],
   ).subset;
 }

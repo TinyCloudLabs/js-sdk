@@ -193,7 +193,69 @@ describe("KVReplication fallback and pending behavior", () => {
     expect(env.counters().localReads).toBe(0);
   });
 });
+  test("bare nested LIST range falls back for in-flight and ambiguous writes", async () => {
+    for (const pendingState of ["in_flight", "ambiguous"] as const) {
+      const env = setup();
+      await env.pending.update((state) => {
+        begin(state, "nested", [{ key: "notes/folder/a", op: "delete" }], new Date(1_000_000).toISOString());
+        if (pendingState === "ambiguous") settle(state, "nested", "ambiguous", new Date(1_000_000).toISOString(), "TIMEOUT");
+      });
+      let networkCalls = 0;
+      const result = await env.controller.list({
+        space: identity.space,
+        listPath: "notes/folder",
+        options: undefined,
+        signal: new AbortController().signal,
+        network: async () => { networkCalls++; return ok({ keys: ["notes/folder/a"], truncated: false }); },
+      });
+      expect(result.ok && result.data.keys).toEqual(["notes/folder/a"]);
+      expect(networkCalls).toBe(1);
+      expect(env.listReads()).toBe(0);
+    }
+  });
+
+  test("bare nested LIST continuation restarts for in-flight and ambiguous writes", async () => {
+    for (const pendingState of ["in_flight", "ambiguous"] as const) {
+      const env = setup();
+      await env.pending.update((state) => {
+        begin(state, "nested", [{ key: "notes/folder/b", op: "delete" }], new Date(1_000_000).toISOString());
+        if (pendingState === "ambiguous") settle(state, "nested", "ambiguous", new Date(1_000_000).toISOString(), "TIMEOUT");
+      });
+      const result = await env.controller.list({
+        space: identity.space,
+        listPath: "notes/folder",
+        options: { cursor: encodeTcr1(identity.space, "notes/folder", "notes/folder/a") },
+        signal: new AbortController().signal,
+        network: async () => { throw new Error("cursor restart must not use network"); },
+      });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
+      expect(env.listReads()).toBe(0);
+    }
+  });
 describe("KVReplication list parity and cursor rules", () => {
+  test("a LIST range wider than the selected slash prefix falls back to network", async () => {
+    const env = setup({ prefixes: ["notes/"] });
+    let networkCalls = 0;
+    const result = await env.controller.list({
+      space: identity.space,
+      listPath: "notes",
+      options: undefined,
+      signal: new AbortController().signal,
+      network: async () => { networkCalls++; return ok({ keys: ["notes", "notes/a"], truncated: false }); },
+    });
+    expect(result.ok && result.data.keys).toEqual(["notes", "notes/a"]);
+    expect(networkCalls).toBe(1);
+    const cursor = await env.controller.list({
+      space: identity.space,
+      listPath: "notes",
+      options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+      signal: new AbortController().signal,
+      network: async () => { throw new Error("incomplete local cursor must restart"); },
+    });
+    expect(cursor.ok).toBe(false);
+    expect(!cursor.ok && cursor.error.meta?.replication).toBe("cursor_restart");
+  });
   const networkPage = async (): Promise<Result<KVListPage>> => ok({ keys: ["network/a"], truncated: false });
 
   test("serves covered local pages without consulting the network", async () => {

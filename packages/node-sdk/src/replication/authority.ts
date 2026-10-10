@@ -83,9 +83,9 @@ function kvPathInResource(resource: string, space: string): string | undefined {
 }
 
 /**
- * Whether the signed `att` grants `ability` on a path covering `prefix`,
- * with each grant unrestricted (no caveats). With `ignoreCaveats`, answers
- * coverage only — used to distinguish `CAVEATED_AUTHORITY` from `NOT_COVERED`.
+ * Whether the signed `att` grants `ability` over the selected namespace, with
+ * each grant unrestricted (no caveats). A bare selector requires both its
+ * exact key and its slash descendants; a trailing-slash selector is one range.
  */
 export function ucanAttCovers(
   att: Record<string, Record<string, unknown>>,
@@ -94,21 +94,22 @@ export function ucanAttCovers(
   ability: string,
   options?: { ignoreCaveats?: boolean },
 ): boolean {
-  for (const [resource, abilities] of Object.entries(att)) {
-    const path = kvPathInResource(resource, space);
-    if (path === undefined) continue;
-    for (const [granted, caveats] of Object.entries(abilities)) {
-      if (!isCapabilitySubset(
-        [{ service: KV_SERVICE, space, path: prefix, actions: [ability] }],
-        [{ service: KV_SERVICE, space, path, actions: [granted] }],
-      ).subset) continue;
-      if (!actionContains(granted, ability)) continue;
-      if (options?.ignoreCaveats === true || caveatBranchesUnconstrained(caveats)) {
-        return true;
+  const requiredPaths = prefix.endsWith("/") ? [prefix] : [prefix, `${prefix}/`];
+  return requiredPaths.every((requestedPath) => {
+    for (const [resource, abilities] of Object.entries(att)) {
+      const path = kvPathInResource(resource, space);
+      if (path === undefined) continue;
+      for (const [granted, caveats] of Object.entries(abilities)) {
+        if (!actionContains(granted, ability)) continue;
+        if (!isCapabilitySubset(
+          [{ service: KV_SERVICE, space, path: requestedPath, actions: [ability] }],
+          [{ service: KV_SERVICE, space, path, actions: [granted] }],
+        ).subset) continue;
+        if (options?.ignoreCaveats === true || caveatBranchesUnconstrained(caveats)) return true;
       }
     }
-  }
-  return false;
+    return false;
+  });
 }
 
 /** `unconstrained` for `ReplicaGrantInfo` (§2.1): get AND sync on the prefix carry no caveats. */

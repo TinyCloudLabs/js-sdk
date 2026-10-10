@@ -50,11 +50,11 @@ describe("parseUcanGrant", () => {
 });
 
 describe("assertGrantInstallable", () => {
-  test("accepts a trailing-slash grant covering sync and get on the prefix", () => {
+  test("requires authority to cover the complete selected namespace", () => {
     expect(codeOf(() => assertGrantInstallable(deviceGrant(), install))).toBeUndefined();
-    expect(codeOf(() => assertGrantInstallable(deviceGrant({ prefix: "notes" }), install))).toBe(
-      ReplicaErrorCode.GRANT_NOT_COVERING,
-    );
+    expect(codeOf(() => assertGrantInstallable(deviceGrant({ prefix: "notes" }), install))).toBe(ReplicaErrorCode.GRANT_NOT_COVERING);
+    expect(codeOf(() => assertGrantInstallable(deviceGrant(), { ...install, prefix: "notes" }))).toBe(ReplicaErrorCode.GRANT_NOT_COVERING);
+    expect(codeOf(() => assertGrantInstallable(deviceGrant({ prefix: "" }), { ...install, prefix: "notes" }))).toBeUndefined();
   });
 
   test("rejects another device's grant", () => {

@@ -147,7 +147,7 @@ async function mintUcan(input: {
   caveats?: Record<string, unknown>;
 }): Promise<string> {
   const space = input.space ?? SPACE_A;
-  const prefixes = input.prefixes ?? ["notes"];
+  const prefixes = input.prefixes ?? ["notes", "notes/"];
   const att: Record<string, Record<string, unknown>> = {};
   for (const prefix of prefixes) {
     att[`${space}/kv/${prefix}`] = {
@@ -622,7 +622,7 @@ describe("sqlite replica handle", () => {
     expect(status.syncedThroughEpoch).toBe(7);
     expect(status.grant).toMatchObject({ state: "active", unconstrained: true });
     const read = await handle.get("notes/a");
-    expect(read.status).toBe("not_covered");
+    expect(read.status).toBe("absent");
     expect(read.meta.syncedThroughEpoch).toBe(7);
     await handle.close();
 
@@ -660,7 +660,7 @@ describe("sqlite replica handle", () => {
     const storage = createSqliteReplicaStorage(storageOptions());
     const ucan = await mintUcan({
       audience: DEVICE_DID,
-      prefixes: ["notes", "other"],
+      prefixes: ["notes", "notes/", "other", "other/"],
     });
     const notes = await storage.open(spec({ prefix: "notes" }));
     const other = await storage.open(spec({ prefix: "other" }));
