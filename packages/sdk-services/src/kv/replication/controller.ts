@@ -7,10 +7,13 @@ import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, pin
 import { localGet, type LocalGetResponse } from "./localResponse";
 import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
-import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 
 const CLOSE_TIMEOUT_MS = 3_000;
-interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean }
+const STATUS_REFRESH_TIMEOUT_MS = CLOSE_TIMEOUT_MS;
+type SyncAbortCause = "timeout" | "caller" | "close" | "purge";
+interface SyncContext { abortCause?: SyncAbortCause }
+interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; syncContext?: SyncContext; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean }
 const nowDate = (now: number) => new Date(now).toISOString();
 const errorCode = (e: unknown): string => typeof e === "object" && e !== null && "code" in e && typeof e.code === "string" ? e.code : "REPLICA_UNAVAILABLE";
 function raceSignal<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -118,13 +121,18 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     }, options.syncIntervalMs);
   }
 
-  async function syncPrefix(prefix: string, trigger: "start" | "interval" | "stale_read" | "manual", signal?: AbortSignal): Promise<LocalSyncResult> {
+  async function syncPrefix(prefix: string, trigger: "start" | "interval" | "stale_read" | "manual", signal?: AbortSignal, context?: SyncContext): Promise<LocalSyncResult> {
     const handle = await open(prefix);
     const state = replicas.get(prefix)!;
     if (state.sync) return state.sync;
     const abort = new AbortController();
+    const syncContext = context ?? {};
+    state.syncContext = syncContext;
     state.abort = abort;
-    const abortFromCaller = () => abort.abort(signal?.reason);
+    const abortFromCaller = () => {
+      syncContext.abortCause ??= "caller";
+      abort.abort(signal?.reason);
+    };
     signal?.addEventListener("abort", abortFromCaller, { once: true });
     const started = scheduler.now();
     let job!: Promise<LocalSyncResult>;
@@ -149,18 +157,63 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       } finally { signal?.removeEventListener("abort", abortFromCaller); state.abort = undefined; }
     })();
     state.sync = job;
-    try { return await job; } finally { if (state.sync === job) state.sync = undefined; }
+    try { return await job; } finally {
+      if (state.sync === job) {
+        state.sync = undefined;
+        state.syncContext = undefined;
+      }
+    }
   }
-  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<void> {
+  type DrainedSync = { settled: false } | { settled: true; result: LocalSyncResult } | { settled: true; error: unknown };
+  async function drainForegroundSync(prefix: string, sync: Promise<LocalSyncResult>): Promise<DrainedSync> {
     let cancel = () => {};
-    const timeout = new Promise<"timeout">((resolve) => {
-      cancel = scheduler.setTimeout(() => resolve("timeout"), CLOSE_TIMEOUT_MS);
+    const settled: Promise<DrainedSync> = sync.then(
+      (result) => ({ settled: true, result }),
+      (error: unknown) => ({ settled: true, error }),
+    );
+    const timeout = new Promise<DrainedSync>((resolve) => {
+      cancel = scheduler.setTimeout(() => resolve({ settled: false }), CLOSE_TIMEOUT_MS);
     });
     try {
-      if (await Promise.race([sync.then(() => "settled" as const, () => "settled" as const), timeout]) === "timeout") {
-        emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
-      }
+      const drained = await Promise.race([settled, timeout]);
+      if (!drained.settled) emit({ type: "replication.sync", space: session.space, replica: prefix, trigger: "stale_read", outcome: "aborted", code: "DRAIN_TIMEOUT", durationMs: CLOSE_TIMEOUT_MS, lagMs: null });
+      return drained;
     } finally { cancel(); }
+  }
+  function validateReadMeta(meta: LocalReadMeta): void {
+    if (meta.coverage !== "complete") throw Object.assign(new Error("Replica coverage changed before the local read"), { code: "COVERAGE_INCOMPLETE" });
+    if (meta.authority !== "valid") {
+      const code = meta.authority === "expired" ? "GRANT_EXPIRED" : meta.authority === "revoked" ? "GRANT_REVOKED" : "GRANT_NOT_YET_VALID";
+      throw Object.assign(new Error("Replica authority changed before the local read"), { code });
+    }
+  }
+  function reasonForReadMetaCode(code: string): ReplicationReason {
+    if (code === "COVERAGE_INCOMPLETE") return "coverage_incomplete";
+    if (code === "GRANT_EXPIRED") return "grant_expired";
+    if (code === "GRANT_REVOKED") return "grant_revoked";
+    if (code === "GRANT_NOT_YET_VALID") return "grant_not_yet_valid";
+    return "replica_error";
+  }
+  async function statusAfterDrain(handle: KVReplicaHandle, signal: AbortSignal): Promise<LocalReplicaStatus> {
+    let cancel = () => {};
+    const timeout = new Promise<never>((_resolve, reject) => {
+      cancel = scheduler.setTimeout(
+        () => reject(Object.assign(new Error("Replica status refresh timed out"), { code: "STATUS_TIMEOUT" })),
+        STATUS_REFRESH_TIMEOUT_MS,
+      );
+    });
+    try {
+      return await raceSignal(Promise.race([handle.status(), timeout]), signal);
+    } finally { cancel(); }
+  }
+  function staleSyncOutcome(outcome: { result: LocalSyncResult } | { error: unknown }, timedOut: boolean, currentStatus: LocalReplicaStatus): { status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" } {
+    if ("error" in outcome) {
+      const code = errorCode(outcome.error);
+      if (code === "NETWORK_ERROR" || (timedOut && (code === "ABORTED" || code === "TIMEOUT"))) return { status: currentStatus, syncedBeforeRead: false, syncError: code === "NETWORK_ERROR" ? code : "TIMEOUT" };
+      return { status: currentStatus, syncedBeforeRead: false, syncError: code, failure: "error" };
+    }
+    if (outcome.result.status === "busy") return { status: currentStatus, syncedBeforeRead: false, failure: "busy" };
+    return { status: currentStatus, syncedBeforeRead: true };
   }
   async function freshness(prefix: string, handle: KVReplicaHandle, signal: AbortSignal): Promise<{ status: LocalReplicaStatus; syncError?: string; syncedBeforeRead: boolean; failure?: "busy" | "error" }> {
     let currentStatus = await handle.status();
@@ -172,16 +225,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const unproven = !pending.durable && !inProcessProof.has(prefix);
     if ((stale || behind || unproven) && !signal.aborted) {
       const syncController = mode === "foreground" ? new AbortController() : undefined;
-      const abortFromCaller = () => syncController?.abort(signal.reason);
+      const syncState = replicas.get(prefix);
+      const ownsSync = !syncState?.sync;
+      const syncContext = syncState?.syncContext ?? {};
+      const abortFromCaller = () => {
+        if (ownsSync) syncContext.abortCause ??= "caller";
+        syncController?.abort(signal.reason);
+      };
       if (syncController) signal.addEventListener("abort", abortFromCaller, { once: true });
-      let timedOut = false;
       let cancelTimeout = () => {};
       const timeout = new Promise<{ timeout: true }>((resolve) => {
-        cancelTimeout = scheduler.setTimeout(() => {
-          timedOut = true;
-          syncController?.abort(Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }));
-          resolve({ timeout: true });
-        }, options.staleSyncTimeoutMs);
+        cancelTimeout = scheduler.setTimeout(() => resolve({ timeout: true }), options.staleSyncTimeoutMs);
       });
       let cancelAbort = () => {};
       const callerAbort = new Promise<{ callerAborted: true }>((resolve) => {
@@ -192,7 +246,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
           cancelAbort = () => signal.removeEventListener("abort", listener);
         }
       });
-      const sync = syncPrefix(prefix, "stale_read", syncController?.signal);
+      const sync = syncPrefix(prefix, "stale_read", syncController?.signal, syncContext);
       const outcome = await Promise.race([
         sync.then((result) => ({ result }), (error: unknown) => ({ error })),
         timeout,
@@ -202,21 +256,34 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       cancelAbort();
       signal.removeEventListener("abort", abortFromCaller);
       if ("callerAborted" in outcome) {
-        if (syncController) {
+        if (syncController && ownsSync) {
+          syncContext.abortCause ??= "caller";
           syncController.abort(signal.reason);
           await drainForegroundSync(prefix, sync);
         }
         return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
       }
       if ("timeout" in outcome) {
-        if (syncController) await drainForegroundSync(prefix, sync);
-        return { status: currentStatus, syncedBeforeRead: false, syncError: "TIMEOUT" };
+        if (ownsSync) {
+          syncContext.abortCause ??= "timeout";
+          syncController?.abort(Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }));
+        }
+        const drained = syncController ? await drainForegroundSync(prefix, sync) : undefined;
+        if (signal.aborted) return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal) };
+        if (drained && !drained.settled) return { status: currentStatus, syncedBeforeRead: false, syncError: "DRAIN_TIMEOUT", failure: "error" };
+        try { currentStatus = await statusAfterDrain(handle, signal); }
+        catch (error) {
+          if (signal.aborted) return { status: currentStatus, syncedBeforeRead: false, syncError: cancellationCode(signal), failure: "error" };
+          return { status: currentStatus, syncedBeforeRead: false, syncError: errorCode(error), failure: "error" };
+        }
+        const timeoutAbort = syncContext.abortCause === "timeout";
+        return staleSyncOutcome(
+          drained?.settled ? ("result" in drained ? { result: drained.result } : { error: drained.error }) : { error: Object.assign(new Error("Stale-read sync timed out"), { code: "TIMEOUT" }) },
+          timeoutAbort || !syncController,
+          currentStatus,
+        );
       }
-      if ("error" in outcome) {
-        const code = errorCode(outcome.error);
-        if (code === "NETWORK_ERROR" || code === "TIMEOUT" || code === "ABORTED") return { status: currentStatus, syncedBeforeRead: false, syncError: timedOut ? "TIMEOUT" : code };
-        return { status: currentStatus, syncedBeforeRead: false, syncError: code, failure: "error" };
-      }
+      if ("error" in outcome) return staleSyncOutcome({ error: outcome.error }, false, currentStatus);
       if (outcome.result.status === "busy") return { status: currentStatus, syncedBeforeRead: false, failure: "busy" };
       currentStatus = await handle.status();
       return { status: currentStatus, syncedBeforeRead: true };
@@ -367,7 +434,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return value;
     }
     if (r.signal.aborted) return abortedResult(r.signal);
-    if (fresh.syncError === ErrorCodes.TIMEOUT) return err(serviceError(ErrorCodes.TIMEOUT, "KV request timed out", "kv"));
     if (fresh.failure) { const value = await r.network(); readEvent("get", r.path, prefix, "network", fresh.failure === "busy" ? "stale" : "stale", value.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError, syncedBeforeRead: fresh.syncedBeforeRead }); return value; }
     let pendingState: PendingWriteState;
     try { pendingState = await raceSignal(pending.read(), r.signal); }
@@ -385,6 +451,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (fresh.status.coverage !== "complete") { const value = await r.network(); readEvent("get", r.path, prefix, "network", "coverage_incomplete", value.ok ? "found" : "error", started); return value; }
     try {
       const local = await raceSignal(handle.get(r.path), r.signal);
+      try { validateReadMeta(local.meta); }
+      catch (error) {
+        const code = errorCode(error);
+        const value = await r.network();
+        readEvent("get", r.path, prefix, "network", reasonForReadMetaCode(code), value.ok ? "found" : "error", started, { code });
+        return value;
+      }
       if (local.status === "coverage_incomplete" || local.status === "not_covered" || local.status === "content_missing") { const value = await r.network(); readEvent("get", r.path, prefix, "network", local.status === "content_missing" ? "content_missing" : local.status === "coverage_incomplete" ? "coverage_incomplete" : "not_covered", value.ok ? "found" : "error", started); return value; }
       if (local.status === "present" && r.options?.maxResponseBytes !== undefined && local.value.byteLength > r.options.maxResponseBytes) {
         const value = await r.network();
@@ -453,7 +526,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return result;
     }
     if (r.signal.aborted) return abortedResult(r.signal);
-    if (fresh.syncError === ErrorCodes.TIMEOUT) return err(serviceError(ErrorCodes.TIMEOUT, "KV request timed out", "kv"));
     let state: PendingWriteState;
     try { state = await raceSignal(pending.read(), r.signal); }
     catch (error) {
@@ -466,14 +538,14 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const pendingRange = state.records.find((record) => kvPrefixCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
     const behind = fresh.status.syncedThroughEpoch < state.committedEpoch;
     if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid" || (!pending.durable && !inProcessProof.has(prefix)))) return restart();
+    if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
     if (fresh.failure) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "stale", result.ok ? "found" : "error", started, { code: fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError }); return result; }
     if (pendingRange) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "pending_write", result.ok ? "found" : "error", started, { pendingState: pendingRange.state }); return result; }
     if (!pending.durable && !inProcessProof.has(prefix)) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_UNPROVEN_SINCE_START", result.ok ? "found" : "error", started); return result; }
-    if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
-    if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "coverage_incomplete", result.ok ? "found" : "error", started); return result; }
+    if (fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid") { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", fresh.status.coverage !== "complete" ? "coverage_incomplete" : fresh.status.authority.state === "expired" ? "grant_expired" : fresh.status.authority.state === "revoked" ? "grant_revoked" : "grant_not_yet_valid", result.ok ? "found" : "error", started); return result; }
     try {
       const signalHandle = { list: (o: { prefix: string; after?: string; limit?: number }) => raceSignal(handle.list(o), r.signal) };
-      const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor), r.signal);
+      const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta), r.signal);
       const event = {
         count: page.keys.length,
         syncedBeforeRead: fresh.syncedBeforeRead,
@@ -485,9 +557,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return ok(page);
     } catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
+      const code = errorCode(error);
       if (cursor && decoded) return restart();
+      const reason = reasonForReadMetaCode(code);
       const result = await r.network();
-      readEvent("list", r.listPath, prefix, "network", "replica_error", result.ok ? "found" : "error", started, { code: errorCode(error) });
+      readEvent("list", r.listPath, prefix, "network", reason, result.ok ? "found" : "error", started, { code });
       return result;
     }
   }
@@ -553,6 +627,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     for (const state of replicas.values()) {
       state.timer?.();
       state.timer = undefined;
+      state.syncContext && (state.syncContext.abortCause ??= "purge");
       state.abort?.abort();
       state.mintAbort?.abort();
     }
@@ -601,6 +676,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       state.timer?.();
       state.timer = undefined;
       state.mintAbort?.abort();
+      state.syncContext && (state.syncContext.abortCause ??= "close");
       state.abort?.abort();
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "closed" });
     }
