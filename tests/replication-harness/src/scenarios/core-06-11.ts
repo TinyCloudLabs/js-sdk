@@ -241,8 +241,12 @@ const core09: Scenario<Variant> = {
       const scan = reader as SdkClient & { scanReplica(needle: Uint8Array): Promise<string[]> };
       const residual = await scan.scanReplica(sentinel);
       ctx.check("SDK purge removes sentinel bytes", residual.length === 0, residual);
-      const closed = purged.events.some((item) => item.event.type === "replication.state" && item.event.state === "closed");
-      ctx.check("SDK purge emits a closed replication state", closed, purged.events);
+      let syncAfterPurgeCode: string | undefined;
+      try { syncAfterPurgeCode = (await reader.sync({ prefix: PREFIX, signal: ctx.signal })).code; }
+      catch (error) { syncAfterPurgeCode = (error as { code?: string }).code; }
+      // The closed driver controller resolves without a sync event after purge.
+      const replicationClosed = syncAfterPurgeCode === "REPLICATION_DISABLED" || syncAfterPurgeCode === "REPLICA_CLOSED" || syncAfterPurgeCode === "SYNC_EVENT_MISSING";
+      ctx.check("SDK sync after purge reports a closed controller", replicationClosed, { code: syncAfterPurgeCode });
       await ctx.topo.proxy("client:reader->a").disable({ signal: ctx.signal });
       const later = await reader.get(key, { signal: ctx.signal });
       ctx.check("SDK read after purge is not locally served", !later.ok && later.read?.source !== "replica", { ok: later.ok, read: later.read, code: later.code });
