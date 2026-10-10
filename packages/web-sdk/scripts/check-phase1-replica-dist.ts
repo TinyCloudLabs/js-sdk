@@ -5,16 +5,28 @@ import { tmpdir } from "node:os";
 
 type Baseline = {
   baselineRef: string;
-  baselineToolchain: { node: string; bun: string; build: string; gzip: string };
+  baselineToolchain: { node: string; bun: string; rustc: string; wasmPack: string; build: string; gzip: string };
   "index.mjs": number;
   "index.cjs": number;
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
 const distDir = resolve(import.meta.dir, "../dist");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
-console.log(`Gzip baseline: ${baseline.baselineRef}; Node ${baseline.baselineToolchain.node}; Bun ${baseline.baselineToolchain.bun}`);
+const actualToolchain = {
+  node: execFileSync("node", ["--version"], { encoding: "utf8" }).trim().replace(/^v/, ""),
+  bun: execFileSync("bun", ["--version"], { encoding: "utf8" }).trim(),
+  rustc: execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim().replace(/^rustc\s+/, ""),
+  wasmPack: execFileSync("wasm-pack", ["--version"], { encoding: "utf8" }).trim(),
+};
+console.log(`Gzip baseline: ${baseline.baselineRef}; Node ${baseline.baselineToolchain.node}; Bun ${baseline.baselineToolchain.bun}; Rust ${baseline.baselineToolchain.rustc}; ${baseline.baselineToolchain.wasmPack}`);
 console.log(`Baseline build: ${baseline.baselineToolchain.build}; gzip: ${baseline.baselineToolchain.gzip}`);
 let failed = false;
+for (const [tool, version] of Object.entries(actualToolchain)) {
+  if (version !== baseline.baselineToolchain[tool as keyof typeof actualToolchain]) {
+    console.error(`Baseline toolchain mismatch: ${tool} baseline=${baseline.baselineToolchain[tool as keyof typeof actualToolchain]} current=${version}`);
+    failed = true;
+  }
+}
 for (const filename of ["index.mjs", "index.cjs"] as const) {
   const source = await readFile(resolve(distDir, filename), "utf8");
   for (const forbidden of ["@tinycloud/replica", "tinycloud-replica"]) {
@@ -35,8 +47,8 @@ for (const filename of ["index.mjs", "index.cjs"] as const) {
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {
-  // Bun parallelizes test files by CPU count; the suite shares global test shims.
-  const test = spawnSync("taskset", ["-c", "0", "bun", "test", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
+  // Bun's file workers share global test shims; keep the suite in one worker.
+  const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
     cwd: resolve(import.meta.dir, "../../.."),
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
@@ -55,6 +67,7 @@ try {
   });
   const output = `${test.stdout}\n${test.stderr}`;
   const unhandledSignatures = [...output.matchAll(/# Unhandled error between tests\n-{20,}\n([\s\S]*?)(?=\n-{20,}\n)/g)].map(([, block]) => {
+    if (block.includes("ReferenceError: HTMLElement is not defined")) return "ReferenceError: HTMLElement is not defined";
     const message = block.match(/error:\s*(.+)/)?.[1] ?? "unidentified unhandled test error";
     if (message.includes("Cannot find package 'eth-testing'")) return "Cannot find package 'eth-testing'";
     if (message.includes("paired OpenCredentials worktree not found")) return "paired OpenCredentials worktree not found";
