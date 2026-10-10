@@ -108,7 +108,7 @@ jobs:
         run: mkdir -p "$RUNNER_TEMP/replica-junit"
 
       - name: node-sdk replication against the node
-        if: matrix.database == 'sqlite'
+        if: always() && matrix.database == 'sqlite'
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -125,26 +125,31 @@ jobs:
           docker logs replica-e2e-pg
           exit 1
 
-      - name: Replica engine and store conformance, and CLI profile-deletion safety
+      - name: Replica engine and store conformance
         if: matrix.database == 'sqlite'
+        run: bun run --cwd packages/replica test
+      - name: CLI profile-deletion safety
+        if: always() && matrix.database == 'sqlite'
         run: |
-          bun run --cwd packages/replica test
           mkdir -p "$RUNNER_TEMP/replica-junit"
           bun test packages/cli/src/commands/replica.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-command.xml"
 
       - name: tc replica against the node
+        if: always()
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-e2e.xml"
       - name: CLI replication flag against the node
+        if: always()
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replication-flag.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-flag.xml"
       - name: Enforce real-node JUnit counts and zero skips
+        if: always()
         run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--node-sdk' || '' }}
       - name: Upload backend JUnit reports
         if: always()
