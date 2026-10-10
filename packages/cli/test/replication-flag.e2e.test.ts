@@ -219,7 +219,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       expect(caughtUp.stderr).toMatch(/pendingCleared:[1-9]\d*/);
     }
     const heldSyncPreload = join(home, "held-sync.cjs");
-    await writeFile(heldSyncPreload, `const original = globalThis.fetch; let held = false; globalThis.fetch = (...args) => { if (!held && String(args[0]).endsWith("/invoke")) { const signal = args[1]?.signal ?? args[0]?.signal; if (signal) { held = true; return new Promise((_, reject) => { const abort = () => reject(signal.reason ?? new Error("held sync aborted")); if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); } } return original(...args); };`);
+    await writeFile(heldSyncPreload, `const original = globalThis.fetch; let held = false; globalThis.fetch = (...args) => { if (!held && String(args[0]).endsWith("/invoke")) { const signal = args[1]?.signal ?? args[0]?.signal; if (signal) { held = true; return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("held sync timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 1500); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("held sync aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); } } return original(...args); };`);
     expect((await put("notes/held-sync", Buffer.from("before"), "owner", "off")).code).toBe(0);
     expect((await put("notes/held-sync", Buffer.from("committed"), "owner", "on")).code).toBe(0);
     const pendingDuringHeldSync = await tc(["kv", "get", "notes/held-sync", "--raw"], {
@@ -228,7 +228,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       replication: "on",
       extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
-    expect(pendingDuringHeldSync.code).toBe(0);
+    if (pendingDuringHeldSync.code !== 0) throw new Error(`held-sync pending read exited ${pendingDuringHeldSync.code}\n${pendingDuringHeldSync.stderr}\n${pendingDuringHeldSync.stdout}`);
     expect(pendingDuringHeldSync.stdout.toString()).toBe("committed");
     expect(pendingDuringHeldSync.stdout.toString()).not.toBe("before");
     expect(pendingDuringHeldSync.stderr).toContain("network pending_write");
