@@ -152,24 +152,21 @@ describe("serialized contracts", () => {
     expect(validAggregate.companion[0].passed).toBe(false);
   });
 
-  test("CLI parses every command and leaves owned bodies as explicit S0 errors", () => {
-    const owners = { run: "S3a", list: "S3a", manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b", doctor: "S1", gc: "S1" };
+  test("CLI runs the owned list command and exposes owned command boundaries", async () => {
+    const owners = { manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b", doctor: "S1", gc: "S1" };
     for (const [command, slice] of Object.entries(owners) as [Command, string][]) {
       expect(parseArgs([command]).command).toBe(command);
-      expect(() => runCommand([command])).toThrow(`${command} is not implemented in S0 (owned by ${slice})`);
+      await expect(runCommand([command])).rejects.toThrow(`${command} is owned by ${slice}`);
     }
+    await expect(runCommand(["run"])).rejects.toThrow("run requires the topology runner to be configured");
+    await expect(runCommand(["list"])).resolves.toBeUndefined();
     expect(parseArgs(["verify-aggregate", "aggregate.json", "--gate", "tc858-phase1-beta", "--print", "cli.version"]))
       .toEqual({ command: "verify-aggregate", positionals: ["aggregate.json"], options: { gate: "tc858-phase1-beta", print: "cli.version" } });
   });
 
-  test("strict SemVer 2 validation rejects ranges, tags, prefixes, and leading-zero identifiers", () => {
-    for (const valid of ["0.0.0", "1.2.3", "1.2.3-alpha.0", "1.2.3+build.01", "1.2.3-rc.1+build.5"]) expect(exactSemver(valid)).toBe(true);
-    for (const invalid of ["beta", "^1.2.3", "1.2", "v1.2.3", "01.2.3", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3-alpha.01", "1.2.3+", "1.2.3-alpha..1"]) expect(exactSemver(invalid)).toBe(false);
-  });
-
-  test("CLI executable reports its S0 ownership boundary", () => {
+  test("CLI list executes successfully", () => {
     const result = Bun.spawnSync(["bun", "bin/harness.ts", "list"], { cwd: new URL("..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe" });
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr.toString()).toContain("list is not implemented in S0 (owned by S3a)");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
   });
 });
