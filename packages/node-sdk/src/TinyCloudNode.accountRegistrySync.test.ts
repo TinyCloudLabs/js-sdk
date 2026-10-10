@@ -114,6 +114,7 @@ function makeFakeWasmBindings(): IWasmBindings {
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 const SPACE_URI = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+const ACCOUNT_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 
 function siweFor(): string {
   return `tinycloud.test wants you to sign in with your Ethereum account:
@@ -283,6 +284,172 @@ describe("sign-in account registry barrier", () => {
     expect(requestSignals).toHaveLength(1);
     expect(requestSignals[0]?.aborted).toBe(true);
   });
+  test("aborts a hung manifest registry KV write and permits an ordinary KV call afterward", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(node, "_address", ADDRESS);
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 40);
+    const signals: AbortSignal[] = [];
+    let requests = 0;
+    const requestStarted = Promise.withResolvers<void>();
+    const fetchRegistry = async (_input: string, init?: { signal?: AbortSignal }): Promise<Response> => {
+      requests += 1;
+      const signal = init?.signal;
+      if (!signal) throw new Error("Registry KV request did not receive an AbortSignal");
+      signals.push(signal);
+      if (requests > 1) return new Response(null, { status: 200 });
+      requestStarted.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const context = new ServiceContext({
+      invoke: () => ({ Authorization: "registry" }),
+      hosts: ["https://tinycloud.test"],
+      fetch: fetchRegistry,
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "registry" },
+      delegationCid: "registry",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_serviceContext", context);
+    const createScopedKV = Reflect.get(node, "createSpaceScopedKVService") as (spaceId: string) => KVService;
+    const registryKV = createScopedKV.call(node, ACCOUNT_SPACE);
+    Reflect.set(node, "_account", new AccountService({
+      getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
+      getHost: () => "https://tinycloud.test",
+      getPrimarySpaceId: () => SPACE_URI,
+      getAccountSpaceId: () => ACCOUNT_SPACE,
+      getSpaces: () => ({ get: () => ({ kv: registryKV }) }) as unknown as ISpaceService,
+      getAccountDb: () => undefined,
+    }));
+    Reflect.set(auth, "capabilityRequest", composeManifestRequest([{
+      app_id: "com.example.registry",
+      name: "Registry",
+      defaults: false,
+      permissions: [{ service: "tinycloud.kv", space: "applications", path: "com.example.registry/", actions: ["put"] }],
+    }]));
+    const schedule = Reflect.get(node, "scheduleAccountRegistrySync");
+    schedule.call(node);
+    Reflect.set(node, "initializeServices", async () => {
+      const activeContext = new ServiceContext({
+        invoke: () => ({ Authorization: "registry" }),
+        hosts: ["https://tinycloud.test"],
+        fetch: fetchRegistry,
+      });
+      activeContext.setSession({
+        delegationHeader: { Authorization: "registry" },
+        delegationCid: "registry",
+        spaceId: SPACE_URI,
+        verificationMethod: "did:key:default",
+        jwk: {},
+      });
+      Reflect.set(node, "_serviceContext", activeContext);
+    });
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => true);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    await requestStarted.promise;
+    const started = Date.now();
+    await node.signIn();
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(requests).toBe(1);
+
+    const ordinaryKV = createScopedKV.call(node, ACCOUNT_SPACE);
+    const ordinary = await ordinaryKV.put("after-sign-in", { ok: true });
+    expect(ordinary.ok).toBe(true);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(requests).toBe(2);
+  });
+
+  test("aborts while a registry SQL error body is still being read", async () => {
+    const { node } = makeNode();
+    const core = Reflect.get(node, "tc");
+    const auth = Reflect.get(node, "auth");
+    if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+      throw new Error("Sign-in dependencies are unavailable");
+    }
+    Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "accountRegistryDeadlineMs", 40);
+    const signals: AbortSignal[] = [];
+    let requests = 0;
+    const requestStarted = Promise.withResolvers<void>();
+    const context = new ServiceContext({
+      invoke: () => ({ Authorization: "registry" }),
+      hosts: ["https://tinycloud.test"],
+      fetch: async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("Registry SQL request did not receive an AbortSignal");
+        signals.push(signal);
+        requests += 1;
+        requestStarted.resolve();
+        return {
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { get: () => null },
+          json: async () => ({}),
+          text: () => new Promise<string>((_resolve, reject) => {
+            if (signal.aborted) reject(signal.reason);
+            else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+          arrayBuffer: async () => new ArrayBuffer(0),
+          blob: async () => new Blob(),
+        };
+      },
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "registry" },
+      delegationCid: "registry",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_serviceContext", context);
+    Reflect.set(node, "_account", {
+      index: {
+        ensure: async () => {
+          const sql = node.sqlForSpace(SPACE_URI);
+          const result = await sql.execute("CREATE TABLE registry_deadline (id INTEGER)");
+          return result.ok ? { ok: true, data: undefined } : { ok: false, error: result.error };
+        },
+      },
+      applications: { register: async () => ({ ok: true, data: undefined }) },
+      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+    });
+    const schedule = Reflect.get(node, "scheduleAccountRegistrySync");
+    schedule.call(node);
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => true);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+
+    await requestStarted.promise;
+    const started = Date.now();
+    await node.signIn();
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(requests).toBe(1);
+  });
+
 
   // Use the real retry delays: a transient registry rejection must warn only
   // after its bounded attempts and must not reject the sign-in promise.

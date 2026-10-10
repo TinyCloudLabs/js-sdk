@@ -37,6 +37,8 @@ export interface ServiceContextConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Default-off telemetry event delivery. */
   telemetry?: TelemetryConfig;
+  /** Dynamically supplied signal for an enclosing operation scope. */
+  operationAbortSignalProvider?: () => AbortSignal | undefined;
 }
 
 /**
@@ -72,6 +74,7 @@ export class ServiceContext implements IServiceContext {
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
+  private readonly _operationAbortSignalProvider?: () => AbortSignal | undefined;
   private readonly _telemetryEnabled: boolean;
   private readonly _telemetryHandler?: TelemetryEventHandler;
 
@@ -93,6 +96,7 @@ export class ServiceContext implements IServiceContext {
         : config.telemetry?.enabled === true;
     this._telemetryHandler =
       typeof config.telemetry === "object" ? config.telemetry.onEvent : undefined;
+    this._operationAbortSignalProvider = config.operationAbortSignalProvider;
   }
 
   // ============================================================
@@ -283,13 +287,12 @@ export class ServiceContext implements IServiceContext {
   }
 
   get operationAbortSignal(): AbortSignal | undefined {
-    return this._operationAbortSignal;
+    return this._operationAbortSignalProvider?.() ?? this._operationAbortSignal;
   }
 
   setOperationAbortSignal(signal: AbortSignal | undefined): void {
     this._operationAbortSignal = signal;
   }
-
   /**
    * Permanently retire this graph after its owner installs a replacement.
    * Unlike `abort()`, retirement never creates a fresh controller, so captured

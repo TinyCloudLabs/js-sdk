@@ -3984,6 +3984,7 @@ export class TinyCloudNode {
         fetch: this._serviceContext.fetch,
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
+        operationAbortSignalProvider: () => this._serviceContext?.operationAbortSignal,
       }));
       const session = this._serviceContext.session;
       if (session) {
