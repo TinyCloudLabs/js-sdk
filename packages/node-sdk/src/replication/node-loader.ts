@@ -1,6 +1,6 @@
-import { registerNodeReplicationLoaders } from "./module-registry";
+import { registerReplicationLoaders } from "./module-registry";
 
-registerNodeReplicationLoaders({
+registerReplicationLoaders({
   runtime: () => import("./runtime"),
   authority: () => import("./authority"),
 });

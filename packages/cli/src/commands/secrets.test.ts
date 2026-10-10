@@ -39,6 +39,7 @@ type NetworkDescriptorLike = {
 
 type FakeNode = {
   did: string;
+  replication?: { status: () => Promise<unknown> };
   getDefaultEncryptionNetworkId(name?: string): string;
   getEncryptionNetworkIdForSpace(spaceId: string, name?: string): string;
   secretsForSpace(spaceId: string): FakeNode["secrets"];
@@ -122,6 +123,7 @@ const recorded = {
   delegatedKvGets: [] as Array<{ path: string; options: { raw: boolean; prefix: string } }>,
   decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] } }>,
   networkReadCalls: [] as string[],
+  networkReadSources: [] as Array<"network" | undefined>,
 };
 let canonicalResultOverride: unknown | null = null;
 
@@ -167,6 +169,7 @@ function resetRecorded(): void {
   recorded.delegatedKvGets.length = 0;
   recorded.decryptEnvelopeCalls.length = 0;
   recorded.networkReadCalls.length = 0;
+  recorded.networkReadSources.length = 0;
   canonicalResultOverride = null;
 }
 
@@ -243,6 +246,7 @@ function makeFakeNode(overrides: {
       async get(name: string, options?: { scope?: string; source?: "network" }) {
         recorded.getCalls.push({ name, options: options?.scope === undefined ? undefined : { scope: options.scope } });
         if (options?.source === "network") recorded.networkReadCalls.push(`get:${name}`);
+        recorded.networkReadSources.push(options?.source);
         return nextResult(overrides.getResult, { ok: true as const, data: "stored-value" });
       },
       async put(name: string, value: string, options?: { scope?: string }) {
@@ -1102,6 +1106,7 @@ describe("CLI secrets commands", () => {
   test("doctor reports an existing encryption network and readable secret", async () => {
     const descriptor = makeDescriptor();
     currentNode = makeFakeNode({ networkShowResult: descriptor });
+    currentNode.replication = { status: async () => [{ state: "ready" }] };
 
     await runSecretsCommand(["--json", "secrets", "doctor", "ANTHROPIC_API_KEY", "--scope", "Food Tracker"]);
 
@@ -1110,6 +1115,8 @@ describe("CLI secrets commands", () => {
       { name: "ANTHROPIC_API_KEY", options: { scope: "Food Tracker" } },
     ]);
     expect(recorded.networkReadCalls).toEqual(["get:ANTHROPIC_API_KEY"]);
+    expect(recorded.networkReadSources).toEqual(["network"]);
+    expect(await currentNode.replication.status()).toEqual([{ state: "ready" }]);
     expect(recorded.outputs).toEqual([
       {
         healthy: true,

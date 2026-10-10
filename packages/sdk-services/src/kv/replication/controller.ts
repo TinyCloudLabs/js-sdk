@@ -555,7 +555,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       state.abort?.abort();
       state.mintAbort?.abort();
     }
-    return (async () => {
+    return Promise.resolve().then(async () => {
       const report = { purged: [] as string[], failed: [] as Array<{ prefix: string; code: string }> };
       const timeoutMs = o?.timeoutMs ?? 5_000;
       const withTimeout = async <T>(job: Promise<T>): Promise<T> => {
@@ -590,7 +590,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       });
       await Promise.all(jobs);
       return report;
-    })();
+    });
   }
 
   async function close(): Promise<void> {

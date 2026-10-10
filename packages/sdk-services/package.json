@@ -27,9 +27,14 @@
       "require": "./dist/kv/index.cjs"
     },
     "./kv/replication": {
-      "types": "./dist/kv/replication/index.d.ts",
-      "import": "./dist/kv/replication/index.js",
-      "require": "./dist/kv/replication/index.cjs"
+      "import": {
+        "types": "./dist/kv/replication/index.d.ts",
+        "default": "./dist/kv/replication/index.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/index.d.cts",
+        "default": "./dist/kv/replication/index.cjs"
+      }
     },
     "./sql": {
       "types": "./dist/sql/index.d.ts",

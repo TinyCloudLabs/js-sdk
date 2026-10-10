@@ -126,8 +126,13 @@ export interface DelegationPlanResult {
  * pure extraction of `delegateTo`'s parent selection (§4.3), so `plan` and
  * `mint` can never disagree about which parent or expiry a delegation gets.
  */
+export type ReplicationAuthoritySession = Pick<
+  TinyCloudSession,
+  "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk"
+> & Partial<Pick<TinyCloudSession, "siwe">>;
+
 export interface ReplicationAuthorityHost {
-  replicationSession(): TinyCloudSession | undefined;
+  replicationSession(): ReplicationAuthoritySession | undefined;
   /** The SIWE "Expiration Time" of the session — the delegateTo delegation cap. */
   siweExpiration(siwe: string): Date | undefined;
   planDelegation(
@@ -165,6 +170,12 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
         // Not a compact UCAN (SIWE/CACAO session): delegate posture does not apply.
         return { refused: "NOT_COVERED" };
       }
+      const tokenExpiry = typeof payload.exp === "number" && Number.isFinite(payload.exp)
+        ? payload.exp * 1000
+        : undefined;
+      if (tokenExpiry === undefined || tokenExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
+        return { refused: "SESSION_EXPIRING" };
+      }
       const att = payload.att;
       if (att === null || typeof att !== "object" || Array.isArray(att)) {
         return { refused: "NOT_COVERED" };
@@ -184,6 +195,15 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
     plan(prefix: string): DelegationPlanResult | AuthorityRefusal {
       const session = host.replicationSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
+      const grant = this.sessionGrant(prefix);
+      if (!("refused" in grant)) {
+        const payload = compactUcanPayload(session.delegationHeader.Authorization);
+        return {
+          path: "session",
+          parentCid: session.delegationCid,
+          expiresAt: (payload.exp as number) * 1000,
+        };
+      }
       return planOrRefusal(replicationEntries(session.spaceId, prefix));
     },
 

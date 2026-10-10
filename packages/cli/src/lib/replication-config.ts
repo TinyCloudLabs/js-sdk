@@ -26,6 +26,7 @@ export function createCliReplicationConfig(
     prefixes: settings.prefixes,
     allowSecrets: settings.allowSecrets === true,
     mode: "foreground",
+    verify: process.env.TC_REPLICATION_VERIFY === "1",
     maxStalenessMs: Number(process.env.TC_REPLICATION_MAX_STALENESS_MS ?? 60_000),
     staleSyncTimeoutMs: Number(process.env.TC_REPLICATION_SYNC_TIMEOUT_MS ?? 10_000),
     storage: sqliteReplicaStorage({

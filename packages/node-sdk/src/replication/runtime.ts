@@ -22,8 +22,9 @@ export interface ReplicationRuntimeOptions extends ReplicationOptions {
 export interface ReplicationRuntimeBinding {
   context: ServiceContext;
   session: ServiceSession;
-  address: string;
-  chainId: number;
+  address?: string;
+  chainId?: number;
+  principal?: string;
   authority: ReplicationAuthority;
   primaryKV: Array<{ space: string; kv: { setReadThrough(readThrough: KVReadThrough | null): void } }>;
 }
@@ -76,11 +77,13 @@ export class ReplicationRuntime {
         await this.binding;
         if (this.current) await this.current.sync(input);
       },
-      purge: async (input) => {
-        await this.binding;
+      purge: (input) => {
         const controller = this.current ?? this.lastController;
-        if (!controller) return { purged: [], failed: [] };
-        return controller.purge(input);
+        if (controller) return controller.purge(input);
+        return this.binding.then(() => {
+          const bound = this.current ?? this.lastController;
+          return bound ? bound.purge(input) : { purged: [], failed: [] };
+        });
       },
       clearPending: async () => {
         await this.binding;
@@ -117,7 +120,8 @@ export class ReplicationRuntime {
     this.current = undefined;
     this.detachAll();
     this.primarySpace = session.spaceId;
-    this.previous = previous ? previous.close().catch(() => undefined) : this.previous;
+    const close = previous ? previous.close().catch(() => undefined) : Promise.resolve();
+    this.previous = Promise.all([this.previous, close]).then(() => undefined);
     const previousClose = this.previous;
 
     this.binding = this.loadServices().then((services) => {
@@ -127,7 +131,7 @@ export class ReplicationRuntime {
         identity = services.canonicalReplicationIdentity({
           host: context.hosts[0]!,
           space: session.spaceId,
-          principal: pkhDid(input.address, input.chainId),
+          principal: input.principal ?? pkhDid(input.address!, input.chainId!),
         });
       } catch {
         for (const prefix of this.options.prefixes) {
@@ -169,14 +173,16 @@ export class ReplicationRuntime {
     kv.setReadThrough(space === this.primarySpace ? this.current ?? null : null);
   }
 
-  unbind(): void {
+  unbind(): Promise<void> {
     this.generation++;
     const controller = this.current;
     this.current = undefined;
     this.primarySpace = undefined;
     this.detachAll();
     const binding = this.binding;
-    this.previous = binding.then(() => controller?.close()).catch(() => undefined);
+    const close = binding.then(() => controller?.close()).catch(() => undefined);
+    this.previous = Promise.all([this.previous, close]).then(() => undefined);
+    return this.previous;
   }
 
   get boundIdentity(): ReplicationIdentity | undefined {

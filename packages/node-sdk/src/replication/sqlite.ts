@@ -19,7 +19,7 @@ import { chmod, mkdir, open as openFile, readFile, realpath, rename, rm, stat, t
 import { basename, dirname, join } from "node:path";
 
 
-import { KVService, ServiceContext } from "@tinycloud/sdk-core";
+import { KVService, ServiceContext, principalDid } from "@tinycloud/sdk-core";
 import {
   canonicalReplicationIdentity,
   replicationIdentityKey,
@@ -96,7 +96,7 @@ async function pathExists(path: string): Promise<boolean> {
 
 /** `did:key:…#fragment` → the bare principal DID (replica's principalOf). */
 function principalOf(did: string): string {
-  return did.split("#", 1)[0]!;
+  return principalDid(did);
 }
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
@@ -911,7 +911,10 @@ export function createSqliteReplicaStorage(
     await ensurePartitionIdentity(idDir, spec.identity, options.dirSync);
     // Delegate posture (§2.1): a spec.device handle never reads or creates
     // the partition's own device key.
-    const device = spec.device ?? (await loadOrCreateDevice(idDir, guard, createDevice, options.dirSync));
+    const createdDevice = spec.device ?? (await loadOrCreateDevice(idDir, guard, createDevice, options.dirSync));
+    // Device key APIs return a verification-method DID URL. Replica grants
+    // use the key's principal DID as their audience and stored device identity.
+    const device = { ...createdDevice, did: principalOf(createdDevice.did) };
     const replicaHash = replicaHashOf(spec.prefix, device.did);
     const replicaDir = join(idDir, "replicas", replicaHash);
     const store = await sqlite.SqliteReplicaStore.open(replicaDir, {

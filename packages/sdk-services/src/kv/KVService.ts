@@ -152,7 +152,16 @@ export class KVService extends BaseService implements IKVService {
    */
   declare protected _config: KVServiceConfig;
   private readThrough: KVReadThrough | null = null;
+  private readThroughReady: Promise<void> = Promise.resolve();
 
+  /** Delay KV routing until an asynchronously loaded read-through is attached. */
+  setReadThroughReady(ready: Promise<unknown>): void {
+    this.readThroughReady = ready.then(() => undefined, () => undefined);
+  }
+
+  private async waitForReadThrough(): Promise<void> {
+    await this.readThroughReady;
+  }
   /**
    * Create a new KVService instance.
    *
@@ -173,6 +182,7 @@ export class KVService extends BaseService implements IKVService {
   setReadThrough(readThrough: KVReadThrough | null): void {
     this.readThrough = readThrough;
   }
+
 
   private handleQuotaErrorResponse(
     response: FetchResponse,
@@ -528,6 +538,7 @@ export class KVService extends BaseService implements IKVService {
     action: typeof KVAction.GET | typeof KVAction.HEAD,
     options?: KVGetOptions | KVHeadOptions
   ): Promise<Result<KVBatchReadResponse<T>>> {
+    await this.waitForReadThrough();
     if (!this.requireAuth()) return err(authRequiredError("kv"));
     if (keys.length === 0) return ok({ results: [], count: 0 });
     if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
@@ -842,6 +853,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVGetOptions
   ): Promise<Result<KVResponse<T>>> {
     return this.withTelemetry("get", key, async () => {
+      await this.waitForReadThrough();
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -982,6 +994,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVPutOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("put", key, async () => {
+      await this.waitForReadThrough();
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1086,6 +1099,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVBatchPutOptions
   ): Promise<Result<KVBatchPutResponse>> {
     return this.withTelemetry("batchPut", String(items.length), async () => {
+      await this.waitForReadThrough();
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1368,6 +1382,7 @@ export class KVService extends BaseService implements IKVService {
    */
   async list(options?: KVListOptions): Promise<Result<KVListResponse>> {
     return this.withTelemetry("list", options?.prefix, async () => {
+      await this.waitForReadThrough();
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1713,6 +1728,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVDeleteOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("delete", key, async () => {
+      await this.waitForReadThrough();
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }

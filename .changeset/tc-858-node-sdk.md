@@ -12,4 +12,6 @@ Add the Phase 1 replication B-node surface for the TC-858 read-through flag: `sq
 - Pending partition updates re-resolve the canonical path on every write and fail closed with `STORAGE_ERROR` after a symlink target changes. Existing unconstrained grants are reused only when parent/expiry policy permits; an offline mint cannot replace a constrained grant.
 
 Consumers that instantiate `TinyCloudNode` with `replication.enabled: true` must now supply `replication.storage`.
-Replication-enabled nodes must be imported from `@tinycloud/node-sdk`; the browser-safe `/core` entry does not register Node-only replication loaders.
+Replication-enabled `/core` consumers may register a browser-safe runtime and authority loader with `registerReplicationLoaders()`; `/core` itself still does not import the controller. Primary-space scoped KV operations wait until the read-through seam is attached. Metadata-light compact-session restores activate the delegation with the host and derive the principal from the validated full space owner. Replica-device verification-method fragments are stripped only for delegation audiences and canonical principal comparisons; session signing retains the full verification method.
+
+- Purge stops timers and aborts syncs synchronously before its asynchronous drain; every bind/unbind preserves the full outstanding close chain so later storage opens cannot overtake an earlier close.

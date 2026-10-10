@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ServiceContext, type KVReadThrough, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
+import { ServiceContext, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
 import { createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
 import type { ServiceSession } from "@tinycloud/sdk-core";
 import { ReplicationRuntime } from "./runtime";
@@ -96,5 +96,52 @@ describe("node ReplicationRuntime binding", () => {
     expect(identities[0]).not.toBe(identities[1]);
     expect(JSON.parse(identities[0]!).host).toBe("https://one.example");
     expect(JSON.parse(identities[1]!).host).toBe("https://two.example");
+  });
+  test("bind and unbind chains wait for every outstanding controller close", async () => {
+    let opened = 0;
+    let releaseA!: () => void;
+    const closeA = new Promise<void>((resolve) => { releaseA = resolve; });
+    const storage: KVReplicaStorage = {
+      kind: "sqlite",
+      async open(spec) {
+        opened++;
+        return {
+          spec,
+          deviceDid: "did:key:replica",
+          async get(key) { return { status: "absent", key, meta: { asOf: new Date(0).toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 } }; },
+          async list() { return { keys: [], meta: { asOf: new Date(0).toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 } }; },
+          async grant() { return null; },
+          async installGrant() { throw new Error("unexpected grant install"); },
+          async sync({ syncStartEpoch }) { return { status: "synced", pages: 0, changes: 0, deleted: 0, fetched: 0, contentMissing: 0, coverage: "complete", syncedThroughEpoch: syncStartEpoch }; },
+          async status() { return { coverage: "complete", lastSyncAt: new Date(0).toISOString(), syncedThroughEpoch: 0, authority: { state: "valid", expiresAt: Date.now() + 60_000 }, grant: null, counts: { keys: 0, contentMissing: 0, tombstones: 0 }, bytes: 0, lastError: null }; },
+          async close() { if (spec.identity.host === "https://a.example") await closeA; },
+        } as KVReplicaHandle;
+      },
+      async purge() {},
+      pendingWrites: createMemoryPendingStore,
+    };
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage }, clock);
+    const bind = (host: string) => runtime.bind({
+      context: context(host),
+      session,
+      address,
+      chainId: 1,
+      authority,
+      primaryKV: [],
+    });
+
+    await bind("https://a.example");
+    await runtime.control.sync();
+    expect(opened).toBe(1);
+    await bind("https://b.example");
+    await bind("https://c.example");
+    const syncingC = runtime.control.sync();
+    await Promise.resolve();
+    expect(opened).toBe(1);
+
+    releaseA();
+    await syncingC;
+    expect(opened).toBe(2);
+    await runtime.control.close();
   });
 });

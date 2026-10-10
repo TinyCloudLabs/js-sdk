@@ -139,6 +139,8 @@ import {
   verifyDidKeyEd25519Signature,
   canonicalizeAddress,
   pkhDid,
+  principalDid,
+  parseSpaceUri,
   resolveTinyCloudHosts,
   publishLocationRecord,
   type LocalNodeIdentityStore,
@@ -1121,6 +1123,8 @@ export class TinyCloudNode {
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
   private readonly replicationRuntime?: Promise<ReplicationRuntime>;
+  private replicationRuntimeInstance?: ReplicationRuntime;
+  private replicationDelegateSession?: Pick<TinyCloudSession, "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk">;
   private readonly replicationControl?: ReplicationControl;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
@@ -1346,12 +1350,21 @@ export class TinyCloudNode {
     if (this.config.replication?.enabled) {
       const runtime = getNodeReplicationLoaders()
         .runtime()
-        .then(({ ReplicationRuntime }) => new ReplicationRuntime(this.config.replication!));
+        .then(({ ReplicationRuntime }) => {
+          const instance = new ReplicationRuntime(this.config.replication!);
+          this.replicationRuntimeInstance = instance;
+          return instance;
+        });
       this.replicationRuntime = runtime;
       this.replicationControl = {
         status: async () => (await runtime).control.status(),
         sync: async (input) => (await runtime).control.sync(input),
-        purge: async (input) => (await runtime).control.purge(input),
+        purge: (input) => {
+          const instance = this.replicationRuntimeInstance;
+          return instance
+            ? instance.control.purge(input)
+            : runtime.then((ready) => ready.control.purge(input));
+        },
         clearPending: async () => (await runtime).control.clearPending(),
         close: async () => (await runtime).control.close(),
       };
@@ -1808,7 +1821,8 @@ export class TinyCloudNode {
     // this sign-in and permanently retire anything captured from the previous
     // session. The authorization flow above remains transactional: a rejected
     // sign-in leaves the existing graph untouched.
-    if (this.replicationRuntime) (await this.replicationRuntime).unbind();
+    this.replicationDelegateSession = undefined;
+    if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     const oldGraph = this._serviceGraph;
     this._serviceGraph = this.createServiceGraphLifetime();
     oldGraph.retire();
@@ -3026,6 +3040,38 @@ export class TinyCloudNode {
     // Never blend a metadata-light restore with the prior wallet identity.
     const stagedAddress = restoredAddress;
     const stagedChainId = sessionData.chainId ?? 1;
+    let replicationPrincipal: string | undefined;
+    let compactReplicationSession: typeof this.replicationDelegateSession;
+    if (this.config.replication?.enabled) {
+      if (stagedAddress !== undefined) {
+        replicationPrincipal = pkhDid(stagedAddress, stagedChainId);
+      } else {
+        const spaceOwner = parseSpaceUri(sessionData.spaceId);
+        if (!spaceOwner?.address || !spaceOwner.chainId) {
+          throw new InvalidRestoredSessionError("Replication needs a full, owner-qualified session space.");
+        }
+        const activation = await activateSessionWithHost(stagedHost, sessionData.delegationHeader);
+        if (
+          !activation.success ||
+          activation.skipped?.includes(sessionData.spaceId) ||
+          (activation.activated !== undefined &&
+            activation.activated.length > 0 &&
+            !activation.activated.includes(sessionData.spaceId))
+        ) {
+          throw new InvalidRestoredSessionError(
+            "The host did not verify the metadata-light session's space delegation.",
+          );
+        }
+        replicationPrincipal = spaceOwner.owner;
+        compactReplicationSession = {
+          delegationHeader: sessionData.delegationHeader,
+          delegationCid: sessionData.delegationCid,
+          spaceId: sessionData.spaceId,
+          verificationMethod: restoredVerificationMethod,
+          jwk: stagedJwk as { [k: string]: unknown },
+        };
+      }
+    }
     const stagedNodeDid = stagedAddress
       ? pkhDid(stagedAddress, stagedChainId)
       : canonicalVerificationMethod;
@@ -3111,8 +3157,10 @@ export class TinyCloudNode {
     } else {
       this._restoredTcSession = stagedTcSession;
     }
+    this.replicationDelegateSession = compactReplicationSession;
+    if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     oldGraph.retire();
-    await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv);
+    await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
   }
 
@@ -3866,7 +3914,10 @@ export class TinyCloudNode {
         spaceScopedContext.setSession({ ...session, spaceId });
       }
       kvService.initialize(spaceScopedContext);
-      if (this.replicationRuntime) void this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kvService));
+      if (this.replicationRuntime) {
+        const attached = this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kvService));
+        kvService.setReadThroughReady(attached);
+      }
     }
     return kvService;
   }
@@ -4802,7 +4853,10 @@ export class TinyCloudNode {
     }));
     spaceScopedContext.setSession({ ...this._serviceContext.session, spaceId });
     kv.initialize(spaceScopedContext);
-    if (this.replicationRuntime) void this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kv));
+    if (this.replicationRuntime) {
+      const attached = this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kv));
+      kv.setReadThroughReady(attached);
+    }
     return kv;
   }
 
@@ -6154,11 +6208,11 @@ export class TinyCloudNode {
   private async replicationAuthority(): Promise<ReplicationAuthority> {
     const { createReplicationAuthority } = await getNodeReplicationLoaders().authority();
     return createReplicationAuthority({
-      replicationSession: () => this.currentTinyCloudSession(),
+      replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
       mintDelegation: async (deviceDid, entries) => {
-        const result = await this.delegateTo(deviceDid, entries);
+        const result = await this.delegateTo(principalDid(deviceDid), entries);
         return {
           ucan: result.delegation.delegationHeader.Authorization,
           expiresAt: result.delegation.expiry.getTime(),
@@ -6167,15 +6221,22 @@ export class TinyCloudNode {
     });
   }
 
-  private async bindReplicationRuntime(context: ServiceContext, session: ServiceSession, kv: KVService): Promise<void> {
-    if (!this.replicationRuntime || this._address === undefined) return;
+  private async bindReplicationRuntime(
+    context: ServiceContext,
+    session: ServiceSession,
+    kv: KVService,
+    principal?: string,
+  ): Promise<void> {
+    if (!this.replicationRuntime) return;
+    const identityPrincipal = principal ??
+      (this._address === undefined ? undefined : pkhDid(this._address, this._chainId));
+    if (identityPrincipal === undefined) return;
     const runtime = await this.replicationRuntime;
     const authority = await this.replicationAuthority();
     await runtime.bind({
       context,
       session,
-      address: this._address,
-      chainId: this._chainId,
+      principal: identityPrincipal,
       authority,
       primaryKV: [{ space: session.spaceId, kv }],
     });

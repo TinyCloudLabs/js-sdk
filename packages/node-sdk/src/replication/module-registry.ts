@@ -5,13 +5,13 @@ export type ReplicationModuleLoaders = {
 
 let nodeLoaders: ReplicationModuleLoaders | undefined;
 
-export function registerNodeReplicationLoaders(loaders: ReplicationModuleLoaders): void {
+export function registerReplicationLoaders(loaders: ReplicationModuleLoaders): void {
   nodeLoaders = loaders;
 }
 
 export function getNodeReplicationLoaders(): ReplicationModuleLoaders {
   if (nodeLoaders === undefined) {
-    throw new Error("Replication requires importing @tinycloud/node-sdk, not @tinycloud/node-sdk/core");
+    throw new Error("Replication requires registering replication controller loaders.");
   }
   return nodeLoaders;
 }

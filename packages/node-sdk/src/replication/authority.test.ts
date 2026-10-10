@@ -233,7 +233,7 @@ const DEVICE_DID = "did:key:zDevice";
 function fakeSessionUcan(att: Record<string, Record<string, unknown>>): string {
   const b64 = (value: unknown) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
-  return `${b64({ alg: "EdDSA" })}.${b64({ att, prf: ["bafyParent"] })}.${b64("sig")}`;
+  return `${b64({ alg: "EdDSA" })}.${b64({ att, prf: ["bafyParent"], exp: Math.floor(Date.now() / 1000) + 3600 })}.${b64("sig")}`;
 }
 
 function fakeSession(over: Partial<TinyCloudSession> = {}): TinyCloudSession {
