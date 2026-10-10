@@ -27,7 +27,10 @@ import {
   type ReplicaDevice,
   type ReplicationAuthority,
 } from "@tinycloud/sdk-services";
-import { parseUcanGrant } from "@tinycloud/replica";
+import type { ReplicaRuntime } from "./replica-contract";
+// @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
+import { parseUcanGrant as replicaParseUcanGrant } from "@tinycloud/replica";
+const parseUcanGrant = replicaParseUcanGrant as ReplicaRuntime["parseUcanGrant"];
 export { assertValidReplicationConfig } from "./config";
 export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
 
