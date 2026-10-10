@@ -356,9 +356,12 @@ export interface IServiceContext {
   on(event: string, handler: EventHandler): () => void;
 
   // Lifecycle
-  /** Abort signal that fires when SDK signs out */
+  /** Abort signal that fires when SDK signs out. */
   readonly abortSignal: AbortSignal;
-
+  /** Additional abort signal for a scoped operation, when active. */
+  readonly operationAbortSignal?: AbortSignal;
+  /** Install an additional signal for the duration of a scoped operation. */
+  setOperationAbortSignal?(signal: AbortSignal | undefined): void;
   // Retry policy
   /** Retry policy for failed requests */
   readonly retryPolicy: RetryPolicy;

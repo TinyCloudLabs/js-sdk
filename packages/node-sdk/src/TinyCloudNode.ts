@@ -1171,6 +1171,8 @@ export class TinyCloudNode {
 
   /** Serializes account-registry writes for the active node instance. */
   private accountRegistryTail: Promise<void> = Promise.resolve();
+  /** Bounds best-effort registry work on the sign-in critical path. */
+  private accountRegistryDeadlineMs = 4_000;
   private pendingAccountRegistrySync?: {
     session: TinyCloudSession;
     promise: Promise<void>;
@@ -1884,6 +1886,9 @@ export class TinyCloudNode {
 
     if (!bootstrapped) {
       this.scheduleAccountRegistrySync();
+      // Drain the bounded best-effort queue before callers can issue their
+      // first KV write; on failure or deadline, its requests are already aborted.
+      await this.accountRegistryTail;
     }
 
     this.notificationHandler.success("Successfully signed in");
@@ -2439,7 +2444,10 @@ export class TinyCloudNode {
     });
   }
 
-  private async writeManifestRegistryRecords(): Promise<void> {
+  private async writeManifestRegistryRecords(
+    account: AccountService,
+    signal: AbortSignal,
+  ): Promise<void> {
     const request = this.capabilityRequest;
     if (!request || request.registryRecords.length === 0) {
       return;
@@ -2449,9 +2457,9 @@ export class TinyCloudNode {
     }
 
     const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
-    await this.ensureOwnedSpaceHostedById(accountSpaceId);
-
-    const result = await this.account.applications.register(request.manifests);
+    await this.ensureOwnedSpaceHostedById(accountSpaceId, signal);
+    if (signal.aborted) throw signal.reason;
+    const result = await account.applications.register(request.manifests);
     if (!result.ok) {
       throw Object.assign(
         new Error(`Failed to write manifest registry records: ${result.error.message}`),
@@ -2460,50 +2468,128 @@ export class TinyCloudNode {
     }
   }
 
+  private createAccountRegistryServices(
+    context: ServiceContext,
+    signal: AbortSignal,
+  ): { account: AccountService; contexts: ServiceContext[] } {
+    const session = context.session;
+    if (!session) throw new Error("Account registry requires an active service session");
+    const contexts: ServiceContext[] = [context];
+    const accountSpaceId = this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE);
+    const createScopedContext = (spaceId: string): ServiceContext => {
+      const scoped = this._serviceGraph.track(new ServiceContext({
+        invoke: context.invoke,
+        invokeAny: context.invokeAny,
+        fetch: context.fetch,
+        hosts: context.hosts,
+        telemetry: this.config.telemetry,
+      }));
+      scoped.setOperationAbortSignal(signal);
+      scoped.setSession({ ...session, spaceId });
+      contexts.push(scoped);
+      return scoped;
+    };
+
+    const sql = new SQLService({});
+    const sqlContext = createScopedContext(accountSpaceId);
+    sql.initialize(sqlContext);
+    const spaces = new SpaceService({
+      hosts: context.hosts,
+      session,
+      invoke: context.invoke,
+      fetch: (url, init) =>
+        context.fetch(url, {
+          ...init,
+          signal: init?.signal
+            ? AbortSignal.any([init.signal, signal])
+            : signal,
+        }),
+      userDid: this.did,
+      createKVService: (spaceId) => {
+        const kv = new KVService({});
+        kv.initialize(createScopedContext(spaceId));
+        return kv;
+      },
+    });
+
+    return {
+      contexts,
+      account: new AccountService({
+        getDid: () => this.did,
+        getHost: () => context.hosts[0] ?? this.config.host!,
+        getPrimarySpaceId: () => session.spaceId,
+        getAccountSpaceId: () => accountSpaceId,
+        getSpaces: () => spaces,
+        getAccountDb: () => sql.db("account"),
+        ensureAccountSpaceHosted: () =>
+          this.ensureOwnedSpaceHostedById(accountSpaceId, signal),
+      }),
+    };
+  }
+
   private scheduleAccountRegistrySync(): void {
     const session = this.currentTinyCloudSession();
     if (!session || this.pendingAccountRegistrySync?.session === session) {
       return;
     }
 
+    const controller = new AbortController();
+    const deadline = setTimeout(
+      () => controller.abort(new DOMException("Account registry deadline exceeded", "TimeoutError")),
+      this.accountRegistryDeadlineMs,
+    );
     const promise = this.enqueueAccountRegistryOperation(session, async () => {
-      await this.withAccountRegistryRetry(async () => {
-        if (this.currentTinyCloudSession() !== session) {
-          return;
-        }
-
-        await this.account.index.ensure();
-        if (this.currentTinyCloudSession() !== session) {
-          return;
-        }
-
-        await this.writeManifestRegistryRecords();
-
-        if (this.currentTinyCloudSession() !== session) {
-          return;
-        }
-
-        if (this.currentSessionCanListSpaces()) {
-          const spaces = await this.account.spaces.syncAccessible();
-          if (!spaces.ok) {
-            throw Object.assign(
-              new Error(`Failed to sync account spaces: ${spaces.error.message}`),
-              { cause: spaces.error },
-            );
-          }
-        }
-        // Else: the current session carries a recap that does not grant
-        // `tinycloud.space/list` (every manifest/recap session, and the default
-        // non-manifest recap alike — its abilities table has no `space` service).
-        // `syncAccessible()` depends on `tinycloud.space/list`, which such a
-        // session does not hold — see {@link isOwnedSpaceRegistered} — so the
-        // owned-space listing is a doomed request that 401s on the wire
-        // (`Unauthorized Action: …/space/ tinycloud.space/list`). The account
-        // spaces registry is instead maintained by bootstrap seeding +
-        // `spaces.register()`, so we skip the invoke entirely rather than emit it.
+      const sharedContext = this._serviceContext;
+      if (!sharedContext) return;
+      const context = this._serviceGraph.track(new ServiceContext({
+        invoke: sharedContext.invoke,
+        invokeAny: sharedContext.invokeAny,
+        fetch: sharedContext.fetch,
+        hosts: sharedContext.hosts,
+        telemetry: this.config.telemetry,
+      }));
+      context.setOperationAbortSignal(controller.signal);
+      const current = this.currentTinyCloudSession();
+      if (!current) return;
+      context.setSession({
+        delegationHeader: current.delegationHeader,
+        delegationCid: current.delegationCid,
+        spaceId: current.spaceId,
+        verificationMethod: current.verificationMethod,
+        jwk: current.jwk,
       });
-    });
+      const registry = this.createAccountRegistryServices(context, controller.signal);
+      try {
+        await this.withAccountRegistryRetry(async () => {
+          if (controller.signal.aborted) throw controller.signal.reason;
+          if (this.currentTinyCloudSession() !== session) return;
+          await registry.account.index.ensure();
+          if (controller.signal.aborted) throw controller.signal.reason;
+          if (this.currentTinyCloudSession() !== session) return;
 
+          await this.writeManifestRegistryRecords(registry.account, controller.signal);
+          if (controller.signal.aborted) throw controller.signal.reason;
+          if (this.currentTinyCloudSession() !== session) return;
+
+          if (this.currentSessionCanListSpaces()) {
+            const result = await registry.account.spaces.syncAccessible();
+            if (controller.signal.aborted) throw controller.signal.reason;
+            if (!result.ok) {
+              throw Object.assign(
+                new Error(`Failed to sync account spaces: ${result.error.message}`),
+                { cause: result.error },
+              );
+            }
+          }
+          // Recap sessions without tinycloud.space/list cannot use syncAccessible.
+        }, controller.signal);
+      } finally {
+        for (const operationContext of registry.contexts) {
+          operationContext.retire();
+        }
+        clearTimeout(deadline);
+      }
+    });
     this.pendingAccountRegistrySync = { session, promise };
     const clearPendingSync = () => {
       if (this.pendingAccountRegistrySync?.promise === promise) {
@@ -2511,6 +2597,10 @@ export class TinyCloudNode {
       }
     };
     void promise.then(clearPendingSync, clearPendingSync);
+    void promise.then(
+      () => clearTimeout(deadline),
+      () => clearTimeout(deadline),
+    );
   }
 
   private enqueueAccountRegistryOperation(
@@ -2555,14 +2645,25 @@ export class TinyCloudNode {
     );
   }
 
-  private async withAccountRegistryRetry(task: () => Promise<void>): Promise<void> {
+  private async withAccountRegistryRetry(
+    task: () => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<void> {
     const delays = [250, 1_000, 3_000];
     let lastError: unknown;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
+      if (signal.aborted) {
+        console.warn("TinyCloud account registry sync stopped: deadline exceeded", signal.reason);
+        return;
+      }
       try {
         await task();
         return;
       } catch (error) {
+        if (signal.aborted) {
+          console.warn("TinyCloud account registry sync stopped: deadline exceeded", error);
+          return;
+        }
         // Authorization verdicts are deterministic, not transient: retrying a
         // 401/403 only re-emits the doomed request (the 2026-07-03 recap-storm
         // incident). The typed status/code decides whatever the body says;
@@ -2589,16 +2690,31 @@ export class TinyCloudNode {
           message.includes(STORAGE_FULL_MESSAGE) ||
           message.includes(STORAGE_WRITE_TOO_LARGE_MESSAGE)
         ) {
-          console.warn("TinyCloud account registry sync stopped: storage is full", error);
+          console.warn(
+            "TinyCloud account registry sync stopped: storage is full",
+            error,
+          );
           return;
         }
         lastError = error;
         if (attempt < delays.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              signal.removeEventListener("abort", onAbort);
+              resolve();
+            }, delays[attempt]);
+            const onAbort = () => {
+              clearTimeout(timer);
+              signal.removeEventListener("abort", onAbort);
+              reject(signal.reason);
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+          }).catch((error) => {
+            if (!signal.aborted) throw error;
+          });
         }
       }
     }
-
     console.warn(
       "TinyCloud account registry sync failed after retries",
       lastError,
@@ -2654,7 +2770,7 @@ export class TinyCloudNode {
    * self-revealing: the next write to the space fails immediately and loudly
    * with `404 Space not found`.
    */
-  private async ensureOwnedSpaceHostedById(spaceId: string): Promise<void> {
+  private async ensureOwnedSpaceHostedById(spaceId: string, signal?: AbortSignal): Promise<void> {
     if (!this.auth) {
       throw new Error("Owned space hosting requires wallet mode");
     }
@@ -2673,7 +2789,7 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires a TinyCloud host");
     }
 
-    const activation = await activateSessionWithHost(host, session.delegationHeader);
+    const activation = await activateSessionWithHost(host, session.delegationHeader, signal);
     if (activation.success && !activation.skipped?.includes(spaceId)) {
       this.confirmedHostedSpaceIds.add(spaceId);
       return;
@@ -2686,7 +2802,10 @@ export class TinyCloudNode {
       );
     }
 
-    const created = await (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
+    const authorization = this.auth as NodeUserAuthorization;
+    const created = signal
+      ? await authorization.hostOwnedSpaceResult(spaceId, undefined, signal)
+      : await authorization.hostOwnedSpaceResult(spaceId);
     if (!created.success) {
       throw Object.assign(
         new Error(`Failed to create owned space ${spaceId}: ${describeHostFailure(created)}`),
@@ -2694,9 +2813,9 @@ export class TinyCloudNode {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (signal?.aborted) throw signal.reason;
 
-    const retry = await activateSessionWithHost(host, session.delegationHeader);
+    const retry = await activateSessionWithHost(host, session.delegationHeader, signal);
     if (!retry.success || retry.skipped?.includes(spaceId)) {
       throw Object.assign(
         new Error(

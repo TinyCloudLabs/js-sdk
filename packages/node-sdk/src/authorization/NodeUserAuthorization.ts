@@ -974,6 +974,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private async hostSpace(
     targetSpaceId?: string,
     purpose?: SignRequest["purpose"],
+    signal?: AbortSignal,
   ): Promise<SpaceHostResult> {
     if (!this._tinyCloudSession || !this._address || !this._chainId) {
       throw new Error("Must be signed in to host space");
@@ -984,7 +985,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
 
     // Get peer ID from TinyCloud server
-    const peerId = await fetchPeerId(host, spaceId);
+    const peerId = await fetchPeerId(host, spaceId, signal);
 
     // Generate host SIWE message
     const siwe = this.wasm.generateHostSIWEMessage({
@@ -996,12 +997,32 @@ export class NodeUserAuthorization implements IUserAuthorization {
       peerId,
     });
 
-    // Sign the message
-    const signature = await this.signMessage(siwe, purpose);
-
+    if (signal?.aborted) throw signal.reason;
+    const signing = this.signMessage(siwe, purpose);
+    let signature: string;
+    if (!signal) {
+      signature = await signing;
+    } else {
+      let rejectOnAbort!: (reason?: unknown) => void;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        rejectOnAbort = reject;
+      });
+      const onAbort = () => rejectOnAbort(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      try {
+        // The wallet prompt itself has no AbortSignal API. Stop awaiting it on
+        // deadline; the post-sign check below prevents a late signature from
+        // starting the host-delegation write.
+        signature = await Promise.race([signing, aborted]);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    }
+    if (signal?.aborted) throw signal.reason;
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
-    return submitHostDelegation(host, headers);
+    return submitHostDelegation(host, headers, signal);
   }
 
   /**
@@ -1031,8 +1052,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async hostOwnedSpaceResult(
     spaceId: string,
     purpose?: SignRequest["purpose"],
+    signal?: AbortSignal,
   ): Promise<SpaceHostResult> {
-    return this.hostSpace(spaceId, purpose);
+    return this.hostSpace(spaceId, purpose, signal);
   }
 
   /**
