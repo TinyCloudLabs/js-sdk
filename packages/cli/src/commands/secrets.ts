@@ -29,7 +29,7 @@ import { mergeWarnings } from "../output/warnings.js";
 import { ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { withSignInHint } from "../auth/session-expired.js";
+import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
 import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -396,10 +396,16 @@ async function canonicalSecretGet(
   let ownerNode: TinyCloudNode | undefined;
   if (!auth?.privateKey) {
     const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    if (profile) {
+      const posture = resolveProfilePosture(profile);
       const session = await ProfileManager.getSession(params.ctx.profile);
-      if (!session || isStoredSessionExpired(session)) {
-        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+      if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
+        throw sessionExpiredError(params.ctx.profile, posture);
+      }
+      if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+        if (!session || isStoredSessionExpired(session)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+        }
       }
     }
   }

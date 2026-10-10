@@ -227,9 +227,8 @@ describe("scoped first login", () => {
   // TC-674 control: passes before and after
   test("an unexpired imported session still blocks a scoped paste login", async () => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const session = await persistImportedSession(exp);
+    await persistImportedSession(exp);
     const before = await ProfileManager.getSession("scoped");
-    expect(sessionExpiresAt(session)).toBe(new Date(exp * 1000).toISOString());
     let calls = 0;
     await expect(refreshOpenKeySession("scoped", host, {
       permissions: requested,

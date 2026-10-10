@@ -373,6 +373,7 @@ mock.module("@tinycloud/node-sdk", () => ({
         : `vault/secrets/${name}`,
     },
   }),
+  signedCompactUcanExpiry: () => undefined,
   principalDidEquals: (a: string, b: string) =>
     a.split("#")[0].toLowerCase() === b.split("#")[0].toLowerCase(),
 }));

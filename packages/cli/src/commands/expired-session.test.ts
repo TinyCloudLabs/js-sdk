@@ -155,6 +155,7 @@ async function seedImportedProfile(
     posture: "delegate-session",
     operatorType: "agent",
     authMethod: "openkey",
+    createdAt: new Date().toISOString(),
     ...(localNodeUrl === undefined ? {} : { localNodeUrl }),
   };
   await withTinyCloudStateRoot(home, async () => {
@@ -245,6 +246,183 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     // Within its lifetime, so the secrets expiry pre-check passes; the owner still gets the owner sign-in.
     ["owner-openkey secrets get with a session that no longer verifies", "owner-openkey", "tampered", secrets("get", "KEY"), ownerLogin],
   ];
+
+  // TC-674 control: import expiry already at the signed boundary is typed and leaves no bootstrap state.
+  test("E-C1 refuses an already transport-expired bound import without state changes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-import-expired-c1-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      const seeded = await seedImportedProfile(home, "c1", expiry);
+      const { buildPermissionRequestArtifact } = await import("@tinycloud/operations/artifacts");
+      const request = buildPermissionRequestArtifact({
+        profile: "c1",
+        posture: "delegate-session",
+        operatorType: "agent",
+        host: node.url.origin,
+        sessionDid: seeded.sessionDid.split("#", 1)[0]!,
+        ownerDid: seeded.ownerDid,
+        spaceId: seeded.spaceId,
+        missing: [{ service: "tinycloud.kv", space: seeded.spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+        createRequestId: () => "req_tc674_c1",
+      });
+      await withTinyCloudStateRoot(home, () => writeJsonAtomic(authRequestsPath("c1"), [request]));
+      const profileBefore = await withTinyCloudStateRoot(home, () =>
+        readFile(profileConfigPath("c1"), "utf8"));
+      const artifactPath = join(home, "bound.json");
+      await writeFile(artifactPath, JSON.stringify({
+        kind: "tinycloud.auth.delegation",
+        version: 1,
+        requestId: "req_tc674_c1",
+        delegationCid: seeded.delegation.cid,
+        delegation: { ...seeded.delegation, expiry: new Date(expiry * 1000).toISOString() },
+      }));
+      requests.length = 0;
+      const result = await runBuiltCli(home, ["--profile", "c1", "--json", "auth", "import", artifactPath], expiry * 1000);
+      expect(result).toMatchObject({ exitCode: 1, error: { code: "DELEGATION_EXPIRED" } });
+      expect(await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("c1"), "utf8"))).toBe(profileBefore);
+      expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("c1"), "utf8").catch(() => null))).toBeNull();
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // TC-674 regression: fails before the fix
+  test("E-C2 reports signed expiry when a bound import transport expiry is still live", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-import-expired-c2-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      const seeded = await seedImportedProfile(home, "c2", expiry);
+      const { buildPermissionRequestArtifact } = await import("@tinycloud/operations/artifacts");
+      const request = buildPermissionRequestArtifact({
+        profile: "c2", posture: "delegate-session", operatorType: "agent", host: node.url.origin,
+        sessionDid: seeded.sessionDid.split("#", 1)[0]!, ownerDid: seeded.ownerDid, spaceId: seeded.spaceId,
+        missing: [{ service: "tinycloud.kv", space: seeded.spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+        createRequestId: () => "req_tc674_c2",
+      });
+      await withTinyCloudStateRoot(home, () => writeJsonAtomic(authRequestsPath("c2"), [request]));
+      const profileBefore = await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("c2"), "utf8"));
+      const artifactPath = join(home, "bound.json");
+      await writeFile(artifactPath, JSON.stringify({
+        kind: "tinycloud.auth.delegation", version: 1, requestId: "req_tc674_c2",
+        delegationCid: seeded.delegation.cid,
+        delegation: { ...seeded.delegation, expiry: new Date((expiry + 3600) * 1000).toISOString() },
+      }));
+      requests.length = 0;
+      const result = await runBuiltCli(home, ["--profile", "c2", "--json", "auth", "import", artifactPath], expiry * 1000);
+      expect(result).toMatchObject({ exitCode: 1, error: { code: "DELEGATION_EXPIRED" } });
+      expect(await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("c2"), "utf8"))).toBe(profileBefore);
+      expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("c2"), "utf8").catch(() => null))).toBeNull();
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // TC-674 regression: fails before the fix
+  test("E-C3 refuses an expired unbound compact import without leaving its provisional session", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-import-expired-c3-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      const seeded = await seedImportedProfile(home, "c3", expiry);
+      const profileBefore = await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("c3"), "utf8"));
+      await writeFile(seeded.artifactPath, JSON.stringify({
+        ...seeded.delegation,
+        expiry: new Date(expiry * 1000).toISOString(),
+      }));
+      requests.length = 0;
+      const result = await runBuiltCli(home, ["--profile", "c3", "--json", "auth", "import", seeded.artifactPath], expiry * 1000);
+      expect(result).toMatchObject({ exitCode: 1, error: { code: "DELEGATION_EXPIRED" } });
+      expect(await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("c3"), "utf8"))).toBe(profileBefore);
+      expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("c3"), "utf8").catch(() => null))).toBeNull();
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // TC-674 regression: fails before the fix
+  test("E-C4 preserves a live imported session when a second expired delegation is refused", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-import-expired-c4-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      const live = await seedImportedProfile(home, "c4", expiry + 3600);
+      await seedImportedSession(home, "c4", live);
+      const expired = await mintCompactDelegation({
+        audience: live.sessionDid.split("#", 1)[0]!,
+        expSecs: expiry,
+        host: node.url.origin,
+      });
+      const artifactPath = join(home, "expired-second.json");
+      await writeFile(artifactPath, JSON.stringify(expired.delegation));
+      const { additionalDelegationsPath } = await import("@tinycloud/operations/state");
+      const sessionBefore = await withTinyCloudStateRoot(home, () => readFile(sessionPath("c4"), "utf8"));
+      const additionalBefore = await withTinyCloudStateRoot(home, () =>
+        readFile(additionalDelegationsPath("c4"), "utf8").catch(() => null));
+      requests.length = 0;
+      const result = await runBuiltCli(home, ["--profile", "c4", "--json", "auth", "import", artifactPath], expiry * 1000);
+      expect(result).toMatchObject({ exitCode: 1, error: { code: "DELEGATION_EXPIRED" } });
+      expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("c4"), "utf8"))).toBe(sessionBefore);
+      expect(await withTinyCloudStateRoot(home, () =>
+        readFile(additionalDelegationsPath("c4"), "utf8").catch(() => null))).toBe(additionalBefore);
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+  // TC-674 control: a live imported delegation still reads a real encrypted secret.
+  test("imports a live hermetic delegation and reads its encrypted secret", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-import-live-hermetic-"));
+    const { createHermeticEncryptedNode } = await import(
+      new URL("../../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href
+    ) as {
+      createHermeticEncryptedNode(options: { secretPayloadValue: string }): Promise<{
+        host: string;
+        ownerDid: string;
+        mintDelegationForAudience(audience: string): Promise<PortableDelegation>;
+        stop(): void;
+      }>;
+    };
+    const hermetic = await createHermeticEncryptedNode({ secretPayloadValue: "tc-674-hermetic-canary" });
+    try {
+      const wasm = new NodeWasmBindings();
+      const sessionManager = wasm.createSessionManager();
+      const sessionDid = sessionManager.getDID("default");
+      const delegation = await hermetic.mintDelegationForAudience(sessionDid.split("#", 1)[0]!);
+      const profileName = "hermetic";
+      const profile = {
+        name: profileName,
+        host: hermetic.host,
+        chainId: 1,
+        spaceName: "secrets",
+        did: sessionDid,
+        sessionDid,
+        ownerDid: hermetic.ownerDid,
+        spaceId: delegation.spaceId,
+        posture: "delegate-session",
+        operatorType: "agent",
+        authMethod: "openkey",
+        createdAt: new Date().toISOString(),
+      };
+      await withTinyCloudStateRoot(home, async () => {
+        await writeJsonAtomic(profileConfigPath(profileName), profile);
+        await writeJsonAtomic(join(profilePath(profileName), "key.json"), JSON.parse(sessionManager.jwk("default")!));
+      });
+      const artifactPath = join(home, "hermetic-delegation.json");
+      await writeFile(artifactPath, JSON.stringify(delegation));
+      const imported = await runBuiltCli(home, ["--profile", profileName, "--json", "auth", "import", artifactPath]);
+      expect(imported.exitCode).toBe(0);
+      const read = await runBuiltCli(home, ["--profile", profileName, "--json", "secrets", "get", "HERMETIC_DELEGATION_CANARY"]);
+      expect(read.exitCode).toBe(0);
+      expect(JSON.parse(read.stdout)).toMatchObject({
+        name: "HERMETIC_DELEGATION_CANARY",
+        value: "tc-674-hermetic-canary",
+      });
+    } finally {
+      hermetic.stop();
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   // TC-674 regression: fails before the fix
   test("imports a live delegation, then rejects it at signed expiry before node access", async () => {

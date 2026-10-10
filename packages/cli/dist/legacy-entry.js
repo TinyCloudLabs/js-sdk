@@ -24104,10 +24104,16 @@ async function canonicalSecretGet(params, collect) {
   let ownerNode;
   if (!auth?.privateKey) {
     const profile2 = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile2?.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+    if (profile2) {
+      const posture = resolveProfilePosture(profile2);
       const session = await ProfileManager.getSession(params.ctx.profile);
-      if (!session || isStoredSessionExpired(session)) {
-        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+      if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
+        throw sessionExpiredError(params.ctx.profile, posture);
+      }
+      if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+        if (!session || isStoredSessionExpired(session)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+        }
       }
     }
   }
