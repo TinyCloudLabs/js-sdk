@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { AggregateReport, AggregateRow, GateReason, GateReasonCode, Manifest, RunInputs, Verdict } from "../contracts/gate";
-import type { GateId, SetId } from "../contracts/common";
+import type { Backend, GateId, SetId } from "../contracts/common";
 import type { ValidatedRunReport } from "../schemas/report";
 import { AggregateReportSchema, RunReportSchema } from "../schemas/report";
 import { canonicalSha256 } from "./canonical-json";
@@ -15,6 +15,7 @@ export interface AggregateOptions {
   companionManifests: ReadonlyMap<SetId, Manifest>;
   recomputedCoreManifest: Manifest | null;
   recomputedCompanionManifests: ReadonlyMap<SetId, Manifest>;
+  expectedLegs?: readonly { name: string; backend: Backend; set: SetId | null }[];
   legs: LegEvidence[];
   legCoreConclusion: AggregateReport["legCoreConclusion"];
   legCompanionConclusion: AggregateReport["legCompanionConclusion"];
@@ -147,16 +148,33 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
       companionLegs.set(set, [...(companionLegs.get(set) ?? []), evidence]);
     }
   }
-  const core = options.inputs.gate ? await buildVerdict(options, options.coreManifest, options.recomputedCoreManifest, coreLegs, options.legCoreConclusion, false) : null;
+  let legCoreConclusion = options.legCoreConclusion;
+  let legCompanionConclusion = options.legCompanionConclusion;
+  if (!options.inputs.gate) {
+    const failIfPassing = (conclusion: AggregateReport["legCoreConclusion"]) => conclusion === "success" ? "failure" as const : conclusion;
+    if (!options.expectedLegs?.length) legCoreConclusion = failIfPassing(legCoreConclusion);
+    else {
+      for (const expected of options.expectedLegs) {
+        const matches = parsedLegs.filter(({ evidence, report }) => evidence.name === expected.name
+          && report.invocation.backends.length === 1 && report.invocation.backends[0] === expected.backend
+          && report.invocation.set === expected.set);
+        if (matches.length !== 1) {
+          if (expected.set === null) legCoreConclusion = failIfPassing(legCoreConclusion);
+          else legCompanionConclusion = failIfPassing(legCompanionConclusion);
+        }
+      }
+    }
+  }
+  const core = options.inputs.gate ? await buildVerdict(options, options.coreManifest, options.recomputedCoreManifest, coreLegs, legCoreConclusion, false) : null;
   const companion: AggregateReport["companion"] = [];
   const companionSets = new Set<SetId>([...options.inputs.sets, ...options.companionManifests.keys(), ...options.recomputedCompanionManifests.keys(), ...companionLegs.keys()]);
   for (const set of companionSets) {
     const manifest = options.recomputedCompanionManifests.get(set) ?? null;
-    const verdict = await buildVerdict(options, options.companionManifests.get(set) ?? null, manifest, companionLegs.get(set) ?? [], options.legCompanionConclusion, true);
+    const verdict = await buildVerdict(options, options.companionManifests.get(set) ?? null, manifest, companionLegs.get(set) ?? [], legCompanionConclusion, true);
     companion.push({ set, manifestSha256: manifest?.manifestSha256 ?? "", ...verdict });
   }
   const gate = core && options.inputs.gate && options.recomputedCoreManifest
-    ? { id: options.inputs.gate as GateId, manifestSha256: options.recomputedCoreManifest.manifestSha256, ...core, passed: options.legCoreConclusion === "success" && core.passed }
+    ? { id: options.inputs.gate as GateId, manifestSha256: options.recomputedCoreManifest.manifestSha256, ...core, passed: legCoreConclusion === "success" && core.passed }
     : null;
   const legs: AggregateReport["legs"] = parsedLegs.map(({ evidence, report }) => {
     const summary = { pass: 0, fail: 0, error: 0, skipped: 0, unsupported: 0, xfail: 0, xpass: 0, ...report.summary };
@@ -171,11 +189,12 @@ export async function aggregate(options: AggregateOptions): Promise<AggregateRep
       key: row.key, id: row.id, variant: row.variant, backend: row.backend, tier: row.tier, requiredArtefacts: row.artefacts.map((file) => file.path), status: row.status,
       ...(row.reason ? { reason: row.reason } : {}), durationMs: row.durationMs, artefactDir: row.artefactDir, missingArtefacts: [], quarantined: report.quarantined.includes(row.key),
     }))) },
-    legs, legCoreConclusion: options.legCoreConclusion, legCompanionConclusion: options.legCompanionConclusion, producedAt: options.producedAt ?? new Date().toISOString(),
+    legs, legCoreConclusion, legCompanionConclusion, producedAt: options.producedAt ?? new Date().toISOString(),
   };
   return AggregateReportSchema.parse(report) as AggregateReport;
 }
 export function aggregateExitCode(report: AggregateReport): 0 | 1 | 3 {
   if (report.inputs.gate) return report.gate?.passed ? 0 : 3;
+  if (report.legCoreConclusion !== "success" || report.legCompanionConclusion !== "success" || !report.legs.length) return 1;
   return report.adhoc?.rows.every((row) => row.status === "pass" && !row.quarantined && row.missingArtefacts.length === 0) ? 0 : 1;
 }

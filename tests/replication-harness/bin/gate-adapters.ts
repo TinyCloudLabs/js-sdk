@@ -196,15 +196,27 @@ function backendValue(value: unknown): Backend {
   if (value === "sqlite" || value === "pg16" || value === "pg16-c") return value;
   throw new Error(`invalid matrix backend ${String(value)}`);
 }
-async function readMatrixEntry(inputsPath: string, name: string): Promise<{ name: string; backend: Backend; set: SetId | null; tiers: Tier[] }> {
-  const matrixPath = join(dirname(inputsPath), "matrix.json");
-  const matrix = await jsonFile<{ include?: unknown[] }>(matrixPath);
-  const candidate = matrix.include?.find((item) => item && typeof item === "object" && (item as { name?: unknown }).name === name) as Record<string, unknown> | undefined;
-  if (!candidate) throw new Error(`leg ${name} is not present in ${matrixPath}`);
-  const set = candidate.set === null ? null : candidate.set === "phase1-companion" ? candidate.set : (() => { throw new Error(`invalid matrix set for leg ${name}`); })();
-  const tiers = candidate.tiers;
-  if (!Array.isArray(tiers) || !tiers.length || tiers.some((tier) => !["core", "edge", "speed", "tc12"].includes(String(tier)))) throw new Error(`invalid matrix tiers for leg ${name}`);
-  return { name, backend: backendValue(candidate.backend), set, tiers: tiers as Tier[] };
+type ResolvedMatrixLeg = { name: string; backend: Backend; set: SetId | null; tiers: Tier[] };
+function parseMatrixEntry(value: unknown, index: number): ResolvedMatrixLeg {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid matrix entry ${index}`);
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.name !== "string" || !entry.name) throw new Error(`invalid matrix name at entry ${index}`);
+  const set = entry.set === null ? null : entry.set === "phase1-companion" ? entry.set : (() => { throw new Error(`invalid matrix set for leg ${entry.name}`); })();
+  const tiers = entry.tiers;
+  if (!Array.isArray(tiers) || !tiers.length || tiers.some((tier) => !["core", "edge", "speed", "tc12"].includes(String(tier)))) throw new Error(`invalid matrix tiers for leg ${entry.name}`);
+  return { name: entry.name, backend: backendValue(entry.backend), set, tiers: tiers as Tier[] };
+}
+async function readMatrixEntries(inputsPath: string): Promise<ResolvedMatrixLeg[]> {
+  const matrix = await jsonFile<{ include?: unknown }>(join(dirname(inputsPath), "matrix.json"));
+  if (!Array.isArray(matrix.include)) throw new Error("resolved matrix must include an array");
+  const entries = matrix.include.map((entry, index) => parseMatrixEntry(entry, index));
+  if (new Set(entries.map((entry) => entry.name)).size !== entries.length) throw new Error("resolved matrix contains duplicate leg names");
+  return entries;
+}
+async function readMatrixEntry(inputsPath: string, name: string): Promise<ResolvedMatrixLeg> {
+  const entry = (await readMatrixEntries(inputsPath)).find((item) => item.name === name);
+  if (!entry) throw new Error(`leg ${name} is not present in ${join(dirname(inputsPath), "matrix.json")}`);
+  return entry;
 }
 async function readManifestFor(inputsPath: string, set: SetId | null): Promise<Manifest | null> {
   const filename = set ? `manifest-${set}.json` : "manifest-core.json";
@@ -306,9 +318,13 @@ function renderAggregateMarkdown(report: Awaited<ReturnType<typeof aggregate>>):
   return `${lines.join("\n")}\n`;
 }
 export async function aggregateCommand(args: { options: Record<string, string | true> }): Promise<void> {
+  if (args.options["leg-jobs-conclusion"] !== undefined) {
+    throw new Error("usage: harness aggregate --inputs <inputs.json> --legs <directory> --leg-core-conclusion <result> --leg-companion-conclusion <result> --out <directory>; --leg-jobs-conclusion was removed");
+  }
   await loadRuntimeModule();
   const inputsPath = requiredOption(args.options, "inputs");
   const inputs = await readInputs(inputsPath);
+  const expectedLegs = await readMatrixEntries(inputsPath);
   const legsRoot = requiredOption(args.options, "legs");
   const outDir = requiredOption(args.options, "out");
   const entries = await (await import("node:fs/promises")).readdir(legsRoot, { withFileTypes: true });
@@ -334,16 +350,15 @@ export async function aggregateCommand(args: { options: Record<string, string | 
   for (const set of inputs.sets) recomputedCompanionManifests.set(set, await recomputeManifest(set, inputs));
   const coreLegs = legs.filter((leg) => (leg.report as Partial<RunReport>).invocation?.set === null);
   const companionLegs = legs.filter((leg) => (leg.report as Partial<RunReport>).invocation?.set !== null);
-  const coreFromReport = reportConclusion(coreLegs);
-  const companionFromReport = reportConclusion(companionLegs);
+  const coreFromReport = expectedLegs.some((leg) => leg.set === null) ? reportConclusion(coreLegs) : "success";
+  const companionFromReport = expectedLegs.some((leg) => leg.set !== null) ? reportConclusion(companionLegs) : "success";
   const coreFromFlags = conclusionFlag(option(args.options, "leg-core-conclusion"), coreFromReport);
   const companionFromFlags = conclusionFlag(option(args.options, "leg-companion-conclusion"), companionFromReport);
-  const combined = option(args.options, "leg-jobs-conclusion");
   const aggregateConclusion = (reported: ReturnType<typeof reportConclusion>, flagged: ReturnType<typeof conclusionFlag>) =>
     reported === "success" ? flagged : reported;
-  const report = await aggregate({ inputs, coreManifest, companionManifests, recomputedCoreManifest, recomputedCompanionManifests, legs,
-    legCoreConclusion: aggregateConclusion(coreFromReport, coreLegs.length || !combined ? coreFromFlags : conclusionFlag(combined, coreFromReport)),
-    legCompanionConclusion: aggregateConclusion(companionFromReport, companionLegs.length || !combined ? companionFromFlags : conclusionFlag(combined, companionFromReport)) });
+  const report = await aggregate({ inputs, coreManifest, companionManifests, recomputedCoreManifest, recomputedCompanionManifests, expectedLegs, legs,
+    legCoreConclusion: aggregateConclusion(coreFromReport, coreFromFlags),
+    legCompanionConclusion: aggregateConclusion(companionFromReport, companionFromFlags) });
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, "aggregate.json"), `${JSON.stringify(report, null, 2)}\n`);
   await writeFile(join(outDir, "aggregate.md"), renderAggregateMarkdown(report));
