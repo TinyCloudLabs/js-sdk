@@ -12,11 +12,24 @@ import { ResourceLedger } from "./ledger";
 import { createNode, createPostgres } from "./nodes";
 import { Toxiproxy } from "./toxiproxy";
 import { collectTopologyArtefacts } from "./artefacts";
+import { sharedProxyEndpoint, sharedProxyEndpointDetails } from "./shared-endpoint";
 
 let clientConstructor: ClientConstructor | undefined;
 export function registerClientConstructor(constructor?: ClientConstructor): void { clientConstructor = constructor; }
 export class DockerTopologyFactory implements TopologyFactory {
   async create(env: RunEnvironment, input: TopologySpec, options: { topoId: string; backend: Backend; signal?: AbortSignal; deadlineMs?: number }): Promise<Topology> {
+    const deadlineAt = env.clock.now() + (options.deadlineMs ?? 120_000);
+    let spec = input;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try { return await this.createAttempt(env, spec, { ...options, deadlineMs: remainingMs(env.clock, deadlineAt) }); }
+      catch (error) {
+        if (attempt === 3 || !isRetryableBindConflict(error) || !spec.clients.some((client) => client.endpoint && sharedProxyEndpointDetails(client.endpoint))) throw error;
+        spec = retrySharedEndpoints(spec, options.topoId, attempt + 1);
+      }
+    }
+    throw new HarnessError("DEADLINE_EXCEEDED", "shared proxy bind retries exhausted");
+  }
+  private async createAttempt(env: RunEnvironment, input: TopologySpec, options: { topoId: string; backend: Backend; signal?: AbortSignal; deadlineMs?: number }): Promise<Topology> {
     const spec = validateTopology(input);
     const id = dockerSafe(options.topoId);
     const deadlineAt = env.clock.now() + (options.deadlineMs ?? 120_000);
@@ -48,24 +61,28 @@ export class DockerTopologyFactory implements TopologyFactory {
         nodes.set(node.id, running.handle);
         for (const ref of ledger.resources()) add(ref);
       }
-      const edgeList: { name: string; node: string; hostPort?: number }[] = [];
+      const edgeList: { name: string; node: string; host?: string; hostPort?: number }[] = [];
       const clientProxy = new Map<string, string>();
-      const sharedEndpoints = new Map<string, { name: string; node: string; port: number }>();
+      const directEndpoints = new Map<string, string>();
+      const sharedEndpoints = new Map<string, { name: string; node: string; host: string; port: number }>();
       for (const clientSpec of spec.clients) {
         if (clientSpec.endpoint === undefined) {
           const edgeName = `client:${clientSpec.id}->${clientSpec.node}`;
           edgeList.push({ name: edgeName, node: networkAlias.get(clientSpec.node)! });
           clientProxy.set(clientSpec.id, edgeName);
         } else {
-          const endpoint = parseSharedProxyEndpoint(clientSpec.endpoint);
-          const previous = sharedEndpoints.get(endpoint.url);
-          if (previous && previous.node !== clientSpec.node) throw new HarnessError("TOPOLOGY_INVALID", `shared endpoint ${endpoint.url} targets multiple nodes`);
-          const edgeName = previous?.name ?? `shared:${endpoint.port}`;
-          if (!previous) {
-            sharedEndpoints.set(endpoint.url, { name: edgeName, node: clientSpec.node, port: endpoint.port });
-            edgeList.push({ name: edgeName, node: networkAlias.get(clientSpec.node)!, hostPort: endpoint.port });
+          const endpoint = sharedProxyEndpointDetails(clientSpec.endpoint);
+          if (!endpoint) directEndpoints.set(clientSpec.id, clientSpec.endpoint);
+          else {
+            const previous = sharedEndpoints.get(endpoint.endpoint);
+            if (previous && previous.node !== clientSpec.node) throw new HarnessError("TOPOLOGY_INVALID", `shared endpoint ${endpoint.endpoint} targets multiple nodes`);
+            const edgeName = previous?.name ?? `shared:${endpoint.host}:${endpoint.port}`;
+            if (!previous) {
+              sharedEndpoints.set(endpoint.endpoint, { name: edgeName, node: clientSpec.node, host: endpoint.host, port: endpoint.port });
+              edgeList.push({ name: edgeName, node: networkAlias.get(clientSpec.node)!, host: endpoint.host, hostPort: endpoint.port });
+            }
+            clientProxy.set(clientSpec.id, edgeName);
           }
-          clientProxy.set(clientSpec.id, edgeName);
         }
         for (const host of clientSpec.extraHosts ?? []) edgeList.push({ name: `client:${clientSpec.id}->${host.alias}`, node: networkAlias.get(host.node)! });
       }
@@ -77,10 +94,12 @@ export class DockerTopologyFactory implements TopologyFactory {
       const topology = new DockerTopology(spec, id, options.backend, docker, ledger, resources, nodes, clients, proxies, resourceLabels);
       for (const clientSpec of spec.clients) {
         if (!clientConstructor) throw new HarnessError("NOT_IMPLEMENTED", "client constructor is not registered (S2)");
-        const primary = proxies?.handles.get(clientProxy.get(clientSpec.id)!);
-        if (!primary) throw new HarnessError("TOPOLOGY_INVALID", `missing proxy for client ${clientSpec.id}`);
+        const primaryEdge = clientProxy.get(clientSpec.id);
+        const primary = primaryEdge ? proxies?.handles.get(primaryEdge) : undefined;
+        const endpoint = directEndpoints.get(clientSpec.id) ?? primary?.listenUrl;
+        if (!endpoint) throw new HarnessError("TOPOLOGY_INVALID", `missing proxy for client ${clientSpec.id}`);
         const node = spec.nodes.find((candidate) => candidate.id === clientSpec.node)!;
-        const client = await clientConstructor({ topology, environment: env, spec: { ...clientSpec, endpoint: primary.listenUrl }, image: env.image(node.image ?? "default"), sut: env.sut, signal: options.signal, deadlineMs: remainingMs(env.clock, deadlineAt) });
+        const client = await clientConstructor({ topology, environment: env, spec: { ...clientSpec, endpoint }, image: env.image(node.image ?? "default"), sut: env.sut, signal: options.signal, deadlineMs: remainingMs(env.clock, deadlineAt) });
         clients.set(clientSpec.id, client);
       }
       return topology;
@@ -170,12 +189,19 @@ export async function disposeResources(docker: Docker, resources: ResourceRef[],
   return { removed, leaked, errors, clients };
 }
 function dockerSafe(value: string): string { const safe = value.toLowerCase().replace(/[^a-z0-9_.-]/g, "-"); return safe.length <= 48 ? safe : `${safe.slice(0, 39)}-${createHash("sha256").update(value).digest("hex").slice(0, 8)}`; }
-function parseSharedProxyEndpoint(value: string): { url: string; port: number } {
-  let url: URL;
-  try { url = new URL(value); } catch { throw new HarnessError("TOPOLOGY_INVALID", `shared endpoint must be a loopback proxy URL: ${value}`); }
-  const port = Number(url.port);
-  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || !Number.isInteger(port) || port < 1 || port > 65535 || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new HarnessError("TOPOLOGY_INVALID", `shared endpoint must be http://127.0.0.1:<port>: ${value}`);
-  }
-  return { url: url.origin, port };
+function isRetryableBindConflict(error: unknown): boolean {
+  if (!(error instanceof HarnessError) || error.code !== "DOCKER_FAILED") return false;
+  const detail = error.detail as { teardown?: DisposeReport } | undefined;
+  if (detail?.teardown?.errors.length) return false;
+  return /port is already allocated|address already in use|cannot assign requested address|bind: permission denied/i.test(error.message);
+}
+function retrySharedEndpoints(spec: TopologySpec, topoId: string, attempt: number): TopologySpec {
+  return {
+    ...spec,
+    clients: spec.clients.map((client) => {
+      if (!client.endpoint) return client;
+      const shared = sharedProxyEndpointDetails(client.endpoint);
+      return shared ? { ...client, endpoint: sharedProxyEndpoint(topoId, shared.port, attempt) } : client;
+    }),
+  };
 }

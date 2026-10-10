@@ -7,7 +7,7 @@ import { Docker, labels, remainingMs } from "./docker";
 import { ResourceLedger } from "./ledger";
 
 interface ProxyConfig { name: string; listen: string; upstream: string; enabled?: boolean; toxics?: { name: string; type: string; stream: string; toxicity: number; attributes: Record<string, number> }[] }
-interface ProxyEdge { name: string; node: string; hostPort?: number }
+interface ProxyEdge { name: string; node: string; host?: string; hostPort?: number }
 export class Toxiproxy {
   readonly handles = new Map<string, ProxyHandle>();
   private readonly api: string;
@@ -19,7 +19,8 @@ export class Toxiproxy {
     const args = ["run", "-d", "--name", name, "--network", network, ...labels(env.runId, topoId), "-p", "127.0.0.1::8474"];
     for (let index = 0; index < input.edges.length; index++) {
       const edge = input.edges[index];
-      args.push("-p", `127.0.0.1:${edge.hostPort ?? ""}:${20001 + index}`);
+      const binding = edge.hostPort === undefined ? `127.0.0.1::${20001 + index}` : `${edge.host ?? "127.0.0.1"}:${edge.hostPort}:${20001 + index}`;
+      args.push("-p", binding);
     }
     args.push("ghcr.io/shopify/toxiproxy:2.12.0");
     await docker.run(args, { signal: input.signal, deadlineMs: remainingMs(env.clock, input.deadlineAt) });
@@ -36,7 +37,7 @@ export class Toxiproxy {
       await toxiproxy.request("POST", "/proxies", { name: proxyName, listen: `0.0.0.0:${port}`, upstream: `${edge.node}:8000`, enabled: true }, { signal: input.signal, deadlineMs: remainingMs(env.clock, input.deadlineAt) });
       const published = hostPort(await docker.run(["port", name, `${port}/tcp`], { deadlineMs: remainingMs(env.clock, input.deadlineAt) }));
       toxiproxy.ports.set(proxyName, published);
-      toxiproxy.handles.set(edge.name, new DockerProxyHandle(toxiproxy, edge.name, proxyName, published));
+      toxiproxy.handles.set(edge.name, new DockerProxyHandle(toxiproxy, edge.name, proxyName, published, edge.host ?? "127.0.0.1"));
     }
     return toxiproxy;
   }
@@ -56,7 +57,7 @@ export class Toxiproxy {
 function hostPort(result: { stdout: string }): number { return Number(result.stdout.trim().split("\n")[0].slice(result.stdout.trim().split("\n")[0].lastIndexOf(":") + 1)); }
 class DockerProxyHandle implements ProxyHandle {
   readonly listenUrl: string;
-  constructor(private readonly owner: Toxiproxy, readonly name: string, private readonly proxyName: string, port: number) { this.listenUrl = `http://127.0.0.1:${port}`; }
+  constructor(private readonly owner: Toxiproxy, readonly name: string, private readonly proxyName: string, port: number, host = "127.0.0.1") { this.listenUrl = `http://${host}:${port}`; }
   async disable(options: CallOptions = {}): Promise<void> { await this.owner.request("POST", `/proxies/${encodeURIComponent(this.proxyName)}`, { enabled: false }, options); }
   async enable(options: CallOptions = {}): Promise<void> { await this.owner.request("POST", `/proxies/${encodeURIComponent(this.proxyName)}`, { enabled: true }, options); }
   async addToxic(toxic: ToxicSpec, options: CallOptions = {}): Promise<string> {

@@ -14,6 +14,7 @@ import { realClock } from "../src/contracts/clock";
 import type { RunEnvironment, ResolvedImage } from "../src/contracts/lifecycle";
 import type { KvClient } from "../src/contracts/client";
 import { DockerNodeHandle } from "../src/topology/nodes";
+import { sharedProxyEndpoint } from "../src/topology/shared-endpoint";
 import { collectTopologyArtefacts } from "../src/topology/artefacts";
 
 const noopEnv = (root: string, docker: readonly string[] = ["sudo", "-n", "docker"]): RunEnvironment => ({
@@ -148,11 +149,12 @@ describe("real Docker topology", () => {
     const command = process.env.DOCKER ? process.env.DOCKER.split(/\s+/) : ["sudo", "-n", "docker"];
     const docker = new Docker(command);
     const runId = `test-${crypto.randomUUID().slice(0, 8)}`;
-    const canonicalEndpoint = `http://127.0.0.1:${await unusedLoopbackPort()}`;
-    const clientEndpoints: string[] = [];
+    const topoId = `i-${crypto.randomUUID()}`;
+    const canonicalEndpoint = sharedProxyEndpoint(topoId, await unusedLoopbackPort());
+    const clientEndpoints = new Map<string, string>();
     let topology: Awaited<ReturnType<DockerTopologyFactory["create"]>> | undefined;
     registerClientConstructor(async ({ spec }) => {
-      clientEndpoints.push(spec.endpoint!);
+      clientEndpoints.set(spec.id, spec.endpoint!);
       return { id: spec.id, kind: spec.kind, capabilities: new Set(), close: async () => ({ graceful: true }) } as unknown as KvClient;
     });
     try {
@@ -162,7 +164,10 @@ describe("real Docker topology", () => {
         spec: {
           name: "integration",
           nodes: [{ id: "sq", backend: "sqlite" }, { id: "pg", backend: "pg16" }],
-          clients: ["c1", "c2"].map((id) => ({ id, kind: "sdk" as const, node: "sq", identity: "shared-identity", auth: { posture: "owner" as const }, replication: { prefixes: ["shared/"] } })),
+          clients: [
+            ...["c1", "c2"].map((id) => ({ id, kind: "sdk" as const, node: "sq", identity: "shared-identity", auth: { posture: "owner" as const }, replication: { prefixes: ["shared/"] } })),
+            { id: "c3", kind: "sdk", node: "sq", identity: "override", endpoint: "https://node.example", auth: { posture: "owner" }, replication: { prefixes: ["override/"] } },
+          ],
           links: [{ from: "sq", to: "pg" }, { from: "pg", to: "sq" }],
         },
         clientIds: ["c1", "c2"],
@@ -170,13 +175,16 @@ describe("real Docker topology", () => {
         replicaRoot: join(root, "shared-replica"),
         deviceProofs: [{ id: "device-1", proof: { device: 1 } }, { id: "device-2", proof: { device: 2 } }],
       });
-      topology = await new DockerTopologyFactory().create(env, spec, { topoId: `i-${crypto.randomUUID()}`, backend: "sqlite", deadlineMs: 120_000 });
-      const sharedProxy = topology.proxy(`shared:${new URL(canonicalEndpoint).port}`);
-      expect(clientEndpoints).toEqual([canonicalEndpoint, canonicalEndpoint]);
+      topology = await new DockerTopologyFactory().create(env, spec, { topoId, backend: "sqlite", deadlineMs: 120_000 });
+      const endpointUrl = new URL(canonicalEndpoint);
+      const sharedProxy = topology.proxy(`shared:${endpointUrl.hostname}:${endpointUrl.port}`);
+      expect(clientEndpoints.get("c1")).toBe(canonicalEndpoint);
+      expect(clientEndpoints.get("c2")).toBe(canonicalEndpoint);
+      expect(clientEndpoints.get("c3")).toBe("https://node.example");
       expect(sharedProxy.listenUrl).toBe(canonicalEndpoint);
       await sharedProxy.disable();
-      const clientResults = await Promise.all(clientEndpoints.map(async (endpoint) => {
-        try { return (await fetch(`${endpoint}/healthz`, { signal: AbortSignal.timeout(3000) })).ok; }
+      const clientResults = await Promise.all(["c1", "c2"].map(async (id) => {
+        try { return (await fetch(`${clientEndpoints.get(id)}/healthz`, { signal: AbortSignal.timeout(3000) })).ok; }
         catch { return false; }
       }));
       expect(clientResults).toEqual([false, false]);
@@ -211,6 +219,85 @@ describe("real Docker topology", () => {
           leftoverResources.push(...listing.stdout.split("\n").filter(Boolean));
         }
         expect(leftoverResources).toEqual([]);
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  }, 240_000);
+  test.skipIf(process.env.HARNESS_DOCKER !== "1")("creates concurrent topologies on distinct topology-derived loopback endpoints", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc893-concurrent-"));
+    const command = process.env.DOCKER ? process.env.DOCKER.split(/\s+/) : ["sudo", "-n", "docker"];
+    const docker = new Docker(command);
+    const runId = `test-${crypto.randomUUID().slice(0, 8)}`;
+    const topologyIds = [`a-${crypto.randomUUID()}`, `b-${crypto.randomUUID()}`] as const;
+    const sharedPort = await unusedLoopbackPort();
+    const endpoints = topologyIds.map((id) => sharedProxyEndpoint(id, sharedPort));
+    const clientIds = [["a1", "a2"], ["b1", "b2"]] as const;
+    const clientEndpoints = new Map<string, string>();
+    const topologies: (Awaited<ReturnType<DockerTopologyFactory["create"]>> | undefined)[] = [undefined, undefined];
+    registerClientConstructor(async ({ spec }) => {
+      clientEndpoints.set(spec.id, spec.endpoint!);
+      return { id: spec.id, kind: spec.kind, capabilities: new Set(), close: async () => ({ graceful: true }) } as unknown as KvClient;
+    });
+    try {
+      const image = await new NodeImageResolver(docker, undefined, root).resolve("default");
+      const env = { ...noopEnv(root, command), runId, image: () => image };
+      const makeSpec = (name: string, ids: readonly [string, string], endpoint: string) => prepareSharedEndpointStorageDeviceSpec({
+        spec: {
+          name,
+          nodes: [{ id: "n", backend: "sqlite" as const }],
+          clients: ids.map((id) => ({ id, kind: "sdk" as const, node: "n", identity: "shared", auth: { posture: "owner" as const }, replication: { prefixes: ["shared/"] } })),
+        },
+        clientIds: ids,
+        canonicalEndpoint: endpoint,
+        replicaRoot: join(root, `${name}-replica`),
+        deviceProofs: [{ id: `${name}-device-1`, proof: { device: 1 } }, { id: `${name}-device-2`, proof: { device: 2 } }],
+      });
+      const factory = new DockerTopologyFactory();
+      const specs = topologyIds.map((id, index) => makeSpec(id, clientIds[index], endpoints[index]));
+      const outcomes = await Promise.allSettled(specs.map(async (spec, index) => {
+        const topology = await factory.create(env, spec, { topoId: topologyIds[index], backend: "sqlite", deadlineMs: 120_000 });
+        topologies[index] = topology;
+        return topology;
+      }));
+      const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+      if (failures.length) throw failures[0].reason;
+      expect(endpoints[0]).not.toBe(endpoints[1]);
+      for (let index = 0; index < topologies.length; index++) {
+        const topology = topologies[index]!;
+        const url = new URL(endpoints[index]);
+        const proxy = topology.proxy(`shared:${url.hostname}:${url.port}`);
+        expect(proxy.listenUrl).toBe(endpoints[index]);
+        expect((await fetch(`${endpoints[index]}/healthz`)).status).toBe(200);
+        expect(clientEndpoints.get(clientIds[index][0])).toBe(endpoints[index]);
+        expect(clientEndpoints.get(clientIds[index][1])).toBe(endpoints[index]);
+      }
+      const firstUrl = new URL(endpoints[0]);
+      const firstProxy = topologies[0]!.proxy(`shared:${firstUrl.hostname}:${firstUrl.port}`);
+      await firstProxy.disable();
+      const firstResults = await Promise.all(clientIds[0].map(async (id) => {
+        try { return (await fetch(`${clientEndpoints.get(id)}/healthz`, { signal: AbortSignal.timeout(3000) })).ok; }
+        catch { return false; }
+      }));
+      expect(firstResults).toEqual([false, false]);
+      expect((await fetch(`${endpoints[1]}/healthz`)).status).toBe(200);
+      await firstProxy.enable();
+    } finally {
+      registerClientConstructor(undefined);
+      try {
+        for (const topology of topologies) {
+          if (!topology) continue;
+          const report = await topology.dispose({ deadlineMs: 60_000 });
+          expect(report.errors).toEqual([]);
+        }
+        const leftovers: string[] = [];
+        for (const [args, format] of [
+          [["ps", "-a"], "{{.Names}}"],
+          [["volume", "ls"], "{{.Name}}"],
+          [["network", "ls"], "{{.Name}}"],
+        ] as const) {
+          const result = await docker.run([...args, "--filter", `label=tc893.run=${runId}`, "--format", format]);
+          leftovers.push(...result.stdout.split("\n").filter(Boolean));
+        }
+        expect(leftovers).toEqual([]);
       } finally { await rm(root, { recursive: true, force: true }); }
     }
   }, 240_000);
