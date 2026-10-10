@@ -164,7 +164,7 @@ const core07: Scenario<Variant> = {
       // TC-674 restores the strict exit 3/5 contract for expired imported delegate sessions.
       const delegateExpiryProbe = ctx.probeRequirement("tc674:delegate-session-expiry");
       ctx.check(delegateExpiryProbe === true ? "offline CLI expiry uses supported refusal" : "offline CLI expiry without TC-674 is refused with a code and no local read",
-        acceptsOfflineCliExpiry(offline, delegateExpiryProbe), { probe: delegateExpiryProbe, exit: offline.exit, code: offline.code, read: offline.read, events: operationEvents(offline) });
+        acceptsOfflineCliExpiry(offline, delegateExpiryProbe), { probe: delegateExpiryProbe, exit: offline.exit, code: offline.code, stderr: offline.stderr, read: offline.read, events: operationEvents(offline) });
     }
     if (variant === "cli" && !online.ok) ctx.check("online CLI expiry uses supported refusal", online.exit === 3 || online.exit === 5, { exit: online.exit, code: online.code });
   },

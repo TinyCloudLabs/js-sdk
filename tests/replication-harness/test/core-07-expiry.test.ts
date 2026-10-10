@@ -17,6 +17,7 @@ describe("CORE-07 CLI expiry policy", () => {
     for (const code of ["AUTH_REQUIRED", "GRANT_EXPIRED", "NETWORK_ERROR"]) {
       expect(acceptsOfflineCliExpiry(offlineRefusal({ code }), "requirement probe unavailable")).toBe(true);
     }
+    expect(acceptsOfflineCliExpiry(offlineRefusal({ code: "EXIT_1", stderr: "[replication] expired\n{\"error\":{\"code\":\"NETWORK_ERROR\"}}" }), "requirement probe unavailable")).toBe(true);
     expect(acceptsOfflineCliExpiry(offlineRefusal({ exit: 0 }), "requirement probe unavailable")).toBe(false);
     expect(acceptsOfflineCliExpiry(offlineRefusal({ code: "OTHER" }), "requirement probe unavailable")).toBe(false);
     expect(acceptsOfflineCliExpiry(offlineRefusal({ ok: true }), "requirement probe unavailable")).toBe(false);
