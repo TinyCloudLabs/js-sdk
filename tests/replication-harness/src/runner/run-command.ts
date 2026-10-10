@@ -11,6 +11,7 @@ import { createRunReportBase, runRowsWithInterrupt } from "./run";
 import { createScenarioExecutor } from "./executor";
 import { expandScenarios, scenarioRegistry } from "./registry";
 import { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./runtime";
+import { defaultWorkspaceRoot } from "../clients/sut";
 import { createRequirementProbe } from "./requirements";
 export interface RunCommandArgs { options: Record<string, string | true>; positionals: string[] }
 
@@ -64,7 +65,7 @@ export async function runHarnessCommand(parsed: RunCommandArgs): Promise<void> {
   const teardownMs = numberOption(parsed.options, "teardown-ms", 60_000);
   const runId = option(parsed.options, "run-id", safeRunId())!;
   const resultsDir = resolve(option(parsed.options, "results", process.env.TC893_RESULTS_DIR ?? process.env.TC893_RESULTS ?? "results")!);
-  const sutRoot = option(parsed.options, "sut-root", process.cwd())!;
+  const sutRoot = option(parsed.options, "sut-root", defaultWorkspaceRoot())!;
   const imageRef = option(parsed.options, "node-image", "default")!;
   const sutMode = option(parsed.options, "clients", "workspace");
   if (sutMode !== "workspace") throw new Error(`unsupported SUT mode ${sutMode}; S2 published-client installation is not wired into the local run command yet`);
