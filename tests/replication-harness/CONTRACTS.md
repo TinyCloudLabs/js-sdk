@@ -43,8 +43,11 @@ bun run --cwd tests/replication-harness harness aggregate \
   --out "$RUNNER_TEMP/agg"
 ```
 
-The matrix emitted by `resolve` has `{name, backend, set}` entries such as
-`core-sqlite`, `core-pg16`, and (when the set applies) `companion-sqlite`.
+The matrix emitted by `resolve` has `{name, backend, set, tiers}` entries such as
+`core-sqlite`, `core-pg16`, `companion-sqlite`, and separate `speed-sqlite`.
+For non-gate dispatches, resolve preserves the selected tiers and backends,
+groups non-speed tiers per backend, and emits speed as a separate
+`speed-<backend>` leg.
 `harness run --gate` uses the same resolve → in-process leg hook → aggregate
 sequence locally; its aggregate is diagnostic, not canonical CI evidence.
 

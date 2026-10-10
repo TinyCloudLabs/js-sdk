@@ -14,9 +14,9 @@ function requiredArtifacts(spec: TopologySpec): string[] {
 export function createManifest(inputs: RunInputs, registry: ManifestRegistry, set: SetId | null = null): Manifest {
   const gate = inputs.gate;
   const rows: ManifestRow[] = [];
-  const backends = (set ? ["sqlite"] : inputs.backends) as Backend[];
+  const backends = (set ? ["sqlite"] : inputs.gate ? ["sqlite", "pg16"] : inputs.backends) as Backend[];
   for (const scenario of registry.scenarios) {
-    const selected = set ? scenario.sets?.includes(set) : scenario.tier === "core";
+    const selected = set ? scenario.sets?.includes(set) : inputs.gate ? scenario.tier === "core" : inputs.tiers.includes(scenario.tier);
     if (!selected) continue;
     const variants: readonly (string | null)[] = scenario.variants?.length ? scenario.variants : [null];
     for (const variant of variants) {
@@ -33,6 +33,10 @@ export function createManifest(inputs: RunInputs, registry: ManifestRegistry, se
     }
   }
   rows.sort((a, b) => a.key.localeCompare(b.key));
+  if (set === null && inputs.gate) {
+    if (!rows.length) throw new Error("production gate core manifest must not be empty");
+    for (const backend of ["sqlite", "pg16"] as const) if (!rows.some((row) => row.backend === backend)) throw new Error(`production gate core manifest has no ${backend} rows`);
+  }
   const body = { schema: "tc893.manifest/v1" as const, gate, set, harnessSha: inputs.harnessSha, inputsSha256: inputs.inputsSha256, rows };
   return ManifestSchema.parse({ ...body, manifestSha256: canonicalSha256(body) });
 }

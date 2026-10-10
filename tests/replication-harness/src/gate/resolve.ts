@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import type { GateId, SetId } from "../contracts/common";
+import type { Backend, GateId, SetId, Tier } from "../contracts/common";
 import type { ImageResolver, SutResolver } from "../contracts/frozen";
 import type { JunitPrecondition, Manifest, RunInputs, Subject } from "../contracts/gate";
 import type { ResolvedImage, ResolvedSut } from "../contracts/lifecycle";
@@ -27,6 +27,8 @@ export interface ResolveOptions {
   runUrl?: string;
   gate: GateId | null;
   sets: SetId[];
+  tiers?: Tier[];
+  backends?: Backend[];
   cliVersion?: string;
   nodeSdkVersion?: string;
   mode: "workspace" | "published";
@@ -36,12 +38,12 @@ export interface ResolveOptions {
   outDir: string;
   sutResolver: SutResolver;
   imageResolver: ImageResolver;
-  registry: (sut: ResolvedSut, image: ResolvedImage) => ManifestRegistry;
+  registry: (sut: ResolvedSut, image: ResolvedImage, selection: { tiers: Tier[]; backends: Backend[] }) => ManifestRegistry;
   exportSutArtifacts: (outDir: string, sut: ResolvedSut) => Promise<void>;
   fetchInfo?: (url: string) => Promise<{ version: string; features: string[] }>;
   now?: () => Date;
 }
-export interface ResolveResult { inputs: RunInputs; manifests: { core: Manifest | null; companion: Manifest[] }; matrix: { include: { name: string; backend: string; set: SetId | null }[] } }
+export interface ResolveResult { inputs: RunInputs; manifests: { core: Manifest | null; companion: Manifest[] }; matrix: { include: { name: string; backend: Backend; set: SetId | null; tiers: Tier[] }[] } }
 
 export function subjectFromEvent(event: GithubEvent, options: Pick<ResolveOptions, "eventName" | "ref" | "sha" | "runId" | "runAttempt" | "runUrl">): Subject {
   const repo = event.repository?.full_name ?? "unknown/unknown";
@@ -103,6 +105,11 @@ export async function resolveInputs(options: ResolveOptions): Promise<ResolveRes
   const subject = subjectFromEvent(options.event, options);
   if (options.gate === "tc858-phase1-workspace" && options.mode !== "workspace") throw new Error("workspace gate requires workspace SUT resolution");
   if (options.gate === "tc858-phase1-beta" && options.mode !== "published") throw new Error("beta gate requires published SUT resolution");
+  const tiers = options.gate ? ["core"] as Tier[] : [...new Set(options.tiers?.length ? options.tiers : ["core"] as Tier[])];
+  const backends = options.gate ? ["sqlite", "pg16"] as Backend[] : [...new Set(options.backends?.length ? options.backends : ["sqlite", "pg16"] as Backend[])];
+  if (options.gate && options.tiers?.some((tier) => tier !== "core")) throw new Error("gate resolution only accepts tier core");
+  if (options.gate && options.backends && (options.backends.length !== 2 || !options.backends.includes("sqlite") || !options.backends.includes("pg16"))) throw new Error("gate resolution requires exactly sqlite and pg16 backends");
+  if (!tiers.length || !backends.length) throw new Error("resolve requires at least one tier and backend");
   if (options.mode === "published" && (!options.cliVersion || !options.nodeSdkVersion || !exactSemver(options.cliVersion) || !exactSemver(options.nodeSdkVersion))) throw new Error("published client versions must be exact SemVer values");
   if (options.gate === "tc858-phase1-workspace") validateJunitPrecondition(options.junit, subject);
   const sut = await options.sutResolver({ mode: options.mode, root: options.workspaceRoot, cliVersion: options.cliVersion, nodeSdkVersion: options.nodeSdkVersion });
@@ -124,20 +131,29 @@ export async function resolveInputs(options: ResolveOptions): Promise<ResolveRes
   if (options.gate && !preflightResult.passed) throw new Error("PREFLIGHT_FAILED: resolved node-sdk lacks sqliteReplicaStorage");
   const now = (options.now ?? (() => new Date()))().toISOString();
   const base: Omit<RunInputs, "inputsSha256"> = {
-    schema: "tc893.inputs/v1", gate: options.gate, sets: options.sets, tiers: ["core"],
-    backends: ["sqlite", "pg16"],
+    schema: "tc893.inputs/v1", gate: options.gate, sets: options.sets, tiers, backends,
     subject, harnessSha: options.harnessSha, sut, image: resolvedImage,
     production: { url: prodUrl, version: productionInfo.version, features: productionInfo.features, capturedAt: now },
     preflight: preflightResult, junitPrecondition: options.gate === "tc858-phase1-workspace" ? options.junit ?? null : null,
     resolvedAt: now,
   };
   const inputs: RunInputs = RunInputsSchema.parse({ ...base, inputsSha256: canonicalSha256(base) });
-  const registry = options.registry(sut, resolvedImage);
+  const registry = options.registry(sut, resolvedImage, { tiers, backends });
   const coreManifest = inputs.gate ? createManifest(inputs, registry) : null;
   const companionManifests = options.sets.map((set) => createManifest(inputs, registry, set));
   const matrix: ResolveResult["matrix"] = { include: [] };
-  if (coreManifest) for (const backend of inputs.backends) matrix.include.push({ name: `core-${backend}`, backend, set: null });
-  for (const manifest of companionManifests) if (manifest.rows.length) matrix.include.push({ name: `companion-${manifest.rows[0].backend}`, backend: manifest.rows[0].backend, set: manifest.set });
+  if (coreManifest) for (const backend of backends) matrix.include.push({ name: `core-${backend}`, backend, set: null, tiers: ["core"] });
+  for (const manifest of companionManifests) if (manifest.rows.length) matrix.include.push({
+    name: `companion-${manifest.rows[0]!.backend}`, backend: manifest.rows[0]!.backend, set: manifest.set,
+    tiers: [...new Set(manifest.rows.map((row) => row.tier))],
+  });
+  if (!inputs.gate) {
+    const regularTiers = tiers.filter((tier) => tier !== "speed");
+    for (const backend of backends) {
+      if (regularTiers.length) matrix.include.push({ name: regularTiers.length === 1 ? `${regularTiers[0]}-${backend}` : `adhoc-${backend}`, backend, set: null, tiers: regularTiers });
+      if (tiers.includes("speed")) matrix.include.push({ name: `speed-${backend}`, backend, set: null, tiers: ["speed"] });
+    }
+  }
   await mkdir(options.outDir, { recursive: true });
   await options.exportSutArtifacts(options.outDir, sut);
   await writeFile(join(options.outDir, "inputs.json"), `${JSON.stringify(inputs, null, 2)}\n`);

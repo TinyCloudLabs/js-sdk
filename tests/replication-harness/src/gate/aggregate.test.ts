@@ -8,6 +8,8 @@ import type { GateReasonCode, Manifest, RunInputs } from "../contracts/gate";
 import { canonicalSha256, sha256 } from "./canonical-json";
 import { VerifyAggregateError, verifyAggregate } from "./verify";
 import { runCommand } from "../../bin/harness";
+import { createManifest, type ManifestRegistry } from "./manifest";
+import type { Scenario } from "../contracts/scenario";
 import { runGateLocally } from "./local-run";
 
 const rootDirs: string[] = [];
@@ -122,6 +124,61 @@ describe("aggregate fixture-leg gate rules", () => {
     expect(report.gate?.passed).toBe(true);
     expect(report.companion[0]?.passed).toBe(true);
   });
+  test("a matching empty core manifest cannot pass a gate", async () => {
+    const options = await fixture();
+    const current = options.coreManifest!;
+    const { manifestSha256: _, ...body } = current;
+    const emptyBody = { ...body, rows: [] };
+    const emptyManifest = { ...emptyBody, manifestSha256: canonicalSha256(emptyBody) } as Manifest;
+    options.coreManifest = emptyManifest;
+    options.recomputedCoreManifest = emptyManifest;
+    for (const leg of options.legs.filter((item) => item.name.startsWith("core-"))) {
+      (leg.report as { results: unknown[] }).results = [];
+    }
+    const report = await aggregate(options);
+    expect(report.gate?.passed).toBe(false);
+    expect(report.gate?.reasons.some((item) => item.code === "MANIFEST_MISMATCH" && item.detail.includes("empty"))).toBe(true);
+    expect(aggregateExitCode(report)).toBe(3);
+  });
+
+  test("a gate manifest must have rows on SQLite and PG while an empty companion manifest is valid", async () => {
+    const options = await fixture();
+    const context: ManifestRegistry["context"] = {
+      tiers: ["core"], backends: ["sqlite", "pg16"],
+      sut: options.inputs.sut, image: options.inputs.image, ciPinImage: "ci-pin",
+    };
+    expect(() => createManifest(options.inputs, { scenarios: [], context })).toThrow(/must not be empty/);
+    const sqliteOnlyScenario = {
+      id: "CORE-00", title: "Core preflight", tier: "core", backends: ["sqlite"], timeoutMs: 1,
+      topology: () => ({ nodes: [], clients: [] }), run: async () => {},
+    } as unknown as Scenario;
+    expect(() => createManifest(options.inputs, { scenarios: [sqliteOnlyScenario], context })).toThrow(/no pg16 rows/);
+    expect(createManifest(options.inputs, { scenarios: [], context }, "phase1-companion").rows).toEqual([]);
+    const { inputsSha256: _, ...originalInputs } = options.inputs;
+    const adhocBody: Omit<RunInputs, "inputsSha256"> = { ...originalInputs, gate: null, tiers: ["edge"], backends: ["pg16"] };
+    const adhocInputs: RunInputs = { ...adhocBody, inputsSha256: canonicalSha256(adhocBody) };
+    const edgeScenario = {
+      id: "EDGE-12", title: "Edge case", tier: "edge", timeoutMs: 1000, backends: ["pg16"],
+      topology: () => ({ nodes: [], clients: [] }), run: async () => {},
+    } as unknown as Scenario;
+    const adhocManifest = createManifest(adhocInputs, {
+      scenarios: [sqliteOnlyScenario, edgeScenario],
+      context: { ...context, tiers: ["edge"], backends: ["pg16"] },
+    });
+    expect(adhocManifest.rows.map((row) => row.key)).toEqual(["EDGE-12@pg16"]);
+  });
+  test("a matching core manifest with rows on only one backend cannot pass", async () => {
+    const options = await fixture();
+    const current = options.coreManifest!;
+    const { manifestSha256: _, ...body } = current;
+    const sqliteOnlyBody = { ...body, rows: current.rows.filter((row) => row.backend === "sqlite") };
+    const sqliteOnly = { ...sqliteOnlyBody, manifestSha256: canonicalSha256(sqliteOnlyBody) } as Manifest;
+    options.coreManifest = sqliteOnly;
+    options.recomputedCoreManifest = sqliteOnly;
+    const report = await aggregate(options);
+    expect(report.gate?.passed).toBe(false);
+    expect(report.gate?.reasons.some((item) => item.code === "MANIFEST_MISMATCH" && item.detail.includes("no pg16 rows"))).toBe(true);
+  });
   test("local run --gate resolves, runs each leg, recomputes manifests, and writes its diagnostic aggregate", async () => {
     const options = await fixture();
     const resultsDir = join(options.legs[0]!.directory, "local");
@@ -206,6 +263,27 @@ describe("aggregate fixture-leg gate rules", () => {
     (options.legs[0]!.report as { results: unknown[] }).results = [];
     const report = await aggregate(options);
     expect(report.gate?.reasons.some((item) => item.code === "MISSING_ROW" && item.key === "CORE-00@sqlite")).toBe(true);
+  });
+  test("rejects a PG manifest row whose result declares the SQLite backend", async () => {
+    const options = await fixture();
+    const pgReport = options.legs.find((leg) => leg.name === "core-pg16")!.report as { results: { backend: string }[] };
+    pgReport.results[0]!.backend = "sqlite";
+    const report = await aggregate(options);
+    expect(report.gate?.passed).toBe(false);
+    expect(report.gate?.reasons.some((item) => item.code === "EXTRA_ROW" && item.leg === "core-pg16")).toBe(true);
+    expect(report.gate?.reasons.some((item) => item.code === "MISSING_ROW" && item.key === "CORE-00@pg16")).toBe(true);
+  });
+
+  test("a SQLite leg cannot supply the PG row when the PG leg is empty", async () => {
+    const options = await fixture();
+    const sqliteReport = options.legs.find((leg) => leg.name === "core-sqlite")!.report as { results: Record<string, unknown>[] };
+    const pgReport = options.legs.find((leg) => leg.name === "core-pg16")!.report as { results: unknown[] };
+    sqliteReport.results.push({ ...structuredClone(sqliteReport.results[0]!), key: "CORE-00@pg16", backend: "pg16" });
+    pgReport.results = [];
+    const report = await aggregate(options);
+    expect(report.gate?.passed).toBe(false);
+    expect(report.gate?.reasons.some((item) => item.code === "EXTRA_ROW" && item.leg === "core-sqlite")).toBe(true);
+    expect(report.gate?.reasons.some((item) => item.code === "MISSING_ROW" && item.key === "CORE-00@pg16")).toBe(true);
   });
   test("rejects a capture whose bytes no longer match the leg SHA-256", async () => {
     const options = await fixture();

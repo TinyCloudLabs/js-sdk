@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { JunitPrecondition, Subject } from "../contracts/gate";
 import type { ResolvedImage, ResolvedSut } from "../contracts/lifecycle";
 import { validateJunitPrecondition, resolveInputs } from "./resolve";
+import type { Scenario } from "../contracts/scenario";
 
 const subject: Subject = { repo: "TinyCloudLabs/js-sdk", event: "pull_request", ref: "refs/pull/12/merge", sha: "merge", headSha: "head-12", baseSha: "base-2", prNumber: 12 };
 function evidence(): JunitPrecondition {
@@ -80,6 +81,10 @@ describe("G1 junit precondition", () => {
         nodeSdk: { version: "3.4.5-beta.6", packageJson: "/sdk/package.json", entry: sdkEntry, condition: "import", integrity: "sha512-sdk" },
       };
       const image: ResolvedImage = { role: "custom", ref: "prod-tag", digest: `sha256:${"b".repeat(64)}`, pinned: `node@sha256:${"b".repeat(64)}`, nodeVersion: "1.20.0", features: ["kv-sync-v1"] };
+      const coreScenario = {
+        id: "CORE-00", title: "Core preflight", tier: "core", timeoutMs: 1000,
+        topology: () => ({ nodes: [], clients: [] }), run: async () => {},
+      } as unknown as Scenario;
       let sutResolutions = 0;
       let imageResolutions = 0;
       let productionReads = 0;
@@ -89,7 +94,7 @@ describe("G1 junit precondition", () => {
         harnessSha: "harness-sha", outDir: join(directory, "out"),
         sutResolver: async () => { sutResolutions++; return sut; },
         imageResolver: async (ref) => { imageResolutions++; expect(ref).toEqual({ ref: "ghcr.io/tinycloudlabs/tinycloud-node:1.20.0-dstack" }); return image; },
-        registry: (resolvedSut, resolvedImage) => ({ scenarios: [], context: { tiers: ["core"], backends: ["sqlite", "pg16"], sut: resolvedSut, image: resolvedImage, ciPinImage: "ci-pin" } }),
+        registry: (resolvedSut, resolvedImage) => ({ scenarios: [coreScenario], context: { tiers: ["core"], backends: ["sqlite", "pg16"], sut: resolvedSut, image: resolvedImage, ciPinImage: "ci-pin" } }),
         exportSutArtifacts: async (outDir) => { await writeFile(join(outDir, "package-lock.json"), "{}"); },
         fetchInfo: async () => { productionReads++; return { version: "1.20.0", features: ["kv-sync-v1"] }; },
       });
@@ -102,6 +107,42 @@ describe("G1 junit precondition", () => {
       expect(await readFile(join(directory, "out/package-lock.json"), "utf8")).toBe("{}");
       expect(JSON.parse(await readFile(join(directory, "out/manifest-core.json"), "utf8")).manifestSha256).toBe(result.manifests.core?.manifestSha256);
       expect(JSON.parse(await readFile(join(directory, "out/matrix.json"), "utf8"))).toEqual(result.matrix);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  test("non-gate resolve emits selected tier/backend legs and keeps speed separate", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc893-adhoc-resolve-"));
+    try {
+      const sut: ResolvedSut = {
+        source: "workspace", gitSha: "workspace-sha", distSha256: "c".repeat(64),
+        cli: { version: "1.2.3", packageJson: "/cli/package.json", entry: "/cli/index.js" },
+        nodeSdk: { version: "3.2.1", packageJson: "/sdk/package.json", entry: "/sdk/index.js", condition: "import" },
+      };
+      const image: ResolvedImage = { role: "custom", ref: "prod-tag", digest: `sha256:${"d".repeat(64)}`, pinned: `node@sha256:${"d".repeat(64)}`, nodeVersion: "1.20.0", features: ["kv-sync-v1"] };
+      let capturedSelection: { tiers: string[]; backends: string[] } | undefined;
+      const result = await resolveInputs({
+        event: { repository: { full_name: "TinyCloudLabs/js-sdk" } }, eventName: "workflow_dispatch", ref: "refs/heads/main", sha: "dispatch-sha",
+        gate: null, sets: [], tiers: ["core", "edge", "speed", "tc12"], backends: ["pg16-c", "sqlite"], mode: "workspace",
+        harnessSha: "harness-sha", outDir: join(directory, "out"),
+        sutResolver: async () => sut,
+        imageResolver: async () => image,
+        registry: (resolvedSut, resolvedImage, selection) => {
+          capturedSelection = selection;
+          return { scenarios: [], context: { tiers: selection.tiers, backends: selection.backends, sut: resolvedSut, image: resolvedImage, ciPinImage: "ci-pin" } };
+        },
+        exportSutArtifacts: async () => {},
+        fetchInfo: async () => ({ version: "1.20.0", features: ["kv-sync-v1"] }),
+      });
+      expect(result.inputs.tiers).toEqual(["core", "edge", "speed", "tc12"]);
+      expect(result.inputs.backends).toEqual(["pg16-c", "sqlite"]);
+      expect(capturedSelection).toEqual({ tiers: result.inputs.tiers, backends: result.inputs.backends });
+      expect(result.matrix.include).toEqual([
+        { name: "adhoc-pg16-c", backend: "pg16-c", set: null, tiers: ["core", "edge", "tc12"] },
+        { name: "speed-pg16-c", backend: "pg16-c", set: null, tiers: ["speed"] },
+        { name: "adhoc-sqlite", backend: "sqlite", set: null, tiers: ["core", "edge", "tc12"] },
+        { name: "speed-sqlite", backend: "sqlite", set: null, tiers: ["speed"] },
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

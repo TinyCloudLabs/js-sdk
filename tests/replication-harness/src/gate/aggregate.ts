@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { AggregateReport, AggregateRow, GateReason, GateReasonCode, Manifest, ManifestRow, RunInputs, Verdict } from "../contracts/gate";
+import type { AggregateReport, AggregateRow, GateReason, GateReasonCode, Manifest, RunInputs, Verdict } from "../contracts/gate";
 import type { GateId, SetId } from "../contracts/common";
 import type { ValidatedRunReport } from "../schemas/report";
 import { AggregateReportSchema, RunReportSchema } from "../schemas/report";
@@ -54,9 +54,6 @@ async function validateRowArtifacts(leg: LegEvidence, result: ValidatedRunReport
   }
 }
 
-function rowId(row: Pick<ManifestRow, "key">): string {
-  return row.key;
-}
 
 
 async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest | null, manifest: Manifest | null, selectedLegs: LegEvidence[], conclusion: AggregateReport["legCoreConclusion"], companion: boolean): Promise<Verdict> {
@@ -65,12 +62,16 @@ async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest
     reason(reasons, "MANIFEST_MISMATCH", "aggregate checkout could not recompute the manifest");
     return { passed: false, reasons, rows: [] };
   }
+  if (options.inputs.gate && !companion && manifest.rows.length === 0) reason(reasons, "MANIFEST_MISMATCH", "production gate core manifest is empty");
   if (!resolveManifest || !manifestHashMatches(resolveManifest) || resolveManifest.manifestSha256 !== manifest.manifestSha256) reason(reasons, "MANIFEST_MISMATCH", "recomputed full manifest differs from resolve manifest");
-  const expectedBackends = companion ? manifest.rows.length ? ["sqlite"] : [] : options.inputs.backends;
+  const expectedBackends = companion ? manifest.rows.length ? ["sqlite"] : [] : options.inputs.gate ? ["sqlite", "pg16"] : options.inputs.backends;
   const reports: { leg: LegEvidence; report: ValidatedRunReport }[] = [];
   for (const selected of selectedLegs) {
     const parsed = RunReportSchema.safeParse(selected.report);
     if (parsed.success && parsed.data.kind === "leg") reports.push({ leg: selected, report: parsed.data });
+  }
+  if (options.inputs.gate && !companion) for (const backend of ["sqlite", "pg16"] as const) {
+    if (!manifest.rows.some((row) => row.backend === backend)) reason(reasons, "MANIFEST_MISMATCH", `production gate core manifest has no ${backend} rows`);
   }
   for (const backend of expectedBackends) {
     const backendLegs = reports.filter(({ report }) => report.invocation.backends.length === 1 && report.invocation.backends[0] === backend);
@@ -82,6 +83,7 @@ async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest
   if (!manifestHashMatches(manifest) || manifest.harnessSha !== options.inputs.harnessSha || manifest.inputsSha256 !== options.inputs.inputsSha256) reason(reasons, "MANIFEST_MISMATCH", "recomputed manifest hash or inputs do not match resolved inputs");
 
   const expectedRows = manifest.rows;
+  const expectedByKey = new Map(expectedRows.map((row) => [row.key, row]));
   const observedByKey = new Map<string, { leg: LegEvidence; report: ValidatedRunReport; result: ValidatedRunReport["results"][number] }[]>();
   const { inputsSha256, ...inputBody } = options.inputs;
   if (canonicalSha256(inputBody) !== inputsSha256) reason(reasons, "INPUTS_MISMATCH", "resolved inputs hash does not match its contents");
@@ -97,14 +99,17 @@ async function buildVerdict(options: AggregateOptions, resolveManifest: Manifest
     if (report.filtered || report.invocation.only !== null || (!companion && (report.invocation.tiers.length !== 1 || report.invocation.tiers[0] !== "core"))) reason(reasons, "FILTERED_LEG", "gate leg was filtered", { leg: leg.name });
     for (const leaked of report.teardown.leaked) reason(reasons, "TEARDOWN_LEAK", `resource leaked: ${leaked.kind}/${leaked.name}`, { leg: leg.name });
     for (const result of report.results) {
+      const expected = expectedByKey.get(result.key);
+      const reportBackend = report.invocation.backends.length === 1 ? report.invocation.backends[0] : null;
+      if (!expected || result.id !== expected.id || result.variant !== expected.variant || result.tier !== expected.tier
+        || result.backend !== expected.backend || reportBackend !== expected.backend) {
+        reason(reasons, "EXTRA_ROW", "row identity or backend does not match the manifest and supplying leg", { key: result.key, leg: leg.name });
+        continue;
+      }
       const entries = observedByKey.get(result.key) ?? [];
       entries.push({ leg, report, result });
       observedByKey.set(result.key, entries);
     }
-  }
-  const expectedKeys = new Set(expectedRows.map(rowId));
-  for (const { leg, report } of reports) for (const result of report.results) {
-    if (!expectedKeys.has(result.key)) reason(reasons, "EXTRA_ROW", `${companion ? "companion" : "core"} row is not in the recomputed manifest`, { key: result.key, leg: leg.name });
   }
   const aggregateRows: AggregateRow[] = [];
   for (const expected of expectedRows) {
