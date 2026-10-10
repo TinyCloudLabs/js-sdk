@@ -379,9 +379,13 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
     await ok(["init", "--name", "outside-scope", "--key-only"], "outside-scope");
     const outsideManifest = join(home, "outside-scope-manifest.json");
-    await writeFile(outsideManifest, JSON.stringify({ permissions: [
-      { service: "tinycloud.kv", space: "default", path: "other/", actions: ["tinycloud.kv/get"] },
-    ] }));
+    await writeFile(outsideManifest, JSON.stringify({
+      app_id: "tc858-outside-scope",
+      space: "default",
+      permissions: [
+        { service: "tinycloud.kv", path: "other/", skipPrefix: true, actions: ["tinycloud.kv/get"] },
+      ],
+    }));
     const outsideLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", outsideManifest, "--replication-prefix", "notes"], { profile: "outside-scope" });
     expect(outsideLogin.code).toBe(2);
     expect(outsideLogin.stderr).toContain("REPLICATION_PREFIX_OUTSIDE_SCOPE");
@@ -389,9 +393,13 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
     await ok(["init", "--name", "caveated-scope", "--key-only"], "caveated-scope");
     const caveatedManifest = join(home, "caveated-scope-manifest.json");
-    await writeFile(caveatedManifest, JSON.stringify({ permissions: [
-      { service: "tinycloud.kv", space: "default", path: "notes/", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
-    ] }));
+    await writeFile(caveatedManifest, JSON.stringify({
+      app_id: "tc858-caveated-scope",
+      space: "default",
+      permissions: [
+        { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+      ],
+    }));
     const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes"], { profile: "caveated-scope" });
     expect(caveatedLogin.code).toBe(2);
     expect(caveatedLogin.stderr).toContain("REPLICATION_PREFIX_CAVEATED");
