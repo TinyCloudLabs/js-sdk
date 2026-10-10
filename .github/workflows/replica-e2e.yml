@@ -103,6 +103,12 @@ jobs:
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
 
+      - name: node-sdk replication against the node
+        if: matrix.database == 'sqlite'
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts
+
       - name: Start Postgres 16
         if: matrix.database == 'postgres'
         run: |
