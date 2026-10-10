@@ -1,11 +1,12 @@
-import { runCommand, exactSemver, parseArgs } from "../bin/harness";
+import { describe, expect, test } from "bun:test";
+import { runCommand, exactSemver, parseArgs, type Command } from "../bin/harness";
 import { HarnessError } from "../src/contracts/common";
 import { realClock, waitFor } from "../src/contracts/clock";
 import { validateTopology, type TopologySpec } from "../src/contracts/topology";
+import { prepareSharedEndpointStorageDeviceSpec } from "../src/contracts/frozen";
 import { isDivergence, isRead, isState, isSync, isWrite } from "../src/contracts/events";
 import { AggregateReportSchema } from "../src/schemas/report";
 import { JunitPreconditionSchema, ManifestSchema, RunInputsSchema } from "../src/schemas/gate";
-import { exactSemver, parseArgs } from "../bin/harness";
 
 describe("contract guards", () => {
   test("event guards narrow only the matching event discriminant", () => {
@@ -35,15 +36,39 @@ describe("contract guards", () => {
     }
   });
 
-  test("real clock waits and waitFor returns a later probe result", async () => {
+  test("shared-device topology overrides endpoint and storage before client construction", () => {
+    const spec: TopologySpec = {
+      name: "shared-device", nodes: [{ id: "a" }], clients: [
+        { id: "devicea", kind: "sdk", node: "a", identity: "owner", auth: { posture: "owner" }, replication: { prefixes: ["notes/"], mode: "background" } },
+        { id: "deviceb", kind: "sdk", node: "a", identity: "owner", auth: { posture: "owner" }, replication: { prefixes: ["notes/"], mode: "background" } },
+      ],
+    };
+    const deviceProofs = [{ id: "device-a", proof: { key: "proof-a" } }, { id: "device-b", proof: { key: "proof-b" } }] as const;
+    const prepared = prepareSharedEndpointStorageDeviceSpec({
+      spec, clientIds: ["devicea", "deviceb"], canonicalEndpoint: "https://node.example", replicaRoot: "/tmp/shared-replica", deviceProofs,
+    });
+    const [first, second] = prepared.clients;
+    expect([first.endpoint, second.endpoint]).toEqual(["https://node.example", "https://node.example"]);
+    expect([first.replication && first.replication.mode, second.replication && second.replication.mode]).toEqual(["foreground", "foreground"]);
+    expect([first.deviceProof, second.deviceProof]).toEqual([deviceProofs[0].proof, deviceProofs[1].proof]);
+    expect(first.deviceProof).not.toBe(second.deviceProof);
+    expect(spec.clients[0].endpoint).toBeUndefined();
+  });
+
+  test("waitFor returns a later probe result and rejects stalled probes at deadline or abort", async () => {
     let attempts = 0;
     const result = await waitFor(realClock, async () => ++attempts === 2 ? "ready" : undefined, { deadlineMs: 500, intervalMs: 1, describe: "readiness" });
     expect(result).toBe("ready");
-    await expect(waitFor(realClock, async () => undefined, { deadlineMs: 2, intervalMs: 1, describe: "never ready" }))
-      .rejects.toMatchObject({ code: "DEADLINE_EXCEEDED", message: "never ready" });
+    const { promise: stalledProbe } = Promise.withResolvers<undefined>();
+    await expect(waitFor(realClock, () => stalledProbe, { deadlineMs: 5, describe: "stalled probe" }))
+      .rejects.toMatchObject({ code: "DEADLINE_EXCEEDED", message: "stalled probe" });
+    const controller = new AbortController();
+    const { promise: abortedProbe } = Promise.withResolvers<undefined>();
+    await expect(waitFor(realClock, () => { controller.abort("cancelled"); return abortedProbe; }, { deadlineMs: 500, describe: "aborted probe", signal: controller.signal }))
+      .rejects.toMatchObject({ code: "ABORTED" });
   });
-});
 
+});
 const digest = "a".repeat(64);
 const inputs = {
   schema: "tc893.inputs/v1" as const, gate: "tc858-phase1-workspace" as const, sets: ["phase1-companion"] as const,
@@ -55,49 +80,62 @@ const inputs = {
   production: { url: "https://node/info", version: "1.2.3", features: ["kv-sync-v1"], capturedAt: "2026-10-10T00:00:00Z" },
   preflight: { passed: true, checks: [{ name: "node", ok: true }] },
   junitPrecondition: { schema: "tc893.junit-precondition/v1" as const, minimumsVersion: 1 as const, testedSha: "head-sha", association: { prNumber: 12, headSha: "head-sha", baseSha: "base-sha" }, suites: [
-    { name: "cli-acceptance", present: true, exitCode: 0, skipped: 0, tests: 1 },
-    { name: "node-sdk-real-node", present: true, exitCode: 0, skipped: 0, tests: 3 },
+    { name: "cli-acceptance-sqlite", present: true, exitCode: 0, skipped: 0, tests: 1 },
+    { name: "cli-acceptance-pg16", present: true, exitCode: 0, skipped: 0, tests: 1 },
+    { name: "node-sdk-real-node-sqlite", present: true, exitCode: 0, skipped: 0, tests: 3 },
+    { name: "node-sdk-real-node-pg16", present: true, exitCode: 0, skipped: 0, tests: 3 },
   ] },
   resolvedAt: "2026-10-10T00:00:00Z", inputsSha256: digest,
 };
 const coreManifest = { schema: "tc893.manifest/v1" as const, gate: "tc858-phase1-workspace" as const, set: null, harnessSha: "harness-sha", inputsSha256: digest, rows: [], manifestSha256: digest };
+const validGate = { id: "tc858-phase1-workspace", manifestSha256: digest, passed: true, reasons: [], rows: [] };
+const validAggregate = {
+  schema: "tc893.aggregate/v1", inputs,
+  gate: validGate,
+  companion: [{ set: "phase1-companion", manifestSha256: digest, passed: false, reasons: [{ code: "ROW_NOT_PASS", key: "EDGE-01@sqlite", detail: "companion row failed" }], rows: [] }],
+  adhoc: null, legs: [], legCoreConclusion: "success", legCompanionConclusion: "failure", producedAt: "2026-10-10T00:00:00Z",
+} as const;
 
 describe("serialized contracts", () => {
-  test("inputs, manifests, and versioned junit evidence validate", () => {
-    expect(RunInputsSchema.parse(inputs)).toEqual(inputs);
+  test("inputs and manifests validate; junit requires both backends and exact PR association", () => {
+    expect(RunInputsSchema.safeParse(inputs).success).toBe(true);
     expect(ManifestSchema.parse(coreManifest)).toEqual(coreManifest);
-    expect(JunitPreconditionSchema.safeParse({ ...inputs.junitPrecondition, suites: [{ ...inputs.junitPrecondition.suites[0], skipped: 1 }, inputs.junitPrecondition.suites[1]] }).success).toBe(false);
-    expect(JunitPreconditionSchema.safeParse({ ...inputs.junitPrecondition, testedSha: "wrong-sha" }).success).toBe(false);
+    const junit = inputs.junitPrecondition;
+    expect(JunitPreconditionSchema.safeParse({ ...junit, suites: junit.suites.filter((suite) => suite.name !== "cli-acceptance-pg16") }).success).toBe(false);
+    expect(RunInputsSchema.safeParse({ ...inputs, junitPrecondition: { ...junit, association: { prNumber: 13, headSha: "other-head", baseSha: "other-base" }, testedSha: "other-head" } }).success).toBe(false);
+    expect(RunInputsSchema.safeParse({ ...inputs, junitPrecondition: { ...junit, association: { ...junit.association, headSha: "other-head" }, testedSha: "other-head" } }).success).toBe(false);
+    expect(RunInputsSchema.safeParse({ ...inputs, junitPrecondition: { ...junit, association: { ...junit.association, baseSha: "other-base" } } }).success).toBe(false);
   });
 
-  test("a companion failure does not change a passing core gate", () => {
-    const aggregate = {
-      schema: "tc893.aggregate/v1", inputs,
-      gate: { id: "tc858-phase1-workspace", manifestSha256: digest, passed: true, reasons: [], rows: [] },
-      companion: [{ set: "phase1-companion", manifestSha256: digest, passed: false, reasons: [{ code: "ROW_NOT_PASS", key: "EDGE-01@sqlite", detail: "companion row failed" }], rows: [] }],
-      adhoc: null, legs: [], legCoreConclusion: "success", legCompanionConclusion: "failure", producedAt: "2026-10-10T00:00:00Z",
-    };
-    expect(AggregateReportSchema.parse(aggregate)).toEqual(aggregate);
-    expect(aggregate.gate.passed).toBe(true);
-    expect(aggregate.companion[0].passed).toBe(false);
+  test("aggregate verdict matches core conclusion and core reasons, independent of companion", () => {
+    expect(AggregateReportSchema.safeParse(validAggregate).success).toBe(true);
+    const cancelled = { ...validAggregate, legCoreConclusion: "cancelled" as const };
+    const skipped = { ...validAggregate, legCoreConclusion: "skipped" as const };
+    const coreSuccessWithoutReasonButFalse = { ...validAggregate, gate: { ...validGate, passed: false } };
+    const failedCore = { ...validAggregate, legCoreConclusion: "failure" as const, gate: { ...validGate, passed: false, reasons: [{ code: "LEG_JOB_FAILED", detail: "core job failed" }] } };
+    expect(AggregateReportSchema.safeParse(cancelled).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(skipped).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(coreSuccessWithoutReasonButFalse).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(failedCore).success).toBe(true);
+    expect(validAggregate.gate.passed).toBe(true);
+    expect(validAggregate.companion[0].passed).toBe(false);
   });
 
   test("CLI parses every command and leaves owned bodies as explicit S0 errors", () => {
     const owners = { run: "S3a", list: "S3a", manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b", doctor: "S1", gc: "S1" };
-    for (const [command, slice] of Object.entries(owners)) {
+    for (const [command, slice] of Object.entries(owners) as [Command, string][]) {
       expect(parseArgs([command]).command).toBe(command);
       expect(() => runCommand([command])).toThrow(`${command} is not implemented in S0 (owned by ${slice})`);
     }
-  });
-
-  test("exact version validation rejects tags and ranges", () => {
-    expect(exactSemver("1.2.3")).toBe(true);
-    expect(exactSemver("1.2.3-beta.4")).toBe(true);
-    expect(exactSemver("beta")).toBe(false);
-    expect(exactSemver("^1.2.3")).toBe(false);
     expect(parseArgs(["verify-aggregate", "aggregate.json", "--gate", "tc858-phase1-beta", "--print", "cli.version"]))
       .toEqual({ command: "verify-aggregate", positionals: ["aggregate.json"], options: { gate: "tc858-phase1-beta", print: "cli.version" } });
   });
+
+  test("strict SemVer 2 validation rejects ranges, tags, prefixes, and leading-zero identifiers", () => {
+    for (const valid of ["0.0.0", "1.2.3", "1.2.3-alpha.0", "1.2.3+build.01", "1.2.3-rc.1+build.5"]) expect(exactSemver(valid)).toBe(true);
+    for (const invalid of ["beta", "^1.2.3", "1.2", "v1.2.3", "01.2.3", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3-alpha.01", "1.2.3+", "1.2.3-alpha..1"]) expect(exactSemver(invalid)).toBe(false);
+  });
+
   test("CLI executable reports its S0 ownership boundary", () => {
     const result = Bun.spawnSync(["bun", "bin/harness.ts", "list"], { cwd: new URL("..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(2);

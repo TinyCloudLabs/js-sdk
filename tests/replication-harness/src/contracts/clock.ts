@@ -34,11 +34,25 @@ export async function waitFor<T>(clock: Clock, probe: () => Promise<T | undefine
   let lastValue: T | undefined;
   while (clock.now() < deadline) {
     if (o.signal?.aborted) throw new HarnessError("ABORTED", String(o.signal.reason ?? "Aborted"));
-    lastValue = await probe();
-    if (clock.now() >= deadline) throw new HarnessError("DEADLINE_EXCEEDED", o.describe, { lastValue });
-    if (lastValue !== undefined) return lastValue;
+    const timerController = new AbortController();
+    const timerSignal = o.signal ? AbortSignal.any([o.signal, timerController.signal]) : timerController.signal;
     const remaining = deadline - clock.now();
-    if (remaining > 0) await clock.sleep(Math.min(o.intervalMs ?? 100, remaining), o.signal);
+    const timer = clock.sleep(remaining, timerSignal).then(() => ({ kind: "deadline" as const }));
+    let outcome: { kind: "deadline" } | { kind: "probe"; value: T | undefined };
+    try {
+      outcome = await Promise.race([
+        probe().then((value) => ({ kind: "probe" as const, value })),
+        timer,
+      ]);
+    } finally {
+      timerController.abort();
+    }
+    if (o.signal?.aborted) throw new HarnessError("ABORTED", String(o.signal.reason ?? "Aborted"));
+    if (outcome.kind === "deadline" || clock.now() >= deadline) throw new HarnessError("DEADLINE_EXCEEDED", o.describe, { lastValue });
+    lastValue = outcome.value;
+    if (lastValue !== undefined) return lastValue;
+    const sleepMs = Math.min(o.intervalMs ?? 100, deadline - clock.now());
+    if (sleepMs > 0) await clock.sleep(sleepMs, o.signal);
   }
   throw new HarnessError("DEADLINE_EXCEEDED", o.describe, { lastValue });
 }

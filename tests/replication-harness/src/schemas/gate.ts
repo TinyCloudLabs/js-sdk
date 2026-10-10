@@ -21,14 +21,22 @@ export const JunitPreconditionSchema = z.object({
     z.object({ event: z.literal("workflow_dispatch"), ref: nonempty, sha: nonempty }).strict(),
   ]), suites: z.array(JunitSuiteEvidenceSchema).min(1),
 }).strict().superRefine((evidence, ctx) => {
-  const minimums = new Map([["cli-acceptance", 1], ["node-sdk-real-node", 3]]);
+  const minimums: readonly [string, number][] = [
+    ["cli-acceptance-sqlite", 1], ["cli-acceptance-pg16", 1],
+    ["node-sdk-real-node-sqlite", 3], ["node-sdk-real-node-pg16", 3],
+  ];
   for (const [name, count] of minimums) {
     const suite = evidence.suites.find((item) => item.name === name);
     if (!suite || !suite.present || suite.exitCode !== 0 || suite.skipped !== 0 || suite.tests < count) {
       ctx.addIssue({ code: "custom", message: `${name} must exist, exit successfully, have zero skips, and run at least ${count} tests` });
     }
   }
-  if (evidence.association.event !== "workflow_dispatch" && evidence.testedSha !== evidence.association.headSha) ctx.addIssue({ code: "custom", message: "tested SHA must equal PR head SHA" });
+  if ("prNumber" in evidence.association && evidence.testedSha !== evidence.association.headSha) {
+    ctx.addIssue({ code: "custom", message: "tested SHA must equal PR head SHA" });
+  }
+  if ("event" in evidence.association && evidence.testedSha !== evidence.association.sha) {
+    ctx.addIssue({ code: "custom", message: "tested SHA must equal dispatch SHA" });
+  }
 });
 export const RunInputsSchema = z.object({
   schema: z.literal("tc893.inputs/v1"), gate: z.enum(["tc858-phase1-workspace", "tc858-phase1-beta"]).nullable(), sets: z.array(z.literal("phase1-companion")),
@@ -38,10 +46,24 @@ export const RunInputsSchema = z.object({
   preflight: z.object({ passed: z.boolean(), checks: z.array(z.object({ name: nonempty, ok: z.boolean(), detail: z.unknown().optional() }).strict()) }).strict(),
   junitPrecondition: JunitPreconditionSchema.nullable(), resolvedAt: nonempty, inputsSha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict().superRefine((inputs, ctx) => {
-  if (inputs.gate === "tc858-phase1-workspace" && !inputs.junitPrecondition) ctx.addIssue({ code: "custom", message: "workspace gate requires junit precondition evidence" });
-  if (inputs.gate !== "tc858-phase1-workspace" && inputs.junitPrecondition) ctx.addIssue({ code: "custom", message: "junit precondition applies only to workspace gate" });
+  const requiresJunit = inputs.gate === "tc858-phase1-workspace" && inputs.subject.event !== "local";
+  if (requiresJunit && !inputs.junitPrecondition) ctx.addIssue({ code: "custom", message: "workspace CI gate requires junit precondition evidence" });
+  if (!requiresJunit && inputs.junitPrecondition) ctx.addIssue({ code: "custom", message: "junit precondition applies only to the workspace CI gate" });
   if (inputs.gate && (inputs.backends.length !== 2 || !inputs.backends.includes("sqlite") || !inputs.backends.includes("pg16"))) ctx.addIssue({ code: "custom", message: "gate backends must include sqlite and pg16 only" });
   if (inputs.gate && inputs.image.role !== "prod") ctx.addIssue({ code: "custom", message: "gate image role must be prod" });
+  const evidence = inputs.junitPrecondition;
+  if (!evidence) return;
+  const association = evidence.association;
+  const subject = inputs.subject;
+  if (subject.event === "pull_request") {
+    if (!("prNumber" in association) || association.prNumber !== subject.prNumber || association.headSha !== subject.headSha || association.baseSha !== subject.baseSha) {
+      ctx.addIssue({ code: "custom", message: "junit PR association must exactly match subject PR number, head SHA, and base SHA" });
+    }
+  } else if (subject.event === "workflow_dispatch") {
+    if (!("event" in association) || association.event !== subject.event || association.ref !== subject.ref || association.sha !== subject.sha) {
+      ctx.addIssue({ code: "custom", message: "junit dispatch association must exactly match subject event, ref, and SHA" });
+    }
+  } else ctx.addIssue({ code: "custom", message: "local subjects cannot carry junit CI evidence" });
 });
 export const ManifestRowSchema = z.object({ key: nonempty, id: nonempty, variant: z.string().nullable(), backend: z.enum(["sqlite", "pg16", "pg16-c"]), tier: z.enum(["core", "edge", "speed", "tc12"]), requiredArtefacts: z.array(nonempty) }).strict();
 export const ManifestSchema = z.object({ schema: z.literal("tc893.manifest/v1"), gate: z.enum(["tc858-phase1-workspace", "tc858-phase1-beta"]).nullable(), set: z.literal("phase1-companion").nullable(), harnessSha: nonempty, inputsSha256: z.string().regex(/^[a-f0-9]{64}$/), rows: z.array(ManifestRowSchema), manifestSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();

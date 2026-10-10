@@ -31,9 +31,11 @@ export interface KvClient {
   del(key: string, o?: OpOptions): Promise<WriteResult>; list(prefix: string, o?: ListOptions): Promise<ListResult>; batchPut(items: BatchPutItem[], o?: OpOptions): Promise<BatchPutResult>;
   sync(o?: SyncOptions): Promise<SyncResult>; status(o?: CallOptions): Promise<StatusEntry[]>; purge(o?: CallOptions): Promise<PurgeResult>;
   clearPending(o?: { keys?: string[] } & CallOptions): Promise<ClearPendingResult>; authority(): Promise<AuthorityInfo>;
-  events(q?: EventQuery): Promise<EventEnvelope[]>; eventCursor(): number; replicaDir(): string; scanReplica(needle: Uint8Array): Promise<string[]>;
-  withHost(alias: string): KvClient; restart(o?: { replication?: ReplicationSpec | false } & CallOptions): Promise<void>;
-  kill(signal: "SIGINT" | "SIGTERM" | "SIGKILL"): Promise<void>; close(o: { deadlineMs: number }): Promise<{ graceful: boolean }>;
+  withHost(alias: string): KvClient;
+  /** Starts a fresh process on unchanged storage; auth is explicit and never falls back. */
+  restart(o: { auth: "restore" | "fresh-sign-in"; replication?: ReplicationSpec | false } & CallOptions): Promise<void>;
+  kill(signal: "SIGINT" | "SIGTERM" | "SIGKILL"): Promise<void>;
+  close(o: { deadlineMs: number }): Promise<{ graceful: boolean }>;
 }
 export interface CliCallOptions extends OpOptions { stdin?: Uint8Array; profile?: string; omitHost?: boolean }
 export interface CliResult extends OpMeta { exit: number | null; signal: string | null; stdout: Uint8Array; stderr: string; json?: unknown }

@@ -31,6 +31,9 @@ export interface ClientSpec {
   node: string;
   extraHosts?: { alias: string; node: string }[];
   identity: string;
+  endpoint?: string;                           // canonical host override, shared by fixture clients
+  storageRoot?: string;                        // local replica root override
+  deviceProof?: unknown;                        // fixture-provided proof, distinct per device
   auth: AuthSpec;
   replication?: ReplicationSpec | false;
   preloads?: ("fetch-faults" | "node20")[];

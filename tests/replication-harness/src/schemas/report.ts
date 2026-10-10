@@ -32,7 +32,11 @@ export const AggregateReportSchema = z.object({
   legs: z.array(z.object({ name: z.string(), backend, set: set.nullable(), runId: z.string(), reportSha256: z.string(), inputsSha256: z.string(), manifestSha256: z.string().nullable(), filtered: z.boolean(), durationMs: z.number(), summary: statuses }).strict()),
   legCoreConclusion: z.enum(["success", "failure", "cancelled", "skipped", "local"]), legCompanionConclusion: z.enum(["success", "failure", "cancelled", "skipped", "local"]), producedAt: z.string(),
 }).strict().superRefine((aggregate, ctx) => {
-  if (aggregate.gate?.passed && aggregate.legCoreConclusion === "failure") ctx.addIssue({ code: "custom", message: "passing gate cannot have failed core job conclusion" });
+  if (!aggregate.gate) return;
+  const expectedPassed = aggregate.legCoreConclusion === "success" && aggregate.gate.reasons.length === 0;
+  if (aggregate.gate.passed !== expectedPassed) {
+    ctx.addIssue({ code: "custom", message: "gate.passed must equal successful core conclusion with no core reasons" });
+  }
 });
 export type ValidatedRunReport = z.infer<typeof RunReportSchema>;
 export type ValidatedAggregateReport = z.infer<typeof AggregateReportSchema>;
