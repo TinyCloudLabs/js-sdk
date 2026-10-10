@@ -54,6 +54,9 @@ export function createScenarioContext(row: ScenarioRow, topology: Topology, cloc
   const scenario = row.scenario;
   return {
     topo: topology, clock, signal, backend: row.backend, variant, env,
+    probeRequirement(requirement) {
+      return row.probeRequirement?.(requirement) ?? `requirement probe unavailable: ${requirement}`;
+    },
     check(name, ok, detail) {
       state.assertions.push({ name, ok, ...(detail === undefined ? {} : { detail }) });
       if (!ok) throw new AssertionFailure(name);

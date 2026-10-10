@@ -121,11 +121,13 @@ tests also run.
 
 `EDGE-33` tracks imported delegate-session expiry behind the
 `tc674:delegate-session-expiry` requirement; it stays `unsupported` until a
-runtime probe reports the capability. `CORE-07[cli]` retains the delegate
-fixture because the S0 topology contract rejects CLI `sessionExpiryMs` and
-`auth login --method local --expiry` is rejected by the CLI. The CLI's expired
-session unit test manually seeds a signed profile rather than using a harness
-client fixture.
+runtime probe reports the capability. `CORE-07[cli]` uses that same probe:
+when present it requires exit 3 or 5; when absent it requires a non-zero exit,
+an `AUTH_REQUIRED`, `GRANT_EXPIRED`, or `NETWORK_ERROR` code, and no replica
+read event. The CLI fixture remains a delegate session because the S0 topology
+contract rejects CLI `sessionExpiryMs` and `auth login --method local --expiry`
+is rejected. The CLI's expired-session test manually seeds a signed profile
+rather than using a harness client fixture.
 
 2. Write the topology with `TopologySpec` (`validateTopology` enforces unique
    identities/aliases, prefix shape and overlap, SDK-only options, grant

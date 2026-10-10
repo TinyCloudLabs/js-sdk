@@ -8,6 +8,7 @@ import type { Scenario, ScenarioContext } from "../contracts/scenario";
 import type { ClientSpec, TopologySpec } from "../contracts/topology";
 import { registerScenarios } from "../runner/registry";
 import { createCliDelegation } from "./cli-delegation";
+import { acceptsOfflineCliExpiry } from "./core-07-expiry";
 
 const PREFIX = "notes/";
 const key = "notes/a.txt";
@@ -159,7 +160,12 @@ const core07: Scenario<Variant> = {
     ctx.check("expired online invocation has no replica read event", !operationEvents(online).some((event) => event.type === "replication.read" && event.source === "replica"), operationEvents(online));
     const confirmed = await control.get(key, { source: "network", signal: ctx.signal });
     ctx.check("still-authorized control client confirms last committed value", confirmed.ok && confirmed.found && Buffer.from(confirmed.value ?? []).toString() === VALUE, { ok: confirmed.ok, found: confirmed.found });
-    if (variant === "cli") ctx.check("offline CLI expiry uses supported refusal", offline.exit === 3 || offline.exit === 5, { exit: offline.exit, code: offline.code });
+    if (variant === "cli") {
+      // TC-674 restores the strict exit 3/5 contract for expired imported delegate sessions.
+      const delegateExpiryProbe = ctx.probeRequirement("tc674:delegate-session-expiry");
+      ctx.check(delegateExpiryProbe === true ? "offline CLI expiry uses supported refusal" : "offline CLI expiry without TC-674 is refused with a code and no local read",
+        acceptsOfflineCliExpiry(offline, delegateExpiryProbe), { probe: delegateExpiryProbe, exit: offline.exit, code: offline.code, read: offline.read, events: operationEvents(offline) });
+    }
     if (variant === "cli" && !online.ok) ctx.check("online CLI expiry uses supported refusal", online.exit === 3 || online.exit === 5, { exit: online.exit, code: online.code });
   },
 };

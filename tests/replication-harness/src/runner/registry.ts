@@ -1,7 +1,7 @@
 import type { Backend, SetId, Tier } from "../contracts/common";
 import type { Requirement, RunContextView, Scenario } from "../contracts/scenario";
 
-export type ScenarioRow = { key: string; id: string; variant: string | null; backend: Backend; tier: Tier; sets: SetId[]; scenario: Scenario; reason?: string; unavailableStatus?: "skipped" | "unsupported"; forcedUnsupported?: boolean };
+export type ScenarioRow = { key: string; id: string; variant: string | null; backend: Backend; tier: Tier; sets: SetId[]; scenario: Scenario; probeRequirement?: ProbeRequirement; reason?: string; unavailableStatus?: "skipped" | "unsupported"; forcedUnsupported?: boolean };
 export type RegistryFilters = { tiers?: readonly Tier[]; set?: SetId | null; only?: readonly string[]; variants?: readonly string[]; backends: readonly Backend[]; forceUnsupported?: boolean };
 export type ProbeRequirement = (requirement: Requirement) => true | string;
 const expectedUnsupportedRequirements = new Set<Requirement>(["tc12:host-sync", "tc674:delegate-session-expiry"]);
@@ -60,6 +60,7 @@ export function expandScenarios(scenarios: readonly Scenario[], filters: Registr
         if (!filters.backends.includes(backend)) continue;
         const key = `${scenario.id}${variant === null ? "" : `[${variant}]`}@${backend}`;
         rows.push({ key, id: scenario.id, variant, backend, tier: scenario.tier, sets: [...(scenario.sets ?? [])], scenario,
+          ...(probe ? { probeRequirement: probe } : {}),
           ...(requirementFailure && !forceUnsupported ? { reason: requirementFailure.result as string,
             unavailableStatus: requirementFailure.missingProbe || isExpectedUnsupported ? "unsupported" as const : "skipped" as const } : {}),
           ...(forceUnsupported ? { forcedUnsupported: true } : {}) });

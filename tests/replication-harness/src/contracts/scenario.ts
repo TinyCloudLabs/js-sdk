@@ -14,6 +14,7 @@ export interface Scenario<V extends string = string> {
 export interface ScenarioContext {
   readonly topo: Topology; readonly clock: Clock; readonly signal: AbortSignal; readonly backend: Backend; readonly variant: string; readonly env: RunEnvironment;
   check(name: string, ok: boolean, detail?: unknown): void; eq<T>(name: string, actual: T, expected: T): void;
+  probeRequirement(requirement: Requirement): true | string;
   deadline(client: KvClient, extraMs?: number): number; metric(id: string, sample: number, unit: Unit): void;
   artefact(name: string, data: string | Uint8Array): void; unsupported(reason: string): never; skip(reason: string): never;
   assertHealed(): Promise<void>; log(msg: string): void;
