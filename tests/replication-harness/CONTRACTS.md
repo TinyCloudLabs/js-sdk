@@ -81,9 +81,13 @@ conclusion even if every serialized row says `pass`.
 
 `aggregate` exits 0 when the core gate passes, 3 when it fails, and 1 when
 a non-gate run has any non-passing or quarantined row, a failed or
-cancelled leg-job conclusion, or missing or mismatched matrix evidence
-(a leg absent from the matrix, an extra leg, or a mismatched
-`inputsSha256`). Companion verdicts do not alter the core gate exit
+cancelled leg-job conclusion, or missing, unreadable, or mismatched
+matrix evidence (a leg absent from the matrix, an extra leg, an
+unparseable or schema-invalid `report.json`, or a mismatched
+`inputsSha256`). An invalid leg report never aborts aggregation: it
+fails the conclusion and verdict for its set (`MISSING_LEG`), so a
+gate run exits 3 with `gate.passed=false`. Companion verdicts do not
+alter the core gate exit
 status; `verify-aggregate` maps companion failure to the separate
 escalation status 5.
 

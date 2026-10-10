@@ -77,6 +77,18 @@ describe("executable gate CLI adapters", () => {
     expect(obsolete.exitCode).toBe(2);
     expect(obsolete.stderr?.toString()).toContain("usage: harness aggregate");
 
+    const corruptLegsDir = join(root, "corrupt-legs");
+    await cp(legsDir, corruptLegsDir, { recursive: true });
+    await writeFile(join(corruptLegsDir, "core-sqlite", "report.json"), "not json");
+    const corruptDir = join(root, "corrupt-aggregate");
+    const corrupt = command(["aggregate", "--inputs", join(inputDir, "inputs.json"), "--legs", corruptLegsDir,
+      "--leg-core-conclusion", "success", "--leg-companion-conclusion", "success", "--out", corruptDir], env);
+    expect(corrupt.exitCode).toBe(3);
+    const corruptReport = JSON.parse(await readFile(join(corruptDir, "aggregate.json"), "utf8"));
+    expect(corruptReport.gate.passed).toBe(false);
+    expect(corruptReport.legCoreConclusion).toBe("failure");
+    expect(corruptReport.gate.reasons.some((item: { code: string; leg?: string }) => item.code === "MISSING_LEG" && item.leg === "core-sqlite")).toBe(true);
+
     for (const conclusion of ["failure", "cancelled", "skipped"] as const) {
       const failedDir = join(root, `aggregate-${conclusion}`);
       const failed = command(["aggregate", "--inputs", join(inputDir, "inputs.json"), "--legs", legsDir, "--leg-core-conclusion", conclusion,
@@ -199,6 +211,14 @@ describe("executable gate CLI adapters", () => {
     expect(extra.exitCode).toBe(1);
     const extraReport = JSON.parse(await readFile(join(root, "extra-aggregate", "aggregate.json"), "utf8"));
     expect(extraReport.legCoreConclusion).toBe("failure");
+
+    const unparseableDir = join(root, "unparseable-legs");
+    await cp(extraLegsDir, unparseableDir, { recursive: true });
+    await writeFile(join(unparseableDir, "rogue-sqlite", "report.json"), "not json");
+    const unparseable = command(aggregateArgs(join(root, "unparseable-aggregate"), unparseableDir), env);
+    expect(unparseable.exitCode).toBe(1);
+    const unparseableReport = JSON.parse(await readFile(join(root, "unparseable-aggregate", "aggregate.json"), "utf8"));
+    expect(unparseableReport.legCoreConclusion).toBe("failure");
 
     const driftLegsDir = join(root, "drift-legs");
     await mkdir(join(driftLegsDir, "core-sqlite"), { recursive: true });

@@ -295,7 +295,8 @@ export async function runLegCommand(args: { options: Record<string, string | tru
 function reportConclusion(legs: readonly LegEvidence[]): "success" | "failure" | "cancelled" | "skipped" {
   if (!legs.length) return "failure";
   for (const leg of legs) {
-    const report = leg.report as Partial<RunReport>;
+    const report = leg.report as Partial<RunReport> | null;
+    if (!report || typeof report !== "object") return "failure";
     if (report.interrupted || report.results?.some((row) => row.reason === "INTERRUPTED" || (row.status as string) === "cancelled")) return "cancelled";
     if (!report.results || report.results.some((row) => row.status !== "pass")) return "failure";
   }
@@ -334,11 +335,25 @@ export async function aggregateCommand(args: { options: Record<string, string | 
     const directory = join(legsRoot, item.name);
     try {
       const bytes = await readFile(join(directory, "report.json"));
-      legs.push({ name: item.name, directory, report: JSON.parse(bytes.toString("utf8")), reportSha256: createHash("sha256").update(bytes).digest("hex") });
+      let report: unknown = null;
+      let parseError: string | undefined;
+      try {
+        report = JSON.parse(bytes.toString("utf8"));
+      } catch (error) {
+        parseError = error instanceof Error ? error.message : String(error);
+      }
+      legs.push({ name: item.name, directory, report, reportSha256: createHash("sha256").update(bytes).digest("hex"), ...(parseError ? { parseError } : {}) });
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
     }
   }
+  const legSet = (leg: LegEvidence): SetId | null | "companion" => {
+    const report = leg.report as Partial<RunReport> | null;
+    if (report?.invocation && report.invocation.set !== undefined) return report.invocation.set;
+    const expected = expectedLegs.find((entry) => entry.name === leg.name);
+    if (expected) return expected.set;
+    return leg.name.startsWith("companion-") ? "companion" : null;
+  };
   const coreManifest = inputs.gate ? await readManifestFor(inputsPath, null) : null;
   const companionManifests = new Map<SetId, Manifest>();
   for (const set of inputs.sets) {
@@ -348,8 +363,8 @@ export async function aggregateCommand(args: { options: Record<string, string | 
   const recomputedCoreManifest = inputs.gate ? await recomputeManifest(null, inputs) : null;
   const recomputedCompanionManifests = new Map<SetId, Manifest>();
   for (const set of inputs.sets) recomputedCompanionManifests.set(set, await recomputeManifest(set, inputs));
-  const coreLegs = legs.filter((leg) => (leg.report as Partial<RunReport>).invocation?.set === null);
-  const companionLegs = legs.filter((leg) => (leg.report as Partial<RunReport>).invocation?.set !== null);
+  const coreLegs = legs.filter((leg) => legSet(leg) === null);
+  const companionLegs = legs.filter((leg) => legSet(leg) !== null);
   const coreFromReport = expectedLegs.some((leg) => leg.set === null) ? reportConclusion(coreLegs) : "success";
   const companionFromReport = expectedLegs.some((leg) => leg.set !== null) ? reportConclusion(companionLegs) : "success";
   const coreFromFlags = conclusionFlag(option(args.options, "leg-core-conclusion"), coreFromReport);
