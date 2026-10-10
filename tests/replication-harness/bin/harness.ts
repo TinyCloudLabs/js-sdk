@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { scenarioRegistry, validateRegistry, registerScenarios } from "../src/runner/registry";
 import { coreScenarios } from "../src/scenarios/core";
+import "../src/scenarios";
 import { runHarnessCommand } from "../src/runner/run-command";
 import { dockerDoctor, gc } from "../src/topology/gc";
 import { realClock } from "../src/contracts/clock";

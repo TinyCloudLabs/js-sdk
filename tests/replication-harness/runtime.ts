@@ -11,6 +11,7 @@ import { realClock } from "./src/contracts/clock";
 import { Docker } from "./src/topology/docker";
 import { NodeImageResolver } from "./src/topology/images";
 import { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./src/runner/runtime";
+import { createRequirementProbe } from "./src/runner/requirements";
 import { readJunitPrecondition } from "./src/gate/junit";
 import type { configureGateRuntime } from "./bin/gate-adapters";
 
@@ -137,6 +138,7 @@ export async function registerGateRuntime(configure: GateRuntimeRegistrar): Prom
     exportSutArtifacts,
     topologyFactory: assembly.topologyFactory,
     collectClientSecrets: assembly.collectClientSecrets,
+    probeRequirement: createRequirementProbe(),
     junitPrecondition: async (subject, directory) => directory ? readJunitPrecondition(directory, subject) : null,
     fetchInfo: async (url) => {
       const response = await fetch(url);

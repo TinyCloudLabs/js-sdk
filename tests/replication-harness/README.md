@@ -118,16 +118,31 @@ tests also run.
    - `requires` declares requirement probes (production `/info`, SUT
      capabilities); unmet requirements mark the row `unsupported` rather than
      `fail`.
+
 2. Write the topology with `TopologySpec` (`validateTopology` enforces unique
    identities/aliases, prefix shape and overlap, SDK-only options, grant
    issuer order, and minimum expiry) and drive `KvClient`s from the shared
-   `ScenarioContext`. No wall-clock sleeps: deadlines derive from the injected
-   `Clock` and configured bounds.
+   `ScenarioContext`. Expiry scenarios use real expiry waits through the
+   injected `Clock`; they do not fake timers.
 3. Run it for real before opening a PR:
    `HARNESS_DOCKER=1 bun run --cwd tests/replication-harness harness run --only <ID> --backend sqlite,pg16`
    and confirm `report.json`/`report.md` show `pass` on both backends.
 4. Quarantine only as a last resort: add `{id, reason, ticket}` to
    `quarantine.json`. A quarantined **core** row fails the gate.
+
+`EDGE-33` tracks imported delegate-session expiry behind the
+`tc674:delegate-session-expiry` requirement. The probe is tied to SUT identity,
+not observed behavior: `src/runner/requirements.ts` holds a workspace merge-SHA
+pin and a published minimum CLI version. Both are null until TC-674 sets the
+applicable pin; while null the probe reports `TC-674 not landed`, keeping
+`EDGE-33` unsupported. Once pinned, a workspace pin must be an ancestor of the
+resolved SUT SHA, or the published CLI must meet its pinned minimum version.
+`CORE-07[cli]` uses the same probe: when present it requires exit 3 or 5;
+before TC-674 it requires a non-zero exit, an `AUTH_REQUIRED`, `GRANT_EXPIRED`,
+or `NETWORK_ERROR` error-envelope code, and no replica read event. Its fixture
+remains a delegate session because the S0 topology contract rejects CLI
+`sessionExpiryMs` and `auth login --method local --expiry` is rejected; the
+expired-session CLI fixture manually seeds a signed profile outside the harness.
 
 ## CI
 

@@ -65,6 +65,9 @@ describe("S3a scenario expansion", () => {
     expect(skipped[0]?.unavailableStatus).toBe("skipped");
     const unavailable = expandScenarios([tc12], { tiers: ["tc12"], set: null, backends: ["sqlite"] }, view, () => "host sync unavailable");
     expect(unavailable[0]?.unavailableStatus).toBe("unsupported");
+    const delegateExpiry = scenario("EDGE-33", "edge", { variants: ["cli"], requires: ["tc674:delegate-session-expiry"] });
+    const delegateUnavailable = expandScenarios([delegateExpiry], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view, () => "TC-674 delegate expiry support is absent");
+    expect(delegateUnavailable[0]?.unavailableStatus).toBe("unsupported");
     const forced = expandScenarios([tc12], { tiers: ["tc12"], set: null, backends: ["sqlite"], forceUnsupported: true }, view, () => "host sync unavailable");
     const dir = await tempDir();
     try {
