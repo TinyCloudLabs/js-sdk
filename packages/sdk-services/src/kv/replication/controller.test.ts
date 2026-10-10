@@ -476,6 +476,52 @@ describe("A2 lifecycle review regressions", () => {
       expect(env.events.some((event) => event.type === "replication.read" && event.source === "replica" && event.syncError === "TIMEOUT")).toBe(true);
     }
   });
+  test("offline timeout rechecks authority and coverage after sync rejection", async () => {
+    const gates = [
+      { coverage: "empty" as const, authority: { state: "valid" as const, expiresAt: null }, reason: "coverage_incomplete" },
+      { coverage: "complete" as const, authority: { state: "expired" as const, expiresAt: null }, reason: "grant_expired" },
+      { coverage: "complete" as const, authority: { state: "revoked" as const, expiresAt: null }, reason: "grant_revoked" },
+    ];
+    for (const gate of gates) {
+      for (const op of ["get", "list"] as const) {
+        const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+        let setCurrentStatus!: (value: LocalReplicaStatus) => void;
+        let networkCalls = 0;
+        let syncStarted!: () => void;
+        const started = new Promise<void>((resolve) => { syncStarted = resolve; });
+        const env = setup({
+          onSync: (_epoch, signal) => {
+            syncStarted();
+            return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+              setCurrentStatus({ ...status(), coverage: gate.coverage, authority: gate.authority });
+              reject(Object.assign(new Error("sync aborted"), { code: "ABORTED" }));
+            }, { once: true }));
+          },
+          setTimeoutImpl: (fn, ms) => {
+            const timer = { fn, ms, cancelled: false };
+            timers.push(timer);
+            return () => { timer.cancelled = true; };
+          },
+        });
+        setCurrentStatus = env.setStatus;
+        env.setNow(1_200_001);
+        const request = op === "get"
+          ? env.controller.get(readRequest(env.network))
+          : env.controller.list(listRequest(undefined, async () => {
+            networkCalls++;
+            return ok({ keys: [], truncated: false });
+          }));
+        await started;
+        timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled)!.fn();
+        const result = await request;
+        const event = env.events.findLast((item) => item.type === "replication.read");
+        expect(result.ok).toBe(true);
+        expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(0);
+        expect(op === "get" ? env.counters().networkCalls : networkCalls).toBe(1);
+        expect(event).toMatchObject({ type: "replication.read", source: "network" });
+      }
+    }
+  });
   test("late stale-sync outcomes retain their §5.2 route for get and list", async () => {
     const scenarios = [
       { name: "SOURCE_CHANGED", code: "SOURCE_CHANGED", local: 0, network: 1, eventCode: "SOURCE_CHANGED" },
@@ -676,6 +722,54 @@ describe("A2 lifecycle review regressions", () => {
     await Promise.all([first, second]);
     expect(env.counters().syncs).toBe(1);
     expect(syncSignal?.aborted).toBe(true);
+  });
+  test("a waiting read does not treat another caller's shared-sync abort as its timeout", async () => {
+    for (const op of ["get", "list"] as const) {
+      for (const cause of ["caller", "close", "purge"] as const) {
+        const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+        let started!: () => void;
+        const syncStarted = new Promise<void>((resolve) => { started = resolve; });
+        const env = setup({
+          onSync: (_epoch, signal) => {
+            started();
+            return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+              reject(Object.assign(new Error("shared sync aborted"), { code: "ABORTED" }));
+            }, { once: true }));
+          },
+          setTimeoutImpl: (fn, ms) => {
+            const timer = { fn, ms, cancelled: false };
+            timers.push(timer);
+            return () => { timer.cancelled = true; };
+          },
+        });
+        env.setNow(1_200_001);
+        const ownerAbort = new AbortController();
+        const owner = env.controller.get({ ...readRequest(env.network), signal: ownerAbort.signal });
+        await syncStarted;
+        let networkCalls = 0;
+        const waiter = op === "get"
+          ? env.controller.get(readRequest(async () => {
+            networkCalls++;
+            return ok({ data: "network", headers: { get: () => null } });
+          }))
+          : env.controller.list(listRequest(undefined, async () => {
+            networkCalls++;
+            return ok({ keys: ["network/a"], truncated: false });
+          }));
+        for (let tick = 0; tick < 10 && timers.filter((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled).length < 2; tick++) await Promise.resolve();
+        timers.filter((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled).at(-1)!.fn();
+        if (cause === "caller") ownerAbort.abort();
+        else if (cause === "close") await env.controller.close();
+        else await env.controller.purge();
+        const result = await waiter;
+        await owner;
+        const event = env.events.findLast((item) => item.type === "replication.read");
+        expect(result.ok).toBe(true);
+        expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(0);
+        expect(networkCalls).toBe(1);
+        expect(event).toMatchObject({ type: "replication.read", source: "network", code: "ABORTED" });
+      }
+    }
   });
 
   test("pending.read rejection removes the caller abort listener", async () => {
