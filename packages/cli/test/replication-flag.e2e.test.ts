@@ -327,8 +327,11 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(["TIMEOUT", "NETWORK_ERROR"]).toContain(offlineRead?.syncError);
     const offlineList = await tc(["kv", "list", "--prefix", "notes"], { profile: "owner", preload: NO_NETWORK, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(offlineList.code === 0, `${offlineList.code}\n${offlineList.stderr}`).toBe(true);
-    const offlineOutside = await tc(["kv", "get", "other/x"], { profile: "owner", preload: NO_NETWORK, replication: "on" });
+    const offlineOutside = await tc(["kv", "get", "other/x"], { profile: "owner", replication: "on" });
+    const offlineOutsideOff = await tc(["kv", "get", "other/x"], { profile: "owner", replication: "off" });
+    expect(offlineOutside.code).toBe(offlineOutsideOff.code);
     expect(offlineOutside.code).toBe(1);
+    expect(offlineOutside.stderr).toBe(offlineOutsideOff.stderr);
     expect(offlineOutside.stderr).toContain("NETWORK_ERROR");
     await startNode();
 
@@ -387,7 +390,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       }),
     ]));
     await writeFile(join(home, "delegate-grant.json"), delegateGrant.stdout);
-    const importedDelegate = await ok<{ permissions: Array<{ service: string; space: string; path: string; actions: string[] }> }>(["auth", "import", "delegate-grant.json"], "delegate");
+    const importedDelegate = await ok<{ delegationCid: string; permissions: Array<{ service: string; space: string; path: string; actions: string[] }> }>(["auth", "import", "delegate-grant.json"], "delegate");
     expect(importedDelegate.permissions).toEqual(expect.arrayContaining([
       expect.objectContaining({
         service: "tinycloud.kv",
@@ -402,8 +405,56 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const delegatedHit = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", replication: "on" });
     expect(delegatedHit.code).toBe(0);
     expect(delegatedHit.stderr).toContain("replica hit");
+    const revoker = new TinyCloudNode({
+      host,
+      privateKey: profile.privateKey,
+      autoBootstrapAccount: false,
+      autoCreateSpace: true,
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "tc-replication-flag",
+        name: "tc replication flag revoker",
+        defaults: false,
+        includePublicSpace: false,
+        prefix: "",
+        space: "default",
+        permissions: [{ service: "tinycloud.delegation", space: "default", path: "", actions: ["revoke"] }],
+      },
+    });
+    await revoker.signIn();
+    try {
+      const result = await revoker.revokeDelegation(importedDelegate.delegationCid);
+      if (!result.ok) throw new Error(`owner revoke failed: ${JSON.stringify(result.error)}`);
+    } finally {
+      await revoker.replication?.close();
+    }
+    const revokedRead = await tc(["kv", "get", "notes/a.txt"], {
+      profile: "delegate",
+      replication: "on",
+      extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(revokedRead.stderr).toContain("GRANT_REVOKED");
+    const revokedReport = await ok<{ replicas: Array<{ prefix: string; state: string; counts?: { keys: number; contentMissing: number; tombstones: number } }> }>(
+      ["replica", "report", "--json"],
+      "delegate",
+      { replication: "on" },
+    );
+    const revokedEntry = revokedReport.replicas.find((entry) => entry.prefix === "notes");
+    expect(revokedEntry === undefined || revokedEntry.state === "revoked").toBe(true);
+    if (revokedEntry) {
+      expect(revokedEntry.counts).toEqual({ keys: 0, contentMissing: 0, tombstones: 0 });
+    }
+    const offlineRevokedRead = await tc(["kv", "get", "notes/a.txt", "--raw"], {
+      profile: "delegate",
+      preload: NO_NETWORK,
+      replication: "on",
+      extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
+    });
+    expect(offlineRevokedRead.code).not.toBe(0);
+    expect(offlineRevokedRead.stderr).not.toContain("replica hit");
+    expect(offlineRevokedRead.stdout.toString()).not.toBe("v4");
 
-    // 9. Node 20 is refused; compact-delegate revocation was exercised above (TC-721).
+    // 9. Node 20 is refused; the real grant revocation path was exercised above.
     const unsupported = await tc(["kv", "get", "notes/a.txt"], { profile: "delegate", preload: NODE20, replication: "on" });
     expect(unsupported.stderr).toContain("runtime_unsupported");
     // Grant edge cases use the real node and fail closed at the login boundary.
@@ -453,7 +504,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
     const alias = host.replace("127.0.0.1", "localhost");
     const primaryWrite = await tc(["kv", "put", "notes/partition", "primary-value"], { profile: "owner", replication: "on" });
-    expect(primaryWrite.code).toBe(0);
+    if (primaryWrite.code !== 0) throw new Error(`primary write failed\n${primaryWrite.stderr}\n${primaryWrite.stdout}`);
     const aliasRead = await tc(["kv", "get", "notes/partition", "--raw"], { profile: "owner", replication: "on", host: alias, extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     if (aliasRead.code !== 0) throw new Error(`alias replica read failed\n${aliasRead.stderr}\n${aliasRead.stdout}`);
     expect(aliasRead.stdout.toString()).toBe("primary-value");

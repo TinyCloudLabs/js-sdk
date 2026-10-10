@@ -509,10 +509,12 @@ describe("node replication integration", () => {
         tinycloudHosts: ["https://signed-restore.example"],
       });
       expect(closed).toEqual(["https://signed-restore.example"]);
-      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "idle" }]);
-      await node.replication!.sync();
+      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "ready" }]);
       expect(opened).toHaveLength(2);
-      expect(opened[1]!.spec.identity).toMatchObject({
+      expect(closed).toEqual(["https://signed-restore.example", "https://signed-restore.example"]);
+      await node.replication!.sync();
+      expect(opened).toHaveLength(3);
+      expect(opened[2]!.spec.identity).toMatchObject({
         host: "https://signed-restore.example",
         space: delegateSpace.toLowerCase(),
         principal: `did:pkh:eip155:${signed.chainId}:${signed.address.toLowerCase()}`,

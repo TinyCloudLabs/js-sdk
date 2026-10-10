@@ -603,11 +603,33 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   async function status(): Promise<ReplicaStatusEntry[]> {
     const snapshot = await pending.read();
     return Promise.all(options.prefixes.map(async (prefix) => {
-      const state = replicas.get(prefix);
       const records = snapshot.records.filter((r) => kvPrefixCovers(prefix, r.key));
       let local;
-      if (state?.handle) { try { local = await state.handle.status(); } catch { /* status is best-effort */ } }
-      return { prefix, state: isClosed ? "closed" as const : local?.authority.state === "revoked" ? "revoked" as const : state?.reason === "grant_missing" ? "grant_missing" as const : local?.authority.state === "valid" ? "ready" as const : state?.reason ? "unavailable" as const : "idle" as const, ...(state?.reason ? { reason: state.reason } : {}), ...(local ?? {}), pending: { inFlight: records.filter((r) => r.state === "in_flight").length, committed: records.filter((r) => r.state === "committed").length, ambiguous: records.filter((r) => r.state === "ambiguous").length }, pinned: pinnedKeys(snapshot, prefix, scheduler.now()), lagMs: local?.lastSyncAt ? scheduler.now() - Date.parse(local.lastSyncAt) : null };
+      let temporary: KVReplicaHandle | undefined;
+      try {
+        let handle = replicas.get(prefix)?.handle;
+        if (!handle) handle = await replicas.get(prefix)?.opening;
+        if (!handle) {
+          const sessionGrant = authority.sessionGrant(prefix);
+          const device = "refused" in sessionGrant ? undefined : sessionGrant.device;
+          temporary = await storage.open({
+            identity,
+            space: session.space,
+            prefix,
+            allowSecrets: options.allowSecrets,
+            ...(device ? { device } : {}),
+            ...(deps.fetch ? { fetch: deps.fetch } : {}),
+          });
+          handle = temporary;
+        }
+        local = await handle.status();
+      } catch {
+        // Status is best-effort and must not change KV behavior.
+      } finally {
+        await temporary?.close().catch(() => undefined);
+      }
+      const state = replicas.get(prefix);
+      return { prefix, state: isClosed ? "closed" as const : local?.authority.state === "revoked" ? "revoked" as const : state?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : state?.reason ? "unavailable" as const : "idle" as const, ...(state?.reason ? { reason: state.reason } : {}), ...(local ?? {}), pending: { inFlight: records.filter((r) => r.state === "in_flight").length, committed: records.filter((r) => r.state === "committed").length, ambiguous: records.filter((r) => r.state === "ambiguous").length }, pinned: pinnedKeys(snapshot, prefix, scheduler.now()), lagMs: local?.lastSyncAt ? scheduler.now() - Date.parse(local.lastSyncAt) : null };
     }));
   }
 

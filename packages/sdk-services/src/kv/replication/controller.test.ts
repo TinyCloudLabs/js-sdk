@@ -74,8 +74,11 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
     async status() { statusCalls++; return statusImpl ? statusImpl(statusCalls) : localStatus; }, async close() {},
   } as unknown as KVReplicaHandle;
   const storage: KVReplicaStorage = { kind: "sqlite", async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; }, async purge(target) { await purgeImpl?.(target); }, pendingWrites() { return pending; } };
-  const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime", parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" }); }, async mint(_deviceDid, _prefix, signal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
-  return { controller, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
+  const authority = { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" as const } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime" as const, parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" as const }); }, async mint(_deviceDid: string, _prefix: string, signal: AbortSignal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } };
+  const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
+  const createController = () => createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event) });
+  const controller = createController();
+  return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
@@ -258,6 +261,35 @@ describe("pending record evidence boundaries", () => {
     expect(status[0]?.pinned.at(-1)?.key).toBe("notes/099");
     await env.controller.get(readRequest(env.network));
     expect(env.events.filter((event) => event.type === "replication.state" && event.state === "pinned")).toHaveLength(1);
+  });
+  test("status reopens persisted revoked authority after grant revocation discovery and purge", async () => {
+    const revoked = {
+      ...status(),
+      authority: { state: "revoked" as const, expiresAt: null },
+      counts: { keys: 0, contentMissing: 0, tombstones: 0 },
+      bytes: 0,
+      lastError: { at: new Date(1_200_001).toISOString(), code: "GRANT_REVOKED", message: "delegation-revoked" },
+    };
+    const env = setup({
+      onSync: () => {
+        throw Object.assign(new Error("The replica's grant was revoked"), { code: "GRANT_REVOKED" });
+      },
+      statusImpl: (call) => call === 1 ? status() : revoked,
+    });
+    env.setNow(1_200_001);
+    await env.controller.get(readRequest(env.network));
+    expect((await env.controller.status())[0]).toMatchObject({
+      state: "revoked",
+      authority: { state: "revoked" },
+      counts: { keys: 0, contentMissing: 0, tombstones: 0 },
+    });
+
+    const restoredProcess = env.createController();
+    expect((await restoredProcess.status())[0]).toMatchObject({
+      state: "revoked",
+      authority: { state: "revoked" },
+      counts: { keys: 0, contentMissing: 0, tombstones: 0 },
+    });
   });
 });
 describe("KVReplication inline verification", () => {
