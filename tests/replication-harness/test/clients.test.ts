@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, test } from "bun:test";
-import { HarnessError } from "../src/contracts/common";
 import { resolveAnchoredPackage } from "../src/clients/sut";
 import { resolveCliAuthPaths, scrubClientEnvironment, terminateWithLadder } from "../src/clients/cli-client";
 
@@ -31,14 +30,20 @@ describe("anchored package resolution", () => {
     await mkdir(join(prefix, "node_modules", "@tinycloud"), { recursive: true });
     await writeFile(join(prefix, "package.json"), "{}\n");
     await symlink(outside, join(prefix, "node_modules", "@tinycloud", "cli"), "dir");
-    await expect(resolveAnchoredPackage(prefix, "@tinycloud/cli")).rejects.toMatchObject({ code: "SUT_RESOLVE_FAILED" } satisfies Partial<HarnessError>);
+    await expect(resolveAnchoredPackage(prefix, "@tinycloud/cli")).rejects.toMatchObject({ code: "PREFLIGHT_FAILED" });
   });
 });
 
 describe("CLI environment and shutdown", () => {
-  test("removes ambient TC variables and only restores approved replication overrides", () => {
-    const env = scrubClientEnvironment({ PATH: "/usr/bin", TC_HOME: "/wrong", TC_SECRET: "must-remove", TC_REPLICATION_VERIFY: "ambient", OTHER: "kept" }, "/isolated/home", { TC_REPLICATION_VERIFY: "1", TC_FAULTS: "/not-approved", CUSTOM: "override" });
-    expect(env).toEqual({ PATH: "/usr/bin", OTHER: "kept", CUSTOM: "override", HOME: "/isolated/home", TC_HOME: "/isolated/home", TC_REPLICATION_VERIFY: "1" });
+  test("builds a child env allowlist and restores only explicit replication overrides", () => {
+    const env = scrubClientEnvironment({
+      PATH: "/usr/bin", LANG: "en_US.UTF-8", TZ: "UTC", HOME: "/ambient",
+      TC_HOME: "/wrong", TC_SECRET: "must-remove", TC_REPLICATION_VERIFY: "ambient", OTHER: "remove",
+      npm_config_registry: "https://npm.example", npm_lifecycle_event: "test", NPM_TOKEN: "secret",
+      HTTP_PROXY: "http://proxy", HTTPS_PROXY: "http://proxy", http_proxy: "http://proxy", https_proxy: "http://proxy",
+      ALL_PROXY: "http://proxy", NO_PROXY: "localhost",
+    }, "/isolated/home", { TC_REPLICATION_VERIFY: "1", TC_FAULTS: "/not-approved", CUSTOM: "override" });
+    expect(env).toEqual({ PATH: "/usr/bin", LANG: "en_US.UTF-8", TZ: "UTC", HOME: "/isolated/home", TC_HOME: "/isolated/home", TC_REPLICATION_VERIFY: "1" });
   });
   test("anchors auth request and grant files to the client's isolated home", () => {
     const home = "/tmp/tc893-client-home";

@@ -15,8 +15,6 @@ let savedDeviceJwk;
 let savedVerificationMethod;
 let savedDelegation;
 let savedPosture = "owner";
-let deviceSessionManager;
-let deviceKeyId;
 let closing = false;
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
@@ -33,11 +31,11 @@ async function persistProof() {
   await chmod(path, 0o600);
 }
 function captureEvent(event) { send({ v: 1, type: "event", inFlight: [...active], event }); }
-function sdkError(result) {
-  if (result?.ok === false) throw Object.assign(new Error(result.error?.message ?? result.error?.code ?? "SDK operation failed"), { code: result.error?.code ?? "SDK_ERROR", meta: result.error });
-  return result;
+function sdkValue(result) {
+  if (result?.ok === false) return result;
+  return result?.data ?? result;
 }
-function sdkValue(result) { sdkError(result); return result?.data ?? result; }
+
 function replicaOptions(config) {
   if (!config) return false;
   const { storageDir, ...options } = config;
@@ -47,12 +45,21 @@ function compactDelegateSession(proof, hosts) {
   const grant = proof.delegation ?? proof;
   const jwk = proof.deviceJwk ?? savedDeviceJwk;
   const verificationMethod = proof.verificationMethod ?? savedVerificationMethod;
-  if (!jwk || !verificationMethod || !grant?.delegationHeader?.Authorization || !grant.cid || !grant.spaceId) throw new Error("Delegate restore requires a combined device JWK, verification method and delegation proof");
+  if (!jwk || !verificationMethod || !grant?.delegationHeader?.Authorization || !grant.cid || !grant.spaceId) {
+    throw new Error("Delegate restore requires a combined device JWK, verification method and delegation proof");
+  }
   return { delegationHeader: grant.delegationHeader, delegationCid: grant.cid, spaceId: grant.spaceId, jwk, verificationMethod, tinycloudHosts: hosts };
 }
 async function handle(op, args, controller) {
   switch (op) {
-    case "hello": return { driver: "tc893-sdk-driver", protocol: 1, node: process.version, sdkVersion: sdk.version ?? "unknown", sdkResolved: loaded.resolved, exports: Object.keys(sdk).sort() };
+    case "hello": return {
+      driver: "tc893-sdk-driver",
+      protocol: 1,
+      node: process.versions.bun !== undefined ? `${process.version} (bun/${process.versions.bun})` : process.version,
+      sdkVersion: sdk.version ?? "unknown",
+      sdkResolved: loaded.resolved,
+      exports: Object.keys(sdk).sort(),
+    };
     case "init": {
       const replication = replicaOptions(args.replication);
       node = new sdk.TinyCloudNode({ host: args.host, domain: args.domain, privateKey: args.privateKeyHex, sessionExpirationMs: args.sessionExpiryMs, autoCreateSpace: true, autoBootstrapAccount: false, enablePublicSpace: false, ...(replication ? { replication } : {}) });
@@ -79,33 +86,35 @@ async function handle(op, args, controller) {
       return { spaceId: savedSession.spaceId, sessionExpiresAt: sessionExpiry(savedSession) };
     }
     case "session.deviceKey": {
-      deviceSessionManager ??= new sdk.NodeWasmBindings().createSessionManager();
-      deviceKeyId ??= deviceSessionManager.createSessionKey("tc893-device");
-      savedDeviceJwk = JSON.parse(deviceSessionManager.jwk(deviceKeyId));
-      savedVerificationMethod = deviceSessionManager.getDID(deviceKeyId);
+      if (!savedSession?.jwk || !savedSession.verificationMethod) throw new Error("Device proof requires an authenticated SDK session");
+      savedDeviceJwk = savedSession.jwk;
+      savedVerificationMethod = savedSession.verificationMethod;
       await persistProof();
       return { did: savedVerificationMethod };
     }
     case "grant.issue": {
       const grant = await node.delegateTo(args.audience.split("#", 1)[0], args.caps.map((cap) => ({ service: "tinycloud.kv", space: node.restorableSession.spaceId, path: cap.prefix, actions: cap.actions })), { expiry: args.expiresInMs });
+      if (grant?.ok === false) return grant;
       savedDelegation = grant.delegation;
       await persistProof();
       return { delegation: grant.delegation, cid: grant.delegation.cid, expiresAt: grant.delegation.expiry instanceof Date ? grant.delegation.expiry.toISOString() : String(grant.delegation.expiry) };
     }
     case "session.useDelegation": {
-      const compact = compactDelegateSession(args.delegation, args.hosts);
+      const proof = args.delegation;
+      const compact = compactDelegateSession(proof, args.hosts);
       await node.restoreSession(compact);
       savedPosture = "delegate-session";
       savedSession = compact;
       savedDeviceJwk = compact.jwk;
       savedVerificationMethod = compact.verificationMethod;
-      savedDelegation = args.delegation.delegation ?? args.delegation;
+      savedDelegation = proof.delegation ?? proof;
       await persistProof();
       return { spaceId: compact.spaceId, sessionExpiresAt: sessionExpiry(compact) };
     }
     case "kv.get": {
-      const result = sdkValue(await node.kv.get(args.key, { source: args.source, maxResponseBytes: args.maxResponseBytes, timeout: args.timeoutMs, space: args.space, signal: controller.signal, binary: true }));
-      const value = result?.data;
+      const result = await node.kv.get(args.key, { source: args.source, maxResponseBytes: args.maxResponseBytes, timeout: args.timeoutMs, space: args.space, signal: controller.signal, binary: true });
+      if (result?.ok === false) return result.error?.code === "KV_NOT_FOUND" ? { found: false } : result;
+      const value = sdkValue(result)?.data;
       return value === undefined || value === null ? { found: false } : { found: true, value: encoded(value) };
     }
     case "kv.put": return sdkValue(await node.kv.put(args.key, decoded(args.value), { contentType: args.contentType, timeout: args.timeoutMs, signal: controller.signal }));

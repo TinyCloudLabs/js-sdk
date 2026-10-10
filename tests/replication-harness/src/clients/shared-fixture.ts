@@ -1,40 +1,30 @@
+import { HarnessError } from "../contracts/common";
 import { prepareSharedEndpointStorageDeviceSpec } from "../contracts/frozen";
-import type { ClientConstructionOptions, SharedEndpointStorageDeviceFixture, SharedFixturePreparation } from "../contracts/frozen";
-import type { KvClient, SdkClient } from "../contracts/client";
-import type { RunEnvironment, Topology } from "../contracts/lifecycle";
-import type { TopologySpec } from "../contracts/topology";
+import type { RestartAuthMode, SharedEndpointStorageDeviceFixture, SharedFixtureFactory } from "../contracts/frozen";
 
-export interface SharedFixtureOptions extends SharedFixturePreparation {
-  environment: RunEnvironment;
-  createTopology(spec: TopologySpec): Promise<Topology>;
-  createClient(input: ClientConstructionOptions): Promise<KvClient>;
-}
-
-export async function createSharedEndpointStorageDeviceFixture(input: SharedFixtureOptions): Promise<SharedEndpointStorageDeviceFixture> {
+export const createSharedEndpointStorageDeviceFixture: SharedFixtureFactory = async (input) => {
   const preparedSpec = prepareSharedEndpointStorageDeviceSpec(input);
   const topology = await input.createTopology(preparedSpec);
   const [firstId, secondId] = input.clientIds;
-  const make = async (id: string): Promise<KvClient> => {
-    const spec = preparedSpec.clients.find((client) => client.id === id);
-    if (!spec) throw new Error(`Shared fixture client ${id} was not prepared`);
-    return input.createClient({ topology, environment: input.environment, spec, image: topology.node(spec.node).image, sut: input.environment.sut });
-  };
-  const first = await make(firstId);
-  const second = await make(secondId);
-  if (first.kind !== "sdk" || second.kind !== "sdk") throw new Error("Shared endpoint/storage/device fixture requires SDK clients");
+  const first = topology.sdk(firstId);
+  const second = topology.sdk(secondId);
+  if (first.kind !== "sdk" || second.kind !== "sdk") {
+    throw new HarnessError("TOPOLOGY_INVALID", "Shared endpoint/storage/device fixture requires SDK clients");
+  }
   return {
     canonicalEndpoint: input.canonicalEndpoint,
     replicaRoot: input.replicaRoot,
     mode: "foreground",
     devices: input.deviceProofs,
     topology,
-    clients: [first, second] as [SdkClient, SdkClient],
+    clients: [first, second],
     async reopen(clientId, options) {
-      if (options.refresh !== false) throw new Error("Shared fixture reopen may not refresh the client before use");
+      if (options.refresh !== false) throw new HarnessError("TOPOLOGY_INVALID", "Shared fixture reopen may not refresh the client before use");
       const current = clientId === firstId ? first : clientId === secondId ? second : undefined;
-      if (!current) throw new Error(`Unknown shared fixture client: ${clientId}`);
-      await current.restart({ auth: options.auth, signal: options.signal, deadlineMs: options.deadlineMs });
+      if (!current) throw new HarnessError("TOPOLOGY_INVALID", `Unknown shared fixture client: ${clientId}`);
+      const restartable = current as unknown as { restart(options: { auth: RestartAuthMode; signal?: AbortSignal; deadlineMs?: number }): Promise<void> };
+      await restartable.restart({ auth: options.auth, signal: options.signal, deadlineMs: options.deadlineMs });
       return current;
     },
   };
-}
+};

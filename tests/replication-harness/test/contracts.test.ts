@@ -49,8 +49,10 @@ describe("contract guards", () => {
     });
     const [first, second] = prepared.clients;
     expect([first.endpoint, second.endpoint]).toEqual(["https://node.example", "https://node.example"]);
+    expect([first.storageRoot, second.storageRoot]).toEqual(["/tmp/shared-replica", "/tmp/shared-replica"]);
     expect([first.replication && first.replication.mode, second.replication && second.replication.mode]).toEqual(["foreground", "foreground"]);
     expect([first.deviceProof, second.deviceProof]).toEqual([deviceProofs[0].proof, deviceProofs[1].proof]);
+    expect([first.deviceProof, second.deviceProof]).not.toEqual([deviceProofs[0].proof, deviceProofs[0].proof]);
     expect(first.deviceProof).not.toBe(second.deviceProof);
     expect(spec.clients[0].endpoint).toBeUndefined();
   });

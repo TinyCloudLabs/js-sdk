@@ -14,7 +14,7 @@ interface PackageMetadata extends JsonRecord { version?: string; bin?: string | 
 interface NpmMetadata { version: string; integrity?: string }
 
 function fail(message: string, detail?: unknown): never {
-  throw new HarnessError("SUT_RESOLVE_FAILED", message, detail);
+  throw new HarnessError("PREFLIGHT_FAILED", message, detail);
 }
 function asRecord(value: unknown, label: string): JsonRecord {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return fail(`${label} must be an object`);
@@ -57,7 +57,7 @@ async function npmView(name: string, version: string): Promise<NpmMetadata> {
   return fail(`npm view returned an unexpected result for ${name}@${version}`, parsed);
 }
 
-async function checkInstalledIntegrity(prefix: string, packageJson: string, name: string, expected?: string): Promise<void> {
+export async function checkInstalledIntegrity(prefix: string, packageJson: string, name: string, expected?: string): Promise<void> {
   if (typeof expected !== "string" || expected.length === 0) fail(`${name} has no registry integrity`, { name });
   const lockPath = join(prefix, "node_modules", ".package-lock.json");
   const lock = await readJson(lockPath, "Installed npm lockfile");
@@ -104,15 +104,24 @@ async function installPublished(request: SutResolutionRequest): Promise<Resolved
   const nodeSdk = await resolveAnchoredPackage(prefix, PACKAGE_NAMES.nodeSdk);
   const [cliNpm, sdkNpm] = await Promise.all([npmView(PACKAGE_NAMES.cli, cliVersion), npmView(PACKAGE_NAMES.nodeSdk, nodeSdkVersion)]);
   if (cliNpm.version !== cliVersion || sdkNpm.version !== nodeSdkVersion) fail("Registry returned a version different from the exact requested SUT", { cliVersion: cliNpm.version, nodeSdkVersion: sdkNpm.version });
+  await Promise.all([
+    checkInstalledIntegrity(prefix, cli.packageJson, PACKAGE_NAMES.cli, cliNpm.integrity),
+    checkInstalledIntegrity(prefix, nodeSdk.packageJson, PACKAGE_NAMES.nodeSdk, sdkNpm.integrity),
+  ]);
+  const bin = typeof cli.data.bin === "string" ? cli.data.bin : cli.data.bin?.tc;
+  if (!bin) fail("Resolved CLI package has no tc bin entry", cli.data.bin);
+  let entry: string;
+  try { entry = await realpath(resolve(dirname(cli.packageJson), bin)); }
+  catch (error) { return fail("Resolved CLI entry is missing", { packageJson: cli.packageJson, bin, error: String(error) }); }
+  const nodeModules = `${prefix}${sep}node_modules${sep}`;
+  if (!entry.startsWith(nodeModules)) fail("Resolved CLI entry escapes the anchored node_modules directory", { prefix, entry });
   const shimPath = join(prefix, "tc893-load-node-sdk.mjs");
   await writeFile(shimPath, 'export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
   const sdkShim = await import(pathToFileURL(shimPath).href) as { sdk: unknown; resolved: string };
-  if (!hasSdkPhase1Export(sdkShim.sdk)) fail("Published SDK lacks sqliteReplicaStorage required for Phase 1", { version: nodeSdk.data.version });
-  const bin = typeof cli.data.bin === "string" ? cli.data.bin : cli.data.bin?.tc;
-  if (!bin) fail("Resolved CLI package has no tc bin entry", cli.data.bin);
+  if (!hasSdkPhase1Export(sdkShim.sdk)) fail("Published SDK lacks sqliteReplicaStorage required for Phase 1", { version: nodeSdk.data.version, cliEntry: entry, cliVersion: cli.data.version });
   return {
     source: "published", root: prefix, lockfileSha256,
-    cli: { version: cli.data.version ?? cliNpm.version, packageJson: cli.packageJson, entry: resolve(join(prefix, bin)), integrity: cliNpm.integrity },
+    cli: { version: cli.data.version ?? cliNpm.version, packageJson: cli.packageJson, entry, integrity: cliNpm.integrity },
     nodeSdk: { version: nodeSdk.data.version ?? sdkNpm.version, packageJson: nodeSdk.packageJson, entry: sdkShim.resolved, condition: "import", integrity: sdkNpm.integrity },
   };
 }
