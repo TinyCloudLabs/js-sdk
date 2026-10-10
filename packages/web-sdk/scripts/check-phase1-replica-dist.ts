@@ -35,7 +35,7 @@ for (const filename of ["index.mjs", "index.cjs"] as const) {
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {
-  const test = spawnSync("bun", ["test", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
+  const test = spawnSync("bun", ["test", "--max-concurrency=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
     cwd: resolve(import.meta.dir, "../../.."),
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
