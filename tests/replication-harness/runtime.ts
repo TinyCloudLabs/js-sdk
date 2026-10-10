@@ -73,7 +73,7 @@ export async function registerGateRuntime(configure: GateRuntimeRegistrar): Prom
     let sut: ResolvedSut;
     let cleanup: (() => Promise<void>) | undefined;
     if (inputs.sut.source === "workspace") {
-      sut = await adapters.resolveSut({ mode: "workspace", root: inputs.sut.root ?? defaultWorkspaceRoot() });
+      sut = await adapters.resolveSut({ mode: "workspace", root: defaultWorkspaceRoot() });
     } else {
       if (!inputsDir) throw new Error("PUBLISHED_SUT_INPUTS_DIR_MISSING: leg did not provide the resolve artifact directory");
       const prefix = await mkdtemp(join(tmpdir(), "tc893-published-sut-"));
