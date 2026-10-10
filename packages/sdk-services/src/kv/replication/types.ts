@@ -152,6 +152,11 @@ export interface KVReplicaStorage {
   readonly kind: "sqlite" | "indexeddb";
   open(spec: KVReplicaSpec): Promise<KVReplicaHandle>;
   /**
+   * Read an existing replica's durable status without creating or mutating storage or waiting
+   * for a mutation guard. Missing replicas return undefined. Implementations must honor abort.
+   */
+  inspectStatus?(spec: KVReplicaSpec, options: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined>;
+  /**
    * Erases replicas for the identity and prefix across the deduplicated union of the adapter's
    * stored device (if any) and `sessionDeviceDid`. A missing stored device never skips the
    * session-device purge. Does not open, mint, or sync. Erasure removes entries, blobs, grant,
@@ -198,6 +203,8 @@ export interface PendingWriteStore {
   readonly identity: ReplicationIdentity;
   /** Consistent lock-free snapshot, e.g. a read of an atomic file replacement. */
   read(): Promise<PendingWriteState>;
+  /** Read an existing durable snapshot without initializing storage; undefined means no file exists. */
+  readExisting?(): Promise<PendingWriteState | undefined>;
   /** Serialized read-modify-write; durable stores persist before resolve. Errors on mismatch/failure. */
   update<T>(mutate: (s: PendingWriteState) => T): Promise<T>;
 }

@@ -18,7 +18,8 @@ type Statement = {
 };
 type NativeDatabase = { exec(sql: string): void; prepare(sql: string): Statement; close(): void };
 
-export type SqliteOpener = (path: string) => SqliteDatabase;
+export type SqliteOpenOptions = { readonly?: boolean };
+export type SqliteOpener = (path: string, options?: SqliteOpenOptions) => SqliteDatabase;
 
 function wrap(native: NativeDatabase): SqliteDatabase {
   const statements = new Map<string, Statement>();
@@ -59,8 +60,8 @@ export async function loadSqlite(): Promise<SqliteOpener> {
   const load = (specifier: string): Promise<Record<string, unknown>> => import(specifier);
   if (runtime.Bun !== undefined) {
     const module = await load(["bun", "sqlite"].join(":"));
-    const Database = module.Database as new (path: string, options: { create: boolean }) => NativeDatabase;
-    return (path) => wrap(new Database(path, { create: true }));
+    const Database = module.Database as new (path: string, options: { create: boolean; readonly?: boolean }) => NativeDatabase;
+    return (path, options) => wrap(new Database(path, { create: !options?.readonly, ...(options?.readonly ? { readonly: true } : {}) }));
   }
   const version = runtime.process?.versions?.node ?? "0.0.0";
   if (!nodeSqliteSupported(version)) {
@@ -84,6 +85,6 @@ export async function loadSqlite(): Promise<SqliteOpener> {
   } finally {
     process.emitWarning = emitWarning;
   }
-  const DatabaseSync = module.DatabaseSync as new (path: string) => NativeDatabase;
-  return (path) => wrap(new DatabaseSync(path));
+  const DatabaseSync = module.DatabaseSync as new (path: string, options?: { readOnly?: boolean }) => NativeDatabase;
+  return (path, options) => wrap(options?.readonly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path));
 }

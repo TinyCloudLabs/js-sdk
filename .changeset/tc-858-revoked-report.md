@@ -1,5 +1,7 @@
 ---
+"@tinycloud/node-sdk": patch
+"@tinycloud/replica": patch
 "@tinycloud/sdk-services": patch
 ---
 
-Replication status reopens persisted replica state when no handle is active in the current process, so reports retain revoked authority after a grant revocation is discovered and purged by an earlier invocation.
+Replica status reads existing SQLite state without creating or mutating storage, waiting on mutation guards, or recreating purged replicas. Status inspection is bounded and cancelled on controller close or purge; in-process grant revocation remains visible after the handle is generation-fenced.

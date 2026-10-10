@@ -132,6 +132,21 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     }
     return contents.split("\n").filter(Boolean).map((line) => JSON.parse(line) as ReplicationEventLog);
   }
+  async function filesNamed(root: string, filename: string): Promise<string[]> {
+    try {
+      const entries = await readdir(root, { withFileTypes: true });
+      const found: string[] = [];
+      for (const entry of entries) {
+        const path = join(root, entry.name);
+        if (entry.isDirectory()) found.push(...await filesNamed(path, filename));
+        else if (entry.name === filename) found.push(path);
+      }
+      return found;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
 
   async function ok<T = unknown>(args: string[], profile = "owner", options: Omit<ReplicationRunOptions, "profile"> = {}): Promise<T> {
     const result = await tc(args, { profile, ...options });
@@ -177,15 +192,19 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(profile.replication?.prefixes).toEqual(["notes", "variables"]);
     const varsPut = await tc(["vars", "put", "flag", "one"], { profile: "owner", extraEnv: { TC_PRIVATE_KEY: profile.privateKey } });
     expect(varsPut.code).toBe(0);
-    // 11. Before any replica is opened, flag-off and default reads are identical and leave no state or log.
+    // 11. A report may inspect status but must not initialize a never-opened replica partition.
     const profileDir = join(home, ".tinycloud", "profiles", "owner", "replication");
+    const beforeActivationReport = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on" });
+    expect(beforeActivationReport.code).toBe(0);
+    expect(JSON.parse(beforeActivationReport.stdout.toString()).replicas).toEqual([]);
+    await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+    // Before any replica is opened, flag-off and default reads are identical and leave no state or log.
     const flagOffBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "off" });
     const defaultBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner" });
     expect(flagOffBeforeActivation.code).toBe(0);
     expect(flagOffBeforeActivation.stdout).toEqual(defaultBeforeActivation.stdout);
     expect(flagOffBeforeActivation.stderr).not.toContain("replica");
     expect(defaultBeforeActivation.stderr).not.toContain("replica");
-    await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
 
     // 3. Both explicit and environment activation serve covered reads locally; raw data is byte-identical.
     const hit = await tc(["kv", "get", "notes/a.txt"], { profile: "owner", replication: "on" });
@@ -533,6 +552,20 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(report.totals.replicaReads).toBeGreaterThan(0);
     expect(report.replicas.length).toBeGreaterThan(0);
     expect(report.partitions.length).toBeGreaterThan(0);
+    const purgeReport = await ok<{
+      replicas: Array<{ prefix: string }>;
+      partitions: Array<{ idHash: string; host: string | null }>;
+      purged: { purged: string[]; failed: Array<{ prefix: string; code: string }> };
+    }>(["replica", "report", "--json", "--purge"], "owner", { replication: "on" });
+    expect(purgeReport.purged.purged).toContain("notes");
+    expect(purgeReport.purged.failed).toEqual([]);
+    expect(purgeReport.replicas.some((replica) => replica.prefix === "notes")).toBe(false);
+    const primaryPartitions = purgeReport.partitions.filter((partition) => partition.host === host);
+    expect(primaryPartitions.length).toBeGreaterThan(0);
+    const remainingPrimaryDatabases = (await Promise.all(
+      primaryPartitions.map((partition) => filesNamed(join(profileDir, partition.idHash), "replica.db")),
+    )).flat();
+    expect(remainingPrimaryDatabases).toEqual([]);
     await ok(["auth", "logout"], "owner");
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(space).toMatch(/^tinycloud:/);

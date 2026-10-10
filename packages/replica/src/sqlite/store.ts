@@ -246,6 +246,47 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   /**
+   * Inspect an existing replica without creating files, running migrations,
+   * recovering revocation cleanup, or entering the mutation guard.
+   */
+  static async inspect(
+    dir: string,
+    options: { now?: () => number; signal?: AbortSignal } = {},
+  ): Promise<{ state: ReplicaState; status: ReplicaStatus } | null> {
+    const checkAbort = () => {
+      if (options.signal?.aborted) throw options.signal.reason ?? new ReplicaError(ReplicaErrorCode.CLOSED, "Replica status inspection was cancelled.");
+    };
+    checkAbort();
+    const dbPath = join(dir, "replica.db");
+    let ino: number;
+    try {
+      ino = (await stat(dbPath)).ino;
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT") return null;
+      throw storageError(error, "Inspecting the replica");
+    }
+    checkAbort();
+    const opener = await loadSqlite();
+    checkAbort();
+    let db: SqliteDatabase | undefined;
+    try {
+      db = opener(dbPath, { readonly: true });
+      checkAbort();
+      const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
+      const state = await store.open();
+      checkAbort();
+      if (state === null) return null;
+      const status = await store.status();
+      checkAbort();
+      return { state, status };
+    } catch (error) {
+      throw storageError(error, "Inspecting the replica");
+    } finally {
+      db?.close();
+    }
+  }
+
+  /**
    * Open the replica store in `dir`. With `create: false` a missing replica is
    * REPLICA_NOT_FOUND and nothing is written to disk.
    */
