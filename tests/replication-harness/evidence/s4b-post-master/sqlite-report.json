@@ -1,0 +1,2509 @@
+{
+  "schema": "tc893.report/v1",
+  "kind": "adhoc",
+  "runId": "tc893-s4b-post-master-sqlite",
+  "startedAt": "2026-10-10T10:35:21.032Z",
+  "finishedAt": "2026-10-10T10:41:00.045Z",
+  "durationMs": 339008.437084,
+  "interrupted": false,
+  "invocation": {
+    "tiers": [
+      "core"
+    ],
+    "set": null,
+    "only": [
+      "CORE-06",
+      "CORE-07",
+      "CORE-08",
+      "CORE-09",
+      "CORE-10",
+      "CORE-11"
+    ],
+    "backends": [
+      "sqlite"
+    ],
+    "concurrency": 1,
+    "speedConcurrency": 1,
+    "argv": [
+      "run",
+      "--tier",
+      "core",
+      "--only",
+      "CORE-06,CORE-07,CORE-08,CORE-09,CORE-10,CORE-11",
+      "--backend",
+      "sqlite",
+      "--concurrency",
+      "1",
+      "--sut-root",
+      "[REDACTED_PATH]",
+      "--run-id",
+      "tc893-s4b-post-master-sqlite",
+      "--results",
+      "[REDACTED_PATH]"
+    ]
+  },
+  "filtered": true,
+  "subject": {
+    "repo": "local",
+    "event": "local",
+    "ref": "feat/tc-893-harness-s4b",
+    "sha": "366d8f02ebcab3bf9fc298cd9dc8ca796628277d"
+  },
+  "harnessSha": "366d8f02ebcab3bf9fc298cd9dc8ca796628277d",
+  "harnessDirty": true,
+  "inputsSha256": null,
+  "manifestSha256": null,
+  "environment": {
+    "runnerClass": "local",
+    "os": "linux-x64",
+    "cpus": 64,
+    "docker": "sudo -n docker",
+    "node": "24.3.0",
+    "bun": "1.3.14"
+  },
+  "sut": {
+    "source": "workspace",
+    "root": "[REDACTED_PATH]",
+    "gitSha": "f3306fc7eeac1ab216980c213e5e143c33092cb9",
+    "dirty": true,
+    "distSha256": "7a7363cca9cbd05ed35e651a4b2bb64f9fca87996cc351ae5b2b4490ce4f016a",
+    "cli": {
+      "version": "1.1.0",
+      "packageJson": "[REDACTED_PATH]",
+      "entry": "[REDACTED_PATH]"
+    },
+    "nodeSdk": {
+      "version": "3.1.0",
+      "packageJson": "[REDACTED_PATH]",
+      "entry": "file://[REDACTED_PATH]",
+      "condition": "import"
+    }
+  },
+  "image": {
+    "role": "default",
+    "ref": "ghcr.io/tinycloudlabs/tinycloud-node:1.20.0-dstack@sha256:10f6114c439a55bfcb8c14ef0df220efd08cb6ee9c894fd780d2e10e10701bac",
+    "digest": "sha256:10f6114c439a55bfcb8c14ef0df220efd08cb6ee9c894fd780d2e10e10701bac",
+    "pinned": "ghcr.io/tinycloudlabs/tinycloud-node:1.20.0-dstack@sha256:10f6114c439a55bfcb8c14ef0df220efd08cb6ee9c894fd780d2e10e10701bac",
+    "nodeVersion": "1.20.0",
+    "features": [
+      "kv",
+      "delegation",
+      "sharing",
+      "sql",
+      "hooks",
+      "signed-urls",
+      "encryption",
+      "kv-sync-v1",
+      "tee"
+    ]
+  },
+  "results": [
+    {
+      "key": "CORE-06[cli]@sqlite",
+      "id": "CORE-06",
+      "variant": "cli",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 15620.585307000001,
+      "assertions": [
+        {
+          "name": "seed primary value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed uncovered value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed existing recovery value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "warm covered prefix sync succeeds",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "exit": 0,
+            "stderr": "",
+            "syncs": [
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "stale_read",
+                "outcome": "ok",
+                "durationMs": 81,
+                "lagMs": null,
+                "pendingCleared": 2,
+                "pages": 1,
+                "changes": 2,
+                "deleted": 0,
+                "fetched": 2,
+                "contentMissing": 0,
+                "coverage": "complete",
+                "at": "2026-10-10T10:35:28.950Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "warm read is a replica hit",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 234,
+            "stalenessMs": 40,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:35:30.141Z"
+          }
+        },
+        {
+          "name": "offline covered get is served from replica with sync error",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 197,
+            "stalenessMs": 1196,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": false,
+            "syncError": "NETWORK_ERROR",
+            "at": "2026-10-10T10:35:31.297Z"
+          }
+        },
+        {
+          "name": "offline covered list succeeds",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "keys": [
+              "notes/a.txt",
+              "notes/offline-write"
+            ]
+          }
+        },
+        {
+          "name": "offline write is not committed",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "outcome": "failed",
+            "code": "EXIT_1"
+          }
+        },
+        {
+          "name": "offline write did not change the network value",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "found": true,
+            "stderr": ""
+          }
+        },
+        {
+          "name": "sync recovers after connectivity returns",
+          "ok": true,
+          "detail": [
+            {
+              "type": "replication.sync",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "trigger": "stale_read",
+              "outcome": "ok",
+              "durationMs": 63,
+              "lagMs": null,
+              "pendingCleared": 0,
+              "pages": 1,
+              "changes": 0,
+              "deleted": 0,
+              "fetched": 0,
+              "contentMissing": 0,
+              "coverage": "complete",
+              "at": "2026-10-10T10:35:36.549Z"
+            }
+          ]
+        },
+        {
+          "name": "offline read metadata reports sync error",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 197,
+            "stalenessMs": 1196,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": false,
+            "syncError": "NETWORK_ERROR",
+            "at": "2026-10-10T10:35:31.297Z"
+          }
+        },
+        {
+          "name": "offline uncovered CLI get is refused with NETWORK_ERROR and no replica read event",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "code": "EXIT_1",
+            "exit": 1,
+            "stderr": "{\n  \"error\": {\n    \"code\": \"NETWORK_ERROR\",\n    \"message\": \"fetch failed\",\n    \"hint\": \"Active profile \\\"owner\\\" → http://127.0.0.1:35365\\nNo other profiles configured. Run `tc profile create <name>` or `tc init`.\\nOr override per-command with --host or TC_HOST.\"\n  }\n}\n",
+            "events": []
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-06_cli__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 1504,
+          "sha256": "bb733731cbacb8af0289ff47c4243eb8dc714e8fb9c09b764311736025e2ec82"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 113,
+          "sha256": "a9441d5764bc10853fc34352763af57072d9ae09a0cac7c6d96cb8797018a229"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 403640,
+          "sha256": "5393330a8c0486515ecbbde8a7f7ae63d9eea972bef08de18d0294b40ff84151"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 827,
+          "sha256": "bbf672e3fa4f1d8b876abb02ee0a344358cb232f5689789087c168d5c1cc1b8f"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 10060,
+          "sha256": "cace6f080905f659a83f01edb0bd192cf5fb30d71702893daf367ecfa5deb9c2"
+        },
+        {
+          "path": "result.json",
+          "bytes": 5506,
+          "sha256": "3d3c34586d54d324cdf8c8b5c3096583794942f8a6944a7b02781ab1afebe4fc"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-06[sdk]@sqlite",
+      "id": "CORE-06",
+      "variant": "sdk",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 2606.3562820000006,
+      "assertions": [
+        {
+          "name": "seed primary value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed uncovered value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed existing recovery value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "warm covered prefix sync succeeds",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "syncs": [
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "manual",
+                "outcome": "ok",
+                "durationMs": 33,
+                "lagMs": null,
+                "pendingCleared": 2,
+                "pages": 1,
+                "changes": 2,
+                "deleted": 0,
+                "fetched": 2,
+                "contentMissing": 0,
+                "coverage": "complete",
+                "at": "2026-10-10T10:35:42.995Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "warm read is a replica hit",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 27,
+            "stalenessMs": 11,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:35:43.024Z"
+          }
+        },
+        {
+          "name": "offline covered get is served from replica with sync error",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 14,
+            "stalenessMs": 28,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": false,
+            "syncError": "NETWORK_ERROR",
+            "at": "2026-10-10T10:35:43.042Z"
+          }
+        },
+        {
+          "name": "offline covered list succeeds",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "keys": [
+              "notes/a.txt",
+              "notes/offline-write"
+            ]
+          }
+        },
+        {
+          "name": "offline write is not committed",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "outcome": "failed",
+            "code": "NETWORK_ERROR"
+          }
+        },
+        {
+          "name": "offline write did not change the network value",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "found": true
+          }
+        },
+        {
+          "name": "sync recovers after connectivity returns",
+          "ok": true,
+          "detail": [
+            {
+              "type": "replication.sync",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "trigger": "manual",
+              "outcome": "ok",
+              "durationMs": 15,
+              "lagMs": null,
+              "pendingCleared": 0,
+              "pages": 1,
+              "changes": 0,
+              "deleted": 0,
+              "fetched": 0,
+              "contentMissing": 0,
+              "coverage": "complete",
+              "at": "2026-10-10T10:35:43.094Z"
+            }
+          ]
+        },
+        {
+          "name": "offline read metadata reports sync error",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 14,
+            "stalenessMs": 28,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": false,
+            "syncError": "NETWORK_ERROR",
+            "at": "2026-10-10T10:35:43.042Z"
+          }
+        },
+        {
+          "name": "offline uncovered get is refused",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "code": "NETWORK_ERROR"
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-06_sdk__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 1536,
+          "sha256": "3545ce3b0a4bc6914b327ec03b7da215c16577c931a00aa26a69d3c1256bb225"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 113,
+          "sha256": "bd4431eb7ae99bee222a4609fa2e1523e23d769562325d6ed33f213419550377"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 246764,
+          "sha256": "ec5674379f3bd7e2c902b0ca1832e43f04e3e2a4c51957c16ba1502c6028ffd0"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 4890,
+          "sha256": "c778859f9a7979b274d7044681c604e5e140efcd7f0a5ea35f2fffaca091399b"
+        },
+        {
+          "path": "result.json",
+          "bytes": 5028,
+          "sha256": "029018e7640b07e47f090d511870ae03ed44229a10387aa0e2cc2e751fb06e20"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-07[cli]@sqlite",
+      "id": "CORE-07",
+      "variant": "cli",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 92193.092834,
+      "assertions": [
+        {
+          "name": "seed primary value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed uncovered value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed existing recovery value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "warm covered prefix sync succeeds",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "exit": 0,
+            "stderr": "",
+            "syncs": [
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "stale_read",
+                "outcome": "ok",
+                "durationMs": 92,
+                "lagMs": null,
+                "pendingCleared": 0,
+                "pages": 1,
+                "changes": 2,
+                "deleted": 0,
+                "fetched": 2,
+                "contentMissing": 0,
+                "coverage": "complete",
+                "at": "2026-10-10T10:36:01.274Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "warm read is a replica hit",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 127,
+            "stalenessMs": 35,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:36:02.443Z"
+          }
+        },
+        {
+          "name": "reader session expiry is present",
+          "ok": true,
+          "detail": {
+            "posture": "delegate-session",
+            "sessionExpiresAt": 1791628634000,
+            "grantExpiresAt": 1791628634000
+          }
+        },
+        {
+          "name": "expired reader does not serve offline replica",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "found": false,
+            "code": "EXIT_1",
+            "exit": 1
+          }
+        },
+        {
+          "name": "expired offline invocation has no replica read event",
+          "ok": true,
+          "detail": [
+            {
+              "type": "replication.state",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "state": "opened",
+              "at": "2026-10-10T10:37:17.017Z"
+            },
+            {
+              "type": "replication.state",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "state": "grant_missing",
+              "code": "SESSION_EXPIRING",
+              "at": "2026-10-10T10:37:17.017Z"
+            },
+            {
+              "type": "replication.state",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "state": "closed",
+              "at": "2026-10-10T10:37:17.044Z"
+            }
+          ]
+        },
+        {
+          "name": "online expiry is refused or returns current network value",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "found": false,
+            "read": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "network",
+              "reason": "grant_missing",
+              "outcome": "error",
+              "latencyMs": 59,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "code": "SESSION_EXPIRING",
+              "at": "2026-10-10T10:37:18.114Z"
+            },
+            "code": "EXIT_5",
+            "exit": 5
+          }
+        },
+        {
+          "name": "expired online invocation has no replica read event",
+          "ok": true,
+          "detail": [
+            {
+              "type": "replication.state",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "state": "opened",
+              "at": "2026-10-10T10:37:18.083Z"
+            },
+            {
+              "type": "replication.state",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "state": "grant_missing",
+              "code": "SESSION_EXPIRING",
+              "at": "2026-10-10T10:37:18.084Z"
+            },
+            {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "network",
+              "reason": "grant_missing",
+              "outcome": "error",
+              "latencyMs": 59,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "code": "SESSION_EXPIRING",
+              "at": "2026-10-10T10:37:18.114Z"
+            },
+            {
+              "type": "replication.state",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "state": "closed",
+              "at": "2026-10-10T10:37:18.116Z"
+            }
+          ]
+        },
+        {
+          "name": "still-authorized control client confirms last committed value",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "found": true
+          }
+        },
+        {
+          "name": "offline CLI expiry without TC-674 is refused with a code and no local read",
+          "ok": true,
+          "detail": {
+            "probe": "requirement probe unavailable: tc674:delegate-session-expiry",
+            "exit": 1,
+            "code": "EXIT_1",
+            "stderr": "[replication] Warning: no usable kv/get+sync grant for notes/; reads use the network (SESSION_EXPIRING).\n{\n  \"error\": {\n    \"code\": \"NETWORK_ERROR\",\n    \"message\": \"fetch failed\",\n    \"hint\": \"Active profile \\\"reader\\\" → [REDACTED]\\nNo other profiles configured. Run `tc profile create <name>` or `tc init`.\\nOr override per-command with --host or TC_HOST.\"\n  }\n}\n",
+            "events": [
+              {
+                "type": "replication.state",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "state": "opened",
+                "at": "2026-10-10T10:37:17.017Z"
+              },
+              {
+                "type": "replication.state",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "state": "grant_missing",
+                "code": "SESSION_EXPIRING",
+                "at": "2026-10-10T10:37:17.017Z"
+              },
+              {
+                "type": "replication.state",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "state": "closed",
+                "at": "2026-10-10T10:37:17.044Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "online CLI expiry uses supported refusal",
+          "ok": true,
+          "detail": {
+            "exit": 5,
+            "code": "EXIT_5"
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-07_cli__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 2471,
+          "sha256": "27a6daac286d345abc4dea746e7ab617ca6a4376b505bfcc3c1def67b7071bbe"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 107,
+          "sha256": "67ed10a6947c31891caf4ac603bfe2e8c531b920b020e097f807caabd7eafea6"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 985324,
+          "sha256": "8f6f36a6de57f09d1c438bd1333238daf0c48697fc1dec27ca36133a0370780a"
+        },
+        {
+          "path": "clients/writer/stderr.log",
+          "bytes": 203,
+          "sha256": "228b266aafd4a005dc8b72e47439ea64397276777f4cc38f05cbe6a5309c0378"
+        },
+        {
+          "path": "clients/writer/events.jsonl",
+          "bytes": 495,
+          "sha256": "6180a92c1d45eb150829a3aa38d24fec52ddb69a8c7c365a855de5c0d7ff2896"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 951,
+          "sha256": "ff9304b726eb72427cc4772a16dc70b658e6b52ce4d18af656bb471795a3b19c"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 4496,
+          "sha256": "ce24425d1025a8877345666c96ed02c0ca7029ed372ec5570117d328780988cc"
+        },
+        {
+          "path": "clients/control/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/control/events.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "result.json",
+          "bytes": 8108,
+          "sha256": "1ac0d6a914807ebdc4be4ff7b5102465b1f9c0bfae76d2652d29f530fdf1cc47"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-07[sdk]@sqlite",
+      "id": "CORE-07",
+      "variant": "sdk",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 75091.95025799998,
+      "assertions": [
+        {
+          "name": "seed primary value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed uncovered value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "seed existing recovery value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "warm covered prefix sync succeeds",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "syncs": [
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "manual",
+                "outcome": "ok",
+                "durationMs": 33,
+                "lagMs": null,
+                "pendingCleared": 0,
+                "pages": 1,
+                "changes": 2,
+                "deleted": 0,
+                "fetched": 2,
+                "contentMissing": 0,
+                "coverage": "complete",
+                "at": "2026-10-10T10:37:27.297Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "warm read is a replica hit",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 30,
+            "stalenessMs": 12,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:37:27.328Z"
+          }
+        },
+        {
+          "name": "reader session expiry is present",
+          "ok": true,
+          "detail": {
+            "posture": "owner",
+            "sessionExpiresAt": 1791628716089,
+            "grantExpiresAt": null
+          }
+        },
+        {
+          "name": "expired reader does not serve offline replica",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "found": false,
+            "code": "NETWORK_ERROR"
+          }
+        },
+        {
+          "name": "expired offline invocation has no replica read event",
+          "ok": true,
+          "detail": [
+            {
+              "type": "replication.sync",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "trigger": "stale_read",
+              "outcome": "error",
+              "class": "node",
+              "code": "GRANT_EXPIRED",
+              "durationMs": 27,
+              "lagMs": null,
+              "at": "2026-10-10T10:38:38.151Z"
+            }
+          ]
+        },
+        {
+          "name": "online expiry is refused or returns current network value",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "found": false,
+            "read": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "network",
+              "reason": "stale",
+              "outcome": "error",
+              "latencyMs": 17,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "code": "GRANT_EXPIRED",
+              "syncedBeforeRead": false,
+              "at": "2026-10-10T10:38:38.174Z"
+            },
+            "code": "AUTH_UNAUTHORIZED"
+          }
+        },
+        {
+          "name": "expired online invocation has no replica read event",
+          "ok": true,
+          "detail": [
+            {
+              "type": "replication.sync",
+              "space": "[REDACTED]",
+              "replica": "notes/",
+              "trigger": "stale_read",
+              "outcome": "error",
+              "class": "node",
+              "code": "GRANT_EXPIRED",
+              "durationMs": 2,
+              "lagMs": null,
+              "at": "2026-10-10T10:38:38.165Z"
+            },
+            {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "network",
+              "reason": "stale",
+              "outcome": "error",
+              "latencyMs": 17,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "code": "GRANT_EXPIRED",
+              "syncedBeforeRead": false,
+              "at": "2026-10-10T10:38:38.174Z"
+            }
+          ]
+        },
+        {
+          "name": "still-authorized control client confirms last committed value",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "found": true
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-07_sdk__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 2203,
+          "sha256": "edc32b87362a1aa71822f0993d75e673514c8952c561cf9bb8b1ff6eb0fb9650"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 107,
+          "sha256": "67ed10a6947c31891caf4ac603bfe2e8c531b920b020e097f807caabd7eafea6"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 454533,
+          "sha256": "347c05340ec4696a1a2ba755d5b954c8a691fe5846487ba40b0dc218a549d376"
+        },
+        {
+          "path": "clients/writer/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/writer/events.jsonl",
+          "bytes": 498,
+          "sha256": "0066ce2179445e3813012bd8c735479a39bca135832e5bfd7bcad62c6e57faa4"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 2759,
+          "sha256": "b2baed7087169ba3637cceafa7fb11aeda33659a5d0c3ec760c5f6e493aecf84"
+        },
+        {
+          "path": "clients/control/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/control/events.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "result.json",
+          "bytes": 5944,
+          "sha256": "5d45430511eed62c09f786861c6e29e334324632d78e5a0ba486385d1868506f"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-09[cli]@sqlite",
+      "id": "CORE-09",
+      "variant": "cli",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 15457.315294,
+      "assertions": [
+        {
+          "name": "write sentinel value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "sync sentinel value",
+          "ok": true,
+          "detail": {
+            "exit": 0,
+            "stderr": "",
+            "syncs": [
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "stale_read",
+                "outcome": "ok",
+                "durationMs": 77,
+                "lagMs": null,
+                "pendingCleared": 1,
+                "pages": 1,
+                "changes": 1,
+                "deleted": 0,
+                "fetched": 1,
+                "contentMissing": 0,
+                "coverage": "complete",
+                "at": "2026-10-10T10:38:51.545Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sentinel is warm before logout or purge",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 237,
+            "stalenessMs": 41,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:38:52.745Z"
+          }
+        },
+        {
+          "name": "CLI logout succeeds",
+          "ok": true,
+          "detail": {
+            "exit": 0,
+            "stderr": ""
+          }
+        },
+        {
+          "name": "CLI logout removes replication directories",
+          "ok": true,
+          "detail": {
+            "replicationExists": false,
+            "legacyExists": false
+          }
+        },
+        {
+          "name": "CLI logout removes sentinel bytes",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "name": "second profile writes independent sentinel",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "second profile warms an independent replica",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "tinycloud:pkh:eip155:1:0xFf892cF6213A543749720EF6b008Be003d9E08D6:default",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 295,
+            "stalenessMs": 46,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:38:55.926Z"
+          }
+        },
+        {
+          "name": "second profile logout keeps replicas",
+          "ok": true,
+          "detail": {
+            "exit": 0,
+            "stderr": ""
+          }
+        },
+        {
+          "name": "keep-replicas preserves replication directories",
+          "ok": true,
+          "detail": {
+            "keptReplication": true,
+            "keptLegacy": true
+          }
+        },
+        {
+          "name": "CLI read after logout is not locally served",
+          "ok": true,
+          "detail": {
+            "exit": 1
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-09_cli__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 1802,
+          "sha256": "f77bbf2a203af17fef7c1bd164025bc09bc08f382051628bec7ac2467d0497b4"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 222,
+          "sha256": "64135c43beaa4be03262ebde19c644377a71a9a24d55abc4a26cfcd0bbe7985b"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 548447,
+          "sha256": "c83b734b2cb1c49354c718743a99298ae37bc6e757286e11bd89801da7c19d4f"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 380,
+          "sha256": "6e14fedf0b273f65e4a0cd723ebad6e86ac94ac881ebf002e42987170f7ff50a"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 3040,
+          "sha256": "d84116404887197004981e5aa6244066a44caeab61b447fcaec0bc5fe907b585"
+        },
+        {
+          "path": "clients/keep/stderr.log",
+          "bytes": 235,
+          "sha256": "e347d88ef1f2c0c6040cfc7bad38f8db7a42ffa9699f210fd56cdf8afbfb0c76"
+        },
+        {
+          "path": "clients/keep/events.jsonl",
+          "bytes": 2006,
+          "sha256": "0983d505fc0668caeafd042271446fd05a6a2d2b7d47624caf121e23f9ef076a"
+        },
+        {
+          "path": "result.json",
+          "bytes": 4319,
+          "sha256": "01843722b70f83b9491627aa936860ae693cb479d24b9a371071be9c9b495d89"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-09[sdk]@sqlite",
+      "id": "CORE-09",
+      "variant": "sdk",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 2390.172067000007,
+      "assertions": [
+        {
+          "name": "write sentinel value",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "sync sentinel value",
+          "ok": true,
+          "detail": {
+            "syncs": [
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "manual",
+                "outcome": "ok",
+                "durationMs": 31,
+                "lagMs": null,
+                "pendingCleared": 1,
+                "pages": 1,
+                "changes": 1,
+                "deleted": 0,
+                "fetched": 1,
+                "contentMissing": 0,
+                "coverage": "complete",
+                "at": "2026-10-10T10:39:05.448Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sentinel is warm before logout or purge",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 25,
+            "stalenessMs": 11,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:05.475Z"
+          }
+        },
+        {
+          "name": "SDK purge returns purged prefix and no failures",
+          "ok": true,
+          "detail": {
+            "actual": {
+              "failed": [],
+              "purged": [
+                "notes/"
+              ]
+            },
+            "expected": {
+              "failed": [],
+              "purged": [
+                "notes/"
+              ]
+            }
+          }
+        },
+        {
+          "name": "SDK purge removes sentinel bytes",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "name": "SDK read after purge is not locally served",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "code": "NETWORK_ERROR"
+          }
+        },
+        {
+          "name": "SDK status is closed after purge",
+          "ok": true,
+          "detail": []
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-09_sdk__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 1536,
+          "sha256": "b8b5ebd0848f9de9ce921801bfeea20ddd720ab18edd9d98210960c6e1f3c74e"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 114,
+          "sha256": "969201d92c672ab70eb43b8a85091e55973e1b658ac437d9a9a4c0ecda58da8c"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 188767,
+          "sha256": "847536fd9240aeabdcf4cf2f81a04519ab92e8b76141af3bc3165e436902cd24"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 2212,
+          "sha256": "285272d1b42683d98ffe6261406ba168c3afc5b87b5f10f5914509b6e76d2d22"
+        },
+        {
+          "path": "result.json",
+          "bytes": 3075,
+          "sha256": "5e91c574f4f830dabbffef81926d2a9366e2fa449b057d9769dd03e867215e7e"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-10[cli]@sqlite",
+      "id": "CORE-10",
+      "variant": "cli",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 21582.850522000022,
+      "assertions": [
+        {
+          "name": "write A value on node a",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "write B value on node b",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "write node-b-only key",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "reader on node a observes A",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 311,
+            "stalenessMs": 50,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:21.435Z"
+          }
+        },
+        {
+          "name": "node-b-only key is absent through node a replica or network",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/only-b",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "absent",
+            "outcome": "not_found",
+            "latencyMs": 304,
+            "stalenessMs": 38,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:26.656Z"
+          }
+        },
+        {
+          "name": "CLI report lists two distinct node partitions",
+          "ok": true,
+          "detail": {
+            "exits": [
+              0,
+              0
+            ],
+            "partitions": [
+              {
+                "idHash": "qb2wi3dxbzhs73jedrfhj4ifbl",
+                "host": "http://127.0.0.1:35383",
+                "space": "tinycloud:pkh:eip155:1:0x843a7f45d468db7e7e2490f5599371e102c2632a:default",
+                "pinned": 0
+              },
+              {
+                "idHash": "yxf237p7mav7wimrkyskdbmzi6",
+                "host": "http://127.0.0.1:35384",
+                "space": "tinycloud:pkh:eip155:1:0x843a7f45d468db7e7e2490f5599371e102c2632a:default",
+                "pinned": 0
+              },
+              {
+                "idHash": "yxf237p7mav7wimrkyskdbmzi6",
+                "host": "http://127.0.0.1:35384",
+                "space": "tinycloud:pkh:eip155:1:0x843a7f45d468db7e7e2490f5599371e102c2632a:default",
+                "pinned": 0
+              }
+            ]
+          }
+        },
+        {
+          "name": "node a and b have distinct proxy endpoints",
+          "ok": true
+        },
+        {
+          "name": "stopping b does not affect reads via a",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "read": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "replica",
+              "reason": "hit",
+              "outcome": "found",
+              "latencyMs": 227,
+              "stalenessMs": 40,
+              "coverage": "complete",
+              "authority": "valid",
+              "syncedBeforeRead": true,
+              "at": "2026-10-10T10:39:31.594Z"
+            }
+          }
+        },
+        {
+          "name": "reader through node b observes B",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 339,
+            "stalenessMs": 48,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:24.377Z"
+          }
+        },
+        {
+          "name": "node-b-only key is absent through node a network",
+          "ok": true,
+          "detail": {
+            "opSeq": 7,
+            "startedMono": 246688.231925,
+            "durationMs": 974.0152379999927,
+            "events": [],
+            "exit": 4,
+            "signal": null,
+            "stdout": {
+              "type": "Buffer",
+              "data": []
+            },
+            "stderr": "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/only-b\\\" not found\"\n  }\n}\n",
+            "ok": true,
+            "found": false,
+            "code": "NOT_FOUND"
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-10_cli__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 2395,
+          "sha256": "2c7e22e4b3157cd1384c0bae01b040c3fc481f9537824f237489e8eb86cea2bb"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 338,
+          "sha256": "f181fef1f6cfc7fa47c0f15ca69c8315c919b970e4aaea0aed2e087617dfdf5b"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 368691,
+          "sha256": "ddb7b17260cdbe3f19d3cb0b7eb6627a1d2639873fb3e069a6fdca44d95680c7"
+        },
+        {
+          "path": "nodes/nodeb.log",
+          "bytes": 802639,
+          "sha256": "66d1bdb86b2e43e258fb33748ca1973c5414730bd6cba450b332a2a6aff66476"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 391,
+          "sha256": "05b3a3aaf4554963eeb0c7e5e748cf5508fa7f4e0c43b9e51a1d06e80b4d2498"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 5864,
+          "sha256": "134cfa093d3051d7f995c6920e7c4e092c03e2140e08621583ab18fa6b07cb1f"
+        },
+        {
+          "path": "clients/writerb/stderr.log",
+          "bytes": 203,
+          "sha256": "228b266aafd4a005dc8b72e47439ea64397276777f4cc38f05cbe6a5309c0378"
+        },
+        {
+          "path": "clients/writerb/events.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "result.json",
+          "bytes": 5689,
+          "sha256": "09f36710395b6ebdc89910a4a7866e3d07984d00f54ca3708fbb007d5cb1b7d2"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-10[sdk]@sqlite",
+      "id": "CORE-10",
+      "variant": "sdk",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 6418.9657950000255,
+      "assertions": [
+        {
+          "name": "write A value on node a",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "write B value on node b",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "write node-b-only key",
+          "ok": true,
+          "detail": {}
+        },
+        {
+          "name": "reader on node a observes A",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 210,
+            "stalenessMs": 16,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:42.073Z"
+          }
+        },
+        {
+          "name": "node-b-only key is absent through node a replica or network",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/only-b",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "absent",
+            "outcome": "not_found",
+            "latencyMs": 26,
+            "stalenessMs": 11,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:43.176Z"
+          }
+        },
+        {
+          "name": "node a and b have distinct proxy endpoints",
+          "ok": true
+        },
+        {
+          "name": "stopping b does not affect reads via a",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "read": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "replica",
+              "reason": "hit",
+              "outcome": "found",
+              "latencyMs": 22,
+              "stalenessMs": 8,
+              "coverage": "complete",
+              "authority": "valid",
+              "syncedBeforeRead": true,
+              "at": "2026-10-10T10:39:44.315Z"
+            }
+          }
+        },
+        {
+          "name": "reader through node b observes B",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 227,
+            "stalenessMs": 18,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:39:43.142Z"
+          }
+        },
+        {
+          "name": "node-b-only key is absent through node a network",
+          "ok": true,
+          "detail": {
+            "opSeq": 4,
+            "startedMono": 265412.76143,
+            "durationMs": 7.579911999986507,
+            "events": [
+              {
+                "clientId": "reader",
+                "seq": 10,
+                "opSeq": 4,
+                "attribution": "op",
+                "recvMono": 265420.222102,
+                "event": {
+                  "type": "replication.read",
+                  "op": "get",
+                  "space": "[REDACTED]",
+                  "key": "notes/only-b",
+                  "replica": null,
+                  "source": "network",
+                  "reason": "NETWORK_REQUESTED",
+                  "outcome": "not_found",
+                  "latencyMs": 7,
+                  "stalenessMs": null,
+                  "coverage": null,
+                  "authority": null,
+                  "at": "2026-10-10T10:39:43.150Z"
+                }
+              }
+            ],
+            "ok": true,
+            "found": false,
+            "readEvent": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/only-b",
+              "replica": null,
+              "source": "network",
+              "reason": "NETWORK_REQUESTED",
+              "outcome": "not_found",
+              "latencyMs": 7,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "at": "2026-10-10T10:39:43.150Z"
+            },
+            "read": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/only-b",
+              "replica": null,
+              "source": "network",
+              "reason": "NETWORK_REQUESTED",
+              "outcome": "not_found",
+              "latencyMs": 7,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "at": "2026-10-10T10:39:43.150Z"
+            }
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-10_sdk__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 2427,
+          "sha256": "f91ed5098924bb9374dcef0737e3170dde432da9c6f293dc3655ae4f514d6766"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 338,
+          "sha256": "c5ccfccd8f3acfb8094686e8bfbb51c227e74206a18fc07285a30927a4d2b032"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 218188,
+          "sha256": "0c5eaed1baebf3877e1bffb0e707f3c1056978d440233b1cbe68119c1681d286"
+        },
+        {
+          "path": "nodes/nodeb.log",
+          "bytes": 239652,
+          "sha256": "6a67c19bc2ba9e740d532aa3484a301fe9a0c83bbc09519618c024959fe7a924"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 4906,
+          "sha256": "23b17c487dbb596c2bb3fcb633b94d1d322cb47442849d0aab3e666ca79ff787"
+        },
+        {
+          "path": "clients/writerb/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/writerb/events.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "result.json",
+          "bytes": 6039,
+          "sha256": "8dc7d9ce2ec4b580df052945e8f3e827c666e36a1004d7b5a1261a744266ce3a"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-11[cli]@sqlite",
+      "id": "CORE-11",
+      "variant": "cli",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 20163.92049999995,
+      "assertions": [
+        {
+          "name": "flag-on and flag-off operation script has equal outputs",
+          "ok": true,
+          "detail": {
+            "actual": [
+              {
+                "exit": 0,
+                "json": {
+                  "key": "notes/script",
+                  "written": true
+                },
+                "ok": true,
+                "outcome": "committed",
+                "signal": null,
+                "stderr": "",
+                "stdout": "7b0a2020226b6579223a20226e6f7465732f736372697074222c0a2020227772697474656e223a20747275650a7d0a"
+              },
+              {
+                "exit": 0,
+                "found": true,
+                "ok": true,
+                "signal": null,
+                "stderr": "",
+                "stdout": "7363726970742d76616c7565",
+                "value": "7363726970742d76616c7565"
+              },
+              {
+                "code": "NOT_FOUND",
+                "exit": 4,
+                "found": false,
+                "ok": true,
+                "signal": null,
+                "stderr": "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/missing\\\" not found\"\n  }\n}\n",
+                "stdout": ""
+              },
+              {
+                "exit": 0,
+                "json": {
+                  "count": 1,
+                  "keys": [
+                    "notes/script"
+                  ],
+                  "prefix": "notes/"
+                },
+                "keys": [
+                  "notes/script"
+                ],
+                "ok": true,
+                "signal": null,
+                "stderr": "",
+                "stdout": "7b0a2020226b657973223a205b0a20202020226e6f7465732f736372697074220a20205d2c0a202022636f756e74223a20312c0a202022707265666978223a20226e6f7465732f220a7d0a"
+              },
+              {
+                "exit": 0,
+                "json": {
+                  "deleted": true,
+                  "key": "notes/script"
+                },
+                "ok": true,
+                "outcome": "committed",
+                "signal": null,
+                "stderr": "",
+                "stdout": "7b0a2020226b6579223a20226e6f7465732f736372697074222c0a20202264656c65746564223a20747275650a7d0a"
+              },
+              {
+                "exit": 4,
+                "signal": null,
+                "stderr": "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/script\\\" not found\"\n  }\n}\n",
+                "stdout": ""
+              }
+            ],
+            "expected": [
+              {
+                "exit": 0,
+                "json": {
+                  "key": "notes/script",
+                  "written": true
+                },
+                "ok": true,
+                "outcome": "committed",
+                "signal": null,
+                "stderr": "",
+                "stdout": "7b0a2020226b6579223a20226e6f7465732f736372697074222c0a2020227772697474656e223a20747275650a7d0a"
+              },
+              {
+                "exit": 0,
+                "found": true,
+                "ok": true,
+                "signal": null,
+                "stderr": "",
+                "stdout": "7363726970742d76616c7565",
+                "value": "7363726970742d76616c7565"
+              },
+              {
+                "code": "NOT_FOUND",
+                "exit": 4,
+                "found": false,
+                "ok": true,
+                "signal": null,
+                "stderr": "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/missing\\\" not found\"\n  }\n}\n",
+                "stdout": ""
+              },
+              {
+                "exit": 0,
+                "json": {
+                  "count": 1,
+                  "keys": [
+                    "notes/script"
+                  ],
+                  "prefix": "notes/"
+                },
+                "keys": [
+                  "notes/script"
+                ],
+                "ok": true,
+                "signal": null,
+                "stderr": "",
+                "stdout": "7b0a2020226b657973223a205b0a20202020226e6f7465732f736372697074220a20205d2c0a202022636f756e74223a20312c0a202022707265666978223a20226e6f7465732f220a7d0a"
+              },
+              {
+                "exit": 0,
+                "json": {
+                  "deleted": true,
+                  "key": "notes/script"
+                },
+                "ok": true,
+                "outcome": "committed",
+                "signal": null,
+                "stderr": "",
+                "stdout": "7b0a2020226b6579223a20226e6f7465732f736372697074222c0a20202264656c65746564223a20747275650a7d0a"
+              },
+              {
+                "exit": 4,
+                "signal": null,
+                "stderr": "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/script\\\" not found\"\n  }\n}\n",
+                "stdout": ""
+              }
+            ]
+          }
+        },
+        {
+          "name": "flag-on and flag-off operation script values match",
+          "ok": true,
+          "detail": {
+            "actual": [
+              "committed",
+              "script-value",
+              false,
+              [
+                "notes/script"
+              ],
+              "committed",
+              ""
+            ],
+            "expected": [
+              "committed",
+              "script-value",
+              false,
+              [
+                "notes/script"
+              ],
+              "committed",
+              ""
+            ]
+          }
+        },
+        {
+          "name": "flag-off creates no replication directory or events file",
+          "ok": true,
+          "detail": {
+            "replicationDir": false,
+            "eventsFile": false
+          }
+        },
+        {
+          "name": "flag-off emits no replication stderr",
+          "ok": true,
+          "detail": [
+            "",
+            "",
+            "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/missing\\\" not found\"\n  }\n}\n",
+            "",
+            "",
+            "{\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Key \\\"notes/script\\\" not found\"\n  }\n}\n"
+          ]
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-11_cli__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 1698,
+          "sha256": "b75d98579a3a0acdd4856a55abf8a18cbe94c13afdd8da2cbade8018ec9e0bd8"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 216,
+          "sha256": "fecec5211ad6fbc1af744ceeb3e0225cf11b22edfdfed0dadee190f6740f2b47"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 914566,
+          "sha256": "47a2e98c00e2156aa00846c4107a78a54829fc0989c7c4d023fddb1d30b5a3bf"
+        },
+        {
+          "path": "clients/off/stderr.log",
+          "bytes": 392,
+          "sha256": "84661257910da15ac7c8b9b533be8d1280db455393807720a498312c83ac89ea"
+        },
+        {
+          "path": "clients/off/events.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/on/stderr.log",
+          "bytes": 189,
+          "sha256": "6958790fe0e8d220d5bcd375904f771dd514f9787042ed9696ac4feb6ff5f629"
+        },
+        {
+          "path": "clients/on/events.jsonl",
+          "bytes": 6036,
+          "sha256": "a943bc845b88bf38ba0444a5876e10c62f543080995b379b30d977281e4ee069"
+        },
+        {
+          "path": "result.json",
+          "bytes": 6963,
+          "sha256": "6697e178fffe40cbecf05a162d152a730688359aae414260f9fc635321483276"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-11[sdk]@sqlite",
+      "id": "CORE-11",
+      "variant": "sdk",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "pass",
+      "reason": "",
+      "durationMs": 3462.836956999963,
+      "assertions": [
+        {
+          "name": "SDK replication is absent without configuration",
+          "ok": true
+        },
+        {
+          "name": "SDK flag-off has no replication status",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "name": "SDK flag-off leaves storageDir untouched",
+          "ok": true,
+          "detail": "[REDACTED_PATH]"
+        },
+        {
+          "name": "SDK flag-on and flag-off operation script outputs, exits, and values match",
+          "ok": true,
+          "detail": {
+            "actual": [
+              {
+                "ok": true,
+                "outcome": "committed"
+              },
+              {
+                "found": true,
+                "ok": true,
+                "value": "7363726970742d76616c7565"
+              },
+              {
+                "found": false,
+                "ok": true
+              },
+              {
+                "keys": [
+                  "notes/script"
+                ],
+                "ok": true
+              },
+              {
+                "ok": true,
+                "outcome": "committed"
+              },
+              {
+                "found": false,
+                "ok": true
+              }
+            ],
+            "expected": [
+              {
+                "ok": true,
+                "outcome": "committed"
+              },
+              {
+                "found": true,
+                "ok": true,
+                "value": "7363726970742d76616c7565"
+              },
+              {
+                "found": false,
+                "ok": true
+              },
+              {
+                "keys": [
+                  "notes/script"
+                ],
+                "ok": true
+              },
+              {
+                "ok": true,
+                "outcome": "committed"
+              },
+              {
+                "found": false,
+                "ok": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "SDK flag-off still has no replication instance",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "name": "SDK flag-off leaves storageDir untouched after script",
+          "ok": true,
+          "detail": "[REDACTED_PATH]"
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-11_sdk__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 1730,
+          "sha256": "ad8133138167d94c9ae75bbff16fec394421c0dfb19c5febbcdb9a4a4bbe6a52"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 216,
+          "sha256": "81e919dfd26d0b35f57c23478cc83df1be206047562670e1761fb0e0ed350ed6"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 344150,
+          "sha256": "d762704313750c7d761200763443622b81da8bb98d38371b6072afbf9f0a65ae"
+        },
+        {
+          "path": "clients/off/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/off/events.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/on/stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "clients/on/events.jsonl",
+          "bytes": 4083,
+          "sha256": "2c0fd15d96a4ef019c5654e531f4020beccf0423ca86b43e8d92bb10e2f56206"
+        },
+        {
+          "path": "result.json",
+          "bytes": 3547,
+          "sha256": "410bd4b02c56223f63f5979f72d10badeda0ef03c8d1918836f4bc95072958a3"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    },
+    {
+      "key": "CORE-08[cli]@sqlite",
+      "id": "CORE-08",
+      "variant": "cli",
+      "backend": "sqlite",
+      "tier": "core",
+      "sets": [],
+      "status": "fail",
+      "reason": "revoked prefix is absent or revoked and sentinel is purged",
+      "durationMs": 24168.19929800002,
+      "assertions": [
+        {
+          "name": "owner writes sentinel before delegation",
+          "ok": true,
+          "detail": {
+            "ok": true,
+            "outcome": "committed"
+          }
+        },
+        {
+          "name": "owner write reports its authority space",
+          "ok": true
+        },
+        {
+          "name": "delegation CID is available to revoke",
+          "ok": true
+        },
+        {
+          "name": "delegate serves a warm replica hit",
+          "ok": true,
+          "detail": {
+            "type": "replication.read",
+            "op": "get",
+            "space": "[REDACTED]",
+            "key": "notes/a.txt",
+            "replica": "notes/",
+            "source": "replica",
+            "reason": "hit",
+            "outcome": "found",
+            "latencyMs": 153,
+            "stalenessMs": 39,
+            "coverage": "complete",
+            "authority": "valid",
+            "syncedBeforeRead": true,
+            "at": "2026-10-10T10:40:35.806Z"
+          }
+        },
+        {
+          "name": "owner revokes device grant",
+          "ok": true,
+          "detail": {
+            "exit": 0,
+            "stderr": ""
+          }
+        },
+        {
+          "name": "post-revoke stale read forces discovery and is not served locally",
+          "ok": true,
+          "detail": {
+            "ok": false,
+            "result": {
+              "type": "replication.read",
+              "op": "get",
+              "space": "[REDACTED]",
+              "key": "notes/a.txt",
+              "replica": "notes/",
+              "source": "network",
+              "reason": "stale",
+              "outcome": "error",
+              "latencyMs": 121,
+              "stalenessMs": null,
+              "coverage": null,
+              "authority": null,
+              "code": "GRANT_REVOKED",
+              "syncedBeforeRead": false,
+              "at": "2026-10-10T10:40:38.070Z"
+            },
+            "events": [
+              {
+                "type": "replication.state",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "state": "opened",
+                "at": "2026-10-10T10:40:37.977Z"
+              },
+              {
+                "type": "replication.state",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "state": "grant_installed",
+                "strategy": "session",
+                "at": "2026-10-10T10:40:37.994Z"
+              },
+              {
+                "type": "replication.sync",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "trigger": "stale_read",
+                "outcome": "error",
+                "class": "node",
+                "code": "GRANT_REVOKED",
+                "durationMs": 58,
+                "lagMs": null,
+                "at": "2026-10-10T10:40:38.061Z"
+              },
+              {
+                "type": "replication.read",
+                "op": "get",
+                "space": "[REDACTED]",
+                "key": "notes/a.txt",
+                "replica": "notes/",
+                "source": "network",
+                "reason": "stale",
+                "outcome": "error",
+                "latencyMs": 121,
+                "stalenessMs": null,
+                "coverage": null,
+                "authority": null,
+                "code": "GRANT_REVOKED",
+                "syncedBeforeRead": false,
+                "at": "2026-10-10T10:40:38.070Z"
+              },
+              {
+                "type": "replication.state",
+                "space": "[REDACTED]",
+                "replica": "notes/",
+                "state": "closed",
+                "at": "2026-10-10T10:40:38.072Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "fresh invocation offline does not serve revoked local data",
+          "ok": true,
+          "detail": {
+            "exit": 1,
+            "ok": false,
+            "code": "EXIT_1"
+          }
+        },
+        {
+          "name": "revoked prefix is absent or revoked and sentinel is purged",
+          "ok": false,
+          "detail": {
+            "replicaDir": "[REDACTED_PATH]",
+            "report": {
+              "exit": 0,
+              "json": {
+                "since": "24h",
+                "totals": {
+                  "reads": 2,
+                  "replicaReads": 1,
+                  "hitRatio": 0.5,
+                  "writes": 0,
+                  "divergences": 0
+                },
+                "readsBySourceReason": {
+                  "replica:hit": 1,
+                  "network:stale": 1
+                },
+                "latencyMs": {
+                  "replica": {
+                    "p50": 153,
+                    "p95": 153
+                  },
+                  "network": {
+                    "p50": 121,
+                    "p95": 121
+                  }
+                },
+                "stalenessMs": {
+                  "p50": 39,
+                  "p95": 39,
+                  "max": 39
+                },
+                "syncs": {
+                  "none:ok": 1,
+                  "node:GRANT_REVOKED": 1
+                },
+                "writes": {},
+                "divergences": [],
+                "replicas": [
+                  {
+                    "prefix": "notes/",
+                    "state": "idle",
+                    "pending": {
+                      "inFlight": 0,
+                      "committed": 0,
+                      "ambiguous": 0
+                    },
+                    "pinned": [],
+                    "lagMs": null
+                  }
+                ],
+                "partitions": [
+                  {
+                    "idHash": "qgq2xpcrzkznoesiyuoflczrwj",
+                    "host": "[REDACTED]",
+                    "space": "tinycloud:pkh:eip155:1:0x843a7f45d468db7e7e2490f5599371e102c2632a:default",
+                    "pinned": 0
+                  }
+                ]
+              }
+            },
+            "residual": []
+          }
+        }
+      ],
+      "metrics": [],
+      "artefactDir": "CORE-08_cli__sqlite",
+      "artefacts": [
+        {
+          "path": "topology.json",
+          "bytes": 2207,
+          "sha256": "c45b665b9c0923e9040aff56754f3189df966415482cba9c858b60ca73522cda"
+        },
+        {
+          "path": "toxiproxy.json",
+          "bytes": 108,
+          "sha256": "a583841fa68de3ce3d17f61e9e7404fad4e848ac34e4b2a16a30f0928adcb79a"
+        },
+        {
+          "path": "nodes/a.log",
+          "bytes": 381505,
+          "sha256": "72c1727e07a6a63c17f98c24e06c7d83e2163e21707ba35c52630b7cc1c758a7"
+        },
+        {
+          "path": "clients/owner/stderr.log",
+          "bytes": 203,
+          "sha256": "228b266aafd4a005dc8b72e47439ea64397276777f4cc38f05cbe6a5309c0378"
+        },
+        {
+          "path": "clients/owner/events.jsonl",
+          "bytes": 244,
+          "sha256": "3991d008cf0bc82d99698753b91396f71413ce706d90f009e204ceb698d0fed5"
+        },
+        {
+          "path": "clients/reader/stderr.log",
+          "bytes": 441,
+          "sha256": "e775a7b953b89da98aabbbac904e7710ef86896e27d637f9a89f7ead3c6db1e7"
+        },
+        {
+          "path": "clients/reader/events.jsonl",
+          "bytes": 3418,
+          "sha256": "0e29ac3516564a6f3bbfde364f9ce9c4e7a3a6cbb45b2fd48b531b2c33fe1721"
+        },
+        {
+          "path": "result.json",
+          "bytes": 7044,
+          "sha256": "8d6c28b0fe89c4716c18802d005e431e85c161d14157a028a74bacafbb6f5656"
+        }
+      ],
+      "teardown": {
+        "leaked": [],
+        "errors": []
+      }
+    }
+  ],
+  "summary": {
+    "pass": 10,
+    "fail": 1,
+    "error": 0,
+    "skipped": 0,
+    "unsupported": 0,
+    "xfail": 0,
+    "xpass": 0
+  },
+  "quarantined": [],
+  "teardown": {
+    "leaked": []
+  }
+}
