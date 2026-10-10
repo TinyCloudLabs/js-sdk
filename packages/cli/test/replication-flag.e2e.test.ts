@@ -17,6 +17,16 @@ const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");
 const { TC_HOST: _host, TC_PROFILE: _profile, TC_REPLICATION: _replication, ...ambient } = process.env;
 
 type Run = { code: number; stdout: Buffer; stderr: string };
+type ReplicationEventLog = {
+  type: string;
+  key?: string;
+  source?: string;
+  reason?: string;
+  syncError?: string;
+  syncedBeforeRead?: boolean;
+  pendingCleared?: number;
+  outcome?: string;
+};
 
 describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL === undefined ? "SQLite" : "Postgres"})`, () => {
   let home: string;
@@ -110,6 +120,17 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const exited = Promise.withResolvers<number>();
     child.once("exit", (code) => exited.resolve(code ?? -1));
     return { code: await exited.promise, stdout: Buffer.concat(stdout), stderr };
+  }
+  async function replicationEvents(profile = "owner"): Promise<ReplicationEventLog[]> {
+    const path = join(home, ".tinycloud", "profiles", profile, "replication", "events.jsonl");
+    let contents: string;
+    try {
+      contents = await readFile(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    return contents.split("\n").filter(Boolean).map((line) => JSON.parse(line) as ReplicationEventLog);
   }
 
   async function ok<T = unknown>(args: string[], profile = "owner", options: Omit<ReplicationRunOptions, "profile"> = {}): Promise<T> {
@@ -206,42 +227,54 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     // 4. Committed writes return the new value: either network fallback or one catch-up sync.
     const next = await put("notes/a.txt", Buffer.from("v2"), "owner", "on");
     expect(next.code).toBe(0);
+    const pendingReadEventsStart = await replicationEvents();
     const pendingRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on" });
+    const pendingReadEvents = (await replicationEvents()).slice(pendingReadEventsStart.length);
+    const pendingReadEvent = pendingReadEvents.find((event) => event.type === "replication.read" && event.key === "notes/a.txt");
     expect(pendingRead.stdout.toString()).toBe("v2");
-    const networkPending = pendingRead.stderr.includes("pending_write");
-    const syncedBeforeRead = pendingRead.stderr.includes("replica hit")
-      && pendingRead.stderr.includes("syncedBeforeRead:true")
-      && /pendingCleared:[1-9]\d*/.test(pendingRead.stderr);
+    const networkPending = pendingReadEvent?.source === "network" && pendingReadEvent.reason === "pending_write";
+    const caughtUpBeforeRead = pendingReadEvents.some((event) => event.type === "replication.sync" && event.outcome === "ok" && (event.pendingCleared ?? 0) >= 1);
+    const syncedBeforeRead = pendingReadEvent?.source === "replica" && pendingReadEvent.syncedBeforeRead === true && caughtUpBeforeRead;
     expect(networkPending || syncedBeforeRead).toBe(true);
     if (networkPending) {
+      const caughtUpEventsStart = await replicationEvents();
       const caughtUp = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+      const caughtUpEvents = (await replicationEvents()).slice(caughtUpEventsStart.length);
       expect(caughtUp.stdout.toString()).toBe("v2");
-      expect(caughtUp.stderr).toMatch(/pendingCleared:[1-9]\d*/);
+      expect(caughtUpEvents.some((event) => event.type === "replication.sync" && event.outcome === "ok" && (event.pendingCleared ?? 0) >= 1)).toBe(true);
     }
     const heldSyncPreload = join(home, "held-sync.cjs");
     await writeFile(heldSyncPreload, `const original = globalThis.fetch; let held = false; globalThis.fetch = (...args) => { if (!held && String(args[0]).endsWith("/invoke")) { const signal = args[1]?.signal ?? args[0]?.signal; if (signal) { held = true; return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("held sync timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 1500); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("held sync aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); } } return original(...args); };`);
     expect((await put("notes/held-sync", Buffer.from("before"), "owner", "off")).code).toBe(0);
     expect((await put("notes/held-sync", Buffer.from("committed"), "owner", "on")).code).toBe(0);
+    const pendingHeldEventsStart = await replicationEvents();
     const pendingDuringHeldSync = await tc(["kv", "get", "notes/held-sync", "--raw"], {
       profile: "owner",
       preload: heldSyncPreload,
       replication: "on",
       extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
-    if (pendingDuringHeldSync.code !== 0) throw new Error(`held-sync pending read exited ${pendingDuringHeldSync.code}\n${pendingDuringHeldSync.stderr}\n${pendingDuringHeldSync.stdout}`);
+    const pendingHeldEvents = (await replicationEvents()).slice(pendingHeldEventsStart.length);
+    const pendingHeldRead = pendingHeldEvents.find((event) => event.type === "replication.read" && event.key === "notes/held-sync");
+    expect(pendingDuringHeldSync.code).toBe(0);
     expect(pendingDuringHeldSync.stdout.toString()).toBe("committed");
-    expect(pendingDuringHeldSync.stdout.toString()).not.toBe("before");
-    expect(pendingDuringHeldSync.stderr).toContain("network pending_write");
-    expect(pendingDuringHeldSync.stderr).not.toContain("replica hit");
+    expect(pendingHeldRead).toMatchObject({
+      type: "replication.read",
+      key: "notes/held-sync",
+      source: "network",
+      reason: "pending_write",
+      outcome: "found",
+    });
+    const pendingRecoveryEventsStart = await replicationEvents();
     const recoveredPendingSync = await tc(["kv", "get", "notes/held-sync", "--raw"], {
       profile: "owner",
       replication: "on",
       extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
+    const pendingRecoveryEvents = (await replicationEvents()).slice(pendingRecoveryEventsStart.length);
     expect(recoveredPendingSync.code).toBe(0);
     expect(recoveredPendingSync.stdout.toString()).toBe("committed");
-    expect(recoveredPendingSync.stderr).toMatch(/pendingCleared:[1-9]\d*/);
-
+    expect(pendingRecoveryEvents.some((event) => event.type === "replication.sync" && event.outcome === "ok" && (event.pendingCleared ?? 0) >= 1)).toBe(true);
 
 
     const deleted = await tc(["kv", "delete", "notes/b.json"], { profile: "owner", replication: "on" });
@@ -285,9 +318,13 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
     // 6. Offline reads use the replica; an uncovered online-only read fails closed.
     await stopNode();
+    const offlineEventsStart = await replicationEvents();
     const offlineHit = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", preload: NO_NETWORK, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
+    const offlineEvents = (await replicationEvents()).slice(offlineEventsStart.length);
+    const offlineRead = offlineEvents.find((event) => event.type === "replication.read" && event.key === "notes/a.txt");
     expect(offlineHit.code).toBe(0);
-    expect(offlineHit.stderr).toContain("syncError");
+    expect(offlineRead).toMatchObject({ type: "replication.read", source: "replica", outcome: "found" });
+    expect(["TIMEOUT", "NETWORK_ERROR"]).toContain(offlineRead?.syncError);
     const offlineList = await tc(["kv", "list", "--prefix", "notes"], { profile: "owner", preload: NO_NETWORK, replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(offlineList.code === 0, `${offlineList.code}\n${offlineList.stderr}`).toBe(true);
     const offlineOutside = await tc(["kv", "get", "other/x"], { profile: "owner", preload: NO_NETWORK, replication: "on" });
@@ -297,25 +334,34 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
     // 7. A held stale sync serves offline; SIGINT still drains the active controller.
     // The next invocation must complete a real sync, not only escape a busy state.
+    const stalledEventsStart = await replicationEvents();
     const stalled = await tc(["kv", "get", "notes/a.txt", "--raw"], {
       profile: "owner",
       preload: heldSyncPreload,
       replication: "on",
       extraEnv: { TC_REPLICATION_SYNC_TIMEOUT_MS: "500", TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
+    const stalledEvents = (await replicationEvents()).slice(stalledEventsStart.length);
+    const stalledRead = stalledEvents.find((event) => event.type === "replication.read" && event.key === "notes/a.txt");
     expect(stalled.code).toBe(0);
     expect(stalled.stdout.toString()).toBe("v4");
-    expect(stalled.stderr).toContain("replica hit");
-    expect(stalled.stderr).toContain("syncError");
+    expect(stalledRead).toMatchObject({
+      type: "replication.read",
+      key: "notes/a.txt",
+      source: "replica",
+      outcome: "found",
+    });
+    expect(["TIMEOUT", "NETWORK_ERROR"]).toContain(stalledRead?.syncError);
+    const recoveredEventsStart = await replicationEvents();
     const recoveredSync = await tc(["kv", "get", "notes/a.txt", "--raw"], {
       profile: "owner",
       replication: "on",
       extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
     });
+    const recoveredEvents = (await replicationEvents()).slice(recoveredEventsStart.length);
     expect(recoveredSync.code).toBe(0);
     expect(recoveredSync.stdout.toString()).toBe("v4");
-    expect(recoveredSync.stderr).toContain("sync notes ok");
-    expect(recoveredSync.stderr).toContain("replica hit");
+    expect(recoveredEvents.some((event) => event.type === "replication.sync" && event.outcome === "ok")).toBe(true);
 
     const interruptPreload = join(home, "interrupt-sync.cjs");
     await writeFile(interruptPreload, `const original = globalThis.fetch; globalThis.fetch = (...args) => { if (!String(args[0]).includes("/invoke")) return original(...args); setImmediate(() => process.kill(process.pid, "SIGINT")); const signal = args[1]?.signal ?? args[0]?.signal; if (!signal) return original(...args); return new Promise((_, reject) => { const keepAlive = setTimeout(() => reject(Object.assign(new Error("synthetic fetch timeout"), { name: "TimeoutError", code: "TIMEOUT" })), 5000); const abort = () => { clearTimeout(keepAlive); reject(signal.reason ?? new Error("aborted")); }; if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }); };`);
