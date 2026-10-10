@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { rmSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, realpath, readlink, symlink, writeFile, rm } from "node:fs/promises";
@@ -8,6 +9,16 @@ import { pathToFileURL } from "node:url";
 import { HarnessError } from "../contracts/common";
 import type { ResolvedSut } from "../contracts/lifecycle";
 import type { SutResolutionRequest } from "../contracts/frozen";
+
+/**
+ * Default root for `workspace` SUT resolution: `TC893_SUT_ROOT` when set, otherwise the git
+ * top-level of `cwd`. `bun run --cwd tests/replication-harness` sets cwd to the harness
+ * directory, so `process.cwd()` alone resolves the wrong root in CI (TC-893).
+ */
+export function defaultWorkspaceRoot(cwd = process.cwd()): string {
+  if (process.env.TC893_SUT_ROOT) return process.env.TC893_SUT_ROOT;
+  return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
+}
 
 const PACKAGE_NAMES = { cli: "@tinycloud/cli", nodeSdk: "@tinycloud/node-sdk" } as const;
 type JsonRecord = Record<string, unknown>;
