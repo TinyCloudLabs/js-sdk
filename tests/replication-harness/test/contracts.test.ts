@@ -88,12 +88,19 @@ const inputs = {
   resolvedAt: "2026-10-10T00:00:00Z", inputsSha256: digest,
 };
 const coreManifest = { schema: "tc893.manifest/v1" as const, gate: "tc858-phase1-workspace" as const, set: null, harnessSha: "harness-sha", inputsSha256: digest, rows: [], manifestSha256: digest };
-const validGate = { id: "tc858-phase1-workspace", manifestSha256: digest, passed: true, reasons: [], rows: [] };
+const coreRows = ["sqlite", "pg16"].map((backend) => ({
+  key: `CORE-00@${backend}`, id: "CORE-00", variant: null, backend, tier: "core", requiredArtefacts: ["result.json"],
+  status: "pass", durationMs: 1, artefactDir: `core/${backend}`, missingArtefacts: [], quarantined: false,
+}));
+const coreLegs = ["sqlite", "pg16"].map((backend) => ({
+  name: `core-${backend}`, backend, set: null, runId: "run-1", reportSha256: digest, inputsSha256: digest,
+  manifestSha256: digest, filtered: false, durationMs: 1, summary: { pass: 1 },
+}));
+const validGate = { id: "tc858-phase1-workspace", manifestSha256: digest, passed: true, reasons: [], rows: coreRows };
 const validAggregate = {
-  schema: "tc893.aggregate/v1", inputs,
-  gate: validGate,
+  schema: "tc893.aggregate/v1", inputs, gate: validGate,
   companion: [{ set: "phase1-companion", manifestSha256: digest, passed: false, reasons: [{ code: "ROW_NOT_PASS", key: "EDGE-01@sqlite", detail: "companion row failed" }], rows: [] }],
-  adhoc: null, legs: [], legCoreConclusion: "success", legCompanionConclusion: "failure", producedAt: "2026-10-10T00:00:00Z",
+  adhoc: null, legs: coreLegs, legCoreConclusion: "success", legCompanionConclusion: "failure", producedAt: "2026-10-10T00:00:00Z",
 } as const;
 
 describe("serialized contracts", () => {
@@ -107,12 +114,36 @@ describe("serialized contracts", () => {
     expect(RunInputsSchema.safeParse({ ...inputs, junitPrecondition: { ...junit, association: { ...junit.association, baseSha: "other-base" } } }).success).toBe(false);
   });
 
-  test("aggregate verdict matches core conclusion and core reasons, independent of companion", () => {
+  test("aggregate pass requires complete serialized core evidence and ignores companion verdicts", () => {
     expect(AggregateReportSchema.safeParse(validAggregate).success).toBe(true);
+    const noLegReports = { ...validAggregate, legs: [] };
+    const missingCoreRow = {
+      ...validAggregate,
+      legs: [],
+      gate: { ...validGate, rows: [{ ...coreRows[0], status: "missing" }] },
+    };
+    const backendLegWithFailingCoreRow = {
+      ...validAggregate,
+      gate: { ...validGate, rows: [{ ...coreRows[0], status: "fail" }] },
+    };
+    const skippedCoreRow = { ...validAggregate, gate: { ...validGate, rows: [{ ...coreRows[0], status: "skipped" }] } };
+    const errorCoreRow = { ...validAggregate, gate: { ...validGate, rows: [{ ...coreRows[0], status: "error" }] } };
+    const quarantinedCoreRow = { ...validAggregate, gate: { ...validGate, rows: [{ ...coreRows[0], quarantined: true }] } };
+    const mismatchedLegInputs = {
+      ...validAggregate,
+      legs: [{ ...coreLegs[0], inputsSha256: "b".repeat(64) }, coreLegs[1]],
+    };
     const cancelled = { ...validAggregate, legCoreConclusion: "cancelled" as const };
     const skipped = { ...validAggregate, legCoreConclusion: "skipped" as const };
     const coreSuccessWithoutReasonButFalse = { ...validAggregate, gate: { ...validGate, passed: false } };
     const failedCore = { ...validAggregate, legCoreConclusion: "failure" as const, gate: { ...validGate, passed: false, reasons: [{ code: "LEG_JOB_FAILED", detail: "core job failed" }] } };
+    expect(AggregateReportSchema.safeParse(noLegReports).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(missingCoreRow).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(backendLegWithFailingCoreRow).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(skippedCoreRow).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(errorCoreRow).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(quarantinedCoreRow).success).toBe(false);
+    expect(AggregateReportSchema.safeParse(mismatchedLegInputs).success).toBe(false);
     expect(AggregateReportSchema.safeParse(cancelled).success).toBe(false);
     expect(AggregateReportSchema.safeParse(skipped).success).toBe(false);
     expect(AggregateReportSchema.safeParse(coreSuccessWithoutReasonButFalse).success).toBe(false);

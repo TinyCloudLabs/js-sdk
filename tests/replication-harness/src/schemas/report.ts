@@ -33,9 +33,20 @@ export const AggregateReportSchema = z.object({
   legCoreConclusion: z.enum(["success", "failure", "cancelled", "skipped", "local"]), legCompanionConclusion: z.enum(["success", "failure", "cancelled", "skipped", "local"]), producedAt: z.string(),
 }).strict().superRefine((aggregate, ctx) => {
   if (!aggregate.gate) return;
-  const expectedPassed = aggregate.legCoreConclusion === "success" && aggregate.gate.reasons.length === 0;
-  if (aggregate.gate.passed !== expectedPassed) {
+  const coreLegs = aggregate.legs.filter((leg) => leg.set === null);
+  const backendEvidenceIsComplete = coreLegs.length === aggregate.inputs.backends.length
+    && aggregate.inputs.backends.every((backend) => {
+      const legs = coreLegs.filter((leg) => leg.backend === backend);
+      return legs.length === 1 && legs[0].inputsSha256 === aggregate.inputs.inputsSha256;
+    });
+  const coreRowsArePassing = aggregate.gate.rows.every((row) =>
+    row.tier === "core" && row.status === "pass" && !row.quarantined && row.missingArtefacts.length === 0 && row.artefactDir !== null);
+  const coreVerdictIsPassing = aggregate.legCoreConclusion === "success" && aggregate.gate.reasons.length === 0;
+  if (aggregate.gate.passed !== coreVerdictIsPassing) {
     ctx.addIssue({ code: "custom", message: "gate.passed must equal successful core conclusion with no core reasons" });
+  }
+  if (aggregate.gate.passed && (!backendEvidenceIsComplete || !coreRowsArePassing)) {
+    ctx.addIssue({ code: "custom", message: "a passing gate requires one matching-input leg per backend and all serialized core rows to pass without quarantine or missing artefacts" });
   }
 });
 export type ValidatedRunReport = z.infer<typeof RunReportSchema>;
