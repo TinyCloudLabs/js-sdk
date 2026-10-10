@@ -13,6 +13,7 @@ import { NodeImageResolver } from "./src/topology/images";
 import { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./src/runner/runtime";
 import { createRequirementProbe } from "./src/runner/requirements";
 import { readJunitPrecondition } from "./src/gate/junit";
+import { defaultWorkspaceRoot } from "./src/clients/sut";
 import type { configureGateRuntime } from "./bin/gate-adapters";
 
 export { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./src/runner/runtime";
@@ -72,7 +73,7 @@ export async function registerGateRuntime(configure: GateRuntimeRegistrar): Prom
     let sut: ResolvedSut;
     let cleanup: (() => Promise<void>) | undefined;
     if (inputs.sut.source === "workspace") {
-      sut = await adapters.resolveSut({ mode: "workspace", root: process.cwd() });
+      sut = await adapters.resolveSut({ mode: "workspace", root: defaultWorkspaceRoot() });
     } else {
       if (!inputsDir) throw new Error("PUBLISHED_SUT_INPUTS_DIR_MISSING: leg did not provide the resolve artifact directory");
       const prefix = await mkdtemp(join(tmpdir(), "tc893-published-sut-"));

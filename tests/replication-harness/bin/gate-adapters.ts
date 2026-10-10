@@ -21,6 +21,7 @@ import { createManifest, type ManifestRegistry } from "../src/gate/manifest";
 import { resolveInputs, readResolveEvent, subjectFromEvent } from "../src/gate/resolve";
 import { runGateLocally, type LocalGateHooks, type LocalGatePlan } from "../src/gate/local-run";
 import { verifyAggregateFile, type VerifyOptions } from "../src/gate/verify";
+import { defaultWorkspaceRoot } from "../src/clients/sut";
 import { canonicalSha256 } from "../src/gate/canonical-json";
 
 export interface GateRuntime {
@@ -154,7 +155,7 @@ async function buildResolveOptions(args: { options: Record<string, string | true
     ...(runIdValue ? { runId: runIdValue } : {}), ...(runAttemptValue ? { runAttempt: Number(runAttemptValue) } : {}), ...(runUrl ? { runUrl } : {}),
     gate, sets: eventName === "pull_request" ? ["phase1-companion"] : parseList(dispatchString(dispatch, "set")) as SetId[],
     tiers, backends, cliVersion: dispatchString(dispatch, "cli_version", "cliVersion"), nodeSdkVersion: dispatchString(dispatch, "node_sdk_version", "nodeSdkVersion"),
-    mode, workspaceRoot: dispatchString(dispatch, "sut_root", "workspaceRoot") ?? process.cwd(), harnessSha: gitSha(), junit,
+    mode, workspaceRoot: dispatchString(dispatch, "sut_root", "workspaceRoot") ?? defaultWorkspaceRoot(), harnessSha: gitSha(), junit,
     outDir: requiredOption(args.options, "out"), sutResolver: services.sutResolver, imageResolver: services.imageResolver,
     registry: (sut, image, selection) => ({ scenarios: scenarioRegistry, context: { ...selection, sut, image, ciPinImage: "ghcr.io/tinycloudlabs/tinycloud-node:d7f511f" } }),
     exportSutArtifacts: services.exportSutArtifacts, ...(services.fetchInfo ? { fetchInfo: services.fetchInfo } : {}),
