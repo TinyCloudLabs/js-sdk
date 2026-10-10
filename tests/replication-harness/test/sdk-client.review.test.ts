@@ -19,6 +19,7 @@ async function waitForFileContents(path: string, predicate: (contents: string) =
 }
 const loaderSource = String.raw`
 import { appendFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 const logPath = process.env.TC893_HOME + "/observations.jsonl";
 const record = (entry) => appendFileSync(logPath, JSON.stringify(entry) + "\n");
 record({ kind: "boot", nodeVersion: process.version, bunType: typeof process.versions.bun, runtime: process.versions.bun === undefined ? "node" : "bun/" + process.versions.bun, env: Object.keys(process.env).sort() });
@@ -27,7 +28,9 @@ class TinyCloudNode {
   constructor(options) {
     this.options = options;
     this.restorableSession = undefined;
-    record({ kind: "init", privateKeyProvided: options.privateKey !== undefined });
+    this.sessionKeyJwk = { kty: "OKP", x: randomUUID(), d: randomUUID() };
+    this.sessionDid = "did:key:" + this.sessionKeyJwk.x + "#key-1";
+    record({ kind: "init", privateKeyProvided: options.privateKey !== undefined, host: options.host });
     this.kv = {
       get: async (key, options = {}) => {
         if (key === "throws") throw Object.assign(new Error("auth exception"), { code: "AUTH_EXPIRED" });
@@ -42,25 +45,40 @@ class TinyCloudNode {
           record({ kind: "abort-started" });
           return await new Promise((resolve) => options.signal.addEventListener("abort", () => { record({ kind: "abort-cancelled" }); resolve({ ok: false, error: { code: "TIMEOUT" } }); }, { once: true }));
         }
+        if (key.startsWith("parallel-")) await new Promise((resolve) => setTimeout(resolve, key.endsWith("a") ? 20 : 5));
+        this.options.replication?.onEvent?.({ type: "replication.read", op: "get", key, source: "network", reason: "miss" });
         return { ok: true, data: { data: new Uint8Array([42]) } };
       },
-      put: async (key) => key === "denied" ? { ok: false, error: { code: "AUTH_REQUIRED", message: "login required" } } : { ok: true, data: {} },
+      put: async (key) => {
+        if (key === "denied") return { ok: false, error: { code: "AUTH_REQUIRED", message: "login required" } };
+        const grant = this.restorableSession?.grant;
+        if (grant && !grant.caps?.some((cap) => key.startsWith(cap.path) && cap.actions.includes("put"))) {
+          return { ok: false, error: { code: "AUTH_UNAUTHORIZED", message: "outside device grant" } };
+        }
+        return { ok: true, data: {} };
+      },
       delete: async () => ({ ok: true, data: {} }),
-      list: async () => ({ ok: true, data: { keys: [] } }),
+      list: async (options) => { record({ kind: "list", prefix: options.prefix }); return { ok: true, data: { keys: [] } }; },
       batchPut: async () => ({ ok: true, data: { written: [] } }),
     };
-    this.replication = { status: async () => [], sync: async () => ({ ok: false, error: { code: "REPLICA_UNAVAILABLE" } }), purge: async () => ({ ok: false, error: { code: "REPLICA_UNAVAILABLE" } }), clearPending: async () => ({ ok: false, error: { code: "REPLICA_UNAVAILABLE" } }) };
+    this.replication = {
+      status: async () => [],
+      sync: async () => { this.options.replication?.onEvent?.({ type: "replication.sync", trigger: "manual", outcome: "ok" }); },
+      purge: async () => ({ ok: false, error: { code: "REPLICA_UNAVAILABLE" } }),
+      clearPending: async () => 0,
+    };
   }
   async signIn() {
     record({ kind: "sign-in" });
-    this.restorableSession = { spaceId: "owner-space", expiresAt: new Date(Date.now() + 60000).toISOString(), jwk: { kty: "OKP", x: "owner-public", d: "device-session-secret" }, verificationMethod: "did:owner", address: "0xowner", chainId: 1, siwe: "signed owner session", signature: "signature" };
+    const expiry = new Date(Date.now() + 60000).toISOString();
+    this.restorableSession = { spaceId: "owner-space", jwk: this.sessionKeyJwk, verificationMethod: this.sessionDid, address: "0xowner", chainId: 1, siwe: "signed owner session\nExpiration Time: " + expiry, signature: "signature", delegationHeader: { Authorization: "Bearer owner-session" } };
   }
   async restoreSession(session) {
-    record({ kind: "restore" });
+    record({ kind: "restore", hosts: session.tinycloudHosts });
     this.restorableSession = session;
   }
   async delegateTo(audience, caps, options) {
-    const delegation = { delegationHeader: { Authorization: "Bearer grant" }, cid: "grant-cid", spaceId: this.restorableSession.spaceId, expiry: new Date(Date.now() + options.expiry).toISOString() };
+    const delegation = { delegationHeader: { Authorization: "Bearer grant" }, cid: "grant-cid", spaceId: this.restorableSession.spaceId, expiry: new Date(Date.now() + options.expiry).toISOString(), audience, caps };
     return { delegation };
   }
 }
@@ -98,6 +116,7 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
   let owner: SdkClientImpl | undefined;
   let delegate: SdkClientImpl | undefined;
   let sessionOnly: SdkClientImpl | undefined;
+  let aliasClient: SdkClientImpl | undefined;
   try {
     const loaderPath = join(root, "fake-sdk.mjs");
     await writeFile(loaderPath, loaderSource, { mode: 0o600 });
@@ -111,13 +130,29 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
       spec: { id: "invalid", kind: "sdk", node: "local", identity: "shared", auth: { posture }, deviceProof },
     });
     await expect(invalidConstruction("owner", { key: "unsupported" })).rejects.toThrow(HarnessError);
-    await expect(invalidConstruction("delegate-session", { key: "unsupported" })).rejects.toThrow(/deviceJwk/);
-    owner = new SdkClientImpl({ id: "owner", host: "https://node.example", domain: "node.example", home: ownerHome, storageDir: join(root, "owner-replica"), sdkLoader: loaderPath, privateKeyHex: "owner-secret-do-not-persist", auth: "fresh-sign-in" });
+    await expect(invalidConstruction("delegate-session", { key: "unsupported" })).rejects.toThrow(/device JWK/);
+    owner = new SdkClientImpl({
+      id: "owner", host: "https://node.example", domain: "node.example", home: ownerHome,
+      storageDir: join(root, "owner-replica"), sdkLoader: loaderPath,
+      privateKeyHex: "owner-secret-do-not-persist", auth: "fresh-sign-in",
+      hostAliases: { nodeb: "https://nodeb-proxy.example" },
+      replication: { prefixes: ["notes/"], mode: "foreground", storageDir: join(root, "owner-replica") },
+    });
     const stderrArtifactPath = owner.stderrArtifactPath;
     const hello = await owner.rpc("hello", {});
     expect(hello.driver).toBe("tc893-sdk-driver");
     expect(hello.node).toMatch(/^v\d+\.\d+\.\d+/);
     expect(hello.node).not.toContain("bun/");
+    aliasClient = owner.withHost("nodeb") as SdkClientImpl;
+    expect((await aliasClient.get("alias")).found).toBe(true);
+    const aliasInit = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
+      .split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line) as { kind: string; host?: string })
+      .find((item) => item.kind === "init" && item.host === "https://nodeb-proxy.example");
+    expect(aliasInit).toBeTruthy();
+    const aliasRestore = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; hosts?: string[] })
+      .find((item) => item.kind === "restore" && item.hosts?.[0] === "https://nodeb-proxy.example");
+    expect(aliasRestore).toBeTruthy();
 
     const boot = JSON.parse((await readFile(join(ownerHome, "observations.jsonl"), "utf8")).split("\n")[0]!) as { nodeVersion: string; bunType: string; runtime: string; env: string[] };
     expect(hello.node).toBe(boot.nodeVersion);
@@ -133,8 +168,19 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     expect(await owner.rpc("kv.put", { key: "denied", value: { $b64: "eA==" } })).toMatchObject({ ok: false, error: { code: "AUTH_REQUIRED" } });
     expect(await owner.put("denied", "x")).toMatchObject({ ok: false, outcome: "failed", code: "AUTH_REQUIRED" });
     expect(await owner.purge()).toMatchObject({ ok: false, code: "REPLICA_UNAVAILABLE", purged: [], failed: [] });
-    expect(await owner.clearPending()).toMatchObject({ ok: false, code: "REPLICA_UNAVAILABLE", cleared: 0 });
+    expect(await owner.clearPending()).toMatchObject({ ok: true, cleared: 0 });
 
+    const singleRead = await owner.get("single");
+    expect(singleRead.events).toHaveLength(1);
+    expect(singleRead.events[0]).toMatchObject({ opSeq: singleRead.opSeq, attribution: "op", event: { key: "single" } });
+    await owner.list("notes/only/");
+    const listObservation = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; prefix?: string }).find((item) => item.kind === "list");
+    expect(listObservation?.prefix).toBe("notes/only/");
+    const [parallelA, parallelB] = await Promise.all([owner.get("parallel-a"), owner.get("parallel-b")]);
+    expect(new Set([parallelA.opSeq, parallelB.opSeq]).size).toBe(2);
+    expect([...parallelA.events, ...parallelB.events].every((event) => event.attribution === "op" && event.opSeq !== null)).toBe(true);
+    expect((await owner.sync({ prefix: "notes/" })).ok).toBe(true);
     const sdkTimeout = await owner.get("timeout", { deadlineMs: 0 });
     expect(sdkTimeout).toMatchObject({ ok: false, found: false, code: "TIMEOUT" });
     const timeoutLines = (await readFile(join(ownerHome, "observations.jsonl"), "utf8")).split("\n");
@@ -152,32 +198,54 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     await owner.kill("SIGKILL");
     await expect(owner.get("after-crash")).rejects.toMatchObject({ code: "CLIENT_CRASHED" });
     const bootsAfterCrash = (await readFile(join(ownerHome, "observations.jsonl"), "utf8")).split("\n").filter((line) => line.includes('"kind":"boot"'));
-    expect(bootsAfterCrash).toHaveLength(1);
+    expect(bootsAfterCrash).toHaveLength(2);
 
     process.env.HARNESS_NODE = "node";
     await owner.restart({ auth: "restore" });
     await waitForFileContents(stderrArtifactPath, (contents) => (contents.match(/sdk-driver-stderr-canary/g) ?? []).length >= 2);
-    expect((await readFile(owner.stderrArtifactPath, "utf8")).match(/sdk-driver-stderr-canary/g)).toHaveLength(2);
+    expect((await readFile(owner.stderrArtifactPath, "utf8")).match(/sdk-driver-stderr-canary/g)).toHaveLength(3);
     expect(owner.stderr.match(/sdk-driver-stderr-canary/g)).toHaveLength(2);
     expect((await owner.get("restored"))).toMatchObject({ ok: true, found: true });
-    await owner.rpc("session.deviceKey", {});
-    const grant = await owner.rpc("grant.issue", { audience: "did:device", caps: [{ prefix: "notes/", actions: ["get"] }], expiresInMs: 60_000 });
+    const ownerProof = JSON.parse(await readFile(join(ownerHome, "session.json"), "utf8")) as Record<string, unknown>;
+    const ownerSession = ownerProof.session as Record<string, unknown>;
+    const ownerJwk = ownerSession.jwk as Record<string, unknown>;
+    const ownerDelegationHeader = (ownerSession.delegationHeader as { Authorization: string }).Authorization;
+    expect(ownerJwk.d).toBeTruthy();
     expect((await owner.authority()).grantExpiresAt).toBeNull();
-
-    const proof = JSON.parse(await readFile(join(ownerHome, "session.json"), "utf8")) as Record<string, unknown>;
-    expect(proof.deviceJwk).toBeTruthy();
-    expect(proof.verificationMethod).toBeTruthy();
-    expect(proof.delegation).toBeTruthy();
-    expect(JSON.stringify(proof)).not.toContain("owner-secret-do-not-persist");
+    expect((await owner.authority()).sessionExpiresAt).toBeGreaterThan(Date.now());
+    expect(await owner.status()).toEqual([]);
 
     process.env.HARNESS_NODE = "node";
-    delegate = new SdkClientImpl({ id: "device", host: "https://node.example", domain: "node.example", home: join(root, "device-home"), storageDir: join(root, "device-replica"), sdkLoader: loaderPath, auth: "session-only", delegation: proof });
+    delegate = new SdkClientImpl({
+      id: "device", host: "https://node.example", domain: "node.example",
+      home: join(root, "device-home"), storageDir: join(root, "device-replica"),
+      sdkLoader: loaderPath, auth: "session-only",
+    });
     expect((await delegate.rpc("hello", {})).node).toMatch(/^v\d+\.\d+\.\d+/);
+    const deviceKey = await delegate.rpc("session.deviceKey", {});
+    expect(deviceKey.did).not.toBe(ownerSession.verificationMethod);
+    const grant = await owner.rpc("grant.issue", {
+      audience: deviceKey.did,
+      caps: [{ prefix: "notes/", actions: ["get", "sync"] }],
+      expiresInMs: 60_000,
+    });
+    await delegate.rpc("session.useDelegation", { delegation: grant.delegation, hosts: ["https://node.example"] });
     expect((await delegate.authority()).posture).toBe("delegate-session");
     expect((await delegate.authority()).grantExpiresAt).toBe(Date.parse(grant.expiresAt));
-    expect(await readFile(join(root, "device-home", "session.json"), "utf8")).not.toContain("owner-secret-do-not-persist");
+    const deviceProofText = await readFile(join(root, "device-home", "session.json"), "utf8");
+    const proof = JSON.parse(deviceProofText) as Record<string, unknown>;
+    const deviceJwk = proof.deviceJwk as Record<string, unknown>;
+    expect(proof.session).toBeUndefined();
+    expect(deviceJwk.d).toBeTruthy();
+    expect(deviceJwk.x).not.toBe(ownerJwk.x);
+    expect(deviceProofText).not.toContain(String(ownerJwk.d));
+    expect(deviceProofText).not.toContain(ownerDelegationHeader);
+    expect(deviceProofText).not.toContain("owner-secret-do-not-persist");
+    await expect(delegate.put("outside-grant", "blocked")).resolves.toMatchObject({ ok: false, code: "AUTH_UNAUTHORIZED" });
+    expect(await delegate.get("notes/allowed", { source: "network" })).toMatchObject({ ok: true, found: true });
     await delegate.restart({ auth: "restore" });
     expect((await delegate.authority()).grantExpiresAt).toBe(Date.parse(grant.expiresAt));
+    await expect(delegate.put("outside-grant", "blocked-after-restore")).resolves.toMatchObject({ ok: false, code: "AUTH_UNAUTHORIZED" });
 
     process.env.HARNESS_NODE = "/missing/harness-node";
     sessionOnly = new SdkClientImpl({ id: "empty-device", host: "https://node.example", domain: "node.example", home: join(root, "empty-device-home"), storageDir: join(root, "empty-device-replica"), sdkLoader: loaderPath, node: "node", auth: "session-only" });
@@ -185,7 +253,7 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     expect((await sessionOnly.authority()).posture).toBe("delegate-session");
     const ownerObservations = (await readFile(join(ownerHome, "observations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { kind: string; privateKeyProvided?: boolean; runtime?: string });
     expect(ownerObservations.filter((item) => item.kind === "sign-in")).toHaveLength(1);
-    expect(ownerObservations.filter((item) => item.kind === "init").map((item) => item.privateKeyProvided)).toEqual([true, true]);
+    expect(ownerObservations.filter((item) => item.kind === "init").map((item) => item.privateKeyProvided)).toEqual([true, true, true]);
     expect(ownerObservations.filter((item) => item.kind === "boot").every((item) => item.runtime === "node")).toBe(true);
     const deviceObservations = (await readFile(join(root, "device-home", "observations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { kind: string; privateKeyProvided?: boolean });
     expect(deviceObservations.filter((item) => item.kind === "sign-in")).toHaveLength(0);
@@ -194,7 +262,7 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     expect(emptyDeviceObservations.filter((item) => item.kind === "sign-in")).toHaveLength(0);
     expect(emptyDeviceObservations.filter((item) => item.kind === "init").map((item) => item.privateKeyProvided)).toEqual([false]);
   } finally {
-    await Promise.all([owner?.close({ deadlineMs: 100 }), delegate?.close({ deadlineMs: 100 }), sessionOnly?.close({ deadlineMs: 100 })].map((closing) => closing?.catch(() => undefined)));
+    await Promise.all([owner?.close({ deadlineMs: 100 }), delegate?.close({ deadlineMs: 100 }), sessionOnly?.close({ deadlineMs: 100 }), aliasClient?.close({ deadlineMs: 100 })].map((closing) => closing?.catch(() => undefined)));
     await rm(root, { recursive: true, force: true });
     for (const [key, value] of restoreEnv) {
       if (value === undefined) delete process.env[key];
@@ -202,3 +270,20 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     }
   }
 }, 30_000);
+test("SDK client rejects an undefined RPC value as a coded protocol error", async () => {
+  const client = new SdkClientImpl({
+    id: "malformed", host: "https://node.example", domain: "node.example",
+    home: "/tmp/tc893-malformed-home", storageDir: "/tmp/tc893-malformed-replica", sdkLoader: "/tmp/unused.mjs",
+  });
+  let rejectResult!: (error: unknown) => void;
+  const rejected = new Promise<unknown>((_resolve, reject) => { rejectResult = reject; });
+  const internals = client as unknown as {
+    pending: Map<number, { op: string; resolve(value: unknown): void; reject(error: unknown): void }>;
+    receive(line: string): void;
+  };
+  internals.pending.set(9, { op: "kv.get", resolve: () => {}, reject: rejectResult });
+  internals.receive(JSON.stringify({ v: 1, type: "response", id: 9, ok: true }));
+  const error = await rejected.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(HarnessError);
+  expect(error).toMatchObject({ code: "RPC_PROTOCOL" });
+});

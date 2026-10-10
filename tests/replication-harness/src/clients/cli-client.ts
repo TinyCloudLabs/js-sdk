@@ -1,10 +1,9 @@
-import { homedir } from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type { Stats } from "node:fs";
-import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { HarnessError } from "../contracts/common";
 import type { EventEnvelope, EventQuery } from "../contracts/events";
@@ -104,6 +103,20 @@ interface CliEventState {
   opSequence: number;
   eventSequence: number;
   allEvents: EventEnvelope[];
+  artifactDirectory?: string;
+}
+const processRunId = randomUUID();
+function clientHome(runId: string, topologyId: string, clientId: string): string {
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  return join(tmpdir(), "tc893-client-homes", `${process.pid}-${processRunId}`, hash(runId), hash(topologyId), hash(clientId));
+}
+async function ensureClientArtifacts(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  for (const name of ["stderr.log", "events.jsonl"]) {
+    const file = join(directory, name);
+    const handle = await open(file, "a", 0o600);
+    await handle.close();
+  }
 }
 type CliOperation = "get" | "put" | "del" | "list" | "sync" | "other";
 interface CliInvocation {
@@ -249,6 +262,7 @@ class ProfileEventCoordinator {
           recvMono: now(),
           event: event as EventEnvelope["event"],
         };
+        if (target.state.artifactDirectory) await appendFile(join(target.state.artifactDirectory, "events.jsonl"), `${JSON.stringify(envelope)}\n`, { mode: 0o600 });
         target.state.allEvents.push(envelope);
         target.events.push(envelope);
       }
@@ -415,17 +429,54 @@ export async function createCliDelegation(options: CliDelegationWorkflowOptions)
   requireCliSuccess("owner request grant", grant);
   if (!grant.stdout.byteLength) throw new HarnessError("PREFLIGHT_FAILED", "CLI owner grant emitted no portable grant artifact");
   await writeFile(grantPath, grant.stdout, { mode: 0o600, flag: "wx" });
+  const deviceProfilePath = join(deviceHome, ".tinycloud", "profiles", options.device.profile(), "profile.json");
+  const deviceProfile = JSON.parse(await readFile(deviceProfilePath, "utf8")) as Record<string, unknown>;
+  deviceProfile.authMethod = "openkey";
+  deviceProfile.replication = { prefixes: [options.prefix] };
+  await writeFile(deviceProfilePath, JSON.stringify(deviceProfile), { mode: 0o600 });
   const imported = await options.device.tc(["auth", "import", grantPath]);
   requireCliSuccess("device grant import", imported);
+  let importedResult: { expiry?: unknown };
+  try { importedResult = JSON.parse(Buffer.from(imported.stdout).toString("utf8")) as { expiry?: unknown }; } catch {
+    throw new HarnessError("PREFLIGHT_FAILED", "CLI grant import returned no parseable expiry metadata");
+  }
+  const expiresAt = typeof importedResult.expiry === "string" ? Date.parse(importedResult.expiry) : Number.NaN;
+  if (!Number.isFinite(expiresAt)) throw new HarnessError("PREFLIGHT_FAILED", "CLI grant import returned no valid expiry metadata");
+  await writeFile(join(deviceHome, ".tc893-authority.json"), JSON.stringify({ grantExpiresAt: expiresAt }), { mode: 0o600 });
+  await writeFile(join(deviceHome, ".tc893-delegation.json"), grant.stdout, { mode: 0o600 });
   return { requestPath, grantPath, request, grant, imported };
+}
+interface CliOwnerProfileRef { home: string; profile: string }
+const cliOwnerProfiles = new Map<string, CliOwnerProfileRef>();
+export async function reuseCliOwnerIdentity(home: string, profileName: string, runId: string, identity: string): Promise<void> {
+  const source = cliOwnerProfiles.get(`${runId}\u0000${identity}`);
+  if (!source) return;
+  const sourceDirectory = join(source.home, ".tinycloud", "profiles", source.profile);
+  const targetDirectory = join(home, ".tinycloud", "profiles", profileName);
+  const [sourceKey, sourceProfileText, targetProfileText] = await Promise.all([
+    readFile(join(sourceDirectory, "key.json")),
+    readFile(join(sourceDirectory, "profile.json"), "utf8"),
+    readFile(join(targetDirectory, "profile.json"), "utf8"),
+  ]);
+  const sourceProfile = JSON.parse(sourceProfileText) as Record<string, unknown>;
+  const targetProfile = JSON.parse(targetProfileText) as Record<string, unknown>;
+  for (const field of ["did", "privateKey", "address", "chainId", "authMethod", "posture"] as const) {
+    if (sourceProfile[field] !== undefined) targetProfile[field] = sourceProfile[field];
+  }
+  await Promise.all([
+    writeFile(join(targetDirectory, "key.json"), sourceKey, { mode: 0o600 }),
+    writeFile(join(targetDirectory, "profile.json"), JSON.stringify(targetProfile), { mode: 0o600 }),
+  ]);
 }
 
 export interface CliClientOptions {
   id: string;
   home?: string;
+  artifactDirectory?: string;
   cliEntry: string;
   node?: string;
   host: string;
+  hostAliases?: Record<string, string>;
   profile?: string;
   replication?: ReplicationSpec | false;
   preloads?: string[];
@@ -433,6 +484,7 @@ export interface CliClientOptions {
   runId?: string;
   identity?: string;
   ownerPosture?: boolean;
+  hostProfileSource?: string;
 }
 
 const DEADLINE_EXCEEDED = Symbol("deadlineExceeded");
@@ -446,30 +498,38 @@ export class CliClientImpl implements CliClient {
   private readonly entry: string;
   private readonly nodeExecutable: string;
   private readonly host: string;
+  private readonly hostAliases: Record<string, string>;
   private readonly profileName: string;
   private readonly runId?: string;
   private readonly identity?: string;
   private readonly ownerPosture: boolean;
   private readonly eventState: CliEventState;
+  private readonly artifactDirectory: string;
   private replication?: ReplicationSpec | false;
-  private readonly preloads: string[];
   private readonly children = new Set<ChildProcess>();
+  private readonly hostProfileSource?: string;
+  private hostProfilePromise?: Promise<void>;
   constructor(options: CliClientOptions, sharedEventState?: CliEventState) {
     this.id = options.id;
-    this.homePath = resolve(options.home ?? join(homedir(), ".cache", "tc893", options.id));
+    this.homePath = resolve(options.home ?? join(tmpdir(), "tc893-client-homes", `${process.pid}-${processRunId}`, createHash("sha256").update(options.id).digest("hex")));
+    this.artifactDirectory = resolve(options.artifactDirectory ?? this.homePath);
     this.profileName = options.profile ?? options.id;
     this.profilePath = profileDirectory(this.homePath, this.profileName);
     this.entry = resolve(options.cliEntry);
     this.nodeExecutable = options.node ?? process.env.HARNESS_NODE ?? "node";
     this.host = options.host;
+    this.hostAliases = options.hostAliases ?? {};
     this.runId = options.runId;
     this.identity = options.identity;
     this.ownerPosture = options.ownerPosture === true;
+    this.hostProfileSource = options.hostProfileSource;
     this.replication = options.replication;
-    this.preloads = options.preloads ?? [];
+    if (options.preloads?.length) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "CLI preload execution is not available in the S2 client");
     this.eventState = sharedEventState ?? { opSequence: 0, eventSequence: 0, allEvents: [] };
+    this.eventState.artifactDirectory = this.artifactDirectory;
   }
   home(): string { return this.homePath; }
+  artifactDirectoryPath(): string { return this.artifactDirectory; }
   profile(): string { return this.profileName; }
   eventsFile(): string { return join(this.profilePath, "replication", "events.jsonl"); }
   eventCursor(): number { return this.eventState.allEvents.at(-1)?.seq ?? 0; }
@@ -495,15 +555,18 @@ export class CliClientImpl implements CliClient {
     return found;
   }
   withHost(alias: string): CliClient {
+    const host = this.hostAliases[alias] ?? alias;
     return new CliClientImpl({
       id: this.id,
       home: this.homePath,
+      artifactDirectory: this.artifactDirectory,
       cliEntry: this.entry,
       node: this.nodeExecutable,
-      host: alias,
-      profile: this.profileName,
+      host,
+      profile: `host-${createHash("sha256").update(host).digest("hex").slice(0, 16)}`,
+      hostProfileSource: this.profileName,
+      hostAliases: this.hostAliases,
       replication: this.replication,
-      preloads: this.preloads,
       runId: this.runId,
       identity: this.identity,
       ownerPosture: this.ownerPosture,
@@ -523,6 +586,7 @@ export class CliClientImpl implements CliClient {
       throw new HarnessError("PREFLIGHT_FAILED", "CLI owner key-only profile has no private key");
     }
     registerSdkIdentityPrivateKey(this.runId, this.identity, profile.privateKey);
+    cliOwnerProfiles.set(`${this.runId}\u0000${this.identity}`, { home: this.homePath, profile: this.profileName });
   }
 
   private async registerAfterOwnerKeySetup(args: string[], exitCode: number | null): Promise<void> {
@@ -531,10 +595,56 @@ export class CliClientImpl implements CliClient {
     if (localLogin) await this.registerOwnerIdentity();
   }
 
-  private async run(args: string[], options: CliCallOptions = {}): Promise<InternalCliResult> {
+  private ensureHostProfile(): Promise<void> {
+    this.hostProfilePromise ??= this.prepareHostProfile();
+    return this.hostProfilePromise;
+  }
+  private async prepareHostProfile(): Promise<void> {
+    const sessionPath = join(this.profilePath, "session.json");
+    try { await stat(sessionPath); return; } catch { /* Bootstrap this host-specific profile once. */ }
+    const sourceDirectory = profileDirectory(this.homePath, this.hostProfileSource!);
+    try {
+      await Promise.all([stat(join(sourceDirectory, "key.json")), stat(join(sourceDirectory, "profile.json"))]);
+    } catch {
+      if (!this.ownerPosture) return;
+      throw new HarnessError("PREFLIGHT_FAILED", "CLI owner host switch is missing its source profile key or configuration");
+    }
+    await mkdir(this.profilePath, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      copyFile(join(sourceDirectory, "key.json"), join(this.profilePath, "key.json")),
+      copyFile(join(sourceDirectory, "profile.json"), join(this.profilePath, "profile.json")),
+    ]);
+    await rm(sessionPath, { force: true });
+    if (this.ownerPosture) {
+      const args = ["auth", "login", "--method", "local"];
+      if (this.replication) {
+        for (const prefix of this.replication.prefixes) args.push("--replication-prefix", prefix);
+        if (this.replication.allowSecrets) args.push("--replication-allow-secrets");
+      }
+      const result = await this.run(args, { profile: this.profileName }, true);
+      requireCliSuccess("host-specific owner sign-in", result);
+      return;
+    }
+    const grantPath = join(this.homePath, ".tc893-delegation.json");
+    try { await stat(grantPath); } catch {
+      throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "CLI delegate withHost requires its portable grant so it can establish authority on the target host");
+    }
+    const imported = await this.run(["auth", "import", grantPath], { profile: this.profileName }, true);
+    requireCliSuccess("host-specific delegate import", imported);
+    let result: { expiry?: unknown };
+    try { result = JSON.parse(Buffer.from(imported.stdout).toString("utf8")) as { expiry?: unknown }; } catch {
+      throw new HarnessError("PREFLIGHT_FAILED", "Host-specific CLI grant import returned no parseable expiry metadata");
+    }
+    const expiresAt = typeof result.expiry === "string" ? Date.parse(result.expiry) : Number.NaN;
+    if (!Number.isFinite(expiresAt)) throw new HarnessError("PREFLIGHT_FAILED", "Host-specific CLI grant import returned no valid expiry metadata");
+    await writeFile(join(this.homePath, ".tc893-authority.json"), JSON.stringify({ grantExpiresAt: expiresAt }), { mode: 0o600 });
+  }
+  private async run(args: string[], options: CliCallOptions = {}, skipHostProfile = false): Promise<InternalCliResult> {
+    if (!skipHostProfile && this.hostProfileSource) await this.ensureHostProfile();
     rejectFault(options);
     const startedMono = now();
     await mkdir(this.homePath, { recursive: true, mode: 0o700 });
+    await ensureClientArtifacts(this.artifactDirectory);
     await verifyNodeVersion(this.nodeExecutable, this.homePath);
     const state = this.eventState;
     const opSeq = ++state.opSequence;
@@ -546,7 +656,7 @@ export class CliClientImpl implements CliClient {
     let removeAbortListener: (() => void) | undefined;
     let finished = false;
     try {
-      const spawnArgs = [...this.preloads.flatMap((preload) => ["--require", preload]), this.entry, "-q", "--json", "--profile", activeProfile];
+      const spawnArgs = [this.entry, "-q", "--json", "--profile", activeProfile];
       if (!options.omitHost) spawnArgs.push("--host", this.host);
       if (options.flag === "on") spawnArgs.push("--replication");
       else if (options.flag === "off") spawnArgs.push("--no-replication");
@@ -605,6 +715,7 @@ export class CliClientImpl implements CliClient {
       const processResult = await exit;
       const events = await coordinator.finish(invocation);
       finished = true;
+      await appendFile(join(this.artifactDirectory, "stderr.log"), Buffer.concat(stderr), { mode: 0o600 });
       const output = Buffer.concat(stdout);
       const result: InternalCliResult = {
         opSeq,
@@ -637,10 +748,11 @@ export class CliClientImpl implements CliClient {
     if (result[DEADLINE_EXCEEDED]) {
       return { ...result, ok: false, found: false, code: "DEADLINE_EXCEEDED" };
     }
-    const found = result.exit !== 4;
+    const found = result.exit === 0;
     const event = result.events.map((item) => item.event).find((item) => item.type === "replication.read");
     const read = event as ReadView | undefined;
-    return { ...result, ok: found ? result.exit === 0 : true, found, ...(found ? { value: result.stdout } : {}), ...(read ? { read, readEvent: read as GetResult["readEvent"] } : {}), ...(found ? {} : { code: "NOT_FOUND" }) };
+    const code = found ? undefined : result.exit === 4 ? "NOT_FOUND" : result.signal ? `SIGNAL_${result.signal}` : `EXIT_${result.exit}`;
+    return { ...result, ok: found || result.exit === 4, found, ...(found ? { value: result.stdout } : {}), ...(read ? { read, readEvent: read as GetResult["readEvent"] } : {}), ...(code ? { code } : {}) };
   }
   async put(key: string, value: string | Uint8Array, options: CliCallOptions & PutOptions = {}): Promise<WriteResult> {
     if (options.contentType !== undefined) unsupportedOption("contentType");
@@ -662,7 +774,7 @@ export class CliClientImpl implements CliClient {
   async batchPut(_items: BatchPutItem[], _options?: OpOptions): Promise<BatchPutResult> { return unsupportedOption("batchPut"); }
   async sync(options: SyncOptions & CliCallOptions = {}): Promise<SyncResult> {
     const result = await this.op(["kv", "list", "--prefix", options.prefix ?? ""], { ...options, replication: { maxStalenessMs: 0, staleSyncTimeoutMs: options.replication?.staleSyncTimeoutMs, verify: options.replication?.verify } });
-    const syncs = result.events.map((item) => item.event).filter((event) => event.type === "replication.sync");
+    const syncs = result.events.filter((item) => item.attribution === "op" && item.opSeq === result.opSeq).map((item) => item.event).filter((event) => event.type === "replication.sync");
     return { ...result, ok: result.exit === 0 && syncs.length > 0 && syncs.every((event) => event.outcome === "ok"), syncs: syncs as SyncResult["syncs"] };
   }
   async status(options?: CliCallOptions): Promise<StatusEntry[]> { const result = await this.op(["replica", "report", "--json"], options); return ((result.json as { replicas?: StatusEntry[] } | undefined)?.replicas ?? []); }
@@ -671,24 +783,34 @@ export class CliClientImpl implements CliClient {
   async authority(): Promise<{ posture: "owner" | "delegate-session"; sessionExpiresAt: number | null; grantExpiresAt: number | null }> {
     const profilePath = join(this.homePath, ".tinycloud", "profiles", this.profileName);
     try {
-      const [profileBytes, sessionBytes] = await Promise.all([readFile(join(profilePath, "profile.json"), "utf8"), readFile(join(profilePath, "session.json"), "utf8")]);
+      const [profileBytes, sessionBytes, metadataBytes] = await Promise.all([
+        readFile(join(profilePath, "profile.json"), "utf8"),
+        readFile(join(profilePath, "session.json"), "utf8"),
+        readFile(join(this.homePath, ".tc893-authority.json"), "utf8").catch(() => "{}"),
+      ]);
       const profile = JSON.parse(profileBytes) as Record<string, unknown>;
       const persisted = JSON.parse(sessionBytes) as Record<string, unknown>;
+      const metadata = JSON.parse(metadataBytes) as Record<string, unknown>;
       const session = persisted.session && typeof persisted.session === "object" ? persisted.session as Record<string, unknown> : persisted;
       const grantValue = session.delegation ?? session.grant ?? profile.delegation ?? profile.grant;
       const grant = grantValue && typeof grantValue === "object" ? grantValue as Record<string, unknown> : {};
-      const expiry = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
+      const expiry = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : typeof value === "string" && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
+      const siweExpiry = typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time: (.+)$/m)?.[1] : undefined;
       const posture = profile.posture === "delegate-session" ? "delegate-session" : "owner";
-      const sessionExpiry = session.expiresAt ?? session.expiry ?? session.expirationTime;
-      const grantExpiry = session.grantExpiresAt ?? session.delegationExpiry ?? grant.expiresAt ?? grant.expiry ?? (posture === "delegate-session" ? sessionExpiry : undefined);
+      const sessionExpiry = session.expiresAt ?? session.expiry ?? session.expirationTime ?? siweExpiry;
+      const grantExpiry = session.grantExpiresAt ?? session.delegationExpiry ?? grant.expiresAt ?? grant.expiry ?? profile.grantExpiresAt ?? metadata.grantExpiresAt ?? (posture === "delegate-session" ? sessionExpiry : undefined);
       return { posture, sessionExpiresAt: expiry(sessionExpiry), grantExpiresAt: posture === "delegate-session" ? expiry(grantExpiry) : null };
     } catch {
       return { posture: "owner", sessionExpiresAt: null, grantExpiresAt: null };
     }
   }
-  async restart(options: { auth?: "restore" | "fresh-sign-in"; replication?: ReplicationSpec | false } & OpOptions = {}): Promise<void> { this.replication = options.replication ?? this.replication; }
+  async restart(options: { auth?: "restore" | "fresh-sign-in"; replication?: ReplicationSpec | false } & OpOptions = {}): Promise<void> {
+    if (options.auth === "fresh-sign-in") unsupportedOption("CLI fresh sign-in restart");
+    this.replication = options.replication ?? this.replication;
+  }
   async kill(signal: "SIGINT" | "SIGTERM" | "SIGKILL"): Promise<void> { for (const child of this.children) child.kill(signal); }
   async close(_options: { deadlineMs: number }): Promise<{ graceful: boolean }> {
+    await ensureClientArtifacts(this.artifactDirectory);
     const children = [...this.children];
     await Promise.all(children.map((child) => terminateWithLadder(child, undefined, 0)));
     return { graceful: children.every((child) => child.signalCode !== "SIGKILL" && child.exitCode !== null) };
@@ -702,27 +824,34 @@ function clientHost(input: ClientConstructionOptions): string {
 export async function createCliClient(input: ClientConstructionOptions): Promise<CliClientImpl> {
   const spec = input.spec;
   if (spec.kind !== "cli") throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", `Client ${spec.id} is not a CLI client`);
-  const home = resolve(input.environment.resultsDir, input.environment.runId, input.topology.id, "clients", spec.id, "home");
+  if (spec.preloads?.length) throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", "CLI preload execution is not available in the S2 client");
+  const home = clientHome(input.environment.runId, input.topology.id, spec.id);
+  const artifactDirectory = resolve(input.environment.resultsDir, input.environment.runId, input.topology.id, "clients", spec.id);
   const profile = spec.auth.posture === "owner" ? "owner" : spec.id;
-  const preloadDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../../preloads");
-  const preloads = (spec.preloads ?? []).map((preload) => join(preloadDirectory, preload === "fetch-faults" ? "fetch-faults.cjs" : "node20.cjs"));
+  const hostAliases = Object.fromEntries((spec.extraHosts ?? []).map((extra) => [
+    extra.alias,
+    input.topology.proxy(`client:${spec.id}->${extra.alias}`).listenUrl,
+  ]));
   const client = new CliClientImpl({
     id: spec.id,
     home,
+    artifactDirectory,
     cliEntry: input.sut.cli.entry,
     node: process.env.HARNESS_NODE,
     host: clientHost(input),
+    hostAliases,
     profile,
     replication: spec.replication,
-    preloads,
     runId: input.environment.runId,
     identity: spec.identity,
     ownerPosture: spec.auth.posture === "owner",
   });
+  await ensureClientArtifacts(artifactDirectory);
   if (spec.auth.posture === "owner") {
     const init = await client.tc(["init", "--name", profile, "--key-only"]);
     if (init.exit !== 0) throw new HarnessError("PREFLIGHT_FAILED", "CLI owner key-only initialization failed", { exit: init.exit, signal: init.signal, stderr: init.stderr });
     const loginArgs = ["auth", "login", "--method", "local"];
+    await reuseCliOwnerIdentity(home, profile, input.environment.runId, spec.identity);
     if (spec.replication) {
       for (const prefix of spec.replication.prefixes) loginArgs.push("--replication-prefix", prefix);
       if (spec.replication.allowSecrets) loginArgs.push("--replication-allow-secrets");

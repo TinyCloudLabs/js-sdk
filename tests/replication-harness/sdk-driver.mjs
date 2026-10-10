@@ -14,7 +14,7 @@ let savedSession;
 let savedDeviceJwk;
 let savedVerificationMethod;
 let savedDelegation;
-let savedPosture = "owner";
+let savedPosture = "session-only";
 let closing = false;
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
@@ -22,12 +22,22 @@ function send(line) { process.stdout.write(`${JSON.stringify(line)}\n`); }
 function encoded(value) { return { $b64: Buffer.from(value).toString("base64") }; }
 function decoded(value) { return value && typeof value.$b64 === "string" ? new Uint8Array(Buffer.from(value.$b64, "base64")) : value; }
 function errorShape(error) { return { code: error?.code ?? error?.name ?? "DRIVER_ERROR", message: error?.message ?? String(error), name: error?.name, meta: error?.meta }; }
-function sessionExpiry(session) { return session?.expiresAt ?? session?.expirationTime ?? null; }
+function sessionExpiry(session) {
+  const direct = session?.expiresAt ?? session?.expirationTime;
+  if (direct !== undefined && direct !== null) return direct;
+  return typeof session?.siwe === "string" ? session.siwe.match(/^Expiration Time: (.+)$/m)?.[1] ?? null : null;
+}
 async function persistProof() {
-  if (!process.env.TC893_HOME || !savedSession) return;
+  if (!process.env.TC893_HOME) return;
+  const proof = savedPosture === "owner"
+    ? { posture: "owner", session: savedSession, deviceJwk: savedDeviceJwk, verificationMethod: savedVerificationMethod, delegation: null }
+    : savedPosture === "delegate-session" && savedDeviceJwk && savedVerificationMethod && savedDelegation
+      ? { posture: "delegate-session", deviceJwk: savedDeviceJwk, verificationMethod: savedVerificationMethod, delegation: savedDelegation }
+      : undefined;
+  if (!proof) return;
   const path = `${process.env.TC893_HOME}/session.json`;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, JSON.stringify({ posture: savedPosture, session: savedSession, deviceJwk: savedDeviceJwk, verificationMethod: savedVerificationMethod, delegation: savedDelegation }), { mode: 0o600 });
+  await writeFile(path, JSON.stringify(proof), { mode: 0o600 });
   await chmod(path, 0o600);
 }
 function captureEvent(event) { send({ v: 1, type: "event", inFlight: [...active], event }); }
@@ -42,13 +52,15 @@ function replicaOptions(config) {
   return { ...options, enabled: true, storage: sdk.sqliteReplicaStorage({ dir: storageDir }), onEvent: captureEvent };
 }
 function compactDelegateSession(proof, hosts) {
-  const grant = proof.delegation ?? proof;
-  const jwk = proof.deviceJwk ?? savedDeviceJwk;
-  const verificationMethod = proof.verificationMethod ?? savedVerificationMethod;
-  if (!jwk || !verificationMethod || !grant?.delegationHeader?.Authorization || !grant.cid || !grant.spaceId) {
-    throw new Error("Delegate restore requires a combined device JWK, verification method and delegation proof");
+  const grant = proof?.delegation ?? proof;
+  const jwk = proof?.deviceJwk ?? savedDeviceJwk ?? node?.sessionKeyJwk;
+  const verificationMethod = proof?.verificationMethod ?? savedVerificationMethod ?? node?.sessionDid;
+  if (!jwk || typeof verificationMethod !== "string" || !grant?.delegationHeader?.Authorization || !grant.cid || !grant.spaceId) {
+    throw new Error("Delegate restore requires the device's own JWK, verification method, and delegation grant");
   }
-  return { delegationHeader: grant.delegationHeader, delegationCid: grant.cid, spaceId: grant.spaceId, jwk, verificationMethod, tinycloudHosts: hosts };
+  savedDeviceJwk = jwk;
+  savedVerificationMethod = verificationMethod;
+  return { delegationHeader: grant.delegationHeader, delegationCid: grant.cid, spaceId: grant.spaceId, jwk, verificationMethod, tinycloudHosts: hosts, grant };
 }
 async function handle(op, args, controller) {
   switch (op) {
@@ -63,10 +75,10 @@ async function handle(op, args, controller) {
     case "init": {
       const replication = replicaOptions(args.replication);
       node = new sdk.TinyCloudNode({ host: args.host, domain: args.domain, privateKey: args.privateKeyHex, sessionExpirationMs: args.sessionExpiryMs, autoCreateSpace: true, autoBootstrapAccount: false, enablePublicSpace: false, ...(replication ? { replication } : {}) });
+      savedPosture = args.privateKeyHex ? "owner" : "session-only";
       return { address: node.address ?? null };
     }
     case "signIn": {
-      savedPosture = "owner";
       await node.signIn({ autoCreateSpace: true, autoBootstrapAccount: false, enablePublicSpace: false });
       savedSession = node.restorableSession;
       if (!savedSession) throw new Error("SDK returned no restorable session");
@@ -86,28 +98,23 @@ async function handle(op, args, controller) {
       return { spaceId: savedSession.spaceId, sessionExpiresAt: sessionExpiry(savedSession) };
     }
     case "session.deviceKey": {
-      if (!savedSession?.jwk || !savedSession.verificationMethod) throw new Error("Device proof requires an authenticated SDK session");
-      savedDeviceJwk = savedSession.jwk;
-      savedVerificationMethod = savedSession.verificationMethod;
-      await persistProof();
+      if (savedPosture === "owner") throw Object.assign(new Error("Device key generation requires a session-only SDK driver"), { code: "CLIENT_UNSUPPORTED_OPTION" });
+      savedDeviceJwk = node.sessionKeyJwk;
+      savedVerificationMethod = node.sessionDid;
+      if (!savedDeviceJwk || typeof savedVerificationMethod !== "string") throw new Error("SDK could not expose its generated session-only device key");
       return { did: savedVerificationMethod };
     }
     case "grant.issue": {
       const grant = await node.delegateTo(args.audience.split("#", 1)[0], args.caps.map((cap) => ({ service: "tinycloud.kv", space: node.restorableSession.spaceId, path: cap.prefix, actions: cap.actions })), { expiry: args.expiresInMs });
       if (grant?.ok === false) return grant;
-      savedDelegation = grant.delegation;
-      await persistProof();
       return { delegation: grant.delegation, cid: grant.delegation.cid, expiresAt: grant.delegation.expiry instanceof Date ? grant.delegation.expiry.toISOString() : String(grant.delegation.expiry) };
     }
     case "session.useDelegation": {
-      const proof = args.delegation;
-      const compact = compactDelegateSession(proof, args.hosts);
+      const compact = compactDelegateSession(args.delegation, args.hosts);
       await node.restoreSession(compact);
       savedPosture = "delegate-session";
       savedSession = compact;
-      savedDeviceJwk = compact.jwk;
-      savedVerificationMethod = compact.verificationMethod;
-      savedDelegation = proof.delegation ?? proof;
+      savedDelegation = compact.grant;
       await persistProof();
       return { spaceId: compact.spaceId, sessionExpiresAt: sessionExpiry(compact) };
     }
@@ -119,12 +126,16 @@ async function handle(op, args, controller) {
     }
     case "kv.put": return sdkValue(await node.kv.put(args.key, decoded(args.value), { contentType: args.contentType, timeout: args.timeoutMs, signal: controller.signal }));
     case "kv.delete": return sdkValue(await node.kv.delete(args.key, { timeout: args.timeoutMs, signal: controller.signal }));
-    case "kv.list": return sdkValue(await node.kv.list(args.prefix, { source: args.source, limit: args.limit, cursor: args.cursor, timeout: args.timeoutMs, signal: controller.signal }));
+    case "kv.list": return sdkValue(await node.kv.list({ prefix: args.prefix, source: args.source, limit: args.limit, cursor: args.cursor, timeout: args.timeoutMs, signal: controller.signal }));
     case "kv.batchPut": return sdkValue(await node.kv.batchPut(args.items.map((item) => ({ ...item, value: decoded(item.value) })), { timeout: args.timeoutMs, signal: controller.signal }));
-    case "replication.status": return node.replication?.status() ?? [];
-    case "replication.sync": return node.replication ? node.replication.sync({ prefix: args.prefix, timeout: args.timeoutMs, signal: controller.signal }) : [];
-    case "replication.purge": return node.replication ? node.replication.purge({ timeout: args.timeoutMs, signal: controller.signal }) : { purged: [], failed: [] };
-    case "replication.clearPending": return node.replication ? node.replication.clearPending(args.keys) : { cleared: 0 };
+    case "replication.status": return node.replication ? await node.replication.status() : [];
+    case "replication.sync": {
+      if (!node.replication) return { ok: false, error: { code: "REPLICATION_DISABLED", message: "Replication is disabled" } };
+      await node.replication.sync({ prefix: args.prefix });
+      return { ok: true };
+    }
+    case "replication.purge": return node.replication ? node.replication.purge({ timeoutMs: args.timeoutMs }) : { purged: [], failed: [] };
+    case "replication.clearPending": return node.replication ? { cleared: await node.replication.clearPending() } : { cleared: 0 };
     case "cancel": {
       const target = requests.get(args.id);
       if (!target) return { cancelled: false };
@@ -132,7 +143,7 @@ async function handle(op, args, controller) {
       return { cancelled: true };
     }
     case "close": {
-      await node?.replication?.close({ timeout: args.timeoutMs });
+      await node?.replication?.close();
       closing = true;
       return { closed: true };
     }

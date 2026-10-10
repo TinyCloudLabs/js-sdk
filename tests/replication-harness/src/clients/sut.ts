@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, readdir, realpath, readlink, symlink, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { HarnessError } from "../contracts/common";
@@ -11,6 +11,20 @@ import type { SutResolutionRequest } from "../contracts/frozen";
 const PACKAGE_NAMES = { cli: "@tinycloud/cli", nodeSdk: "@tinycloud/node-sdk" } as const;
 type JsonRecord = Record<string, unknown>;
 interface PackageMetadata extends JsonRecord { version?: string; bin?: string | Record<string, string>; dist?: { integrity?: string } }
+interface CachedPublishedSut {
+  readonly sut: ResolvedSut;
+  readonly prefix: string;
+  readonly lockfileSha256: string;
+  readonly cliFilesSha256: string;
+  readonly sdkFilesSha256: string;
+  readonly cliIntegrity: string;
+  readonly sdkIntegrity: string;
+}
+export function publishedCachePrefix(cacheRoot: string, runId: string, cliVersion: string, nodeSdkVersion: string): string {
+  return join(cacheRoot, "tc893-sut-cache", runId, `tc893-${cliVersion}+${nodeSdkVersion}`);
+}
+const publishedCacheRunId = `${process.pid}-${randomUUID()}`;
+const publishedInstalls = new Map<string, Promise<CachedPublishedSut>>();
 interface NpmMetadata { version: string; integrity?: string }
 
 function fail(message: string, detail?: unknown): never {
@@ -68,6 +82,49 @@ export async function checkInstalledIntegrity(prefix: string, packageJson: strin
   if (typeof locked !== "string" || locked.length === 0) fail(`${name} has no installed lockfile integrity`, { lockPath, lockKey });
   if (locked !== expected) fail(`${name} integrity differs from npm registry integrity`, { expected, locked });
 }
+export async function installedFilesSha256(packageJson: string): Promise<string> {
+  const root = await realpath(dirname(packageJson));
+  const rows: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const rel = relative(root, path).split(sep).join("/");
+      const info = await lstat(path);
+      if (info.isDirectory()) await visit(path);
+      else if (info.isSymbolicLink()) {
+        const target = await realpath(path);
+        const targetRel = relative(root, target);
+        if (targetRel === ".." || targetRel.startsWith(`..${sep}`) || isAbsolute(targetRel)) fail("Installed package contains an escaping symlink", { packageJson, path, target });
+        rows.push(`${rel}:link:${await readlink(path)}:${createHash("sha256").update(await readFile(target)).digest("hex")}`);
+      } else if (info.isFile()) {
+        rows.push(`${rel}:${info.mode & 0o777}:${createHash("sha256").update(await readFile(path)).digest("hex")}`);
+      }
+    }
+  };
+  await visit(root);
+  return createHash("sha256").update(rows.sort().join("\n")).digest("hex");
+}
+
+export async function verifyInstalledFiles(packageJson: string, expected: string): Promise<void> {
+  const actual = await installedFilesSha256(packageJson);
+  if (actual !== expected) fail("Installed package files changed after resolution", { packageJson, expected, actual });
+}
+
+export async function resolveSdkLoader(rootInput: string, source: "workspace" | "published"): Promise<string> {
+  const root = await realpath(rootInput);
+  if (source === "published") return join(root, "tc893-load-node-sdk.mjs");
+  const loaderRoot = join(tmpdir(), "tc893-sdk-loaders", createHash("sha256").update(root).digest("hex"));
+  const modules = join(loaderRoot, "node_modules");
+  await mkdir(modules, { recursive: true });
+  const scopeLink = join(modules, "@tinycloud");
+  try { await symlink(join(root, "node_modules", "@tinycloud"), scopeLink, "dir"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const shimDirectory = join(modules, ".tc893");
+  await mkdir(shimDirectory, { recursive: true });
+  const shimPath = join(shimDirectory, "load-node-sdk.mjs");
+  await writeFile(shimPath, 'export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
+  return shimPath;
+}
 
 async function readFileHashes(root: string, directory: string): Promise<string[]> {
   const result: string[] = [];
@@ -87,19 +144,15 @@ export async function workspaceDistSha256(root: string): Promise<string> {
   return createHash("sha256").update(rows.join("\n")).digest("hex");
 }
 
-async function installPublished(request: SutResolutionRequest): Promise<ResolvedSut> {
-  const cliVersion = request.cliVersion;
-  const nodeSdkVersion = request.nodeSdkVersion;
-  if (!cliVersion || !nodeSdkVersion) fail("Published SUT requires exact CLI and node-sdk versions");
-  const exactSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-  if (!exactSemver.test(cliVersion) || !exactSemver.test(nodeSdkVersion)) fail("Published SUT versions must be exact semver versions");
-  const cache = join(tmpdir(), "tc893-sut-cache");
-  const prefix = join(cache, `tc893-${cliVersion}+${nodeSdkVersion}`);
-  const npmCache = join(cache, "npm");
+async function installPublishedFresh(request: SutResolutionRequest, prefix: string): Promise<CachedPublishedSut> {
+  const cliVersion = request.cliVersion!;
+  const nodeSdkVersion = request.nodeSdkVersion!;
+  const npmCache = join(dirname(prefix), "npm");
   const install = Bun.spawn(["npm", "i", "--prefix", prefix, "--no-audit", "--no-fund", "--save-exact", `${PACKAGE_NAMES.cli}@${cliVersion}`, `${PACKAGE_NAMES.nodeSdk}@${nodeSdkVersion}`], { env: { ...process.env, npm_config_cache: npmCache }, stdout: "pipe", stderr: "pipe" });
   const [exitCode, stdout, stderr] = await Promise.all([install.exited, new Response(install.stdout).text(), new Response(install.stderr).text()]);
   if (exitCode !== 0) fail("npm install of the published SUT failed", { exitCode, stdout, stderr });
-  const lockfileSha256 = createHash("sha256").update(await readFile(join(prefix, "package-lock.json")).then((bytes) => bytes)).digest("hex");
+  const lockPath = join(prefix, "package-lock.json");
+  const lockfileSha256 = createHash("sha256").update(await readFile(lockPath)).digest("hex");
   const cli = await resolveAnchoredPackage(prefix, PACKAGE_NAMES.cli);
   const nodeSdk = await resolveAnchoredPackage(prefix, PACKAGE_NAMES.nodeSdk);
   const [cliNpm, sdkNpm] = await Promise.all([npmView(PACKAGE_NAMES.cli, cliVersion), npmView(PACKAGE_NAMES.nodeSdk, nodeSdkVersion)]);
@@ -119,11 +172,55 @@ async function installPublished(request: SutResolutionRequest): Promise<Resolved
   await writeFile(shimPath, 'export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
   const sdkShim = await import(pathToFileURL(shimPath).href) as { sdk: unknown; resolved: string };
   if (!hasSdkPhase1Export(sdkShim.sdk)) fail("Published SDK lacks sqliteReplicaStorage required for Phase 1", { version: nodeSdk.data.version, cliEntry: entry, cliVersion: cli.data.version });
+  const [cliFilesSha256, sdkFilesSha256] = await Promise.all([installedFilesSha256(cli.packageJson), installedFilesSha256(nodeSdk.packageJson)]);
   return {
-    source: "published", root: prefix, lockfileSha256,
-    cli: { version: cli.data.version ?? cliNpm.version, packageJson: cli.packageJson, entry, integrity: cliNpm.integrity },
-    nodeSdk: { version: nodeSdk.data.version ?? sdkNpm.version, packageJson: nodeSdk.packageJson, entry: sdkShim.resolved, condition: "import", integrity: sdkNpm.integrity },
+    prefix,
+    lockfileSha256,
+    cliFilesSha256,
+    sdkFilesSha256,
+    cliIntegrity: cliNpm.integrity!,
+    sdkIntegrity: sdkNpm.integrity!,
+    sut: {
+      source: "published", root: prefix, lockfileSha256,
+      cli: { version: cli.data.version ?? cliNpm.version, packageJson: cli.packageJson, entry, integrity: cliNpm.integrity },
+      nodeSdk: { version: nodeSdk.data.version ?? sdkNpm.version, packageJson: nodeSdk.packageJson, entry: sdkShim.resolved, condition: "import", integrity: sdkNpm.integrity },
+    },
   };
+}
+
+async function installPublished(request: SutResolutionRequest): Promise<ResolvedSut> {
+  const cliVersion = request.cliVersion;
+  const nodeSdkVersion = request.nodeSdkVersion;
+  if (!cliVersion || !nodeSdkVersion) fail("Published SUT requires exact CLI and node-sdk versions");
+  const exactSemver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+  if (!exactSemver.test(cliVersion) || !exactSemver.test(nodeSdkVersion)) fail("Published SUT versions must be exact semver versions");
+  const key = `${cliVersion}+${nodeSdkVersion}`;
+  let install = publishedInstalls.get(key);
+  if (!install) {
+    const prefix = publishedCachePrefix(tmpdir(), publishedCacheRunId, cliVersion, nodeSdkVersion);
+    install = installPublishedFresh(request, prefix);
+    publishedInstalls.set(key, install);
+    void install.catch(() => { if (publishedInstalls.get(key) === install) publishedInstalls.delete(key); });
+  }
+  const cached = await install;
+  const [cliNpm, sdkNpm] = await Promise.all([npmView(PACKAGE_NAMES.cli, cliVersion), npmView(PACKAGE_NAMES.nodeSdk, nodeSdkVersion)]);
+  if (cliNpm.version !== cliVersion || sdkNpm.version !== nodeSdkVersion ||
+    cliNpm.integrity !== cached.cliIntegrity || sdkNpm.integrity !== cached.sdkIntegrity) {
+    fail("Registry metadata changed after published SUT resolution", { cliVersion: cliNpm.version, nodeSdkVersion: sdkNpm.version });
+  }
+  const [actualLock, cli, nodeSdk] = await Promise.all([
+    readFile(join(cached.prefix, "package-lock.json")).then((bytes) => createHash("sha256").update(bytes).digest("hex")),
+    resolveAnchoredPackage(cached.prefix, PACKAGE_NAMES.cli),
+    resolveAnchoredPackage(cached.prefix, PACKAGE_NAMES.nodeSdk),
+  ]);
+  if (actualLock !== cached.lockfileSha256) fail("Published SUT lockfile changed after resolution", { expected: cached.lockfileSha256, actual: actualLock });
+  await Promise.all([
+    checkInstalledIntegrity(cached.prefix, cli.packageJson, PACKAGE_NAMES.cli, cliNpm.integrity),
+    checkInstalledIntegrity(cached.prefix, nodeSdk.packageJson, PACKAGE_NAMES.nodeSdk, sdkNpm.integrity),
+    verifyInstalledFiles(cli.packageJson, cached.cliFilesSha256),
+    verifyInstalledFiles(nodeSdk.packageJson, cached.sdkFilesSha256),
+  ]);
+  return cached.sut;
 }
 
 export async function resolveSut(request: SutResolutionRequest): Promise<ResolvedSut> {
@@ -134,10 +231,7 @@ export async function resolveSut(request: SutResolutionRequest): Promise<Resolve
   const [cliRaw, sdkRaw] = await Promise.all([readJson(cliPackage, "Workspace CLI package"), readJson(sdkPackage, "Workspace node-sdk package")]);
   const cliData = cliRaw as PackageMetadata;
   const sdkData = sdkRaw as PackageMetadata;
-  const shimDirectory = join(root, "node_modules", ".tc893");
-  await mkdir(shimDirectory, { recursive: true });
-  const shimPath = join(shimDirectory, "load-node-sdk.mjs");
-  await writeFile(shimPath, 'export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
+  const shimPath = await resolveSdkLoader(root, "workspace");
   const sdkShim = await import(pathToFileURL(shimPath).href) as { sdk: unknown; resolved: string };
   if (!hasSdkPhase1Export(sdkShim.sdk)) fail("Workspace SDK lacks sqliteReplicaStorage required for Phase 1", { version: sdkData.version });
   const distSha256 = await workspaceDistSha256(root);

@@ -3,7 +3,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile }
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { CliClientImpl, createCliDelegation, scrubClientEnvironment } from "../src/clients/cli-client";
+import { CliClientImpl, createCliDelegation, reuseCliOwnerIdentity, scrubClientEnvironment } from "../src/clients/cli-client";
 import { forgetSdkIdentityKeys, sdkIdentityPrivateKey } from "../src/clients/identity";
 
 const roots: string[] = [];
@@ -119,6 +119,20 @@ console.log(JSON.stringify({ release: process.release.name, version: process.ver
       }
     }
   });
+  test("applies ClientSpec replication configuration to CLI operations", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const entry = await cliEntry(root, `console.log(JSON.stringify(process.argv.slice(2)));`);
+    const cli = new CliClientImpl({
+      id: "configured-replication",
+      home,
+      cliEntry: entry,
+      host: "http://node.example",
+      replication: { prefixes: ["notes/"] },
+    });
+    const result = await cli.tc(["kv", "get", "notes/key"]);
+    expect(JSON.parse(Buffer.from(result.stdout).toString("utf8"))).toContain("--replication");
+  });
 
   test("rejects a CLI Node runtime below v22.13 before the SUT starts", async () => {
     const root = await temporaryDirectory();
@@ -223,6 +237,77 @@ await appendFile(file, JSON.stringify({ type: "replication.read", op: "get", key
     }
   });
 
+  test("reports failed gets as not found only for exit 4 and emits client artefacts", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const artifacts = join(root, "artifacts");
+    const entry = await cliEntry(root, `
+const args = process.argv.slice(2);
+const key = args[args.indexOf("get") + 1];
+console.error("cli-stderr-canary");
+if (key === "missing") process.exit(4);
+if (key === "failed") process.exit(1);
+if (key === "killed") process.kill(process.pid, "SIGKILL");
+`);
+    const cli = new CliClientImpl({ id: "get-results", home, artifactDirectory: artifacts, cliEntry: entry, host: "http://127.0.0.1" });
+    const missing = await cli.get("missing");
+    expect(missing).toMatchObject({ ok: true, found: false, code: "NOT_FOUND", exit: 4 });
+    const failed = await cli.get("failed");
+    expect(failed).toMatchObject({ ok: false, found: false, code: "EXIT_1", exit: 1 });
+    const killed = await cli.get("killed");
+    expect(killed).toMatchObject({ ok: false, found: false, code: "SIGNAL_SIGKILL", exit: null, signal: "SIGKILL" });
+    await expect(cli.restart({ auth: "fresh-sign-in" })).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_OPTION" });
+    expect(await readFile(join(artifacts, "stderr.log"), "utf8")).toContain("cli-stderr-canary");
+    await readFile(join(artifacts, "events.jsonl"), "utf8");
+  });
+
+  test("does not count ambiguous sync events and resolves withHost aliases to the client proxy", async () => {
+    const root = await temporaryDirectory();
+    const home = join(root, "home");
+    const entry = await cliEntry(root, `
+import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+const profile = args[args.indexOf("--profile") + 1];
+const command = args[args.indexOf("--host") + 2];
+const host = args[args.indexOf("--host") + 1];
+if (args.includes("auth") && args.includes("login")) {
+  await writeFile(join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "session.json"), "{}");
+  console.log(JSON.stringify({ login: true, host, profile }));
+} else if (args.at(-1) === "hello") {
+  console.log(JSON.stringify({ host, profile }));
+} else {
+  const kind = args.includes("get") ? "get" : "sync";
+  await writeFile(join(process.env.TC_HOME, kind + ".ready"), "ready");
+  while (true) {
+    try { await access(join(process.env.TC_HOME, "get.ready")); await access(join(process.env.TC_HOME, "sync.ready")); break; }
+    catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  const file = join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "replication", "events.jsonl");
+  await mkdir(join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "replication"), { recursive: true });
+  await appendFile(file, JSON.stringify({ type: "replication.sync", trigger: "manual", outcome: "ok" }) + "\\n");
+}
+`);
+    const sourceProfile = join(home, ".tinycloud", "profiles", "owner");
+    await mkdir(sourceProfile, { recursive: true });
+    await writeFile(join(sourceProfile, "key.json"), JSON.stringify({ kty: "EC", d: "owner-key" }), { mode: 0o600 });
+    await writeFile(join(sourceProfile, "profile.json"), JSON.stringify({ privateKey: "a".repeat(64), authMethod: "local", posture: "local-owner-key" }), { mode: 0o600 });
+    const cli = new CliClientImpl({
+      id: "alias", home, cliEntry: entry, host: "http://host-a",
+      hostAliases: { nodeb: "http://127.0.0.1:9876" }, profile: "owner",
+      ownerPosture: true, runId: "alias-host-test", identity: "owner",
+    });
+    await cli.registerOwnerIdentity();
+    const sync = cli.sync({ prefix: "notes/" });
+    const overlappingGet = cli.get("notes/key");
+    const [syncResult] = await Promise.all([sync, overlappingGet]);
+    expect(syncResult).toMatchObject({ ok: false, syncs: [] });
+    const aliasClient = cli.withHost("nodeb");
+    const aliasResult = await aliasClient.tc(["hello"]);
+    expect(JSON.parse(Buffer.from(aliasResult.stdout).toString("utf8"))).toMatchObject({ host: "http://127.0.0.1:9876" });
+    expect(JSON.parse(Buffer.from(aliasResult.stdout).toString("utf8")).profile).not.toBe("owner");
+  });
+
   test("preserves the actual signal on abort and returns deadline-exceeded for CLI get", async () => {
     // A real Node child is required here: fake time cannot exercise kernel signal delivery or close metadata.
     const root = await temporaryDirectory();
@@ -252,6 +337,38 @@ setInterval(() => {}, 1_000);
     expect(timedOut).toMatchObject({ ok: false, found: false, code: "DEADLINE_EXCEEDED", exit: null, signal: "SIGKILL" });
   }, 15_000);
 
+  test("reuses one owner key for profiles sharing a run identity", async () => {
+    const root = await temporaryDirectory();
+    const runId = `identity-reuse-${crypto.randomUUID()}`;
+    const identity = "shared-owner";
+    const sourceHome = join(root, "source-home");
+    const targetHome = join(root, "target-home");
+    const sourceProfile = join(sourceHome, ".tinycloud", "profiles", "owner");
+    const targetProfile = join(targetHome, ".tinycloud", "profiles", "owner");
+    await mkdir(sourceProfile, { recursive: true });
+    await mkdir(targetProfile, { recursive: true });
+    const sourceKey = { kty: "EC", d: "source-did-key" };
+    const targetKey = { kty: "EC", d: "target-did-key" };
+    const sourceConfig = { name: "owner", did: "did:source", privateKey: "a".repeat(64), authMethod: "local", posture: "local-owner-key" };
+    await writeFile(join(sourceProfile, "key.json"), JSON.stringify(sourceKey), { mode: 0o600 });
+    await writeFile(join(sourceProfile, "profile.json"), JSON.stringify(sourceConfig), { mode: 0o600 });
+    await writeFile(join(targetProfile, "key.json"), JSON.stringify(targetKey), { mode: 0o600 });
+    await writeFile(join(targetProfile, "profile.json"), JSON.stringify({ ...sourceConfig, did: "did:target", privateKey: "b".repeat(64) }), { mode: 0o600 });
+    const source = new CliClientImpl({ id: "owner-a", home: sourceHome, profile: "owner", cliEntry: join(root, "unused"), host: "http://127.0.0.1", ownerPosture: true, runId, identity });
+    const target = new CliClientImpl({ id: "owner-b", home: targetHome, profile: "owner", cliEntry: join(root, "unused"), host: "http://127.0.0.1", ownerPosture: true, runId, identity });
+    try {
+      await source.registerOwnerIdentity();
+      await reuseCliOwnerIdentity(targetHome, "owner", runId, identity);
+      await target.registerOwnerIdentity();
+      expect(await readFile(join(targetProfile, "key.json"), "utf8")).toBe(JSON.stringify(sourceKey));
+      expect(JSON.parse(await readFile(join(targetProfile, "profile.json"), "utf8"))).toMatchObject({
+        did: "did:source", privateKey: "a".repeat(64), authMethod: "local", posture: "local-owner-key",
+      });
+    } finally {
+      forgetSdkIdentityKeys(runId);
+    }
+  });
+
   test("runs the isolated owner request/grant/import workflow without copying owner key material", async () => {
     const root = await temporaryDirectory();
     const ownerHome = join(root, "owner-home");
@@ -267,7 +384,7 @@ const profile = args[args.indexOf("--profile") + 1];
 const commandStart = args.indexOf("--host") + 2;
 const command = args.slice(commandStart);
 const home = process.env.TC_HOME;
-await appendFile(join(home, "calls.jsonl"), JSON.stringify({ profile, command }) + "\\n");
+await appendFile(join(home, "calls.jsonl"), JSON.stringify({ profile, host: args[args.indexOf("--host") + 1], command }) + "\\n");
 if (command[0] === "profile" && command[1] === "create") {
   const profileDir = join(home, ".tinycloud", "profiles", profile);
   await mkdir(profileDir, { recursive: true });
@@ -296,6 +413,12 @@ if (command[0] === "profile" && command[1] === "create") {
   const grantPath = command.find((argument) => argument.endsWith(".json"));
   if (!grantPath) throw new Error("missing grant path");
   await readFile(grantPath, "utf8");
+  const expiry = new Date(Date.now() + 90000).toISOString();
+  await writeFile(join(home, ".tinycloud", "profiles", profile, "session.json"), JSON.stringify({ expiresAt: expiry }));
+  process.stdout.write(JSON.stringify({ expiry }) + "\\n");
+}
+if (command[0] === "hello") {
+  process.stdout.write(JSON.stringify({ profile, host: args[args.indexOf("--host") + 1] }) + "\\n");
 }
 `);
     const owner = new CliClientImpl({ id: "owner", home: ownerHome, cliEntry: entry, host: "http://127.0.0.1", ownerPosture: true, runId, identity });
@@ -303,9 +426,13 @@ if (command[0] === "profile" && command[1] === "create") {
     try {
       const workflow = await createCliDelegation({ owner, device, space: "default", prefix: "notes/", actions: ["get", "list", "metadata", "sync"] });
       const ownerProfile = JSON.parse(await readFile(join(ownerHome, ".tinycloud", "profiles", "owner", "profile.json"), "utf8")) as { privateKey: string };
-      const deviceProfile = JSON.parse(await readFile(join(deviceHome, ".tinycloud", "profiles", "device", "profile.json"), "utf8")) as { posture: string; privateKey?: string };
+      const deviceProfile = JSON.parse(await readFile(join(deviceHome, ".tinycloud", "profiles", "device", "profile.json"), "utf8")) as { posture: string; privateKey?: string; authMethod?: string; replication?: { prefixes: string[] } };
       const deviceKey = JSON.parse(await readFile(join(deviceHome, ".tinycloud", "profiles", "device", "key.json"), "utf8")) as { d: string };
       expect(deviceProfile.posture).toBe("delegate-session");
+      expect(deviceProfile.authMethod).toBe("openkey");
+      expect(deviceProfile.replication?.prefixes).toEqual(["notes/"]);
+      expect(await readFile(join(deviceHome, ".tc893-delegation.json"), "utf8")).toBe(await readFile(workflow.grantPath, "utf8"));
+      expect((await device.authority()).grantExpiresAt).toBeGreaterThan(Date.now());
       expect(deviceProfile.privateKey).toBeUndefined();
       expect(deviceKey.d).not.toBe(ownerProfile.privateKey);
       expect(isAbsolute(workflow.requestPath)).toBe(true);
@@ -313,6 +440,10 @@ if (command[0] === "profile" && command[1] === "create") {
       expect(workflow.requestPath.startsWith(deviceHome)).toBe(true);
       expect(workflow.grantPath.startsWith(ownerHome)).toBe(true);
       expect((await stat(workflow.grantPath)).mode & 0o777).toBe(0o600);
+      const deviceOnB = device.withHost("http://node-b.example");
+      const delegateOnB = await deviceOnB.tc(["hello"]);
+      expect(JSON.parse(Buffer.from(delegateOnB.stdout).toString("utf8"))).toMatchObject({ host: "http://node-b.example" });
+      expect((await deviceOnB.authority()).grantExpiresAt).toBeGreaterThan(Date.now());
       const reusedDeviceHome = join(root, "device-reuse-home");
       const reusedDevice = new CliClientImpl({ id: "device-reuse", home: reusedDeviceHome, cliEntry: entry, host: "http://127.0.0.1", ownerPosture: false, runId, identity });
       const reusedWorkflow = await createCliDelegation({ owner, device: reusedDevice, ownerReady: true, space: "default", prefix: "notes/", actions: ["get", "list", "metadata", "sync"] });
@@ -320,11 +451,12 @@ if (command[0] === "profile" && command[1] === "create") {
       expect(await containsFileText(reusedDeviceHome, ownerProfile.privateKey)).toBe(false);
 
       const ownerCalls = (await readFile(join(ownerHome, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { command: string[] });
-      const deviceCalls = (await readFile(join(deviceHome, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { command: string[] });
+      const deviceCalls = (await readFile(join(deviceHome, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { command: string[]; host: string; profile: string });
       const reusedDeviceCalls = (await readFile(join(reusedDeviceHome, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { command: string[] });
       expect(ownerCalls.map((call) => call.command.slice(0, 2))).toEqual([["init", "--name"], ["auth", "login"], ["auth", "grant"], ["auth", "grant"]]);
-      expect(deviceCalls.map((call) => call.command.slice(0, 2))).toEqual([["profile", "create"], ["auth", "request"], ["auth", "import"]]);
       expect(reusedDeviceCalls.map((call) => call.command.slice(0, 2))).toEqual([["profile", "create"], ["auth", "request"], ["auth", "import"]]);
+      expect(deviceCalls.filter((call) => call.host === "http://127.0.0.1").map((call) => call.command.slice(0, 2))).toEqual([["profile", "create"], ["auth", "request"], ["auth", "import"]]);
+      expect(deviceCalls.some((call) => call.host === "http://node-b.example" && call.command.slice(0, 2).join(" ") === "auth import" && call.profile !== "device")).toBe(true);
       expect(ownerCalls[2]!.command.slice(2, 4)).toEqual(["--yes", workflow.requestPath]);
       expect(ownerCalls[3]!.command.slice(2, 4)).toEqual(["--yes", reusedWorkflow.requestPath]);
       expect(deviceCalls[1]!.command[deviceCalls[1]!.command.indexOf("--emit") + 1]).toBe(workflow.requestPath);
