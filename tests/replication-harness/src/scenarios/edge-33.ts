@@ -45,7 +45,7 @@ const scenario: Scenario<"cli"> = {
     ctx.check("owner writes before issuing delegate grant", seeded.ok, { code: seeded.code });
     const space = seeded.events.find((item) => item.event.type === "replication.write")?.event.space;
     if (typeof space !== "string") throw new Error("owner write did not report its space");
-    await createCliDelegation({ owner: writer, device: reader, space, prefix: PREFIX, actions: [...ACTIONS], expiry: "75s" });
+    await createCliDelegation({ owner: writer, device: reader, ownerReady: true, space, prefix: PREFIX, actions: [...ACTIONS], expiry: "75s" });
     const warmed = await reader.sync({ prefix: PREFIX, replication: { maxStalenessMs: 0 }, signal: ctx.signal });
     ctx.check("delegate warms covered prefix before grant expiry", warmed.ok, { code: warmed.code, syncs: warmed.syncs });
     const warmRead = await reader.get(KEY, { replication: { maxStalenessMs: 0 }, signal: ctx.signal });

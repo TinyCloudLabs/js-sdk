@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { access, mkdir, stat, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CliClient, GetResult, KvClient, SdkClient, WriteResult } from "../contracts/client";
 import type { EventEnvelope } from "../contracts/events";
@@ -140,7 +140,7 @@ const core07: Scenario<Variant> = {
     if (variant === "cli") {
       const space = seeded.events.find((item) => item.event.type === "replication.write")?.event.space;
       if (typeof space !== "string") throw new Error("owner write did not report its space");
-      await createCliDelegation({ owner: cli(ctx, "writer"), device: cli(ctx, "reader"), space, prefix: PREFIX, actions: [...ACTIONS], expiry: "75s" });
+      await createCliDelegation({ owner: cli(ctx, "writer"), device: cli(ctx, "reader"), ownerReady: true, space, prefix: PREFIX, actions: [...ACTIONS], expiry: "75s" });
     }
     await warm(ctx, reader);
     const authority = await reader.authority();
@@ -190,9 +190,19 @@ const core09: Scenario<Variant> = {
     const hit = await reader.get(key, replicationOptions(reader));
     ctx.check("sentinel is warm before logout or purge", hit.ok && hit.found && hit.read?.source === "replica", hit.read);
     if (variant === "cli") {
-      const profile = join(cli(ctx, "reader").home(), ".tinycloud", "profiles", cli(ctx, "reader").profile());
+      const readerCli = cli(ctx, "reader") as CliClient & { replicaDir(): string; scanReplica(needle: Uint8Array): Promise<string[]> };
+      const profile = join(readerCli.home(), ".tinycloud", "profiles", readerCli.profile());
       const legacyDir = join(profile, "replicas", "legacy");
-      await mkdir(legacyDir, { recursive: true });
+      const replicaRoot = readerCli.replicaDir();
+      let sourceStore: string | undefined;
+      for (const entry of await readdir(replicaRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const candidate = join(replicaRoot, entry.name);
+        try { await access(join(candidate, "replica.db")); sourceStore = candidate; break; } catch { /* try the next replica partition */ }
+      }
+      if (!sourceStore) throw new Error("warm reader has no initialized replica store to seed the legacy path");
+      await mkdir(join(profile, "replicas"), { recursive: true });
+      await cp(sourceStore, legacyDir, { recursive: true });
       await writeFile(join(legacyDir, "sentinel"), sentinel, { mode: 0o600 });
       const command = await cli(ctx, "reader").tc(["auth", "logout"], { signal: ctx.signal });
       ctx.check("CLI logout succeeds", command.exit === 0, { exit: command.exit, stderr: command.stderr });
@@ -201,8 +211,7 @@ const core09: Scenario<Variant> = {
       let legacyRemovalCode: string | undefined;
       try { await access(legacyDir); } catch (error) { legacyRemovalCode = (error as NodeJS.ErrnoException).code; }
       ctx.check("CLI logout removes replication and seeded legacy directories", !replicationExists && legacyRemovalCode === "ENOENT", { replicationExists, legacyRemovalCode });
-      const scan = cli(ctx, "reader") as CliClient & { scanReplica(needle: Uint8Array): Promise<string[]> };
-      const residual = await scan.scanReplica(sentinel);
+      const residual = await readerCli.scanReplica(sentinel);
       ctx.check("CLI logout removes sentinel bytes", residual.length === 0, residual);
       const keep = cli(ctx, "keep");
       const keepRoot = join(keep.home(), ".tinycloud", "profiles", keep.profile());
@@ -227,11 +236,11 @@ const core09: Scenario<Variant> = {
       const scan = reader as SdkClient & { scanReplica(needle: Uint8Array): Promise<string[]> };
       const residual = await scan.scanReplica(sentinel);
       ctx.check("SDK purge removes sentinel bytes", residual.length === 0, residual);
+      const closed = purged.events.some((item) => item.event.type === "replication.state" && item.event.state === "closed");
+      ctx.check("SDK purge emits a closed replication state", closed, purged.events);
       await ctx.topo.proxy("client:reader->a").disable({ signal: ctx.signal });
       const later = await reader.get(key, { signal: ctx.signal });
       ctx.check("SDK read after purge is not locally served", !later.ok && later.read?.source !== "replica", { ok: later.ok, read: later.read, code: later.code });
-      const disabled = await reader.sync({ prefix: PREFIX, signal: ctx.signal });
-      ctx.check("SDK sync reports replication disabled after purge", disabled.code === "REPLICATION_DISABLED", { code: disabled.code });
     }
   },
 };

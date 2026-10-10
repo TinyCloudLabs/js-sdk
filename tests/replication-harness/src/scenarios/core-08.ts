@@ -57,7 +57,7 @@ const scenario: Scenario<"cli"> = {
     const space = put.events.find((item) => item.event.type === "replication.write")?.event.space;
     ctx.check("owner write reports its authority space", typeof space === "string");
     if (typeof space !== "string") throw new Error("owner write did not report its space");
-    const delegation = await createCliDelegation({ owner, device: reader, space, prefix: PREFIX, actions: [...ACTIONS], expiry: "30d" });
+    const delegation = await createCliDelegation({ owner, device: reader, ownerReady: true, space, prefix: PREFIX, actions: [...ACTIONS], expiry: "30d" });
     const grantJson = parseJson(delegation.grant.stdout);
     const cid = grantCid(grantJson);
     ctx.check("delegation CID is available to revoke", typeof cid === "string" && cid.length > 0);
