@@ -425,8 +425,9 @@ export class SdkClientImpl implements SdkClient {
     assertSdkOptions(options);
     const result = await this.timed((opSeq) => this.operationRpc(opSeq, "kv.list", { prefix, source: options.source, limit: options.limit, cursor: options.cursor, timeoutMs: options.deadlineMs }, options));
     const sdkResult = result.value as unknown as { ok?: boolean; error?: { code?: string }; keys?: string[]; nextCursor?: string };
+    const read = result.events.find((item) => item.event.type === "replication.read")?.event as GetResult["read"];
     const failed = sdkResult.ok === false;
-    return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, ...(failed && sdkResult.error?.code ? { code: sdkResult.error.code } : {}), ...(failed ? {} : { keys: sdkResult.keys, nextCursor: sdkResult.nextCursor }) };
+    return { opSeq: result.opSeq, startedMono: result.startedMono, durationMs: result.durationMs, events: result.events, ok: !failed, ...(failed && sdkResult.error?.code ? { code: sdkResult.error.code } : {}), ...(failed ? {} : { keys: sdkResult.keys, nextCursor: sdkResult.nextCursor }), ...(read ? { read } : {}) };
   }
   async batchPut(items: { key: string; value: string | Uint8Array; contentType?: string }[], options?: OpOptions) {
     if (options) assertSdkOptions(options);

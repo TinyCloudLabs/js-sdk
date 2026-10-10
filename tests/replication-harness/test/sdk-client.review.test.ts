@@ -60,7 +60,11 @@ class TinyCloudNode {
         return { ok: true, data: {} };
       },
       delete: async (key) => key === "no-code" ? { ok: false, error: { message: "missing code" } } : { ok: true, data: {} },
-      list: async (options) => { record({ kind: "list", prefix: options.prefix }); return { ok: true, data: { keys: [] } }; },
+      list: async (options) => {
+        record({ kind: "list", prefix: options.prefix });
+        this.options.replication?.onEvent?.({ type: "replication.read", op: "list", key: options.prefix, source: "replica", reason: "hit" });
+        return { ok: true, data: { keys: [] } };
+      },
       batchPut: async () => ({ ok: true, data: { written: [] } }),
     };
     this.startSyncPromise = new Promise((resolve) => setTimeout(resolve, 10));
@@ -191,10 +195,11 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     const getObservation = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
       .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; key?: string; space?: unknown }).find((item) => item.kind === "get" && item.key === "single");
     expect(getObservation?.space).toBeUndefined();
-    await owner.list("notes/only/");
+    const listResult = await owner.list("notes/only/");
     const listObservation = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
       .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; prefix?: string }).find((item) => item.kind === "list");
     expect(listObservation?.prefix).toBe("notes/only/");
+    expect(listResult.read).toMatchObject({ type: "replication.read", op: "list", source: "replica" });
     const [parallelA, parallelB] = await Promise.all([owner.get("parallel-a"), owner.get("parallel-b")]);
     expect(new Set([parallelA.opSeq, parallelB.opSeq]).size).toBe(2);
     expect([...parallelA.events, ...parallelB.events].every((event) => event.attribution === "op" && event.opSeq !== null)).toBe(true);
