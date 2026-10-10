@@ -18,7 +18,7 @@ import { loadAdditionalDelegations, removeStoredDelegations, type StoredAddition
 import { ensureAuthenticated, restoreProfileSessionNode } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { discardWarnings } from "../output/warnings.js";
-import { CLIError, handleError } from "../output/errors.js";
+import { CLIError, handleError, wrapError } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
 import type { OpenKeyAcquisition } from "./auth.js";
 
@@ -224,13 +224,22 @@ export function registerAuthGrantsCommand(
           let removed: number;
           try {
             removed = await removeStoredDelegations(ctx.profile, cid);
-          } catch {
-            throw new CLIError(
-              "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
-              `Delegation ${cid} was revoked on the node, but its local grant could not be removed.`,
-              ExitCode.ERROR,
-              { hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}` },
-            );
+          } catch (error) {
+            const cause = wrapError(error);
+            if (cause.code === "GRANT_NOT_FOUND") {
+              // Another local remover won the race after the node revoke.
+              removed = 0;
+            } else {
+              throw new CLIError(
+                "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
+                `Delegation ${cid} was revoked on the node, but its local grant could not be removed (${cause.code}).`,
+                ExitCode.ERROR,
+                {
+                  causeCode: cause.code,
+                  hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}`,
+                },
+              );
+            }
           }
           discardWarnings(cid);
           const result = { profile: ctx.profile, cid, removed, revoked: true as const,

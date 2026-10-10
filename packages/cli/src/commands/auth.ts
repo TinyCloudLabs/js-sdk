@@ -572,7 +572,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const imported = normalizeDelegationImport(parsed);
         // Loaded on use: a static import would evaluate the operations
         // delegation-binding bundle in every command that registers `auth`.
-        const { activateUnboundImport, storedDelegationKind, STORED_GRANT_SKIP_REASONS } = await import(
+        const { activateUnboundImport, storedDelegationKind, verifiedCompactAudience, STORED_GRANT_SKIP_REASONS } = await import(
           "@tinycloud/operations/delegation-binding"
         );
         const kind = storedDelegationKind({ delegation: imported.delegation });
@@ -609,15 +609,34 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
           node = bootstrap.node;
         }
-        // A delegation whose audience is this profile's own session key can be
-        // installed as a runtime grant (useRuntimeDelegation activates it for
-        // matching service calls). A cross-user delegation — audience is this
-        // profile's stable identity DID or another principal — cannot: the node
-        // rejects runtime delegations that don't target the session key. Persist
-        // it and let the read path activate it via useDelegation in wallet mode.
-        const targetsSessionKey =
-          typeof imported.delegation.delegateDID === "string" &&
-          principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
+        // Only signed compact bytes can classify an import as cross-user.
+        // Transport metadata cannot turn a damaged session grant into a silent
+        // wallet-mode import. Signed-login proofs are validated by activation.
+        const signedAudience = kind === "compact"
+          ? verifiedCompactAudience(node as unknown as RuntimeDelegationActivator, imported.delegation)
+          : undefined;
+        let transportMatchesAudience = false;
+        if (signedAudience !== undefined) {
+          try {
+            transportMatchesAudience = principalDidEquals(imported.delegation.delegateDID, signedAudience);
+          } catch {
+            // Malformed transport DIDs never qualify as a foreign grant.
+          }
+        }
+        if (kind === "compact" && (signedAudience === undefined || !transportMatchesAudience)) {
+          const reason = signedAudience === undefined ? "proof_invalid" : "audience_mismatch";
+          const refusal = new CLIError(
+            "DELEGATION_REJECTED",
+            `Imported delegation was rejected (${reason}). No grant was stored.`,
+            ExitCode.ERROR,
+          );
+          if (bootstrap) await bootstrap.abandon(refusal);
+          throw refusal;
+        }
+        const targetsSessionKey = kind === "signed-login" || (
+          signedAudience !== undefined && principalDidEquals(signedAudience, node.sessionDid)
+        ) || (kind === "other" && typeof imported.delegation.delegateDID === "string" &&
+          principalDidEquals(imported.delegation.delegateDID, node.sessionDid));
         let activated = false;
         let permissions = imported.permissions;
         if (targetsSessionKey) {

@@ -187,6 +187,75 @@ test("refuses a compact grant with a corrupted signature and a matching recomput
   }
 });
 
+test("only a verified signed foreign audience is silently excluded from replay", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const sessionGrant = await fixture.hermetic.mintDelegation();
+    const foreignGrant = await fixture.hermetic.mintDelegationForAudience(fixture.hermetic.unrelatedAudience);
+    const computeCid = (authorization: string) =>
+      new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization);
+    const flipped = (authorization: string) => {
+      const parts = authorization.split(".");
+      parts[2] = `${parts[2]![0] === "A" ? "B" : "A"}${parts[2]!.slice(1)}`;
+      return parts.join(".");
+    };
+    const changedSignature = flipped(sessionGrant.delegationHeader.Authorization);
+    const foreignSignature = flipped(foreignGrant.delegationHeader.Authorization);
+    const cases = [
+      { label: "A1 edited transport audience", grant: { ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience }, reason: "audience_mismatch" },
+      { label: "A2 malformed transport audience", grant: { ...sessionGrant, delegateDID: "not-a-did" }, reason: "audience_mismatch" },
+      { label: "A3 flipped signature and recomputed CID", grant: {
+        ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience,
+        cid: computeCid(changedSignature), delegationHeader: { Authorization: changedSignature },
+      }, reason: "proof_invalid" },
+      { label: "A4 garbage authorization", grant: {
+        ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience,
+        delegationHeader: { Authorization: "garbage" },
+      }, reason: "proof_missing" },
+      { label: "A5 CID mismatch", grant: {
+        ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience, cid: foreignGrant.cid,
+      }, reason: "cid_mismatch" },
+      { label: "A6 signed foreign audience", grant: foreignGrant, reason: null },
+      { label: "A7 corrupted foreign signature", grant: {
+        ...foreignGrant, cid: computeCid(foreignSignature), delegationHeader: { Authorization: foreignSignature },
+      }, reason: "proof_invalid" },
+      { label: "A8 signed foreign audience with session transport DID", grant: {
+        ...foreignGrant, delegateDID: fixture.sessionDid,
+      }, reason: "audience_mismatch" },
+    ] as const;
+    for (const { label, grant, reason } of cases) {
+      await persistRuntimeDelegations(fixture, [grant]);
+      const runtime = await authenticatedRuntime(fixture.profile);
+      expect(installedCids(runtime), label).toEqual([]);
+      expect(runtime.runtime.warnings, label).toEqual(reason === null ? undefined : [{
+        code: "STORED_GRANT_SKIPPED", reason,
+        ...(reason === "cid_mismatch" || reason === "proof_missing" ? {} : { grantCid: grant.cid }),
+      }]);
+    }
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a double Bearer prefix is refused without blocking a valid covering grant or its read", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [{
+      ...grant, delegationHeader: { Authorization: `Bearer Bearer ${grant.delegationHeader.Authorization}` },
+    }, grant]);
+    const runtime = await authenticatedRuntime(fixture.profile);
+    expect(runtime.runtime.warnings).toEqual([{ code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" }]);
+    expect(installedCids(runtime)).toEqual([grant.cid]);
+    const node = runtime.runtime.node as RuntimeNode;
+    const installed = node.getRuntimePermissionDelegations()[0]!;
+    expect(installed.delegationHeader.Authorization).toBe(grant.delegationHeader.Authorization);
+    await fixture.hermetic.readAndDecrypt(node, validatedDelegation(installed, runtime.runtime.granted));
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("accepts a bound Bearer-prefixed compact grant and migrates an unbound one", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {

@@ -333,6 +333,9 @@ function handleError(error) {
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
   const meta = {};
+  if (cliError.code === "GRANT_REVOKED_LOCAL_REMOVE_FAILED" && typeof cliError.metadata?.causeCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(cliError.metadata.causeCode)) {
+    meta.causeCode = cliError.metadata.causeCode;
+  }
   if (cliError.status !== void 0 && authMeta !== void 0) meta.status = cliError.status;
   const capability = validatedCapabilityOf({ meta: authMeta });
   if (capability) {

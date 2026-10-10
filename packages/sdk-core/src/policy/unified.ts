@@ -1280,7 +1280,7 @@ const SignedCompactAttenuationSchema = z.record(z.record(z.array(z.unknown()).mi
 /** Verify an issued UCAN's exact bytes while reading its signed attenuation. */
 export function parseSignedCompactUcanAttenuation(input: string, expectedCid?: string): {
   cid: string;
-  payload: { att: z.infer<typeof SignedCompactAttenuationSchema> };
+  payload: { att: z.infer<typeof SignedCompactAttenuationSchema>; aud: string };
 } {
   if (typeof input !== "string" || /\s/.test(input))
     throw new Error("Authorization must be compact UCAN bytes");
@@ -1309,9 +1309,11 @@ export function parseSignedCompactUcanAttenuation(input: string, expectedCid?: s
   const signature = decodeBase64Url(signatureSegment);
   if (!ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey))
     throw new Error("compact UCAN signature is invalid");
+  if (typeof payloadValue.aud !== "string" || payloadValue.aud.length === 0)
+    throw new Error("compact UCAN signed audience is missing");
   const cid = CID.createV1(0x55, createDigest(0x1e, blake3(new TextEncoder().encode(input)))).toString();
   if (expectedCid !== undefined && cid !== expectedCid) throw new Error("compact UCAN CID does not match exact Authorization bytes");
-  return { cid, payload: { att } };
+  return { cid, payload: { att, aud: payloadValue.aud } };
 }
 
 export function parsePolicySessionUcan(

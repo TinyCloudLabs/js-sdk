@@ -510,6 +510,9 @@ function handleError(error) {
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
   const meta = {};
+  if (cliError.code === "GRANT_REVOKED_LOCAL_REMOVE_FAILED" && typeof cliError.metadata?.causeCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(cliError.metadata.causeCode)) {
+    meta.causeCode = cliError.metadata.causeCode;
+  }
   if (cliError.status !== void 0 && authMeta !== void 0) meta.status = cliError.status;
   const capability = validatedCapabilityOf({ meta: authMeta });
   if (capability) {
@@ -20605,13 +20608,21 @@ function registerAuthGrantsCommand(auth, options = {}) {
         let removed;
         try {
           removed = await removeStoredDelegations(ctx.profile, cid);
-        } catch {
-          throw new CLIError(
-            "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
-            `Delegation ${cid} was revoked on the node, but its local grant could not be removed.`,
-            ExitCode.ERROR,
-            { hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}` }
-          );
+        } catch (error) {
+          const cause = wrapError(error);
+          if (cause.code === "GRANT_NOT_FOUND") {
+            removed = 0;
+          } else {
+            throw new CLIError(
+              "GRANT_REVOKED_LOCAL_REMOVE_FAILED",
+              `Delegation ${cid} was revoked on the node, but its local grant could not be removed (${cause.code}).`,
+              ExitCode.ERROR,
+              {
+                causeCode: cause.code,
+                hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}`
+              }
+            );
+          }
         }
         discardWarnings(cid);
         const result = {
@@ -21025,7 +21036,7 @@ function registerAuthCommand(program, options) {
         return;
       }
       const imported = normalizeDelegationImport(parsed);
-      const { activateUnboundImport, storedDelegationKind: storedDelegationKind2, STORED_GRANT_SKIP_REASONS } = await import("@tinycloud/operations/delegation-binding");
+      const { activateUnboundImport, storedDelegationKind: storedDelegationKind2, verifiedCompactAudience, STORED_GRANT_SKIP_REASONS } = await import("@tinycloud/operations/delegation-binding");
       const kind = storedDelegationKind2({ delegation: imported.delegation });
       if (kind === "refused") {
         throw new CLIError(
@@ -21055,7 +21066,25 @@ function registerAuthCommand(program, options) {
         bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
         node = bootstrap.node;
       }
-      const targetsSessionKey = typeof imported.delegation.delegateDID === "string" && principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
+      const signedAudience = kind === "compact" ? verifiedCompactAudience(node, imported.delegation) : void 0;
+      let transportMatchesAudience = false;
+      if (signedAudience !== void 0) {
+        try {
+          transportMatchesAudience = principalDidEquals(imported.delegation.delegateDID, signedAudience);
+        } catch {
+        }
+      }
+      if (kind === "compact" && (signedAudience === void 0 || !transportMatchesAudience)) {
+        const reason = signedAudience === void 0 ? "proof_invalid" : "audience_mismatch";
+        const refusal = new CLIError(
+          "DELEGATION_REJECTED",
+          `Imported delegation was rejected (${reason}). No grant was stored.`,
+          ExitCode.ERROR
+        );
+        if (bootstrap) await bootstrap.abandon(refusal);
+        throw refusal;
+      }
+      const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals(signedAudience, node.sessionDid) || kind === "other" && typeof imported.delegation.delegateDID === "string" && principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
       let activated = false;
       let permissions = imported.permissions;
       if (targetsSessionKey) {

@@ -163,6 +163,11 @@ export function handleError(error: unknown): never {
     ? cliError.metadata
     : undefined;
   const meta: Record<string, unknown> = {};
+  if (cliError.code === "GRANT_REVOKED_LOCAL_REMOVE_FAILED" &&
+    typeof cliError.metadata?.causeCode === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/.test(cliError.metadata.causeCode)) {
+    meta.causeCode = cliError.metadata.causeCode;
+  }
   if (cliError.status !== undefined && authMeta !== undefined) meta.status = cliError.status;
   const capability = validatedCapabilityOf({ meta: authMeta });
   if (capability) {

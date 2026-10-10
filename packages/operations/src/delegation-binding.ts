@@ -377,15 +377,32 @@ export async function replayProfileDelegations(
   return { installed, warnings };
 }
 
-/** The stored audience targets another principal, not this restored session. */
-export function storedDelegationForAnotherKey(entry: unknown, node: RuntimeDelegationActivator): boolean {
-  if (storedDelegationKind(entry) === "refused" || !isRecord(entry) ||
-    !isRecord(entry.delegation) || typeof entry.delegation.delegateDID !== "string" ||
-    typeof node.sessionDid !== "string") return false;
+/** Return an audience only after the exact compact bytes, CID and signature verify. */
+export function verifiedCompactAudience(node: RuntimeDelegationActivator, delegation: PortableDelegation): string | undefined {
+  const authorization = delegation.delegationHeader.Authorization;
+  const token = withoutBearer(authorization);
+  // Neither the CID helper nor the signature verifier may strip a second prefix.
+  if (/^Bearer(?:\s|$)/i.test(token)) return undefined;
   try {
-    return !nodeSdk.principalDidEquals(entry.delegation.delegateDID, node.sessionDid);
+    if (node.computeDelegationCid(authorization) !== delegation.cid) return undefined;
+    return parseSignedCompactUcanAttenuation(token, delegation.cid).payload.aud;
   } catch {
-    return entry.delegation.delegateDID !== node.sessionDid;
+    return undefined;
+  }
+}
+
+/** Only a verified signed audience and matching transport audience can identify a foreign grant. */
+export function storedDelegationForAnotherKey(entry: unknown, node: RuntimeDelegationActivator): boolean {
+  if (storedDelegationKind(entry) !== "compact" || typeof node.sessionDid !== "string") return false;
+  const delegation = normalizeStoredDelegation(entry);
+  if (delegation === undefined) return false;
+  const audience = verifiedCompactAudience(node, delegation);
+  if (audience === undefined) return false;
+  try {
+    return nodeSdk.principalDidEquals(delegation.delegateDID, audience) &&
+      !nodeSdk.principalDidEquals(audience, node.sessionDid);
+  } catch {
+    return false;
   }
 }
 
@@ -471,6 +488,7 @@ async function assess(
   // Bearer is a storage/HTTP presentation prefix, not part of the signed
   // compact bytes. The node's invocation signer must receive the raw token.
   const authorization = withoutBearer(delegation.delegationHeader.Authorization);
+  if (/^Bearer(?:\s|$)/i.test(authorization)) return skipped("cid_mismatch");
   const toActivate = authorization === delegation.delegationHeader.Authorization
     ? delegation
     : { ...delegation, delegationHeader: { Authorization: authorization }, authHeader: authorization };
@@ -492,6 +510,16 @@ async function assess(
     if (outsideRequest) return skipped("outside_request");
     if (effectivePermissions !== undefined && !mode.activate) {
       return { status: "verified", cid: delegation.cid, effectivePermissions, expiry: delegation.expiry };
+    }
+    // The node compares audiences before invoking `authorize`. A corrupted
+    // compact signature must not be mislabeled as an audience mismatch when
+    // its transport DID also differs from this session.
+    if (kind === "compact" && rejectionReason(error) === "audience_mismatch") {
+      try {
+        verifyCompactProof(toActivate);
+      } catch {
+        return skipped("proof_invalid");
+      }
     }
     return skipped(rejectionReason(error));
   }
