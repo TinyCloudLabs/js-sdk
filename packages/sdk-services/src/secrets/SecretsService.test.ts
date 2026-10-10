@@ -161,7 +161,6 @@ describe("SecretsService", () => {
     expect(vault.get).toHaveBeenCalledWith(
       "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
     );
-
     const deleteResult = await secrets.delete("ANTHROPIC_API_KEY", options);
     expect(deleteResult.ok).toBe(true);
     expect(vault.delete).toHaveBeenCalledWith(
@@ -250,11 +249,13 @@ describe("SecretsService", () => {
       prefix: "secrets/",
       removePrefix: true,
       limit: 1000,
+      source: "network",
     });
     expect(vault.listPage).toHaveBeenNthCalledWith(2, {
       prefix: "secrets/",
       removePrefix: true,
       limit: 1000,
+      source: "network",
       cursor: "page-2",
     });
   });

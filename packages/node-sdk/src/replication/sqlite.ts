@@ -19,7 +19,7 @@ import { chmod, mkdir, open as openFile, readFile, realpath, rename, rm, stat, t
 import { basename, dirname, join } from "node:path";
 
 
-import { KVService, ServiceContext } from "@tinycloud/sdk-core";
+import { KVService, ServiceContext, principalDid } from "@tinycloud/sdk-core";
 import {
   canonicalReplicationIdentity,
   replicationIdentityKey,
@@ -96,7 +96,7 @@ async function pathExists(path: string): Promise<boolean> {
 
 /** `did:key:…#fragment` → the bare principal DID (replica's principalOf). */
 function principalOf(did: string): string {
-  return did.split("#", 1)[0]!;
+  return principalDid(did);
 }
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
@@ -426,17 +426,26 @@ export class FilePendingWriteStore implements PendingWriteStore {
     // In-process serialization first (review), then the optional
     // cross-process guard — never the reverse, so the profile lock can never
     // be held while waiting on this file's chain.
-    // Binding B-int constraint: NEVER call update() while already holding
-    // the profile lock — the chain-first ordering is safe only if no caller
-    // holds the profile lock outside update().
-    return serializePendingWrite(file, () =>
-      this.#guard(async () => {
+    return serializePendingWrite(file, async () => {
+      let currentFile: string;
+      try {
+        currentFile = join(await realpath(dirname(file)), basename(file));
+      } catch (error) {
+        throw storageError("STORAGE_ERROR", "Resolving the open pending-write partition", error);
+      }
+      if (currentFile !== file) {
+        throw new ReplicaStorageError(
+          "STORAGE_ERROR",
+          `The pending-write partition changed while open: ${dirname(file)}.`,
+        );
+      }
+      return this.#guard(async () => {
         const state = await this.read();
         const result = mutate(state);
         await writeJsonAtomic(file, state, this.#dirSync);
         return result;
-      }),
-    );
+      });
+    });
   }
 }
 
@@ -902,7 +911,10 @@ export function createSqliteReplicaStorage(
     await ensurePartitionIdentity(idDir, spec.identity, options.dirSync);
     // Delegate posture (§2.1): a spec.device handle never reads or creates
     // the partition's own device key.
-    const device = spec.device ?? (await loadOrCreateDevice(idDir, guard, createDevice, options.dirSync));
+    const createdDevice = spec.device ?? (await loadOrCreateDevice(idDir, guard, createDevice, options.dirSync));
+    // Device key APIs return a verification-method DID URL. Replica grants
+    // use the key's principal DID as their audience and stored device identity.
+    const device = { ...createdDevice, did: principalOf(createdDevice.did) };
     const replicaHash = replicaHashOf(spec.prefix, device.did);
     const replicaDir = join(idDir, "replicas", replicaHash);
     const store = await sqlite.SqliteReplicaStore.open(replicaDir, {

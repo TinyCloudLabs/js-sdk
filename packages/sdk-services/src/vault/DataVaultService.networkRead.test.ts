@@ -23,6 +23,7 @@ import {
 } from "../debug";
 import { KVService } from "../kv/KVService";
 import { DataVaultService, type VaultCrypto } from "./DataVaultService";
+import { SecretsService } from "../secrets/SecretsService";
 
 const SPACE_ID = "tinycloud:pkh:eip155:1:0xabc:secrets";
 const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
@@ -155,6 +156,7 @@ function createClassifiedVault(options?: {
   authorization?: string;
 }) {
   let localDecryptFails = false;
+  let networkCalls = 0;
   let kvResponse = async () => new Response("missing", { status: 404 });
   let decrypt = async (input: { canonicalBody: string }) =>
     decryptResponse(crypto, input);
@@ -175,7 +177,10 @@ function createClassifiedVault(options?: {
   const context = new ServiceContext({
     hosts: ["https://tinycloud.test"],
     invoke: () => ({ Authorization: authorization }),
-    fetch: async () => kvResponse() as any,
+    fetch: async () => {
+      networkCalls++;
+      return kvResponse() as any;
+    },
     ...(options?.telemetry
       ? { telemetry: { enabled: true, onEvent: options.telemetry } }
       : {}),
@@ -212,6 +217,8 @@ function createClassifiedVault(options?: {
   vault.initialize(context);
 
   return {
+    kv,
+    getNetworkCalls: () => networkCalls,
     vault,
     setKvResponse: (response: () => Promise<Response>) => {
       kvResponse = response;
@@ -235,6 +242,40 @@ function createClassifiedVault(options?: {
 }
 
 describe("DataVaultService.readNetworkEncrypted", () => {
+  test("secrets and vault existence reads bypass an attached replica", async () => {
+    const fixture = createClassifiedVault();
+    let replicaReads = 0;
+    fixture.kv.setReadThrough({
+      get: async () => {
+        replicaReads++;
+        throw new Error("replica read must be bypassed");
+      },
+      list: async () => {
+        replicaReads++;
+        throw new Error("replica read must be bypassed");
+      },
+      write: async () => {
+        throw new Error("unused write");
+      },
+      observeNetworkRequested: () => {},
+    });
+    const envelope = await fixture.encrypt({
+      value: "secret-value",
+      createdAt: "2026-07-15T00:00:00.000Z",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+    });
+    fixture.setKvResponse(() =>
+      Promise.resolve(new Response(envelope, { status: 200 })),
+    );
+
+    const secrets = new SecretsService(fixture.vault);
+    const secret = await secrets.get("API_KEY", { source: "network" });
+    expect(secret).toEqual({ ok: true, data: "secret-value" });
+    const existence = await fixture.vault.readNetworkEncrypted("secrets/API_KEY");
+    expect(existence.status).toBe("ok");
+    expect(fixture.getNetworkCalls()).toBe(2);
+    expect(replicaReads).toBe(0);
+  });
   test("classifies real KV and encryption paths without exposing error data", async () => {
     const fixture = createClassifiedVault();
     const secret = {

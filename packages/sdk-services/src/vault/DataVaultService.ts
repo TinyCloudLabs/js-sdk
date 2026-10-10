@@ -650,6 +650,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     try {
       const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
         raw: true,
+        ...(options?.source === undefined ? {} : { source: options.source }),
       });
       if (!valueResult.ok) {
         return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -707,7 +708,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
 
     let valueResult: Awaited<ReturnType<IKVService["get"]>>;
     try {
-      valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true });
+      valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true, source: "network" });
     } catch {
       return { status: "node_unreachable" };
     }
@@ -801,6 +802,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     try {
       const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
         raw: true,
+        source: "network",
       });
       if (!valueResult.ok) {
         return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -966,6 +968,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         // Fetch encrypted entry key from key space
         const keyResult = await this.tc.kv.get<string>(`keys/${key}`, {
           raw: true,
+          ...(options?.source === undefined ? {} : { source: options.source }),
         });
         if (!keyResult.ok) {
           return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -978,6 +981,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         // Fetch encrypted value from data space
         const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
           raw: true,
+          ...(options?.source === undefined ? {} : { source: options.source }),
         });
         if (!valueResult.ok) {
           return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -1117,6 +1121,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           prefix: listPrefix,
           removePrefix: true,
           ...(options?.limit === undefined ? {} : { limit: options.limit }),
+          ...(options?.source === undefined ? {} : { source: options.source }),
           ...(options?.cursor === undefined ? {} : { cursor: options.cursor }),
         });
 

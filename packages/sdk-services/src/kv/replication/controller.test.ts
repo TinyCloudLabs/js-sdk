@@ -13,7 +13,7 @@ const identity = canonicalReplicationIdentity({ host: "https://node.example", sp
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, setTimeoutImpl = () => () => undefined }: {
+function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined }: {
   durable?: boolean;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -25,6 +25,8 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
   verify?: boolean;
   openError?: string;
   runtimeMint?: (signal: AbortSignal) => Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
+  sessionOnly?: boolean;
+  sessionRefused?: boolean;
   setTimeoutImpl?: (fn: () => void, ms: number) => () => void;
 } = {}) {
   let now = 1_000_000;
@@ -59,7 +61,7 @@ function setup({ durable = true, initialEpoch = 0, onSync, statusOverrides = {},
     async status() { return localStatus; }, async close() {},
   } as unknown as KVReplicaHandle;
   const storage: KVReplicaStorage = { kind: "sqlite", async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; }, async purge(target) { await purgeImpl?.(target); }, pendingWrites() { return pending; } };
-  const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionGrant: () => runtimeMint ? { refused: "NOT_COVERED" } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => runtimeMint ? ({ path: "runtime", parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" }), async mint(_deviceDid, _prefix, signal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
+  const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime", parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" }); }, async mint(_deviceDid, _prefix, signal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
   return { controller, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
@@ -67,6 +69,25 @@ const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ 
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes", options, signal: new AbortController().signal, network });
 
 describe("KVReplication fallback and pending behavior", () => {
+  test("session-only refusal ignores an installed grant and serves the network", async () => {
+    const env = setup({ sessionOnly: true, sessionRefused: true });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters().localReads).toBe(0);
+    expect(env.counters().networkCalls).toBe(1);
+    expect(env.events.some((event) => event.type === "replication.state" && event.state === "grant_missing")).toBe(true);
+    expect(env.events.some((event) => event.type === "replication.read" && event.source === "network" && event.reason === "grant_missing")).toBe(true);
+  });
+  test("a previously installed grant cannot outlive the current session authority", async () => {
+    const env = setup({ sessionRefused: true });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters().localReads).toBe(0);
+    expect(env.counters().networkCalls).toBe(1);
+    expect(env.events.some((event) => event.type === "replication.state" && event.state === "grant_missing")).toBe(true);
+    expect(env.events.some((event) => event.type === "replication.read" && event.source === "network" && event.reason === "grant_missing")).toBe(true);
+  });
+
   const cases = [
     { name: "coverage incomplete", setup: () => setup({ statusOverrides: { coverage: "bootstrapping" } }), reason: "coverage_incomplete", localReads: 0, networkCalls: 1 },
     { name: "expired authority", setup: () => setup({ statusOverrides: { authority: { state: "expired", expiresAt: null } } }), reason: "grant_expired", localReads: 0, networkCalls: 1 },

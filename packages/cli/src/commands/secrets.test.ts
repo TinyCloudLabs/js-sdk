@@ -39,6 +39,7 @@ type NetworkDescriptorLike = {
 
 type FakeNode = {
   did: string;
+  replication?: { status: () => Promise<unknown> };
   getDefaultEncryptionNetworkId(name?: string): string;
   getEncryptionNetworkIdForSpace(spaceId: string, name?: string): string;
   secretsForSpace(spaceId: string): FakeNode["secrets"];
@@ -49,8 +50,8 @@ type FakeNode = {
     | { status: "read_failed" }
   >;
   secrets: {
-    list(options?: { scope?: string }): Promise<{ ok: true; data: string[] } | { ok: false; error: { code: string; message: string; service?: string } }>;
-    get(name: string, options?: { scope?: string }): Promise<{ ok: true; data: string } | { ok: false; error: { code: string; message: string; service?: string } }>;
+    list(options?: { scope?: string; source?: "network" }): Promise<{ ok: true; data: string[] } | { ok: false; error: { code: string; message: string; service?: string } }>;
+    get(name: string, options?: { scope?: string; source?: "network" }): Promise<{ ok: true; data: string } | { ok: false; error: { code: string; message: string; service?: string } }>;
     put(name: string, value: string, options?: { scope?: string }): Promise<{ ok: true; data: undefined } | { ok: false; error: { code: string; message: string; service?: string } }>;
     delete(name: string, options?: { scope?: string }): Promise<{ ok: true; data: undefined } | { ok: false; error: { code: string; message: string; service?: string } }>;
   };
@@ -121,6 +122,8 @@ const recorded = {
   sessionRefreshes: [] as Array<{ profile: string; host: string }>,
   delegatedKvGets: [] as Array<{ path: string; options: { raw: boolean; prefix: string } }>,
   decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] } }>,
+  networkReadCalls: [] as string[],
+  networkReadSources: [] as Array<"network" | undefined>,
 };
 let canonicalResultOverride: unknown | null = null;
 
@@ -165,6 +168,8 @@ function resetRecorded(): void {
   recorded.sessionRefreshes.length = 0;
   recorded.delegatedKvGets.length = 0;
   recorded.decryptEnvelopeCalls.length = 0;
+  recorded.networkReadCalls.length = 0;
+  recorded.networkReadSources.length = 0;
   canonicalResultOverride = null;
 }
 
@@ -231,14 +236,17 @@ function makeFakeNode(overrides: {
       return this.secrets;
     },
     secrets: {
-      async list(options?: { scope?: string }) {
-        recorded.listCalls.push(options);
+      async list(options?: { scope?: string; source?: "network" }) {
+        recorded.listCalls.push(options?.scope === undefined ? undefined : { scope: options.scope });
+        if (options?.source === "network") recorded.networkReadCalls.push("list");
         const listError = nextError(overrides.listError);
         if (listError) throw listError;
         return nextResult(overrides.listResult, { ok: true as const, data: ["ANTHROPIC_API_KEY"] });
       },
-      async get(name: string, options?: { scope?: string }) {
-        recorded.getCalls.push({ name, options });
+      async get(name: string, options?: { scope?: string; source?: "network" }) {
+        recorded.getCalls.push({ name, options: options?.scope === undefined ? undefined : { scope: options.scope } });
+        if (options?.source === "network") recorded.networkReadCalls.push(`get:${name}`);
+        recorded.networkReadSources.push(options?.source);
         return nextResult(overrides.getResult, { ok: true as const, data: "stored-value" });
       },
       async put(name: string, value: string, options?: { scope?: string }) {
@@ -677,6 +685,7 @@ describe("CLI secrets commands", () => {
     await runSecretsCommand(["secrets", "delete", "ANTHROPIC_API_KEY"]);
 
     expect(recorded.listCalls).toEqual([{ scope: "Food Tracker" }]);
+    expect(recorded.networkReadCalls).toEqual(["list"]);
     expect(recorded.getCalls).toEqual([
       { name: "ANTHROPIC_API_KEY", options: undefined },
     ]);
@@ -1097,6 +1106,7 @@ describe("CLI secrets commands", () => {
   test("doctor reports an existing encryption network and readable secret", async () => {
     const descriptor = makeDescriptor();
     currentNode = makeFakeNode({ networkShowResult: descriptor });
+    currentNode.replication = { status: async () => [{ state: "ready" }] };
 
     await runSecretsCommand(["--json", "secrets", "doctor", "ANTHROPIC_API_KEY", "--scope", "Food Tracker"]);
 
@@ -1104,6 +1114,9 @@ describe("CLI secrets commands", () => {
     expect(recorded.getCalls).toEqual([
       { name: "ANTHROPIC_API_KEY", options: { scope: "Food Tracker" } },
     ]);
+    expect(recorded.networkReadCalls).toEqual(["get:ANTHROPIC_API_KEY"]);
+    expect(recorded.networkReadSources).toEqual(["network"]);
+    expect(await currentNode.replication.status()).toEqual([{ state: "ready" }]);
     expect(recorded.outputs).toEqual([
       {
         healthy: true,

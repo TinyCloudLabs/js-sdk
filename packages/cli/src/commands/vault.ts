@@ -134,7 +134,7 @@ export function registerVaultCommand(program: Command): void {
 
         await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
 
-        const result = await withSpinner(`Getting ${key}...`, () => node.vault.get(key)) as any;
+        const result = await withSpinner(`Getting ${key}...`, () => node.vault.get(key, { source: "network" })) as any;
 
         if (!result.ok) {
           if (result.error.code === "NOT_FOUND") {
@@ -208,7 +208,7 @@ export function registerVaultCommand(program: Command): void {
 
         await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
 
-        const listOptions = options.prefix ? { prefix: options.prefix } : undefined;
+        const listOptions = options.prefix ? { prefix: options.prefix, source: "network" as const } : { source: "network" as const };
         const result = await withSpinner("Listing vault keys...", () => node.vault.list(listOptions)) as any;
 
         if (!result.ok) {

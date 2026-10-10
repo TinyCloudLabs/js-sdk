@@ -18,9 +18,10 @@ import {
   type ISigner,
   type IWasmBindings,
   type PermissionEntry,
-  type TinyCloudSession,
+  type ReplicationAuthority,
 } from "@tinycloud/sdk-core";
 
+import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
@@ -395,15 +396,34 @@ describe("planDelegation parity with delegateTo (§4.3)", () => {
 // replicationAuthority host wiring (§4.2)
 // ---------------------------------------------------------------------------
 
+async function replicationAuthorityForTest(node: TinyCloudNode): Promise<ReplicationAuthority> {
+  const method: unknown = Reflect.get(node, "replicationAuthority");
+  if (typeof method !== "function") throw new TypeError("replicationAuthority method is unavailable");
+  const value: unknown = await Reflect.apply(method, node, []);
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !("sessionGrant" in value) ||
+    typeof value.sessionGrant !== "function" ||
+    !("plan" in value) ||
+    typeof value.plan !== "function" ||
+    !("mint" in value) ||
+    typeof value.mint !== "function"
+  ) {
+    throw new TypeError("replicationAuthority returned an invalid authority");
+  }
+  return value;
+}
+
 describe("replicationAuthority (§4.2)", () => {
-  test("no session → sessionGrant and plan refuse SESSION_EXPIRING", () => {
+  test("no session → sessionGrant and plan refuse SESSION_EXPIRING", async () => {
     const node = new TinyCloudNode({ wasmBindings: makeFakeWasmBindings() });
-    const authority = node.replicationAuthority();
+    const authority = await replicationAuthorityForTest(node);
     expect(authority.sessionGrant("notes")).toEqual({ refused: "SESSION_EXPIRING" });
     expect(authority.plan("notes")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  test("plan routes through planDelegation with one get+sync entry on the session space", () => {
+  test("plan routes through planDelegation with one get+sync entry on the session space", async () => {
     const node = sessionOnlyNode(makeFakeWasmBindings(), fakeSession());
     const planDelegationSpy = mock(() => ({
       path: "runtime" as const,
@@ -412,9 +432,8 @@ describe("replicationAuthority (§4.2)", () => {
       effectiveExpiration: new Date(1_700_000_000_000),
     }));
     // Method-shape shim: planDelegation's union return includes internal fields.
-    (node as unknown as { planDelegation: typeof planDelegationSpy }).planDelegation =
-      planDelegationSpy;
-    const authority = node.replicationAuthority();
+    Reflect.set(node, "planDelegation", planDelegationSpy);
+    const authority = await replicationAuthorityForTest(node);
     expect(authority.plan("notes")).toEqual({
       path: "runtime",
       parentCid: "bafyP",

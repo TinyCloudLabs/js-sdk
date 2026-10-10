@@ -6,6 +6,8 @@ import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
 
+import { createCliReplicationConfig } from "./replication-config.js";
+import { registerReplication } from "./replication-registry.js";
 export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
 /**
  * Returns true when a JWK carries the private-key parameter required by the
@@ -112,10 +114,21 @@ export async function createSDKInstance(
   if (profile?.authMethod === "local" && effectivePrivateKey) {
     // Local key auth: prefer the persisted TinyCloud session so the CLI
     // keeps the same session key DID across request/grant/import flows.
+    const replication = createCliReplicationConfig(
+      ctx.profile,
+      profile?.replication,
+      { debug: ctx.replicationDebug, quiet: ctx.quiet },
+      ctx.replication,
+    );
+    if (ctx.replication && !replication) {
+      process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
+    }
     const node = new TinyCloudNode({
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      ...(replication ? { replication } : {}),
     });
+    if (node.replication) registerReplication(ctx.profile, node.replication);
 
     let restoredOwnSession = false;
     if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
@@ -146,10 +159,21 @@ export async function createSDKInstance(
   }
 
   // OpenKey / delegation-based auth
+  const replication = createCliReplicationConfig(
+    ctx.profile,
+    profile?.replication,
+    { debug: ctx.replicationDebug, quiet: ctx.quiet },
+    ctx.replication,
+  );
+  if (ctx.replication && !replication) {
+    process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
+  }
   const node = new TinyCloudNode({
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...(replication ? { replication } : {}),
   });
+  if (node.replication) registerReplication(ctx.profile, node.replication);
 
   // Only the profile's own restored session may run its binding migration.
   let restoredOwnSession = false;

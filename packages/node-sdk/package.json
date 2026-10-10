@@ -18,6 +18,26 @@
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js",
       "require": "./dist/core.cjs"
+    },
+    "./replication/runtime": {
+      "import": {
+        "types": "./dist/replication/runtime.d.ts",
+        "default": "./dist/replication/runtime.js"
+      },
+      "require": {
+        "types": "./dist/replication/runtime.d.cts",
+        "default": "./dist/replication/runtime.cjs"
+      }
+    },
+    "./replication/authority": {
+      "import": {
+        "types": "./dist/replication/authority.d.ts",
+        "default": "./dist/replication/authority.js"
+      },
+      "require": {
+        "types": "./dist/replication/authority.d.cts",
+        "default": "./dist/replication/authority.cjs"
+      }
     }
   },
   "engines": {

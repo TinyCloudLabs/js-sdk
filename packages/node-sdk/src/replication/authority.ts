@@ -17,19 +17,22 @@ import {
   KV,
   actionContains,
   canonicalizeRecapCaveats,
-  isCapabilitySubset,
+  parseSpaceUri,
   type PermissionEntry,
-  type ReplicationOptions,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 import {
   kvPrefixCovers,
-  requiresSecretsOptIn,
   type AuthorityRefusal,
   type ReplicaDevice,
   type ReplicationAuthority,
 } from "@tinycloud/sdk-services";
-import { compactUcanPayload } from "../delegation";
+import type { ReplicaRuntime } from "./replica-contract";
+// @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
+import { parseUcanGrant as replicaParseUcanGrant } from "@tinycloud/replica";
+const parseUcanGrant = replicaParseUcanGrant as ReplicaRuntime["parseUcanGrant"];
+export { assertValidReplicationConfig } from "./config";
+export { augmentSignInEntriesWithReplication, hasUnrestrictedGetCoverage } from "./authority-sign-in";
 
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
@@ -48,99 +51,7 @@ function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] 
 }
 
 
-/**
- * The unrestricted-get gate (§4.1): the request may gain `sync` on `p` only
- * where it already requests an unrestricted `get` on a path that covers `p`
- * under the SAME subset semantics `signedCapabilitySubset` uses for the
- * signed recap — `isCapabilitySubset`, whose `pathContains` requires a
- * trailing-segment prefix (`notes/` covers `notes/x`; an exact `get(notes)`
- * does NOT cover `notes/private`). A requested entry with no caveats covers
- * only uncaveated grants, so a caveated covering `get` fails the gate.
- */
-export function hasUnrestrictedGetCoverage(
-  entries: readonly PermissionEntry[],
-  spaceId: string,
-  prefix: string,
-): boolean {
-  return isCapabilitySubset(
-    [
-      {
-        service: KV_SERVICE,
-        space: spaceId,
-        path: prefix,
-        actions: [KV_GET],
-      },
-    ],
-    [...entries],
-  ).subset;
-}
 
-/**
- * One augmentation step for both the sign-in request and
- * `replicationSignInEntries()` (§4.1, §4.6): for each configured prefix, the
- * replication entry `{kv, spaceId, prefix, [get, sync]}` — added only when an
- * unrestricted `get` covering the prefix already exists and the
- * secrets/vault opt-in is satisfied.
- */
-export function augmentSignInEntriesWithReplication(input: {
-  entries: readonly PermissionEntry[];
-  primarySpaceId: string;
-  replication?: Pick<ReplicationOptions, "prefixes" | "allowSecrets">;
-}): PermissionEntry[] {
-  const out: PermissionEntry[] = [];
-  const replication = input.replication;
-  if (replication === undefined) return out;
-  for (const prefix of replication.prefixes) {
-    if (
-      requiresSecretsOptIn(input.primarySpaceId, prefix) &&
-      replication.allowSecrets !== true
-    ) {
-      continue;
-    }
-    if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, prefix)) {
-      continue;
-    }
-    out.push({
-      service: KV_SERVICE,
-      space: input.primarySpaceId,
-      path: prefix,
-      actions: [KV_GET, KV_SYNC],
-    });
-  }
-  return out;
-}
-
-/** Constructor-time validation (§3.1). The space-dependent secrets check runs later, at sign-in/open. */
-export function assertValidReplicationConfig(
-  replication: (ReplicationOptions & { storage?: unknown }) | undefined,
-): void {
-  if (replication === undefined || replication.enabled !== true) return;
-  if (replication.storage === undefined || replication.storage === null) {
-    throw new TypeError("replication.enabled requires replication.storage");
-  }
-  if (!Array.isArray(replication.prefixes) || replication.prefixes.length === 0) {
-    throw new TypeError("replication.prefixes must be a non-empty array");
-  }
-  for (const prefix of replication.prefixes) {
-    if (typeof prefix !== "string" || prefix === "") {
-      throw new TypeError("replication.prefixes must not contain an empty prefix");
-    }
-  }
-  for (const [index, prefix] of replication.prefixes.entries()) {
-    for (const other of replication.prefixes.slice(index + 1)) {
-      if (kvPrefixCovers(prefix, other) || kvPrefixCovers(other, prefix)) {
-        throw new TypeError(
-          `replication.prefixes must not overlap: ${JSON.stringify(prefix)} and ${JSON.stringify(other)}`,
-        );
-      }
-    }
-    if (prefix.split("/", 1)[0] === "vault" && replication.allowSecrets !== true) {
-      throw new TypeError(
-        `replication prefix ${JSON.stringify(prefix)} overlaps the vault namespace; pass allowSecrets to opt in`,
-      );
-    }
-  }
-}
 
 /**
  * The signed UCAN attenuation (`att`: resource → ability → caveat branches).
@@ -219,8 +130,13 @@ export interface DelegationPlanResult {
  * pure extraction of `delegateTo`'s parent selection (§4.3), so `plan` and
  * `mint` can never disagree about which parent or expiry a delegation gets.
  */
+export type ReplicationAuthoritySession = Pick<
+  TinyCloudSession,
+  "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk"
+> & Partial<Pick<TinyCloudSession, "siwe">>;
+
 export interface ReplicationAuthorityHost {
-  replicationSession(): TinyCloudSession | undefined;
+  replicationSession(): ReplicationAuthoritySession | undefined;
   /** The SIWE "Expiration Time" of the session — the delegateTo delegation cap. */
   siweExpiration(siwe: string): Date | undefined;
   planDelegation(
@@ -236,14 +152,53 @@ export interface ReplicationAuthorityHost {
 /** Milliseconds of validity a session or parent must have left for authority reuse (delegateTo's margin). */
 export const AUTHORITY_EXPIRY_MARGIN_MS = 60_000;
 
+
+/** Verify a compact session delegation before using any persisted space metadata. */
+export function replicationScopeFromSignedSession(input: {
+  delegationHeader: { Authorization: string };
+  delegationCid: string;
+  verificationMethod: string;
+  persistedSpace: string;
+}): { space: string; principal: string } | undefined {
+  let grant: ReturnType<typeof parseUcanGrant>;
+  try {
+    grant = parseUcanGrant(input.delegationHeader.Authorization);
+  } catch {
+    return undefined;
+  }
+  const bareDid = (value: string): string => value.split("#", 1)[0]!;
+  if (
+    grant.cid !== input.delegationCid ||
+    bareDid(grant.audience) !== bareDid(input.verificationMethod)
+  ) return undefined;
+  for (const resource of Object.keys(grant.att)) {
+    const space = resource.match(/^(?:tinycloud:\/\/)?(.+?)\/kv\//)?.[1];
+    if (space !== input.persistedSpace) continue;
+    const owner = parseSpaceUri(space);
+    if (owner?.owner && owner.address && owner.chainId) return { space, principal: owner.owner };
+  }
+  return undefined;
+}
 export function createReplicationAuthority(host: ReplicationAuthorityHost): ReplicationAuthority {
   const planOrRefusal = (entries: PermissionEntry[]): DelegationPlanResult | AuthorityRefusal => {
     const plan = host.planDelegation(entries);
     if ("refused" in plan) return plan;
     return { path: plan.path, parentCid: plan.parentCid, expiresAt: plan.expiresAt };
   };
-
-  return {
+  const sessionAudience = (value: string): string => value.split("#", 1)[0]!;
+  const signedSessionGrant = (session: ReplicationAuthoritySession) => {
+    const grant = parseUcanGrant(session.delegationHeader.Authorization);
+    if (
+      grant.cid !== session.delegationCid ||
+      sessionAudience(grant.audience) !== sessionAudience(session.verificationMethod)
+    ) return undefined;
+    return grant;
+  };
+  const authority: ReplicationAuthority = {
+    get sessionOnly() {
+      const session = host.replicationSession();
+      return session !== undefined && session.siwe === undefined;
+    },
     sessionGrant(prefix: string): { ucan: string; device: ReplicaDevice } | AuthorityRefusal {
       const session = host.replicationSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
@@ -251,40 +206,51 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
       if (siweExpiry !== undefined && siweExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
         return { refused: "SESSION_EXPIRING" };
       }
-      let payload: Record<string, unknown>;
+      let grant: ReturnType<typeof parseUcanGrant>;
       try {
-        payload = compactUcanPayload(session.delegationHeader.Authorization);
+        const verified = signedSessionGrant(session);
+        if (!verified) return { refused: "NOT_COVERED" };
+        grant = verified;
       } catch {
-        // Not a compact UCAN (SIWE/CACAO session): delegate posture does not apply.
         return { refused: "NOT_COVERED" };
       }
-      const att = payload.att;
-      if (att === null || typeof att !== "object" || Array.isArray(att)) {
-        return { refused: "NOT_COVERED" };
+      const tokenExpiry = grant.expiresAt === null ? undefined : grant.expiresAt * 1000;
+      if (tokenExpiry === undefined || tokenExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
+        return { refused: "SESSION_EXPIRING" };
       }
-      const covered = ucanAttCovers(att as Record<string, Record<string, unknown>>, session.spaceId, prefix, KV_GET, { ignoreCaveats: true }) &&
-        ucanAttCovers(att as Record<string, Record<string, unknown>>, session.spaceId, prefix, KV_SYNC, { ignoreCaveats: true });
+      const covered = ucanAttCovers(grant.att, session.spaceId, prefix, KV_GET, { ignoreCaveats: true }) &&
+        ucanAttCovers(grant.att, session.spaceId, prefix, KV_SYNC, { ignoreCaveats: true });
       if (!covered) return { refused: "NOT_COVERED" };
-      if (!ucanAttUnconstrainedFor(att as Record<string, Record<string, unknown>>, session.spaceId, prefix)) {
+      if (!ucanAttUnconstrainedFor(grant.att, session.spaceId, prefix)) {
         return { refused: "CAVEATED_AUTHORITY" };
       }
       return {
-        ucan: session.delegationHeader.Authorization,
+        ucan: grant.jwt,
         device: { did: session.verificationMethod, jwk: session.jwk },
       };
     },
-
     plan(prefix: string): DelegationPlanResult | AuthorityRefusal {
       const session = host.replicationSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
+      const sessionGrant = this.sessionGrant(prefix);
+      if (!("refused" in sessionGrant)) {
+        const signed = signedSessionGrant(session);
+        if (!signed || signed.expiresAt === null) return { refused: "NOT_COVERED" };
+        return {
+          path: "session",
+          parentCid: session.delegationCid,
+          expiresAt: signed.expiresAt * 1000,
+        };
+      }
+      if (authority.sessionOnly) return sessionGrant;
       return planOrRefusal(replicationEntries(session.spaceId, prefix));
     },
-
     async mint(
       deviceDid: string,
       prefix: string,
       signal: AbortSignal,
     ): Promise<{ ucan: string; parentCid: string; expiresAt: number }> {
+      if (authority.sessionOnly) throw new Error("compact delegate sessions cannot mint device grants");
       const session = host.replicationSession();
       if (session === undefined) throw new Error("replication mint without a session");
       const entries = replicationEntries(session.spaceId, prefix);
@@ -313,5 +279,5 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
       return { ucan: minted.ucan, parentCid: plan.parentCid, expiresAt: minted.expiresAt };
     },
   };
+  return authority;
 }
-

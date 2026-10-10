@@ -36,6 +36,7 @@
 // Register Node.js-specific defaults (NodeWasmBindings, PrivateKeySigner)
 // This must be imported before TinyCloudNode is used, so it runs on module load.
 import "./nodeDefaults";
+import "./replication/node-loader";
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";

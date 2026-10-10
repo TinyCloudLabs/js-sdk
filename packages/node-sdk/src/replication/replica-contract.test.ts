@@ -31,9 +31,11 @@ import type {
 // is only exercised where a `KVService` exists, so assignability of the
 // transport's client is pinned here too.
 const replicaRuntime: ReplicaRuntime = realReplica;
+const parseUcanGrant: ReplicaRuntime["parseUcanGrant"] = realReplica.parseUcanGrant;
 const sqliteRuntime: SqliteRuntime = realSqlite;
 const kvClient: KVSyncClient = new KVService({});
 void replicaRuntime;
+void parseUcanGrant;
 void sqliteRuntime;
 void kvClient;
 

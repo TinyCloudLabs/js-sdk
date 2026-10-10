@@ -206,6 +206,11 @@ export type AuthorityRefusal = {
   refused: "NOT_COVERED" | "CAVEATED_AUTHORITY" | "SESSION_EXPIRING";
 };
 export interface ReplicationAuthority {
+  /**
+   * Restrict this authority to the current session's grant. When true, the controller MUST NOT
+   * consult the plan, mint a grant, or treat an installed storage grant as serving authority.
+   */
+  sessionOnly?: boolean;
   sessionGrant(
     prefix: string,
   ): { ucan: string; device: ReplicaDevice } | AuthorityRefusal;

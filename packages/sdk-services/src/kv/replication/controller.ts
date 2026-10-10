@@ -55,20 +55,21 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (previous) { await previous; previous = undefined; }
       const sessionGrant = authority.sessionGrant(prefix);
       const delegated = "refused" in sessionGrant ? undefined : sessionGrant;
-      const plan = authority.plan(prefix);
+      const plan = authority.sessionOnly ? undefined : authority.plan(prefix);
       let refusalCode: string | undefined;
       if ("refused" in sessionGrant) refusalCode = sessionGrant.refused;
-      if ("refused" in plan) refusalCode ??= plan.refused;
+      if (plan && "refused" in plan) refusalCode ??= plan.refused;
       let device: ReplicaDevice | undefined;
       if (delegated) { device = delegated.device; state!.strategy = "session"; }
       const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
       const handle = await storage.open(spec);
       state!.handle = handle;
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "opened" });
-      let installed = await handle.grant();
+      const runtimePlan = !authority.sessionOnly && plan && !("refused" in plan) ? plan : undefined;
+      let installed = runtimePlan ? await handle.grant() : undefined;
       if (delegated) installed = await handle.installGrant(delegated.ucan);
-      else if (!("refused" in plan)) {
-        if (!installed || !installed.unconstrained || installed.parentCid !== plan.parentCid || (installed.expiresAt !== null && plan.expiresAt > installed.expiresAt + 300_000)) {
+      else if (runtimePlan) {
+        if (!installed || !installed.unconstrained || installed.parentCid !== runtimePlan.parentCid || (installed.expiresAt !== null && runtimePlan.expiresAt > installed.expiresAt + 300_000)) {
           try {
             const mintAbort = new AbortController();
             state!.mintAbort = mintAbort;
@@ -555,7 +556,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       state.abort?.abort();
       state.mintAbort?.abort();
     }
-    return (async () => {
+    return Promise.resolve().then(async () => {
       const report = { purged: [] as string[], failed: [] as Array<{ prefix: string; code: string }> };
       const timeoutMs = o?.timeoutMs ?? 5_000;
       const withTimeout = async <T>(job: Promise<T>): Promise<T> => {
@@ -590,7 +591,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       });
       await Promise.all(jobs);
       return report;
-    })();
+    });
   }
 
   async function close(): Promise<void> {
@@ -609,7 +610,16 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       await state.handle?.close().catch(() => undefined);
     }));
     let cancel = () => {};
-    const timeout = new Promise<void>((resolve) => { cancel = scheduler.setTimeout(resolve, CLOSE_TIMEOUT_MS); });
+    let drained = false;
+    void drain.then(
+      () => { drained = true; cancel(); },
+      () => { drained = true; cancel(); },
+    );
+    const timeout = new Promise<void>((resolve) => {
+      queueMicrotask(() => {
+        if (!drained) cancel = scheduler.setTimeout(resolve, CLOSE_TIMEOUT_MS);
+      });
+    });
 
     try { await Promise.race([drain, timeout]); }
     finally { cancel(); }
