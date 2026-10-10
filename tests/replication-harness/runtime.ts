@@ -11,7 +11,7 @@ import { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./src/runner/runt
 import type { configureGateRuntime } from "./bin/gate-adapters";
 
 export { assembleHarnessRuntime, loadS2RuntimeAdapters } from "./src/runner/runtime";
-export type { HarnessClientFactories, HarnessRuntime, HarnessRuntimeAdapters } from "./src/runner/runtime";
+export type { ClientSecretCollector, HarnessClientFactories, HarnessRuntime, HarnessRuntimeAdapters } from "./src/runner/runtime";
 
 type GateRuntimeRegistrar = typeof configureGateRuntime;
 const imageKey = (ref: NodeImageRef): string => JSON.stringify(ref);
@@ -71,6 +71,7 @@ export async function registerGateRuntime(configure: GateRuntimeRegistrar): Prom
     imageResolver,
     exportSutArtifacts,
     topologyFactory: assembly.topologyFactory,
+    collectClientSecrets: assembly.collectClientSecrets,
     fetchInfo: async (url) => {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`GET ${url} failed: HTTP ${response.status}`);

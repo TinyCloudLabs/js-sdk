@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Scenario } from "../src/contracts/scenario";
@@ -18,6 +18,8 @@ import { runRows, runRowsWithInterrupt, createRunReportBase } from "../src/runne
 import { initialResult } from "../src/runner/status";
 import { createScenarioExecutor } from "../src/runner/executor";
 import type { RunEnvironment, Topology, TopologyFactory } from "../src/contracts/lifecycle";
+import type { KvClient } from "../src/contracts/client";
+import { resolveSubjectRef } from "../src/runner/run-command";
 
 const topology: Scenario["topology"] = () => ({ name: "fake", nodes: [], clients: [] });
 function scenario(id: string, tier: Scenario["tier"], options: Partial<Scenario> = {}): Scenario {
@@ -187,6 +189,91 @@ describe("S3a scenario expansion", () => {
       expect(jsonText).toContain("[REDACTED]");
       expect(RunReportSchema.safeParse(JSON.parse(jsonText)).success).toBe(true);
       expect(mdText).toContain("EDGE-03@sqlite");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  test("executor redacts client assertion, log, and capture secrets while indexing capture hashes", async () => {
+    const dir = await tempDir();
+    const secret = "synthetic-client-private-key";
+    const runId = "test-run";
+    const sourceRoot = await mkdtemp(join(tmpdir(), "tc893-client-capture-fixture-"));
+    const home = join(sourceRoot, "homes", "c1");
+    const spec: Scenario["topology"] = () => ({ name: "capture-fixture", nodes: [{ id: "n1" }],
+      clients: [{ id: "c1", kind: "cli", node: "n1", identity: "owner", auth: { posture: "owner" } }] });
+    const fixtureScenario = scenario("EDGE-10", "edge", { topology: spec, run: async (ctx) => {
+      ctx.log(`client log ${secret}`);
+      ctx.check("key detail", false, { privateKey: secret, logLine: `client log ${secret}` });
+    } });
+    try {
+      const profileDir = join(home, ".tinycloud", "profiles", "owner");
+      await mkdir(profileDir, { recursive: true });
+      await writeFile(join(profileDir, "key.json"), JSON.stringify({ privateKey: secret }));
+      const factory: TopologyFactory = { create: async (env, topologySpec, options) => {
+        const captureDir = join(env.resultsDir, env.runId, options.topoId, "clients", "c1");
+        await mkdir(captureDir, { recursive: true });
+        await writeFile(join(captureDir, "stderr.log"), `client stderr ${secret}\n`);
+        await writeFile(join(captureDir, "events.jsonl"), `${JSON.stringify({ token: secret })}\n`);
+        const client = { id: "c1", kind: "cli", capabilities: new Set(), home: () => home, artifactDirectoryPath: () => captureDir } as unknown as KvClient;
+        const clients = new Map([["c1", client]]);
+        return { id: options.topoId, backend: options.backend, spec: topologySpec, client: (id: string) => clients.get(id)!,
+          collectArtefacts: async (outputDir: string) => ({ dir: outputDir, files: [] }),
+          dispose: async () => ({ removed: [], leaked: [], errors: [], clients: [] }) } as unknown as Topology;
+      } };
+      const rows = expandScenarios([fixtureScenario], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
+      const env: RunEnvironment = { runId, resultsDir: dir, clock: realClock, docker: ["docker"], sut: view.sut,
+        image: () => view.image, slackMs: 1, teardownMs: 100 };
+      const secrets: string[] = [];
+      const executor = createScenarioExecutor({ factory, env, clock: realClock, artefactRoot: dir, clientArtifactsRoot: sourceRoot,
+        secrets, collectClientSecrets: async () => [secret] });
+      const output = await runRows({ rows, clock: realClock, concurrency: 1, report: reportBase(dir), reportDirectory: dir,
+        secrets, executeRow: executor.executeRow, finalizeRow: executor.finalizeRow });
+      const json = await readFile(join(dir, "report.json"), "utf8");
+      const markdown = await readFile(join(dir, "report.md"), "utf8");
+      expect(json).not.toContain(secret);
+      expect(markdown).not.toContain(secret);
+      expect(json).toContain("[REDACTED]");
+      expect(markdown).toContain("[REDACTED]");
+      expect(RunReportSchema.safeParse(JSON.parse(json)).success).toBe(true);
+      const row = output.report.results[0]!;
+      const captures = row.artefacts.filter((file) => file.path.startsWith("clients/c1/"));
+      expect(captures.map((file) => file.path).sort()).toEqual(["clients/c1/events.jsonl", "clients/c1/stderr.log"]);
+      for (const file of captures) {
+        const bytes = await readFile(join(dir, row.artefactDir, file.path));
+        expect(bytes.toString("utf8")).not.toContain(secret);
+        expect(file.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      }
+      expect(await readFile(join(dir, row.artefactDir, "clients/c1/stderr.log"), "utf8")).toContain("[REDACTED]");
+      const scenarioLog = await readFile(join(dir, row.artefactDir, "scenario.log"), "utf8");
+      expect(scenarioLog).not.toContain(secret);
+      expect(scenarioLog).toContain("[REDACTED]");
+      expect(home.startsWith(dir)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("detached HEAD report metadata falls back to the commit SHA and validates", async () => {
+    const dir = await tempDir();
+    try {
+      await Bun.$`git -C ${dir} init -q -b main`;
+      await Bun.$`git -C ${dir} config user.name harness-test`;
+      await Bun.$`git -C ${dir} config user.email harness-test@example.test`;
+      await writeFile(join(dir, "tracked.txt"), "fixture");
+      await Bun.$`git -C ${dir} add tracked.txt`;
+      await Bun.$`git -C ${dir} commit -qm fixture`;
+      const sha = (await Bun.$`git -C ${dir} rev-parse HEAD`.text()).trim();
+      await Bun.$`git -C ${dir} checkout -q --detach ${sha}`;
+      const ref = await resolveSubjectRef(dir, sha);
+      expect(ref).toBe(sha);
+      const rows = expandScenarios([scenario("EDGE-11", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
+      const base = reportBase(dir);
+      const report = { ...base, subject: { ...base.subject, ref, sha } };
+      await runRows({ rows, clock: realClock, concurrency: 1, report, reportDirectory: join(dir, "report"),
+        executeRow: async (row) => result(row) });
+      const text = await readFile(join(dir, "report", "report.json"), "utf8");
+      expect(RunReportSchema.safeParse(JSON.parse(text)).success).toBe(true);
+      expect(JSON.parse(text).subject.ref).toBe(sha);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 

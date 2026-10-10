@@ -1,5 +1,5 @@
-import { cpus } from "node:os";
-import { readFile } from "node:fs/promises";
+import { cpus, tmpdir } from "node:os";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { realClock } from "../contracts/clock";
 import type { Backend, SetId, Tier } from "../contracts/common";
@@ -46,6 +46,13 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return (await Bun.$`git -C ${root} ${args}`.text()).trim();
 }
 
+export async function resolveSubjectRef(root: string, sha: string): Promise<string> {
+  const branch = await git(root, "branch", "--show-current");
+  if (branch) return branch;
+  const symbolic = await git(root, "rev-parse", "--abbrev-ref", "HEAD");
+  return symbolic && symbolic !== "HEAD" ? symbolic : sha;
+}
+
 export async function runHarnessCommand(parsed: RunCommandArgs): Promise<void> {
   if (parsed.positionals.length) throw new Error(`unexpected positional arguments: ${parsed.positionals.join(" ")}`);
   const tiers = checkedList<Tier>("tier", listOption(parsed.options, "tier"), ["core"], ["core", "edge", "speed", "tc12"]);
@@ -81,18 +88,25 @@ export async function runHarnessCommand(parsed: RunCommandArgs): Promise<void> {
   const set: SetId | null = setOption === "phase1-companion" ? "phase1-companion" : null;
   const rows = expandScenarios(scenarioRegistry, { tiers, backends, only, variants, set }, run);
   if (!rows.length) throw new Error("no scenarios selected");
-  const executor = createScenarioExecutor({ factory: runtime.topologyFactory, env: environment, clock: realClock, artefactRoot: join(resultsDir, runId) });
   const harnessRoot = process.cwd();
   const harnessSha = await git(harnessRoot, "rev-parse", "HEAD");
   const harnessDirty = (await git(harnessRoot, "status", "--porcelain")).length > 0;
   const report = createRunReportBase({ runId, startedAt: new Date(realClock.wallNow()).toISOString(), tiers,
     set, only: only ?? null, backends, concurrency, argv: process.argv.slice(2),
     filtered: Boolean(only || variants || parsed.options.tier !== undefined || parsed.options.backend !== undefined),
-    subject: { repo: process.env.GITHUB_REPOSITORY ?? "local", event: "local", ref: await git(harnessRoot, "branch", "--show-current"), sha: harnessSha },
+    subject: { repo: process.env.GITHUB_REPOSITORY ?? "local", event: "local", ref: await resolveSubjectRef(harnessRoot, harnessSha), sha: harnessSha },
     harnessSha, harnessDirty, environment: { runnerClass: process.env.TC893_RUNNER_CLASS ?? "local", os: `${process.platform}-${process.arch}`,
       cpus: cpus().length, docker: docker.join(" "), node: process.versions.node, bun: Bun.version }, sut, image });
-  const { report: result, interrupted } = await runRowsWithInterrupt({ rows, clock: realClock, concurrency,
-    executeRow: executor.executeRow, finalizeRow: executor.finalizeRow, report, reportDirectory: join(resultsDir, runId) });
-  console.log(JSON.stringify({ runId, report: join(resultsDir, runId, "report.json"), summary: result.summary }, null, 2));
-  process.exitCode = interrupted ? 130 : result.summary.fail || result.summary.error || result.summary.xpass ? 1 : 0;
+  const clientArtifactsRoot = await mkdtemp(join(tmpdir(), "tc893-client-captures-"));
+  const secrets: string[] = [];
+  const executor = createScenarioExecutor({ factory: runtime.topologyFactory, env: environment, clock: realClock,
+    artefactRoot: join(resultsDir, runId), clientArtifactsRoot, secrets, collectClientSecrets: runtime.collectClientSecrets });
+  try {
+    const { report: result, interrupted } = await runRowsWithInterrupt({ rows, clock: realClock, concurrency,
+      executeRow: executor.executeRow, finalizeRow: executor.finalizeRow, report, reportDirectory: join(resultsDir, runId), secrets });
+    console.log(JSON.stringify({ runId, report: join(resultsDir, runId, "report.json"), summary: result.summary }, null, 2));
+    process.exitCode = interrupted ? 130 : result.summary.fail || result.summary.error || result.summary.xpass ? 1 : 0;
+  } finally {
+    await rm(clientArtifactsRoot, { recursive: true, force: true });
+  }
 }

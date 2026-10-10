@@ -1,15 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { cpus } from "node:os";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cpus, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Backend, GateId, SetId, Tier } from "../src/contracts/common";
 import type { JunitPrecondition, Manifest, RunInputs, Subject } from "../src/contracts/gate";
 import type { ImageResolver, SutResolver } from "../src/contracts/frozen";
+import type { KvClient } from "../src/contracts/client";
 import type { RunEnvironment, ResolvedImage, TopologyFactory } from "../src/contracts/lifecycle";
 import type { RunReport } from "../src/contracts/report";
-import type { NodeImageRef } from "../src/contracts/topology";
+import type { ClientSpec, NodeImageRef } from "../src/contracts/topology";
 import { scenarioRegistry, expandScenarios, validateRegistry, type ProbeRequirement } from "../src/runner/registry";
 import { createRunReportBase, runRowsWithInterrupt } from "../src/runner/run";
 import { createScenarioExecutor } from "../src/runner/executor";
@@ -27,6 +28,7 @@ export interface GateRuntime {
   imageResolver: ImageResolver;
   exportSutArtifacts(outDir: string, sut: RunInputs["sut"]): Promise<void>;
   topologyFactory: TopologyFactory;
+  collectClientSecrets?: (client: KvClient, spec: ClientSpec, runId: string) => Promise<readonly string[]>;
   fetchInfo?(url: string): Promise<{ version: string; features: string[] }>;
   junitPrecondition?(subject: Subject): Promise<JunitPrecondition | null>;
   probeRequirement?: ProbeRequirement;
@@ -273,11 +275,18 @@ async function runS3aLeg(entry: LocalGatePlan["matrix"][number], inputs: RunInpu
     backends: [selected.backend], concurrency: Number(process.env.TC893_CONCURRENCY ?? 4), argv: process.argv.slice(2), filtered: false,
     subject: inputs.subject, harnessSha: inputs.harnessSha, harnessDirty: harnessDirty(), inputsSha256: inputs.inputsSha256, manifestSha256,
     environment: reportEnvironment(), sut: inputs.sut, image: inputs.image });
-  const executor = createScenarioExecutor({ factory: services.topologyFactory, env, clock: env.clock, artefactRoot: resultsDir });
-  const output = await runRowsWithInterrupt({ rows, clock: env.clock, concurrency: reportBase.invocation.concurrency, report: reportBase,
-    reportDirectory: resultsDir, executeRow: executor.executeRow, finalizeRow: executor.finalizeRow });
-  const bytes = await readFile(join(resultsDir, "report.json"));
-  return { name: entry.name, directory: resultsDir, report: output.report, reportSha256: createHash("sha256").update(bytes).digest("hex") };
+  const clientArtifactsRoot = await mkdtemp(join(tmpdir(), "tc893-client-captures-"));
+  const secrets: string[] = [];
+  try {
+    const executor = createScenarioExecutor({ factory: services.topologyFactory, env, clock: env.clock, artefactRoot: resultsDir,
+      clientArtifactsRoot, secrets, collectClientSecrets: services.collectClientSecrets });
+    const output = await runRowsWithInterrupt({ rows, clock: env.clock, concurrency: reportBase.invocation.concurrency, report: reportBase,
+      reportDirectory: resultsDir, executeRow: executor.executeRow, finalizeRow: executor.finalizeRow, secrets });
+    const bytes = await readFile(join(resultsDir, "report.json"));
+    return { name: entry.name, directory: resultsDir, report: output.report, reportSha256: createHash("sha256").update(bytes).digest("hex") };
+  } finally {
+    await rm(clientArtifactsRoot, { recursive: true, force: true });
+  }
 }
 
 export async function runLegCommand(args: { options: Record<string, string | true> }): Promise<void> {
