@@ -54,7 +54,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: "tc893-${{ github.event.pull_request.number || github.run_id }}"
+  group: "tc893-${{ (github.event.action == 'labeled' && github.event.label.name != 'replication') && github.run_id || github.event.pull_request.number || github.run_id }}"
   cancel-in-progress: true
 
 env:
