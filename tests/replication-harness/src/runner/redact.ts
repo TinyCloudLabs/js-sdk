@@ -1,24 +1,46 @@
+import { Buffer } from "node:buffer";
+
 const REDACTED = "[REDACTED]";
+
+function encodedForms(value: string): string[] {
+  const encoded = Buffer.from(value, "utf8").toString("base64");
+  const url = encoded.replaceAll("+", "-").replaceAll("/", "_");
+  return [value, JSON.stringify(value).slice(1, -1), encoded, url, url.replace(/=+$/, "")];
+}
+function secretForms(secret: string): { text: string[]; bytes: Uint8Array[] } {
+  const text = new Set<string>();
+  for (const source of [secret, JSON.stringify(secret).slice(1, -1)]) {
+    for (const form of encodedForms(source)) text.add(form);
+  }
+  const bytes = [...text].map((form) => new TextEncoder().encode(form));
+  const base64 = secret.replaceAll("-", "+").replaceAll("_", "/");
+  if (/^[A-Za-z0-9+/]*={0,2}$/.test(base64) && base64.length % 4 !== 1) {
+    const decoded = Buffer.from(secret, "base64url");
+    if (decoded.length && decoded.toString("base64url") === secret.replace(/=+$/, "")) bytes.push(new Uint8Array(decoded));
+  }
+  const unique = new Map(bytes.map((value) => [Buffer.from(value).toString("hex"), value]));
+  return { text: [...text].filter((form) => form.length > 0).sort((a, b) => b.length - a.length), bytes: [...unique.values()].sort((a, b) => b.length - a.length) };
+}
+function allForms(secrets: readonly string[]): { text: string[]; bytes: Uint8Array[] } {
+  const text = new Set<string>();
+  const bytes = new Map<string, Uint8Array>();
+  for (const secret of new Set(secrets)) {
+    if (!secret) continue;
+    const forms = secretForms(secret);
+    for (const form of forms.text) text.add(form);
+    for (const form of forms.bytes) bytes.set(Buffer.from(form).toString("hex"), form);
+  }
+  return { text: [...text].sort((a, b) => b.length - a.length), bytes: [...bytes.values()].sort((a, b) => b.length - a.length) };
+}
 export function redactText(input: string, secrets: readonly string[]): string {
   let result = input;
-  for (const secret of [...new Set(secrets)].filter((value) => value.length > 0).sort((a, b) => b.length - a.length)) {
-    result = result.split(secret).join(REDACTED);
-  }
+  for (const form of allForms(secrets).text) result = result.split(form).join(REDACTED);
   return result;
 }
-export function redactValue<T>(value: T, secrets: readonly string[]): T {
-  if (typeof value === "string") return redactText(value, secrets) as T;
-  if (Array.isArray(value)) return value.map((item) => redactValue(item, secrets)) as T;
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactText(key, secrets), redactValue(item, secrets)])) as T;
-  }
-  return value;
-}
-export function redactBytes(input: Uint8Array, secrets: readonly string[]): Uint8Array {
+function replaceBytes(input: Uint8Array, patterns: readonly Uint8Array[]): Uint8Array {
   let output = input;
   const replacement = new TextEncoder().encode(REDACTED);
-  for (const secret of [...new Set(secrets)].filter((value) => value.length > 0).sort((a, b) => b.length - a.length)) {
-    const needle = new TextEncoder().encode(secret);
+  for (const needle of patterns) {
     const chunks: Uint8Array[] = [];
     let start = 0;
     for (let index = 0; index <= output.length - needle.length; index++) {
@@ -38,4 +60,21 @@ export function redactBytes(input: Uint8Array, secrets: readonly string[]): Uint
     }
   }
   return output;
+}
+export function redactBytes(input: Uint8Array, secrets: readonly string[]): Uint8Array {
+  return replaceBytes(input, allForms(secrets).bytes);
+}
+export function redactValue<T>(value: T, secrets: readonly string[]): T {
+  if (typeof value === "string") return redactText(value, secrets) as T;
+  if (value instanceof Uint8Array) return redactBytes(value, secrets) as T;
+  if (Array.isArray(value)) {
+    if (value.every((item) => typeof item === "number" && Number.isInteger(item) && item >= 0 && item <= 255)) {
+      return [...redactBytes(Uint8Array.from(value), secrets)] as T;
+    }
+    return value.map((item) => redactValue(item, secrets)) as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactText(key, secrets), redactValue(item, secrets)])) as T;
+  }
+  return value;
 }

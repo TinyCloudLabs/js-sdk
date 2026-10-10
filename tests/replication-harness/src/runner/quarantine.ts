@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { ScenarioResult } from "../contracts/report";
-
+import { isScenarioVariant } from "./registry";
 export type QuarantineEntry = { key: string; ticket: string; reason: string };
 export function validateQuarantine(value: unknown): QuarantineEntry[] {
   if (!Array.isArray(value)) throw new Error("quarantine.json must contain an array");
@@ -8,7 +8,9 @@ export function validateQuarantine(value: unknown): QuarantineEntry[] {
   return value.map((entry: unknown) => {
     if (!entry || typeof entry !== "object") throw new Error("quarantine entry must be an object");
     const { key, ticket, reason } = entry as Record<string, unknown>;
-    if (typeof key !== "string" || !/^[A-Z][A-Z0-9-]*(?:\[[A-Za-z0-9-]+\])?@(sqlite|pg16|pg16-c)$/.test(key)) throw new Error("quarantine entry has an invalid row key");
+    if (typeof key !== "string") throw new Error("quarantine entry has an invalid row key");
+    const match = /^([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)(?:\[([^\]]+)\])?@(sqlite|pg16|pg16-c)$/.exec(key);
+    if (!match || (match[2] !== undefined && !isScenarioVariant(match[2]))) throw new Error("quarantine entry has an invalid row key");
     if (seen.has(key)) throw new Error(`duplicate quarantine key ${key}`);
     seen.add(key);
     if (typeof ticket !== "string" || !/^(?:[A-Z][A-Z0-9]*-\d+|https?:\/\/\S+)$/.test(ticket)) throw new Error(`quarantine entry ${key} needs a ticket`);

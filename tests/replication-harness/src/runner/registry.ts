@@ -10,6 +10,9 @@ export function registerScenarios(...scenarios: Scenario[]): void {
 }
 
 
+export function isScenarioVariant(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9-]*(?:>[A-Za-z0-9][A-Za-z0-9-]*)?$/.test(value);
+}
 export function validateRegistry(scenarios: readonly Scenario[]): void {
   const ids = new Set<string>();
   for (const scenario of scenarios) {
@@ -22,6 +25,7 @@ export function validateRegistry(scenarios: readonly Scenario[]): void {
       throw new Error(`${scenario.id}: core scenarios cannot declare appliesTo or requires`);
     }
     if (scenario.appliesTo && !scenario.variants?.length) throw new Error(`${scenario.id}: appliesTo requires explicit variants`);
+    if (scenario.variants && scenario.variants.some((variant) => !isScenarioVariant(variant))) throw new Error(`${scenario.id}: invalid variant`);
     if (scenario.variants && new Set(scenario.variants).size !== scenario.variants.length) throw new Error(`${scenario.id}: duplicate variants`);
   }
   if (scenarios.some((scenario) => scenario.tier === "core") && !scenarios.some((scenario) => scenario.id === "CORE-00" && scenario.tier === "core")) {
@@ -30,7 +34,7 @@ export function validateRegistry(scenarios: readonly Scenario[]): void {
 }
 
 export function expandScenarios(scenarios: readonly Scenario[], filters: RegistryFilters, run: RunContextView,
-  probe: ProbeRequirement = () => true): ScenarioRow[] {
+  probe?: ProbeRequirement): ScenarioRow[] {
   validateRegistry(scenarios);
   const tiers = filters.tiers ?? run.tiers;
   const selected = scenarios.filter((s) => tiers.includes(s.tier) && (!filters.set || s.sets?.includes(filters.set)) &&
@@ -44,14 +48,18 @@ export function expandScenarios(scenarios: readonly Scenario[], filters: Registr
         const applies = scenario.appliesTo(run, variant);
         if (applies !== true) continue;
       }
-      const requirementFailure = scenario.requires?.map((requirement) => ({ requirement, result: probe(requirement) })).find(({ result }) => result !== true);
-      const forceUnsupported = filters.forceUnsupported && requirementFailure?.requirement === "tc12:host-sync";
+      const requirementFailure = scenario.requires?.map((requirement) => ({
+        requirement,
+        result: probe ? probe(requirement) : `requirement probe unavailable: ${requirement}`,
+        missingProbe: !probe,
+      })).find(({ result }) => result !== true);
+      const forceUnsupported = filters.forceUnsupported && (requirementFailure?.missingProbe || requirementFailure?.requirement === "tc12:host-sync");
       for (const backend of scenario.backends ?? filters.backends) {
         if (!filters.backends.includes(backend)) continue;
         const key = `${scenario.id}${variant === null ? "" : `[${variant}]`}@${backend}`;
         rows.push({ key, id: scenario.id, variant, backend, tier: scenario.tier, sets: [...(scenario.sets ?? [])], scenario,
           ...(requirementFailure && !forceUnsupported ? { reason: requirementFailure.result as string,
-            unavailableStatus: requirementFailure.requirement === "tc12:host-sync" ? "unsupported" as const : "skipped" as const } : {}),
+            unavailableStatus: requirementFailure.missingProbe || requirementFailure.requirement === "tc12:host-sync" ? "unsupported" as const : "skipped" as const } : {}),
           ...(forceUnsupported ? { forcedUnsupported: true } : {}) });
       }
     }

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +11,8 @@ import type { RunContextView } from "../src/contracts/scenario";
 import { realClock } from "../src/contracts/clock";
 import { RunReportSchema } from "../src/schemas/report";
 import { expandScenarios, validateRegistry, type ScenarioRow } from "../src/runner/registry";
+import { validateQuarantine } from "../src/runner/quarantine";
+import { createScenarioContext, writeScenarioArtefacts, type ScenarioContextState } from "../src/runner/context";
 import { scheduleRows } from "../src/runner/schedule";
 import { runRows, runRowsWithInterrupt, createRunReportBase } from "../src/runner/run";
 import { initialResult } from "../src/runner/status";
@@ -48,6 +52,10 @@ describe("S3a scenario expansion", () => {
   });
   test("requirement probes distinguish skipped, unsupported, and force-unsupported xpass", async () => {
     const tc12 = scenario("TC12-01", "tc12", { variants: ["sdk"], requires: ["tc12:host-sync"] });
+    const noProbe = expandScenarios([tc12], { tiers: ["tc12"], set: null, backends: ["sqlite"] }, view);
+    expect(noProbe[0]?.unavailableStatus).toBe("unsupported");
+    const forcedWithoutProbe = expandScenarios([tc12], { tiers: ["tc12"], set: null, backends: ["sqlite"], forceUnsupported: true }, view);
+    expect(forcedWithoutProbe[0]?.forcedUnsupported).toBe(true);
     const skipped = expandScenarios([scenario("EDGE-07", "edge", { requires: ["workspace-sut"] })],
       { tiers: ["edge"], set: null, backends: ["sqlite"] }, view, () => "workspace SUT required");
     expect(skipped[0]?.unavailableStatus).toBe("skipped");
@@ -189,5 +197,73 @@ describe("S3a scenario expansion", () => {
       return row.key;
     });
     expect(max.value).toBe(1);
+  });
+  test("quarantine accepts both directional variant keys", () => {
+    expect(validateQuarantine([
+      { key: "CORE-01[sdk>cli]@sqlite", ticket: "TC-893", reason: "known issue" },
+      { key: "CORE-01[cli>sdk]@pg16", ticket: "TC-893", reason: "known issue" },
+    ]).map((entry) => entry.key)).toEqual(["CORE-01[sdk>cli]@sqlite", "CORE-01[cli>sdk]@pg16"]);
+  });
+
+  test("redacts serialized and binary secret forms before eq and in both leg reports", async () => {
+    const dir = await tempDir();
+    const pem = "-----BEGIN PRIVATE KEY-----\nsynthetic-pem-secret\n-----END PRIVATE KEY-----";
+    const jwkD = "c2VjcmV0LWp3ay1k";
+    const secrets = [pem, jwkD];
+    const [row] = expandScenarios([scenario("EDGE-09", "edge")], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
+    const fakeTopology = { spec: { clients: [] } } as unknown as Topology;
+    const state: ScenarioContextState = { assertions: [], metrics: [], logs: [], artefacts: new Map(), secrets };
+    const env: RunEnvironment = { runId: "test-run", resultsDir: dir, clock: realClock, docker: ["docker"], sut: view.sut,
+      image: () => view.image, slackMs: 1, teardownMs: 100 };
+    const context = createScenarioContext(row!, fakeTopology, realClock, new AbortController().signal, env, state);
+    try {
+      const pemJson = JSON.stringify({ privateKey: pem });
+      const jwkBytes = new TextEncoder().encode(jwkD);
+      const jwkBuffer = Buffer.from(jwkD, "utf8");
+      context.eq("serialized PEM", pemJson, pemJson);
+      context.eq("binary JWK d", jwkBytes, new Uint8Array(jwkBytes));
+      context.eq("buffer JWK d", jwkBuffer, Buffer.from(jwkBytes));
+      expect(JSON.stringify(state.assertions)).not.toContain(pem);
+      expect(JSON.stringify(state.assertions)).not.toContain(jwkD);
+      expect(JSON.stringify(state.assertions)).toContain("[REDACTED]");
+
+      expect(() => context.artefact(`${jwkD}.txt`, "secret filename")).toThrow("filename contains");
+      expect(() => context.artefact("scenario.log", "overwrite")).toThrow("reserved");
+      context.artefact("ordinary.txt", "ordinary contents");
+      context.log("runner log");
+      const indexed = await writeScenarioArtefacts(state, dir);
+      for (const file of indexed) {
+        const bytes = await readFile(join(dir, file.path));
+        expect(file.bytes).toBe(bytes.byteLength);
+        expect(file.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      }
+
+      const failed = result(row!, "fail");
+      failed.assertions.push({ name: "secret representations", ok: false, detail: {
+        serializedPem: pemJson,
+        pemBase64: Buffer.from(pem).toString("base64"),
+        escapedPemBase64: Buffer.from(JSON.stringify(pem).slice(1, -1)).toString("base64"),
+        escapedPemBase64url: Buffer.from(JSON.stringify(pem).slice(1, -1)).toString("base64url"),
+        jwkD,
+        jwkDBase64: Buffer.from(jwkD).toString("base64"),
+        jwkDBase64url: Buffer.from(jwkD).toString("base64url"),
+        jwkBytes,
+        jwkBuffer,
+        jwkNumbers: [...jwkBytes],
+      } });
+      await runRows({ rows: [row!], clock: realClock, concurrency: 1, report: reportBase(dir), reportDirectory: dir, secrets,
+        executeRow: async () => failed });
+      const jsonText = await readFile(join(dir, "report.json"), "utf8");
+      const mdText = await readFile(join(dir, "report.md"), "utf8");
+      const pemEscaped = JSON.stringify(pem).slice(1, -1);
+      const secretForms = [pem, pemEscaped, Buffer.from(pem).toString("base64"),
+        Buffer.from(pem).toString("base64url"), Buffer.from(pemEscaped).toString("base64"),
+        Buffer.from(pemEscaped).toString("base64url"), jwkD, Buffer.from(jwkD).toString("base64"),
+        Buffer.from(jwkD).toString("base64url")];
+      for (const text of [jsonText, mdText]) for (const secret of secretForms) expect(text).not.toContain(secret);
+      expect(jsonText).toContain("[REDACTED]");
+      expect(mdText).toContain("[REDACTED]");
+      expect(RunReportSchema.safeParse(JSON.parse(jsonText)).success).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

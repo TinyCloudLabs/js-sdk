@@ -32,7 +32,7 @@ export function createScenarioExecutor(options: { factory: TopologyFactory; env:
     const dir = join(options.artefactRoot, artifactPath(row));
     const started = options.clock.now();
     const result = initialResult(row, artifactPath(row), "pass", "");
-    const state: ScenarioContextState = { assertions: [], metrics: [], logs: [], artefacts: new Map() };
+    const state: ScenarioContextState = { assertions: [], metrics: [], logs: [], artefacts: new Map(), secrets: options.secrets ?? [] };
     try {
       const spec = validateTopology(row.scenario.topology(row.variant ?? "", row.backend));
       const topology = await options.factory.create(options.env, spec, { topoId: topologyId(options.env.runId, row), backend: row.backend, signal,
@@ -63,15 +63,11 @@ export function createScenarioExecutor(options: { factory: TopologyFactory; env:
     result.durationMs = Math.max(0, options.clock.now() - lifecycle.started);
     try {
       await mkdir(lifecycle.dir, { recursive: true });
-      await writeScenarioArtefacts(lifecycle.state, lifecycle.dir, options.secrets);
+      const scenarioFiles = await writeScenarioArtefacts(lifecycle.state, lifecycle.dir, options.secrets);
       const index = await lifecycle.topology.collectArtefacts(lifecycle.dir, { deadlineMs: 30_000 });
-      result.artefacts = index.files.map((file) => ({ path: redactText(file.path, options.secrets ?? []), bytes: file.bytes, sha256: file.sha256 }));
-      const recorded = new Set(result.artefacts.map((item) => item.path));
-      for (const [name, content] of lifecycle.state.artefacts) {
-        if (recorded.has(name)) continue;
-        const bytes = typeof content === "string" ? new TextEncoder().encode(redactText(content, options.secrets ?? [])) : redactBytes(content, options.secrets ?? []);
-        result.artefacts.push({ path: name, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") });
-      }
+      const files = new Map(index.files.map((file) => [redactText(file.path, options.secrets ?? []), { path: redactText(file.path, options.secrets ?? []), bytes: file.bytes, sha256: file.sha256 }]));
+      for (const file of scenarioFiles) files.set(file.path, file);
+      result.artefacts = [...files.values()];
     } catch (error) {
       result.status = "error";
       result.reason = `ARTEFACT_FAILED: ${error instanceof Error ? error.message : String(error)}`;
