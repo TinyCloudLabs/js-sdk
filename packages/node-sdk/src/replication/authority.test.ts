@@ -138,7 +138,7 @@ describe("hasUnrestrictedGetCoverage (§4.1 gate)", () => {
 describe("augmentSignInEntriesWithReplication (§4.1)", () => {
   const replication = { prefixes: ["notes", "other"] };
 
-  test("one {get, sync} entry per prefix with an unrestricted covering get", () => {
+  test("bare selectors emit exact and descendant get/sync grant entries", () => {
     const out = augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
@@ -146,8 +146,15 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
     });
     expect(out).toEqual([
       { service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
       { service: "tinycloud.kv", space: SPACE, path: "other", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "other/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
+    expect(augmentSignInEntriesWithReplication({
+      entries: [kvEntry({ path: "" })],
+      primarySpaceId: SPACE,
+      replication: { prefixes: ["notes/", ""] },
+    }).map((entry) => entry.path)).toEqual(["notes/", ""]);
   });
 
 
@@ -166,13 +173,13 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
       primarySpaceId: SPACE,
       replication: { prefixes: ["vault/keys", "notes"] },
     });
-    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
+    expect(out.map((entry) => entry.path)).toEqual(["notes", "notes/"]);
     const opted = augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
       replication: { prefixes: ["vault/keys"], allowSecrets: true },
     });
-    expect(opted.map((entry) => entry.path)).toEqual(["vault/keys"]);
+    expect(opted.map((entry) => entry.path)).toEqual(["vault/keys", "vault/keys/"]);
   });
 
   test("undefined replication config yields no entries", () => {
@@ -390,7 +397,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     expect(authority.sessionGrant("notes")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  test("plan delegates to planDelegation and passes refusals through", () => {
+  test("plan passes exact and descendant grant paths for a bare selector", () => {
     const planDelegation = mock(() => ({
       path: "runtime" as const,
       parentCid: "bafyA",
@@ -400,8 +407,10 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     const plan = authority.plan("notes");
     expect(plan).toEqual({ path: "runtime", parentCid: "bafyA", expiresAt: 1_700_000_000_000 });
     const entries = planDelegation.mock.calls[0]![0] as PermissionEntry[];
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] });
+    expect(entries).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
 
     const refused = createReplicationAuthority(
       makeHost({ planDelegation: () => ({ refused: "CAVEATED_AUTHORITY" as const }) }),
@@ -418,6 +427,10 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     const result = await authority.mint(DEVICE_DID, "notes", new AbortController().signal);
     expect(result).toEqual({ ucan: "signed-ucan", parentCid: "bafyB", expiresAt: plan.expiresAt });
     expect(mintDelegation.mock.calls[0]![0]).toBe(DEVICE_DID);
+    expect(mintDelegation.mock.calls[0]![1]).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
 
     const refused = createReplicationAuthority(
       makeHost({ planDelegation: () => ({ refused: "NOT_COVERED" as const }) }),

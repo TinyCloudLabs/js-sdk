@@ -120,6 +120,18 @@ describe("sync and offline reads", () => {
     expect((await replica.list({ prefix: "notes/" })).entries.map((entry) => entry.key)).toEqual(["notes/a"]);
     await store.close();
   });
+  test("list preserves published 3.1.0 string-prefix filtering", async () => {
+    const node = new FakeNode("notes");
+    node.put("notes/a", "descendant");
+    const store = await newStore(undefined, { prefix: "notes" });
+    await store.installGrant(deviceGrant({ prefix: "" }));
+    const replica = new Replica({ store, transport: node });
+    await replica.sync();
+    for (const prefix of ["", "n", "notes", "notes/"]) {
+      expect((await replica.list({ prefix })).entries.map((entry) => entry.key)).toEqual(["notes/a"]);
+    }
+    await store.close();
+  });
 
 
   test("catches up updates and deletes; metadata-only changes do not refetch", async () => {

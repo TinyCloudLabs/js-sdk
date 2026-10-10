@@ -9,6 +9,7 @@ import {
   type LocalReplicaStatus,
   type PendingWriteStore,
   type ReplicationAuthority,
+  type ReplicationEvent,
   type ReplicationScheduler,
 } from "@tinycloud/sdk-services";
 import { canonicalReplicationIdentity, createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
@@ -659,6 +660,51 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       expect((await node.kv.get("notes/seed")).data?.data).toBe("seed-v0");
       const uncovered = await node.kv.get("outside/secret");
       expect(uncovered.ok ? undefined : uncovered.error.code).toBe("NETWORK_ERROR");
+    } finally {
+      await node.replication?.close();
+      await rm(replicaDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+  test("bare selector installs its complete grant and serves exact and descendant keys locally", async () => {
+    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-bare-selector-"));
+    const events: ReplicationEvent[] = [];
+    const node = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: {
+        enabled: true,
+        prefixes: ["notes"],
+        storage: createSqliteReplicaStorage({ dir: replicaDir }),
+        mode: "foreground",
+        onEvent: (event) => events.push(event),
+      },
+    });
+    try {
+      await node.signIn();
+      expect((await node.kv.put("notes", "exact")).ok).toBe(true);
+      expect((await node.kv.put("notes/a", "descendant")).ok).toBe(true);
+      await node.replication!.sync();
+      expect(await node.replication!.status()).toMatchObject([
+        { prefix: "notes", state: "ready", coverage: "complete", grant: { unconstrained: true } },
+      ]);
+
+      const serviceContext = (node as unknown as { _serviceContext: ServiceContext })._serviceContext;
+      (serviceContext as unknown as { _fetch: typeof fetch })._fetch = async () => {
+        throw Object.assign(new Error("network unavailable"), { code: "NETWORK_ERROR" });
+      };
+      expect((await node.kv.get("notes")).data?.data).toBe("exact");
+      expect((await node.kv.get("notes/a")).data?.data).toBe("descendant");
+      for (const key of ["notes", "notes/a"]) {
+        expect(events.some((event) =>
+          event.type === "replication.read" && event.key === key &&
+          event.source === "replica" && event.reason === "hit"
+        )).toBe(true);
+      }
     } finally {
       await node.replication?.close();
       await rm(replicaDir, { recursive: true, force: true });

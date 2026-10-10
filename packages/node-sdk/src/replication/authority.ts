@@ -14,8 +14,9 @@
  */
 
 import {
-  KV,
+  grantPathsForSelector,
   actionContains,
+  KV,
   canonicalizeRecapCaveats,
   isCapabilitySubset,
   parseSpaceUri,
@@ -40,14 +41,12 @@ const KV_SERVICE = "tinycloud.kv";
 
 /** The delegation the replication grant delegates: get + sync on one prefix of the session space. */
 function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] {
-  return [
-    {
-      service: KV_SERVICE,
-      space: spaceId,
-      path: prefix,
-      actions: [KV_GET, KV_SYNC],
-    },
-  ];
+  return grantPathsForSelector(prefix).map((path) => ({
+    service: KV_SERVICE,
+    space: spaceId,
+    path,
+    actions: [KV_GET, KV_SYNC],
+  }));
 }
 
 

@@ -1,4 +1,4 @@
-import { isCapabilitySubset, type PermissionEntry } from "@tinycloud/sdk-core";
+import { grantPathsForSelector, isCapabilitySubset, type PermissionEntry } from "@tinycloud/sdk-core";
 import { requiresSecretsOptIn } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -31,8 +31,7 @@ export function addReplicationLoginEntries(
       path: prefix,
       actions: ["tinycloud.kv/get"],
     };
-    const requiredPaths = prefix.endsWith("/") ? [prefix] : [prefix, `${prefix}/`];
-    const required = requiredPaths.map((path) => ({ ...requested, path }));
+    const required = grantPathsForSelector(prefix).map((path) => ({ ...requested, path }));
     const matching = request.filter((entry) =>
       sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid),
     );
@@ -59,9 +58,11 @@ export function addReplicationLoginEntries(
     }
     const service = "tinycloud.kv";
     const actions = [`${service}/get`, `${service}/sync`];
-    const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === prefix &&
-      actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
-    if (!existing) result.push({ service, space: primarySpace, path: prefix, actions });
+    for (const path of grantPathsForSelector(prefix)) {
+      const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === path &&
+        actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
+      if (!existing) result.push({ service, space: primarySpace, path, actions });
+    }
   }
   return result;
 }
