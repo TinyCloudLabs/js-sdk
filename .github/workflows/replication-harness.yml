@@ -69,12 +69,13 @@ env:
 jobs:
   resolve:
     name: Resolve inputs and matrix
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'replication')
+    if: github.event_name == 'workflow_dispatch' || (github.event.action == 'labeled' && github.event.label.name == 'replication') || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'replication'))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
       core-matrix: ${{ steps.split.outputs.core-matrix }}
       companion-matrix: ${{ steps.split.outputs.companion-matrix }}
+      has-companion: ${{ steps.split.outputs.has-companion }}
     steps:
       - uses: actions/checkout@v4
 
@@ -126,6 +127,8 @@ jobs:
         run: |
           jq -c '{include:[.include[] | select(.set == null)]}' "$RUNNER_TEMP/tc893/in/matrix.json" \
             | sed 's/^/core-matrix=/' >> "$GITHUB_OUTPUT"
+          jq '[.include[] | select(.set != null)] | length > 0' "$RUNNER_TEMP/tc893/in/matrix.json" \
+            | sed 's/^/has-companion=/' >> "$GITHUB_OUTPUT"
           jq -c '{include:[.include[] | select(.set != null)]}' "$RUNNER_TEMP/tc893/in/matrix.json" \
             | sed 's/^/companion-matrix=/' >> "$GITHUB_OUTPUT"
 
@@ -194,6 +197,7 @@ jobs:
   leg-companion:
     name: Companion ${{ matrix.name }}
     needs: resolve
+    if: needs.resolve.outputs.has-companion == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -249,7 +253,7 @@ jobs:
   aggregate:
     name: Aggregate
     needs: [resolve, leg-core, leg-companion]
-    if: always()
+    if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

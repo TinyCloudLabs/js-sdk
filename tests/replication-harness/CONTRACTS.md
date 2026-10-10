@@ -57,6 +57,7 @@ selects that matrix entry from the resolve artefacts and writes
 `<results>/report.json` and `report.md`. `aggregate --legs` reads one
 `<leg-name>/report.json` directory per matrix leg, recomputes the registry
 manifests, and writes `aggregate.json` and `aggregate.md` under `--out`.
+When the matrix lists no companion legs, `aggregate` treats a `skipped` `--leg-companion-conclusion` as `success` (the `leg-companion` job is skipped via `has-companion`); with companion legs in the matrix, `skipped` still fails.
 
 `manifest --inputs "$IN/inputs.json" --out "$RUNNER_TEMP/tc893/manifest"`
 recomputes and writes `manifest-core.json`; add `--set phase1-companion` to

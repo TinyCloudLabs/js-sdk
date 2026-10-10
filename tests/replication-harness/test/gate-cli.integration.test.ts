@@ -305,4 +305,51 @@ describe("executable gate CLI adapters", () => {
       expect(adhocAggregate.legCoreConclusion).toBe("failure");
     }
   });
+  test("skipped companion conclusion passes without companion legs but fails when the matrix lists them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc893-skipped-"));
+    roots.push(root);
+    const eventFile = join(root, "dispatch-event.json");
+    const event = { repository: { full_name: "TinyCloudLabs/js-sdk" }, ref: "refs/heads/adhoc", after: "1".repeat(40) };
+    await writeFile(eventFile, JSON.stringify(event));
+    const env = {
+      TC893_RUNTIME_MODULE: runtimeModule,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: event.ref,
+      GITHUB_SHA: event.after,
+      GITHUB_RUN_ID: "12345",
+      GITHUB_RUN_ATTEMPT: "1",
+    };
+
+    // No companion legs in the matrix: a skipped leg-companion job is benign.
+    const bareInputs = join(root, "bare-in");
+    const bareResolved = command(["resolve", "--event-file", eventFile,
+      "--dispatch-inputs", JSON.stringify({ gate: "none", clients: "workspace", tier: "core", backends: '["sqlite"]', set: "" }),
+      "--out", bareInputs], env);
+    expect(bareResolved.exitCode).toBe(0);
+    const bareLegs = join(root, "bare-legs");
+    const bareRun = command(["run", "--inputs", join(bareInputs, "inputs.json"), "--leg", "core-sqlite", "--results", join(bareLegs, "core-sqlite")], env);
+    expect(bareRun.exitCode).toBe(0);
+    const bare = command(["aggregate", "--inputs", join(bareInputs, "inputs.json"), "--legs", bareLegs,
+      "--leg-core-conclusion", "success", "--leg-companion-conclusion", "skipped", "--out", join(root, "bare-aggregate")], env);
+    expect(bare.exitCode).toBe(0);
+
+    // Companion legs in the matrix: skipped still fails.
+    const companionInputs = join(root, "companion-in");
+    const companionResolved = command(["resolve", "--event-file", eventFile,
+      "--dispatch-inputs", JSON.stringify({ gate: "none", clients: "workspace", tier: "core", backends: '["sqlite"]', set: "phase1-companion" }),
+      "--out", companionInputs], env);
+    expect(companionResolved.exitCode).toBe(0);
+    const companionMatrix = JSON.parse(companionResolved.stdout?.toString() ?? "") as { include: { name: string; set: string | null }[] };
+    expect(companionMatrix.include.some((leg) => leg.set !== null)).toBe(true);
+    const companionLegs = join(root, "companion-legs");
+    for (const leg of companionMatrix.include) {
+      const run = command(["run", "--inputs", join(companionInputs, "inputs.json"), "--leg", leg.name, "--results", join(companionLegs, leg.name)], env);
+      expect(run.exitCode).toBe(0);
+    }
+    const skipped = command(["aggregate", "--inputs", join(companionInputs, "inputs.json"), "--legs", companionLegs,
+      "--leg-core-conclusion", "success", "--leg-companion-conclusion", "skipped", "--out", join(root, "companion-aggregate")], env);
+    expect(skipped.exitCode).toBe(1);
+    const skippedReport = JSON.parse(await readFile(join(root, "companion-aggregate", "aggregate.json"), "utf8"));
+    expect(skippedReport.legCompanionConclusion).toBe("skipped");
+  });
 });

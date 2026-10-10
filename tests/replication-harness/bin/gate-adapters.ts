@@ -374,11 +374,14 @@ export async function aggregateCommand(args: { options: Record<string, string | 
   const companionFromReport = expectedLegs.some((leg) => leg.set !== null) ? reportConclusion(companionLegs) : "success";
   const coreFromFlags = conclusionFlag(option(args.options, "leg-core-conclusion"), coreFromReport);
   const companionFromFlags = conclusionFlag(option(args.options, "leg-companion-conclusion"), companionFromReport);
+  // leg-companion is skipped when the matrix lists no companion legs; that is
+  // not a failure. When companion legs are expected, "skipped" still fails.
+  const companionFlag = !expectedLegs.some((leg) => leg.set !== null) && companionFromFlags === "skipped" ? "success" : companionFromFlags;
   const aggregateConclusion = (reported: ReturnType<typeof reportConclusion>, flagged: ReturnType<typeof conclusionFlag>) =>
     reported === "success" ? flagged : reported;
   const report = await aggregate({ inputs, coreManifest, companionManifests, recomputedCoreManifest, recomputedCompanionManifests, expectedLegs, legs,
     legCoreConclusion: aggregateConclusion(coreFromReport, coreFromFlags),
-    legCompanionConclusion: aggregateConclusion(companionFromReport, companionFromFlags) });
+    legCompanionConclusion: aggregateConclusion(companionFromReport, companionFlag) });
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, "aggregate.json"), `${JSON.stringify(report, null, 2)}\n`);
   await writeFile(join(outDir, "aggregate.md"), renderAggregateMarkdown(report));
