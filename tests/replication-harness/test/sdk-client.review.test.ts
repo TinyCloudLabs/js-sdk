@@ -61,15 +61,21 @@ class TinyCloudNode {
       list: async (options) => { record({ kind: "list", prefix: options.prefix }); return { ok: true, data: { keys: [] } }; },
       batchPut: async () => ({ ok: true, data: { written: [] } }),
     };
+    this.replicationClosed = false;
+    this.replicationPurged = false;
     this.replication = {
-      status: async () => [],
+      status: async () => this.replicationPurged && !this.replicationClosed ? [{ prefix: "notes/", state: "idle" }] : [],
       sync: async () => { this.options.replication?.onEvent?.({ type: "replication.sync", trigger: "manual", outcome: "ok" }); },
-      purge: async () => ({ ok: false, error: { code: "REPLICA_UNAVAILABLE" } }),
+      purge: async ({ timeoutMs } = {}) => {
+        if (timeoutMs === 123) { this.replicationPurged = true; return { purged: ["notes/"], failed: [] }; }
+        return { ok: false, error: { code: "REPLICA_UNAVAILABLE" } };
+      },
       clearPending: async () => 0,
+      close: async () => { this.replicationClosed = true; },
     };
   }
   async signIn() {
-    record({ kind: "sign-in" });
+    record({ kind: "sign-in", host: this.options.host });
     const expiry = new Date(Date.now() + 60000).toISOString();
     this.restorableSession = { spaceId: "owner-space", jwk: this.sessionKeyJwk, verificationMethod: this.sessionDid, address: "0xowner", chainId: 1, siwe: "signed owner session\nExpiration Time: " + expiry, signature: "signature", delegationHeader: { Authorization: "Bearer owner-session" } };
   }
@@ -149,10 +155,10 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
       .split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line) as { kind: string; host?: string })
       .find((item) => item.kind === "init" && item.host === "https://nodeb-proxy.example");
     expect(aliasInit).toBeTruthy();
-    const aliasRestore = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
-      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; hosts?: string[] })
-      .find((item) => item.kind === "restore" && item.hosts?.[0] === "https://nodeb-proxy.example");
-    expect(aliasRestore).toBeTruthy();
+    const aliasSignIn = (await readFile(join(ownerHome, "observations.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; host?: string })
+      .find((item) => item.kind === "sign-in" && item.host === "https://nodeb-proxy.example");
+    expect(aliasSignIn).toBeTruthy();
 
     const boot = JSON.parse((await readFile(join(ownerHome, "observations.jsonl"), "utf8")).split("\n")[0]!) as { nodeVersion: string; bunType: string; runtime: string; env: string[] };
     expect(hello.node).toBe(boot.nodeVersion);
@@ -252,7 +258,7 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     expect((await sessionOnly.rpc("hello", {})).node).toMatch(/^v\d+\.\d+\.\d+/);
     expect((await sessionOnly.authority()).posture).toBe("delegate-session");
     const ownerObservations = (await readFile(join(ownerHome, "observations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { kind: string; privateKeyProvided?: boolean; runtime?: string });
-    expect(ownerObservations.filter((item) => item.kind === "sign-in")).toHaveLength(1);
+    expect(ownerObservations.filter((item) => item.kind === "sign-in")).toHaveLength(2);
     expect(ownerObservations.filter((item) => item.kind === "init").map((item) => item.privateKeyProvided)).toEqual([true, true, true]);
     expect(ownerObservations.filter((item) => item.kind === "boot").every((item) => item.runtime === "node")).toBe(true);
     const deviceObservations = (await readFile(join(root, "device-home", "observations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { kind: string; privateKeyProvided?: boolean });
@@ -261,6 +267,8 @@ test("SDK client keeps Node RPC, auth, deadline, and crash semantics isolated", 
     const emptyDeviceObservations = (await readFile(join(root, "empty-device-home", "observations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { kind: string; privateKeyProvided?: boolean });
     expect(emptyDeviceObservations.filter((item) => item.kind === "sign-in")).toHaveLength(0);
     expect(emptyDeviceObservations.filter((item) => item.kind === "init").map((item) => item.privateKeyProvided)).toEqual([false]);
+    expect(await owner.rpc("replication.purge", { timeoutMs: 123 })).toEqual({ purged: ["notes/"], failed: [] });
+    expect(await owner.status()).toEqual([]);
   } finally {
     await Promise.all([owner?.close({ deadlineMs: 100 }), delegate?.close({ deadlineMs: 100 }), sessionOnly?.close({ deadlineMs: 100 }), aliasClient?.close({ deadlineMs: 100 })].map((closing) => closing?.catch(() => undefined)));
     await rm(root, { recursive: true, force: true });

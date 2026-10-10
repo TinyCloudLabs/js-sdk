@@ -3,7 +3,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile }
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { CliClientImpl, createCliDelegation, reuseCliOwnerIdentity, scrubClientEnvironment } from "../src/clients/cli-client";
+import { CliClientImpl, createCliClient, createCliDelegation, reuseCliOwnerIdentity, scrubClientEnvironment } from "../src/clients/cli-client";
 import { forgetSdkIdentityKeys, sdkIdentityPrivateKey } from "../src/clients/identity";
 
 const roots: string[] = [];
@@ -286,6 +286,11 @@ if (args.includes("auth") && args.includes("login")) {
   const file = join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "replication", "events.jsonl");
   await mkdir(join(process.env.TC_HOME, ".tinycloud", "profiles", profile, "replication"), { recursive: true });
   await appendFile(file, JSON.stringify({ type: "replication.sync", trigger: "manual", outcome: "ok" }) + "\\n");
+  await writeFile(join(process.env.TC_HOME, kind + ".event-ready"), "ready");
+  while (true) {
+    try { await access(join(process.env.TC_HOME, "get.event-ready")); await access(join(process.env.TC_HOME, "sync.event-ready")); break; }
+    catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
 }
 `);
     const sourceProfile = join(home, ".tinycloud", "profiles", "owner");
@@ -368,6 +373,60 @@ setInterval(() => {}, 1_000);
       forgetSdkIdentityKeys(runId);
     }
   });
+  test("serializes concurrent CLI owner setup for one identity", async () => {
+    const root = await temporaryDirectory();
+    const runId = `identity-race-${randomUUID()}`;
+    const identity = "shared-owner";
+    const marker = join(root, "registered-owner-key");
+    const entry = await cliEntry(root, `
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+const profile = args[args.indexOf("--profile") + 1];
+const home = process.env.TC_HOME;
+const directory = join(home, ".tinycloud", "profiles", profile);
+const command = args.includes("init") ? "init" : args.includes("login") ? "login" : "other";
+if (command === "init") {
+  await mkdir(directory, { recursive: true });
+  const privateKey = randomBytes(32).toString("hex");
+  await writeFile(join(directory, "key.json"), JSON.stringify({ d: privateKey }));
+  await writeFile(join(directory, "profile.json"), JSON.stringify({ name: profile, privateKey }));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+} else if (command === "login") {
+  const profileData = JSON.parse(await readFile(join(directory, "profile.json"), "utf8"));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  try {
+    const registered = await readFile(${JSON.stringify(marker)}, "utf8");
+    if (registered !== profileData.privateKey) {
+      console.error("Identity owner already has a different key");
+      process.exitCode = 1;
+    }
+  } catch {
+    await writeFile(${JSON.stringify(marker)}, profileData.privateKey, { flag: "wx" });
+  }
+}
+`);
+    const makeSpec = (id: string) => ({
+      id, kind: "cli", node: "node-a", endpoint: "http://127.0.0.1:9", identity,
+      auth: { posture: "owner" }, replication: false,
+    });
+    const clients = [makeSpec("owner-a"), makeSpec("owner-b")];
+    const construction = (spec: (typeof clients)[number]) => ({
+      topology: { id: "identity-race-topology", spec: { name: "identity-race", nodes: [], clients } },
+      environment: { runId, resultsDir: join(root, "results") },
+      spec, image: {}, sut: { cli: { entry } },
+    } as never);
+    const [first, second] = await Promise.all(clients.map((spec) => createCliClient(construction(spec))));
+    try {
+      const keyPaths = [first, second].map((client) => join(client.home(), ".tinycloud", "profiles", "owner", "key.json"));
+      expect(await readFile(keyPaths[0]!, "utf8")).toBe(await readFile(keyPaths[1]!, "utf8"));
+      expect(await readFile(marker, "utf8")).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      await Promise.all([first.close({ deadlineMs: 100 }), second.close({ deadlineMs: 100 })]);
+      forgetSdkIdentityKeys(runId);
+    }
+  }, 15_000);
 
   test("runs the isolated owner request/grant/import workflow without copying owner key material", async () => {
     const root = await temporaryDirectory();

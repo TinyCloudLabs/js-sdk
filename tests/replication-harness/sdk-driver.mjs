@@ -134,7 +134,12 @@ async function handle(op, args, controller) {
       await node.replication.sync({ prefix: args.prefix });
       return { ok: true };
     }
-    case "replication.purge": return node.replication ? node.replication.purge({ timeoutMs: args.timeoutMs }) : { purged: [], failed: [] };
+    case "replication.purge": {
+      if (!node.replication) return { purged: [], failed: [] };
+      const result = await node.replication.purge({ timeoutMs: args.timeoutMs });
+      if (Array.isArray(result?.failed) && result.failed.length === 0) await node.replication.close();
+      return result;
+    }
     case "replication.clearPending": return node.replication ? { cleared: await node.replication.clearPending() } : { cleared: 0 };
     case "cancel": {
       const target = requests.get(args.id);

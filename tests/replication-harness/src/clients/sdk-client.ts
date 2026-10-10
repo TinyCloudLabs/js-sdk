@@ -305,7 +305,7 @@ export class SdkClientImpl implements SdkClient {
   withHost(alias: string): KvClient {
     const host = this.options.hostAliases?.[alias] ?? alias;
     const hosts = [...new Set([host, ...(this.options.hosts ?? [this.options.host])])];
-    return new SdkClientImpl({ ...this.options, host, domain: new URL(host).hostname, hosts, home: this.options.home, storageDir: this.options.storageDir, auth: "restore" });
+    return new SdkClientImpl({ ...this.options, host, domain: new URL(host).hostname, hosts, home: this.options.home, storageDir: this.options.storageDir, auth: this.options.privateKeyHex ? "fresh-sign-in" : "restore" });
   }
   async get(key: string, options: OpOptions & { source?: "network"; maxResponseBytes?: number; space?: string } = {}): Promise<GetResult> {
     assertSdkOptions(options);

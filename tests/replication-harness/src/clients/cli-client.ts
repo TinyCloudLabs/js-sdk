@@ -821,6 +821,38 @@ function clientHost(input: ClientConstructionOptions): string {
   return input.spec.endpoint ?? input.topology.proxy(`client:${input.spec.id}->${input.spec.node}`).listenUrl;
 }
 
+const cliOwnerSetupLocks = new Map<string, Promise<void>>();
+async function withCliOwnerSetupLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = cliOwnerSetupLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  cliOwnerSetupLocks.set(key, current);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (cliOwnerSetupLocks.get(key) === current) cliOwnerSetupLocks.delete(key);
+  }
+}
+
+async function initializeCliOwner(client: CliClientImpl, spec: ClientConstructionOptions["spec"], runId: string): Promise<void> {
+  if (spec.kind !== "cli" || spec.auth.posture !== "owner") throw new HarnessError("PREFLIGHT_FAILED", "CLI owner initialization requires an owner CLI ClientSpec");
+  await withCliOwnerSetupLock(`${runId}\u0000${spec.identity}`, async () => {
+    const profile = "owner";
+    const init = await client.tc(["init", "--name", profile, "--key-only"]);
+    if (init.exit !== 0) throw new HarnessError("PREFLIGHT_FAILED", "CLI owner key-only initialization failed", { exit: init.exit, signal: init.signal, stderr: init.stderr });
+    const loginArgs = ["auth", "login", "--method", "local"];
+    await reuseCliOwnerIdentity(client.home(), profile, runId, spec.identity);
+    if (spec.replication) {
+      for (const prefix of spec.replication.prefixes) loginArgs.push("--replication-prefix", prefix);
+      if (spec.replication.allowSecrets) loginArgs.push("--replication-allow-secrets");
+    }
+    const login = await client.tc(loginArgs);
+    if (login.exit !== 0) throw new HarnessError("PREFLIGHT_FAILED", "CLI owner local sign-in failed", { exit: login.exit, signal: login.signal, stderr: login.stderr });
+  });
+}
+
 export async function createCliClient(input: ClientConstructionOptions): Promise<CliClientImpl> {
   const spec = input.spec;
   if (spec.kind !== "cli") throw new HarnessError("CLIENT_UNSUPPORTED_OPTION", `Client ${spec.id} is not a CLI client`);
@@ -847,17 +879,6 @@ export async function createCliClient(input: ClientConstructionOptions): Promise
     ownerPosture: spec.auth.posture === "owner",
   });
   await ensureClientArtifacts(artifactDirectory);
-  if (spec.auth.posture === "owner") {
-    const init = await client.tc(["init", "--name", profile, "--key-only"]);
-    if (init.exit !== 0) throw new HarnessError("PREFLIGHT_FAILED", "CLI owner key-only initialization failed", { exit: init.exit, signal: init.signal, stderr: init.stderr });
-    const loginArgs = ["auth", "login", "--method", "local"];
-    await reuseCliOwnerIdentity(home, profile, input.environment.runId, spec.identity);
-    if (spec.replication) {
-      for (const prefix of spec.replication.prefixes) loginArgs.push("--replication-prefix", prefix);
-      if (spec.replication.allowSecrets) loginArgs.push("--replication-allow-secrets");
-    }
-    const login = await client.tc(loginArgs);
-    if (login.exit !== 0) throw new HarnessError("PREFLIGHT_FAILED", "CLI owner local sign-in failed", { exit: login.exit, signal: login.signal, stderr: login.stderr });
-  }
+  if (spec.auth.posture === "owner") await initializeCliOwner(client, spec, input.environment.runId);
   return client;
 }
