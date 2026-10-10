@@ -154,9 +154,14 @@ describe("serialized contracts", () => {
     expect(validAggregate.companion[0].passed).toBe(false);
   });
 
-  test("CLI accepts every declared subcommand and parses verify options", () => {
-    const expected = ["run", "list", "manifest", "resolve", "aggregate", "verify-aggregate", "doctor", "gc"];
-    for (const command of expected as Command[]) expect(parseArgs([command]).command).toBe(command);
+  test("CLI preserves S1/S3b command ownership and lists registered scenarios", async () => {
+    const owners = { manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b" };
+    for (const [command, slice] of Object.entries(owners) as [Command, string][]) {
+      expect(parseArgs([command]).command).toBe(command);
+      await expect(runCommand([command])).rejects.toThrow(`${command} is owned by ${slice}`);
+    }
+    await expect(runCommand(["list"])).resolves.toBeUndefined();
+    expect(parseArgs(["doctor"]).command).toBe("doctor");
     expect(parseArgs(["gc", "--older-than", "2h"])).toEqual({ command: "gc", positionals: [], options: { "older-than": "2h" } });
     expect(parseArgs(["verify-aggregate", "aggregate.json", "--gate", "tc858-phase1-beta", "--print", "cli.version"]))
       .toEqual({ command: "verify-aggregate", positionals: ["aggregate.json"], options: { gate: "tc858-phase1-beta", print: "cli.version" } });
