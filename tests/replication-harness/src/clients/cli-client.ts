@@ -779,6 +779,7 @@ export class CliClientImpl implements CliClient {
   private async op(args: string[], options: CliCallOptions = {}): Promise<InternalCliResult> { return this.run(args, options); }
   async get(key: string, options: CliCallOptions & GetOptions = {}): Promise<GetResult> {
     if (options.maxResponseBytes !== undefined) unsupportedOption("maxResponseBytes");
+    if (options.space !== undefined) unsupportedOption("space selection");
     const invocationOptions = options.source === "network" ? { ...options, flag: "off" as const } : options;
     const result = await this.op(["kv", "get", key, "--raw"], invocationOptions);
     if (result[DEADLINE_EXCEEDED]) {

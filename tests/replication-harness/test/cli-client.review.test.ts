@@ -137,6 +137,7 @@ console.log(JSON.stringify({ release: process.release.name, version: process.ver
     expect(networkArgs).toContain("--no-replication");
     expect(networkArgs).not.toContain("--replication");
     await expect(cli.clearPending({ keys: [] })).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_OPTION" });
+    await expect(cli.get("k", { space: "other-space" })).rejects.toMatchObject({ code: "CLIENT_UNSUPPORTED_OPTION" });
   });
   test("records expiry returned by a direct delegate grant import", async () => {
     const root = await temporaryDirectory();
