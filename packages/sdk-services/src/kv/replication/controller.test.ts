@@ -11,7 +11,7 @@ import { RequestTimeoutError } from "../../errors";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
-const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
+const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes/"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
 function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes }: {
   pendingStore?: PendingWriteStore;
@@ -55,7 +55,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
     return snapshot;
   };
   const handle = {
-    spec: { identity, space: identity.space, prefix: "notes", allowSecrets: false }, deviceDid: identity.principal,
+    spec: { identity, space: identity.space, prefix: "notes/", allowSecrets: false }, deviceDid: identity.principal,
     async get(key: string) {
       localReads++;
       if (localGetStatus === "throw") throw Object.assign(new Error("local read failed"), { code: "INTEGRITY_ERROR" });
@@ -90,7 +90,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
 }
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
-const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes", options, signal: new AbortController().signal, network });
+const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
 
 describe("KVReplication fallback and pending behavior", () => {
   test("session-only refusal ignores an installed grant and serves the network", async () => {
@@ -183,8 +183,8 @@ describe("KVReplication fallback and pending behavior", () => {
     await env.pending.update((state) => begin(state, "pending", [{ key: "notes/b", op: "put" }], new Date(1_000_000).toISOString()));
     const result = await env.controller.list({
       space: identity.space,
-      listPath: "notes",
-      options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+      listPath: "notes/",
+      options: { cursor: encodeTcr1(identity.space, "notes/", "notes/a") },
       signal: new AbortController().signal,
       network: async () => { throw new Error("cursor restart must not use network"); },
     });
@@ -193,14 +193,76 @@ describe("KVReplication fallback and pending behavior", () => {
     expect(env.counters().localReads).toBe(0);
   });
 });
+  test("bare nested LIST range falls back for in-flight and ambiguous writes", async () => {
+    for (const pendingState of ["in_flight", "ambiguous"] as const) {
+      const env = setup();
+      await env.pending.update((state) => {
+        begin(state, "nested", [{ key: "notes/folder/a", op: "delete" }], new Date(1_000_000).toISOString());
+        if (pendingState === "ambiguous") settle(state, "nested", "ambiguous", new Date(1_000_000).toISOString(), "TIMEOUT");
+      });
+      let networkCalls = 0;
+      const result = await env.controller.list({
+        space: identity.space,
+        listPath: "notes/folder",
+        options: undefined,
+        signal: new AbortController().signal,
+        network: async () => { networkCalls++; return ok({ keys: ["notes/folder/a"], truncated: false }); },
+      });
+      expect(result.ok && result.data.keys).toEqual(["notes/folder/a"]);
+      expect(networkCalls).toBe(1);
+      expect(env.listReads()).toBe(0);
+    }
+  });
+
+  test("bare nested LIST continuation restarts for in-flight and ambiguous writes", async () => {
+    for (const pendingState of ["in_flight", "ambiguous"] as const) {
+      const env = setup();
+      await env.pending.update((state) => {
+        begin(state, "nested", [{ key: "notes/folder/b", op: "delete" }], new Date(1_000_000).toISOString());
+        if (pendingState === "ambiguous") settle(state, "nested", "ambiguous", new Date(1_000_000).toISOString(), "TIMEOUT");
+      });
+      const result = await env.controller.list({
+        space: identity.space,
+        listPath: "notes/folder",
+        options: { cursor: encodeTcr1(identity.space, "notes/folder", "notes/folder/a") },
+        signal: new AbortController().signal,
+        network: async () => { throw new Error("cursor restart must not use network"); },
+      });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
+      expect(env.listReads()).toBe(0);
+    }
+  });
 describe("KVReplication list parity and cursor rules", () => {
+  test("a LIST range wider than the selected slash prefix falls back to network", async () => {
+    const env = setup({ prefixes: ["notes/"] });
+    let networkCalls = 0;
+    const result = await env.controller.list({
+      space: identity.space,
+      listPath: "notes",
+      options: undefined,
+      signal: new AbortController().signal,
+      network: async () => { networkCalls++; return ok({ keys: ["notes", "notes/a"], truncated: false }); },
+    });
+    expect(result.ok && result.data.keys).toEqual(["notes", "notes/a"]);
+    expect(networkCalls).toBe(1);
+    const cursor = await env.controller.list({
+      space: identity.space,
+      listPath: "notes",
+      options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+      signal: new AbortController().signal,
+      network: async () => { throw new Error("incomplete local cursor must restart"); },
+    });
+    expect(cursor.ok).toBe(false);
+    expect(!cursor.ok && cursor.error.meta?.replication).toBe("cursor_restart");
+  });
   const networkPage = async (): Promise<Result<KVListPage>> => ok({ keys: ["network/a"], truncated: false });
 
   test("serves covered local pages without consulting the network", async () => {
     const env = setup();
     const result = await env.controller.list(listRequest(undefined, networkPage));
     expect(result.ok && result.data.keys).toEqual(["notes/a"]);
-    expect(env.listReads()).toBe(2);
+    expect(env.listReads()).toBe(1);
     expect(env.counters().networkCalls).toBe(0);
   });
 
@@ -236,7 +298,7 @@ describe("KVReplication list parity and cursor rules", () => {
   test("a tcr1 cursor for another space restarts without local or network access", async () => {
     const env = setup();
     let networkCalls = 0;
-    const result = await env.controller.list(listRequest({ cursor: encodeTcr1("another-space", "notes", "notes/a") }, async () => { networkCalls++; return networkPage(); }));
+    const result = await env.controller.list(listRequest({ cursor: encodeTcr1("another-space", "notes/", "notes/a") }, async () => { networkCalls++; return networkPage(); }));
     expect(result.ok).toBe(false);
     expect(networkCalls).toBe(0);
     expect(env.listReads()).toBe(0);
@@ -366,12 +428,12 @@ describe("pending record evidence boundaries", () => {
 
   test("locked persisted inspections report unavailable for every replica", async () => {
     const env = setup({
-      prefixes: ["notes", "docs"],
+      prefixes: ["notes/", "docs/"],
       inspectStatus: async () => { throw Object.assign(new Error("database is locked"), { code: "REPLICA_BUSY" }); },
     });
     expect(await env.controller.status()).toMatchObject([
-      { prefix: "notes", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
-      { prefix: "docs", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
+      { prefix: "notes/", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
+      { prefix: "docs/", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
     ]);
     await env.controller.close();
   });
@@ -428,16 +490,16 @@ describe("KVReplication purge lifecycle", () => {
     await syncStarted;
     const purging = env.controller.purge({ timeoutMs: 50 });
     expect(signalFromSync?.aborted).toBe(true);
-    expect(await purging).toEqual({ purged: ["notes"], failed: [] });
+    expect(await purging).toEqual({ purged: ["notes/"], failed: [] });
     await syncing;
   });
 
   test("purge never rejects when storage throws or exceeds its injected timeout", async () => {
     const immediateTimeout = (fn: () => void) => { fn(); return () => undefined; };
     const throwing = setup({ purgeImpl: () => { throw new Error("storage failure"); }, setTimeoutImpl: immediateTimeout });
-    expect(await throwing.controller.purge({ timeoutMs: 20 })).toEqual({ purged: [], failed: [{ prefix: "notes", code: "REPLICA_UNAVAILABLE" }] });
+    expect(await throwing.controller.purge({ timeoutMs: 20 })).toEqual({ purged: [], failed: [{ prefix: "notes/", code: "REPLICA_UNAVAILABLE" }] });
     const hanging = setup({ purgeImpl: () => new Promise<void>(() => {}), setTimeoutImpl: immediateTimeout });
-    expect(await hanging.controller.purge({ timeoutMs: 5 })).toEqual({ purged: [], failed: [{ prefix: "notes", code: "TIMEOUT" }] });
+    expect(await hanging.controller.purge({ timeoutMs: 5 })).toEqual({ purged: [], failed: [{ prefix: "notes/", code: "TIMEOUT" }] });
   });
 });
 describe("shared identity epoch fences independent devices", () => {
@@ -450,7 +512,7 @@ describe("shared identity epoch fences independent devices", () => {
     const createController = (deviceDid: string, busy: boolean) => {
       let replicaStatus = status(0);
       const handle = {
-        spec: { identity, space: identity.space, prefix: "notes", allowSecrets: false },
+        spec: { identity, space: identity.space, prefix: "notes/", allowSecrets: false },
         deviceDid,
         async grant() { return replicaStatus.grant; },
         async installGrant() { return replicaStatus.grant!; },
@@ -538,8 +600,8 @@ describe("A2 lifecycle review regressions", () => {
     let networkCalls = 0;
     const result = await env.controller.list({
       space: identity.space,
-      listPath: "notes",
-      options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+      listPath: "notes/",
+      options: { cursor: encodeTcr1(identity.space, "notes/", "notes/a") },
       signal: new AbortController().signal,
       network: async () => { networkCalls++; return ok({ keys: [], truncated: false }); },
     });
@@ -551,7 +613,7 @@ describe("A2 lifecycle review regressions", () => {
   test("purge includes the session device even before a prefix was opened", async () => {
     let target: { sessionDeviceDid?: string } | undefined;
     const env = setup({ purgeImpl: (value) => { target = value; } });
-    expect(await env.controller.purge()).toEqual({ purged: ["notes"], failed: [] });
+    expect(await env.controller.purge()).toEqual({ purged: ["notes/"], failed: [] });
     await env.controller.get(readRequest(env.network));
     expect(env.counters().opens).toBe(0);
     expect(env.counters().networkCalls).toBe(1);
@@ -593,8 +655,8 @@ describe("A2 lifecycle review regressions", () => {
           ? await env.controller.get(readRequest(env.network))
           : await env.controller.list({
             space: identity.space,
-            listPath: "notes",
-            options: op === "cursor" ? { cursor: encodeTcr1(identity.space, "notes", "notes/a") } : undefined,
+            listPath: "notes/",
+            options: op === "cursor" ? { cursor: encodeTcr1(identity.space, "notes/", "notes/a") } : undefined,
             signal: new AbortController().signal,
             network: async () => { networkCalls++; return ok({ keys: ["notes/server"], truncated: false }); },
           });
@@ -667,8 +729,8 @@ describe("A2 lifecycle review regressions", () => {
             ? env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal })
             : env.controller.list({
               space: identity.space,
-              listPath: "notes",
-              options: { cursor: encodeTcr1(identity.space, "notes", "notes/a") },
+              listPath: "notes/",
+              options: { cursor: encodeTcr1(identity.space, "notes/", "notes/a") },
               signal: requestAbort.signal,
               network: async () => { networkCalls++; return ok({ keys: ["network/a"], truncated: false }); },
             });
@@ -729,7 +791,7 @@ describe("A2 lifecycle review regressions", () => {
       timeout!.fn();
       const result = await request;
       expect(result.ok).toBe(true);
-      expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(op === "get" ? 1 : 2);
+      expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(1);
       expect(env.counters().networkCalls).toBe(0);
       expect(env.events.some((event) => event.type === "replication.read" && event.source === "replica" && event.syncError === "TIMEOUT")).toBe(true);
     }
@@ -827,7 +889,7 @@ describe("A2 lifecycle review regressions", () => {
         const localReads = op === "get" ? env.counters().localReads : env.listReads();
         const event = env.events.findLast((item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
-        expect(localReads).toBe(scenario.local * (op === "list" ? 2 : 1));
+        expect(localReads).toBe(scenario.local);
         expect(op === "get" ? env.counters().networkCalls : listNetworkCalls).toBe(scenario.network);
         expect(event?.type === "replication.read" ? event.source : undefined).toBe(scenario.network ? "network" : "replica");
         if ("eventCode" in scenario) expect(event?.type === "replication.read" ? event.code : undefined).toBe(scenario.eventCode);
@@ -1176,7 +1238,7 @@ describe("A2 lifecycle review regressions", () => {
     } });
     const opening = env.controller.get(readRequest(env.network));
     await mintStarted;
-    expect(await env.controller.purge()).toEqual({ purged: ["notes"], failed: [] });
+    expect(await env.controller.purge()).toEqual({ purged: ["notes/"], failed: [] });
     await opening;
     expect(mintSignal?.aborted).toBe(true);
   });

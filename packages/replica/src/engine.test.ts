@@ -6,6 +6,7 @@ import { FakeNode, NODE_DID, deviceGrant, etagOf, newStore, removeTempDirs, temp
 import { Replica } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { SqliteReplicaStore } from "./sqlite/store.js";
+import { kvPrefixCovers } from "./scope.js";
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
@@ -29,6 +30,42 @@ async function rejectsWith(promise: Promise<unknown>, code: ReplicaErrorCode): P
   }
   throw new Error(`expected ${code}`);
 }
+
+describe("published segment-aware selection", () => {
+  test("keeps bare, slash, and root selector behavior", () => {
+    for (const [prefix, key, expected] of [
+      ["notes", "notes", true], ["notes", "notes/a", true], ["notes", "notesX", false],
+      ["notes/", "notes", false], ["notes/", "notes/a", true],
+      ["", "anything", true], ["", "", true],
+    ] as const) expect(kvPrefixCovers(prefix, key)).toBe(expected);
+  });
+
+  test("bare selector survives SQLite reopen and reset/resync", async () => {
+    const dir = await tempDir();
+    const node = new FakeNode("notes");
+    node.put("notes/a", "alpha");
+    const store = await newStore(dir, { prefix: "notes" });
+    await store.installGrant(deviceGrant({ prefix: "" }));
+    const replica = new Replica({ store, transport: node });
+    await replica.sync();
+    await store.close();
+
+    node.online = false;
+    const reopened = await SqliteReplicaStore.open(dir, { create: false });
+    const offline = new Replica({ store: reopened });
+    expect(await offline.get("notes/a")).toMatchObject({ status: "present" });
+    expect((await offline.list()).entries.map((entry) => entry.key)).toEqual(["notes/a"]);
+    await reopened.close();
+
+    node.online = true;
+    const resetStore = await SqliteReplicaStore.open(dir, { create: false });
+    const resetReplica = new Replica({ store: resetStore, transport: node });
+    await resetReplica.reset("regression");
+    await expect(resetReplica.sync()).resolves.toMatchObject({ coverage: "complete" });
+    expect((await resetReplica.get("notes/a")).status).toBe("present");
+    await resetStore.close();
+  });
+});
 
 describe("sync and offline reads", () => {
   test("bootstraps over several pages, then serves reads from disk with no transport", async () => {
@@ -68,6 +105,34 @@ describe("sync and offline reads", () => {
     expect(status.device.pendingDelegationCid).toBeNull();
     await reopened.close();
   });
+  test("bare selector keeps segment-aware descendant selection", async () => {
+    const node = new FakeNode("notes");
+    node.put("notes", "exact");
+    node.put("notes/a", "descendant");
+    node.put("notesX/a", "sibling");
+    const store = await newStore(undefined, { prefix: "notes" });
+    await store.installGrant(deviceGrant({ prefix: "" }));
+    const replica = new Replica({ store, transport: node });
+    await replica.sync();
+    expect((await replica.get("notes/a")).status).toBe("present");
+    expect((await replica.get("notesX/a")).status).toBe("not_covered");
+    expect((await replica.list()).entries.map((entry) => entry.key)).toEqual(["notes", "notes/a"]);
+    expect((await replica.list({ prefix: "notes/" })).entries.map((entry) => entry.key)).toEqual(["notes/a"]);
+    await store.close();
+  });
+  test("list preserves published 3.1.0 string-prefix filtering", async () => {
+    const node = new FakeNode("notes");
+    node.put("notes/a", "descendant");
+    const store = await newStore(undefined, { prefix: "notes" });
+    await store.installGrant(deviceGrant({ prefix: "" }));
+    const replica = new Replica({ store, transport: node });
+    await replica.sync();
+    for (const prefix of ["", "n", "notes", "notes/"]) {
+      expect((await replica.list({ prefix })).entries.map((entry) => entry.key)).toEqual(["notes/a"]);
+    }
+    await store.close();
+  });
+
 
   test("catches up updates and deletes; metadata-only changes do not refetch", async () => {
     const node = new FakeNode();

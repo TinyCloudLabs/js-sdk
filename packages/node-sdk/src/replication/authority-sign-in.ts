@@ -1,4 +1,5 @@
 import {
+  grantPathsForSelector,
   KV,
   isCapabilitySubset,
   type PermissionEntry,
@@ -15,8 +16,9 @@ export function hasUnrestrictedGetCoverage(
   spaceId: string,
   prefix: string,
 ): boolean {
+  const requiredPaths = grantPathsForSelector(prefix);
   return isCapabilitySubset(
-    [{ service: KV_SERVICE, space: spaceId, path: prefix, actions: [KV_GET] }],
+    requiredPaths.map((path) => ({ service: KV_SERVICE, space: spaceId, path, actions: [KV_GET] })),
     [...entries],
   ).subset;
 }
@@ -39,12 +41,14 @@ export function augmentSignInEntriesWithReplication(input: {
     if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, prefix)) {
       continue;
     }
-    out.push({
-      service: KV_SERVICE,
-      space: input.primarySpaceId,
-      path: prefix,
-      actions: [KV_GET, KV_SYNC],
-    });
+    for (const path of grantPathsForSelector(prefix)) {
+      out.push({
+        service: KV_SERVICE,
+        space: input.primarySpaceId,
+        path,
+        actions: [KV_GET, KV_SYNC],
+      });
+    }
   }
   return out;
 }

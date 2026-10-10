@@ -6,11 +6,14 @@ const meta = { asOf: new Date(1_000_000).toISOString(), coverage: "complete" as 
 const handle = { async list({ prefix, after, limit }: { prefix: string; after?: string; limit?: number }) { const keys = allKeys.filter((key) => key.startsWith(prefix) && (after === undefined || utf8Compare(key, after) > 0)).sort(utf8Compare); return { keys: limit === undefined ? keys : keys.slice(0, limit), meta }; } };
 
 describe("local list parity", () => {
-  test("prefix coverage respects complete path segments", () => {
+  test("replica selectors preserve published segment-aware behavior", () => {
     expect(listPathCovered(["notes"], "notes")).toBe("notes");
+    expect(listPathCovered(["notes"], "notes/")).toBe("notes");
     expect(listPathCovered(["notes"], "notes/a")).toBe("notes");
-    expect(listPathCovered(["notes"], "notes-x")).toBeUndefined();
+    expect(listPathCovered(["notes"], "notesX")).toBeUndefined();
     expect(listPathCovered(["notes/"], "notes")).toBeUndefined();
+    expect(listPathCovered(["notes/"], "notes/a")).toBe("notes/");
+    expect(listPathCovered([""], "anything/deep")).toBe("");
   });
 
   test("exact key and children advance strictly through tcr1 pages", async () => {
@@ -26,8 +29,19 @@ describe("local list parity", () => {
     expect(third.truncated).toBe(false);
     expect(third.nextCursor).toBeUndefined();
   });
+  test("bare nested LIST emits its exact key and slash descendants", async () => {
+    const nested = { async list({ prefix, after, limit }: { prefix: string; after?: string; limit?: number }) {
+      const keys = ["notes/folder", "notes/folder/a", "notes/folderX"]
+        .filter((key) => key.startsWith(prefix) && (after === undefined || utf8Compare(key, after) > 0)).sort(utf8Compare);
+      return { keys: limit === undefined ? keys : keys.slice(0, limit), meta };
+    } };
+    const page = await localList(nested, "space", "notes/folder", undefined, undefined, () => {});
+    expect(page.keys).toEqual(["notes/folder", "notes/folder/a"]);
+  });
 
-  test("validates metadata from the exact-key probe and the children lookup", async () => {
+  test("a complete selector returns the whole LIST range rather than a partial exact hit", async () => {
+    const page = await localList(handle, "space", "notes", undefined, undefined, () => {});
+    expect(page.keys).toEqual(["notes", "notes/a", "notes/b"]);
     let reads = 0;
     const changing = {
       async list({ prefix }: { prefix: string }) {

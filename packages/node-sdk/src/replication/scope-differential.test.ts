@@ -1,21 +1,18 @@
 /**
- * Differential test (TC-858 §13.2): A1 copied `kvPrefixCovers` and
- * `requiresSecretsOptIn` from `packages/replica/src/scope.ts` into
- * sdk-services so node-sdk never imports replica. This pins the copies to
- * the originals on the same input corpus — a divergence here would let the
- * sign-in gate and the engine disagree about coverage.
+ * Differential tests keep the replication coverage helpers aligned with
+ * sdk-core capability containment, the authority source of truth.
  */
+
+import { isCapabilitySubset } from "@tinycloud/sdk-core";
 
 import { describe, expect, test } from "bun:test";
 
 import {
+  grantCovers,
   kvPrefixCovers as kvPrefixCoversReplica,
   requiresSecretsOptIn as requiresSecretsOptInReplica,
 } from "@tinycloud/replica";
-import {
-  kvPrefixCovers,
-  requiresSecretsOptIn,
-} from "@tinycloud/sdk-services";
+import { kvPrefixCovers, requiresSecretsOptIn } from "@tinycloud/sdk-services";
 
 describe("kvPrefixCovers parity with @tinycloud/replica", () => {
   const cases: Array<[string, string]> = [
@@ -44,6 +41,34 @@ describe("kvPrefixCovers parity with @tinycloud/replica", () => {
     });
   }
 });
+ 
+describe("published segment-aware selection compatibility", () => {
+  test("bare notes selects its descendants but not notesX", () => {
+    expect(kvPrefixCoversReplica("notes", "notes")).toBe(true);
+    expect(kvPrefixCoversReplica("notes", "notes/a")).toBe(true);
+    expect(kvPrefixCoversReplica("notes", "notesX")).toBe(false);
+    expect(kvPrefixCoversReplica("notes/", "notes")).toBe(false);
+    expect(kvPrefixCoversReplica("notes/", "notes/a")).toBe(true);
+    expect(kvPrefixCoversReplica("", "anything")).toBe(true);
+    expect(kvPrefixCovers("", "anything")).toBe(true);
+  });
+});
+
+describe("replica grant authority matches sdk-core containment", () => {
+  const paths = ["", "/", "notes", "notes/", "notes/private", "notesX", "a/b/", "a/b/c"];
+  for (const grantedPath of paths) {
+    for (const requestedPath of paths) {
+      test(`${JSON.stringify(grantedPath)} → ${JSON.stringify(requestedPath)}`, () => {
+        const expected = isCapabilitySubset(
+          [{ service: "tinycloud.kv", space: "default", path: requestedPath, actions: ["tinycloud.kv/get"] }],
+          [{ service: "tinycloud.kv", space: "default", path: grantedPath, actions: ["tinycloud.kv/get"] }],
+        ).subset;
+        expect(grantCovers({ att: { [`default/kv/${grantedPath}`]: { "tinycloud.kv/get": {} } } }, "default", requestedPath, "tinycloud.kv/get")).toBe(expected);
+      });
+    }
+  }
+});
+ 
 
 describe("requiresSecretsOptIn parity with @tinycloud/replica", () => {
   const cases: Array<[string, string]> = [

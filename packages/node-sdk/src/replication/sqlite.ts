@@ -794,21 +794,20 @@ class SqliteReplicaHandle implements KVReplicaHandle {
         "The replica has not been created.",
       );
     }
-    // Reuse-rule enforcement on every grant path (amendment §3): a caveated
-    // get/sync grant can never serve this replica, so it must never be
-    // installed — the caller re-mints instead of falling back to one.
-    if (!ucanAttUnconstrainedFor(parsed.att, this.spec.space, this.spec.prefix)) {
-      throw new this.#replica.ReplicaError(
-        this.#replica.ReplicaErrorCode.GRANT_NOT_COVERING,
-        "The grant's get or sync coverage carries caveats; re-mint instead of installing it.",
-      );
-    }
     this.#replica.assertGrantInstallable(parsed, {
       deviceDid: principalOf(this.#device.did),
       space: this.spec.space,
       prefix: this.spec.prefix,
       now: Date.now(),
     });
+    // Reuse-rule enforcement on every grant path: a caveated get/sync grant
+    // can never serve this replica, so it must never be installed.
+    if (!ucanAttUnconstrainedFor(parsed.att, this.spec.space, this.spec.prefix)) {
+      throw new this.#replica.ReplicaError(
+        this.#replica.ReplicaErrorCode.GRANT_NOT_COVERING,
+        "The grant's get or sync coverage carries caveats; re-mint instead of installing it.",
+      );
+    }
     await this.#store.installGrant(parsed);
     return newestGrantInfo(this.#replica, parsed, parsed, this.spec)!;
   }

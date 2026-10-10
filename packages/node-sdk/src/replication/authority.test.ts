@@ -59,14 +59,14 @@ describe("assertValidReplicationConfig (§3.1)", () => {
 
   test("overlapping prefixes throw; sibling prefixes pass", () => {
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "notes/todo"] }),
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/", "notes/todo"] }),
     ).toThrow(/overlap/);
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "note-s"] }),
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/", "note-s/"] }),
     ).not.toThrow();
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "other"] }),
-    ).not.toThrow();
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes", "notes/todo"] }),
+    ).toThrow(/overlap/);
   });
 
   test("a vault prefix requires allowSecrets", () => {
@@ -118,30 +118,27 @@ describe("hasUnrestrictedGetCoverage (§4.1 gate)", () => {
     ).toBe(false);
   });
 
-  test("an exact-path get never authorizes a child-prefix augmentation (review: signed-check semantics)", () => {
-    // `get(notes)` is an exact grant under `isCapabilitySubset`/`pathContains`:
-    // it must NOT cover `notes/private`. Only a trailing-slash prefix grant
-    // (`notes/`) does — the flag never adds a `get` the request lacked.
-    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes" })], SPACE, "notes/private")).toBe(
-      false,
-    );
-    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes/" })], SPACE, "notes/private")).toBe(
-      true,
-    );
-    // End to end: augmentation signs only the prefix the request covered.
+  test("selected namespace requires authority on the exact key and descendants", () => {
+    const exact = [kvEntry({ path: "notes" })];
+    expect(hasUnrestrictedGetCoverage(exact, SPACE, "notes")).toBe(false);
+    const slash = [kvEntry({ path: "notes/" })];
+    expect(hasUnrestrictedGetCoverage(slash, SPACE, "notes")).toBe(false);
+    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "notes" }), kvEntry({ path: "notes/" })], SPACE, "notes")).toBe(true);
+    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "" })], SPACE, "notes")).toBe(true);
+    expect(hasUnrestrictedGetCoverage([kvEntry({ path: "parent/" })], SPACE, "parent/notes")).toBe(true);
     const out = augmentSignInEntriesWithReplication({
-      entries: [kvEntry({ path: "notes" })],
+      entries: exact,
       primarySpaceId: SPACE,
-      replication: { prefixes: ["notes", "notes/private"] },
+      replication: { prefixes: ["notes/", "notes/private", "notesX"] },
     });
-    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
+    expect(out).toEqual([]);
   });
 });
 
 describe("augmentSignInEntriesWithReplication (§4.1)", () => {
   const replication = { prefixes: ["notes", "other"] };
 
-  test("one {get, sync} entry per prefix with an unrestricted covering get", () => {
+  test("bare selectors emit exact and descendant get/sync grant entries", () => {
     const out = augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
@@ -149,18 +146,17 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
     });
     expect(out).toEqual([
       { service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
       { service: "tinycloud.kv", space: SPACE, path: "other", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "other/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
+    expect(augmentSignInEntriesWithReplication({
+      entries: [kvEntry({ path: "" })],
+      primarySpaceId: SPACE,
+      replication: { prefixes: ["notes/", ""] },
+    }).map((entry) => entry.path)).toEqual(["notes/", ""]);
   });
 
-  test("partial coverage: only covered prefixes gain entries", () => {
-    const out = augmentSignInEntriesWithReplication({
-      entries: [kvEntry({ path: "notes" })],
-      primarySpaceId: SPACE,
-      replication,
-    });
-    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
-  });
 
   test("a caveated covering get produces no entry", () => {
     const out = augmentSignInEntriesWithReplication({
@@ -177,13 +173,13 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
       primarySpaceId: SPACE,
       replication: { prefixes: ["vault/keys", "notes"] },
     });
-    expect(out.map((entry) => entry.path)).toEqual(["notes"]);
+    expect(out.map((entry) => entry.path)).toEqual(["notes", "notes/"]);
     const opted = augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
       replication: { prefixes: ["vault/keys"], allowSecrets: true },
     });
-    expect(opted.map((entry) => entry.path)).toEqual(["vault/keys"]);
+    expect(opted.map((entry) => entry.path)).toEqual(["vault/keys", "vault/keys/"]);
   });
 
   test("undefined replication config yields no entries", () => {
@@ -194,13 +190,31 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
 });
 
 describe("ucanAttCovers / ucanAttUnconstrainedFor (§4.2)", () => {
-  const resource = `tinycloud://${SPACE}/kv/notes`;
+  const resource = `tinycloud://${SPACE}/kv/`;
 
   test("unconstrained get+sync on a covering resource", () => {
     const att = { [resource]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} } };
     expect(ucanAttUnconstrainedFor(att, SPACE, "notes")).toBe(true);
-    expect(ucanAttUnconstrainedFor(att, SPACE, "other")).toBe(false);
+    expect(ucanAttUnconstrainedFor({ [`tinycloud://${SPACE}/kv/unrelated/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} } }, SPACE, "notes")).toBe(false);
   });
+  test("signed exact-key authority cannot cover a selected namespace's descendants", () => {
+    const exact = { [`tinycloud://${SPACE}/kv/notes`]: { "tinycloud.kv/get": {} } };
+    for (const prefix of ["notes", "notes/", "notes/private", "notesX"]) {
+      expect(ucanAttCovers(exact, SPACE, prefix, "tinycloud.kv/get")).toBe(false);
+    }
+    const slash = { [`tinycloud://${SPACE}/kv/notes/`]: { "tinycloud.kv/get": {} } };
+    expect(ucanAttCovers(slash, SPACE, "notes", "tinycloud.kv/get")).toBe(false);
+    expect(ucanAttCovers(slash, SPACE, "notes/a", "tinycloud.kv/get")).toBe(true);
+    expect(ucanAttCovers(slash, SPACE, "notes/a/b", "tinycloud.kv/get")).toBe(true);
+  });
+  test("exact and slash grants together cover a bare selector", () => {
+    const att = {
+      [`tinycloud://${SPACE}/kv/notes`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+      [`tinycloud://${SPACE}/kv/notes/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+    };
+    expect(ucanAttUnconstrainedFor(att, SPACE, "notes")).toBe(true);
+  });
+
 
   test("caveated branch: coverage under ignoreCaveats, refusal otherwise", () => {
     const att = {
@@ -306,7 +320,7 @@ function makeHost(over: Partial<ReplicationAuthorityHost> = {}): ReplicationAuth
 
 describe("createReplicationAuthority (§4.2-4.3)", () => {
   test("sessionGrant returns the session UCAN when it carries unconstrained get+sync", () => {
-    const resource = `tinycloud://${SPACE}/kv/notes`;
+    const resource = `tinycloud://${SPACE}/kv/`;
     const session = fakeSession({
       delegationHeader: {
         Authorization: fakeSessionUcan({
@@ -321,6 +335,30 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     if ("refused" in result) throw new Error(`unexpected refusal ${result.refused}`);
     expect(result.device.did).toBe(SESSION_DID);
   });
+  test("sessionGrant requires authority over exact key and descendants", () => {
+    const session = fakeSession({
+      delegationHeader: {
+        Authorization: fakeSessionUcan({
+          [`tinycloud://${SPACE}/kv/notes`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+        }),
+      },
+    });
+    const authority = createReplicationAuthority(makeHost({ replicationSession: () => session }));
+    expect(authority.sessionGrant("notes")).toEqual({ refused: "NOT_COVERED" });
+    for (const prefix of ["notes/", "notes/private", "notesX"]) {
+      expect(authority.sessionGrant(prefix)).toEqual({ refused: "NOT_COVERED" });
+    }
+    const slashOnly = fakeSession({
+      delegationHeader: {
+        Authorization: fakeSessionUcan({
+          [`tinycloud://${SPACE}/kv/notes/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+        }),
+      },
+    });
+    expect(createReplicationAuthority(makeHost({ replicationSession: () => slashOnly })).sessionGrant("notes"))
+      .toEqual({ refused: "NOT_COVERED" });
+  });
+
 
   test("sessionGrant refuses NOT_COVERED for a non-UCAN header and uncovered prefix", () => {
     const authority = createReplicationAuthority(
@@ -335,7 +373,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
   });
 
   test("sessionGrant refuses CAVEATED_AUTHORITY when coverage is caveated only", () => {
-    const resource = `tinycloud://${SPACE}/kv/notes`;
+    const resource = `tinycloud://${SPACE}/kv/`;
     const session = fakeSession({
       delegationHeader: {
         Authorization: fakeSessionUcan({
@@ -359,7 +397,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     expect(authority.sessionGrant("notes")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  test("plan delegates to planDelegation and passes refusals through", () => {
+  test("plan passes exact and descendant grant paths for a bare selector", () => {
     const planDelegation = mock(() => ({
       path: "runtime" as const,
       parentCid: "bafyA",
@@ -369,8 +407,10 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     const plan = authority.plan("notes");
     expect(plan).toEqual({ path: "runtime", parentCid: "bafyA", expiresAt: 1_700_000_000_000 });
     const entries = planDelegation.mock.calls[0]![0] as PermissionEntry[];
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] });
+    expect(entries).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
 
     const refused = createReplicationAuthority(
       makeHost({ planDelegation: () => ({ refused: "CAVEATED_AUTHORITY" as const }) }),
@@ -387,6 +427,10 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     const result = await authority.mint(DEVICE_DID, "notes", new AbortController().signal);
     expect(result).toEqual({ ucan: "signed-ucan", parentCid: "bafyB", expiresAt: plan.expiresAt });
     expect(mintDelegation.mock.calls[0]![0]).toBe(DEVICE_DID);
+    expect(mintDelegation.mock.calls[0]![1]).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
 
     const refused = createReplicationAuthority(
       makeHost({ planDelegation: () => ({ refused: "NOT_COVERED" as const }) }),

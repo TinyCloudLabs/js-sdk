@@ -1,5 +1,5 @@
-import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { kvPrefixCovers, requiresSecretsOptIn } from "@tinycloud/replica";
+import { grantPathsForSelector, isCapabilitySubset, type PermissionEntry } from "@tinycloud/sdk-core";
+import { requiresSecretsOptIn } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ownerLoginPermissions } from "./owner-key.js";
@@ -25,23 +25,44 @@ export function addReplicationLoginEntries(
     if (requiresSecretsOptIn(primarySpace, prefix) && options.allowSecrets !== true) {
       throw new CLIError("SECRETS_OPT_IN_REQUIRED", `Replication prefix ${JSON.stringify(prefix)} in ${primarySpace} requires --replication-allow-secrets.`, ExitCode.USAGE_ERROR);
     }
-    const covering = request.filter((entry) =>
-      entry.service === "tinycloud.kv" &&
-      sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid) &&
-      (entry.actions.includes("tinycloud.kv/get") || entry.actions.includes("tinycloud.kv/*")) &&
-      kvPrefixCovers(entry.path, prefix),
+    const requested: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: primarySpace,
+      path: prefix,
+      actions: ["tinycloud.kv/get"],
+    };
+    const required = grantPathsForSelector(prefix).map((path) => ({ ...requested, path }));
+    const matching = request.filter((entry) =>
+      sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid),
     );
-    if (!covering.length) {
+    const authority = matching.map((entry) => {
+      const { caveats: _caveats, ...grant } = entry;
+      return { ...grant, space: primarySpace };
+    });
+    if (!isCapabilitySubset(required, authority).subset) {
+      const caveatedAtRequestedPath = matching.filter((entry) => !unconstrained(entry.caveats)).map((entry) => {
+        const { caveats: _caveats, ...grant } = entry;
+        return { ...grant, space: primarySpace };
+      });
+      if (isCapabilitySubset([requested], caveatedAtRequestedPath).subset) {
+        throw new CLIError("REPLICATION_PREFIX_CAVEATED", `Replication prefix ${JSON.stringify(prefix)} is covered only by caveated get authority.`, ExitCode.USAGE_ERROR);
+      }
       throw new CLIError("REPLICATION_PREFIX_OUTSIDE_SCOPE", `Replication prefix ${JSON.stringify(prefix)} has no covering get in the login request.`, ExitCode.USAGE_ERROR);
     }
-    if (!covering.some((entry) => unconstrained(entry.caveats))) {
+    const unrestricted = matching.filter((entry) => unconstrained(entry.caveats)).map((entry) => {
+      const { caveats: _caveats, ...grant } = entry;
+      return { ...grant, space: primarySpace };
+    });
+    if (!isCapabilitySubset(required, unrestricted).subset) {
       throw new CLIError("REPLICATION_PREFIX_CAVEATED", `Replication prefix ${JSON.stringify(prefix)} is covered only by caveated get authority.`, ExitCode.USAGE_ERROR);
     }
     const service = "tinycloud.kv";
     const actions = [`${service}/get`, `${service}/sync`];
-    const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === prefix &&
-      actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
-    if (!existing) result.push({ service, space: primarySpace, path: prefix, actions });
+    for (const path of grantPathsForSelector(prefix)) {
+      const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === path &&
+        actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
+      if (!existing) result.push({ service, space: primarySpace, path, actions });
+    }
   }
   return result;
 }

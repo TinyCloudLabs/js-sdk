@@ -44,13 +44,16 @@ export function localList(handle: { list(o: { prefix: string; after?: string; li
     return { keys, truncated: truncated, ...(truncated ? { nextCursor: encodeTcr1(space, path, keys[keys.length - 1]!) } : {}) };
   });
 }
+
 async function awaitExact(handle: { list(o: { prefix: string; after?: string; limit?: number }): Promise<LocalListResult> }, path: string, after: string | undefined, validateMeta: (meta: LocalReadMeta) => void): Promise<boolean> {
   if (after !== undefined && utf8Compare(path, after) <= 0) return false;
   const result = await handle.list({ prefix: path, limit: 1 });
   validateMeta(result.meta);
   return result.keys[0] === path;
 }
+
 export function listPathCovered(prefixes: readonly string[], path: string): string | undefined {
-  const covering = prefixes.filter((p) => kvPrefixCovers(p, path));
+  const descendant = path.endsWith("/") ? path : `${path}/`;
+  const covering = prefixes.filter((prefix) => kvPrefixCovers(prefix, path) && kvPrefixCovers(prefix, descendant));
   return covering.length === 1 ? covering[0] : undefined;
 }
