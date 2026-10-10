@@ -440,13 +440,10 @@ describe("replicationAuthority (§4.2)", () => {
       expiresAt: 1_700_000_000_000,
     });
     const entries = planDelegationSpy.mock.calls[0]![0] as PermissionEntry[];
-    expect(entries).toEqual([
-      {
-        service: "tinycloud.kv",
-        space: SPACE_ID,
-        path: "notes",
-        actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
-      },
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => [entry.space, entry.path, entry.actions])).toEqual([
+      [SPACE_ID, "notes", ["tinycloud.kv/get", "tinycloud.kv/sync"]],
+      [SPACE_ID, "notes/", ["tinycloud.kv/get", "tinycloud.kv/sync"]],
     ]);
   });
 });
@@ -530,14 +527,15 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     await (node.auth as NodeUserAuthorization).signIn();
 
     const entries = node.replicationSignInEntries();
-    expect(entries).toEqual([
-      {
+    expect(entries).toHaveLength(2);
+    for (const path of ["notes", "notes/"]) {
+      expect(entries).toContainEqual({
         service: "tinycloud.kv",
         space: SPACE_ID,
-        path: "notes",
+        path,
         actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
-      },
-    ]);
+      });
+    }
     // Parity (§4.6): the abilities handed to prepareSession carry the same
     // sync entry the restore check will require.
     const spaceAbilities = captured[0]!.spaceAbilities as Record<
@@ -620,7 +618,10 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     });
     (gated.auth as NodeUserAuthorization).setRestoredTinyCloudSession(fakeSession());
     // defaultActions grants an unrestricted root get; only the opt-in gate stands.
-    expect(gated.replicationSignInEntries().map((entry) => entry.path)).toEqual(["vault/keys"]);
+    const entries = gated.replicationSignInEntries();
+    expect(entries.map((entry) => entry.path).sort()).toEqual(["vault/keys", "vault/keys/"]);
+    expect(entries.every((entry) => entry.space === SPACE_ID)).toBe(true);
+    expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
   });
   test("account-primary space: entries target the account space id (account-registry modes)", () => {
     const accountSpaceId =
@@ -638,14 +639,13 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       (node.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
         fakeSession({ spaceId: accountSpaceId }),
       );
-      expect(node.replicationSignInEntries()).toEqual([
-        {
-          service: "tinycloud.kv",
-          space: accountSpaceId,
-          path: "notes",
-          actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
-        },
+      const entries = node.replicationSignInEntries();
+      expect(entries).toHaveLength(2);
+      expect(entries.map((entry) => [entry.space, entry.path])).toEqual([
+        [accountSpaceId, "notes"],
+        [accountSpaceId, "notes/"],
       ]);
+      expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
     }
   });
 
@@ -697,14 +697,13 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     (scoped.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
       fakeSession({ spaceId: secretsSpaceId }),
     );
-    expect(scoped.replicationSignInEntries()).toEqual([
-      {
-        service: "tinycloud.kv",
-        space: secretsSpaceId,
-        path: "vault/secrets/tokens",
-        actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
-      },
+    const entries = scoped.replicationSignInEntries();
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => [entry.space, entry.path])).toEqual([
+      [secretsSpaceId, "vault/secrets/tokens"],
+      [secretsSpaceId, "vault/secrets/tokens/"],
     ]);
+    expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
   });
 
 });
