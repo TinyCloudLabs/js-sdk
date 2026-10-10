@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { removeProfileReplicas } from "../lib/profile-replicas.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -635,6 +635,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const targetsSessionKey = kind === "signed-login" || (
           signedAudience !== undefined && principalDidEquals(signedAudience, node.sessionDid)
         );
+        if (!targetsSessionKey && kind === "compact") {
+          const signedExpiry = signedCompactUcanExpiry(imported.delegation.delegationHeader.Authorization);
+          if (signedExpiry !== undefined && signedExpiry.getTime() <= Date.now()) {
+            throw delegationExpiredError();
+          }
+        }
         let activated = false;
         let permissions = imported.permissions;
         if (targetsSessionKey) {

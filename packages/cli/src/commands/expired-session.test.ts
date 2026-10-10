@@ -62,8 +62,8 @@ afterAll(async () => {
   await rm(shareHome, { recursive: true, force: true });
 });
 
-/** A profile whose stored session is owner-signed and either expired or tampered. */
-async function seedProfile(home: string, posture: Posture, state: "expired" | "tampered" = "expired", localNodeUrl?: string): Promise<void> {
+/** A profile whose stored session is owner-signed and expired, live, or tampered. */
+async function seedProfile(home: string, posture: Posture, state: "expired" | "tampered" | "live" = "expired", localNodeUrl?: string): Promise<void> {
   const previousHome = process.env.TC_HOME;
   process.env.TC_HOME = home;
   try {
@@ -75,7 +75,7 @@ async function seedProfile(home: string, posture: Posture, state: "expired" | "t
     const manager = wasm.createSessionManager();
     const jwk = JSON.parse(manager.jwk("default")!);
     const sessionDid = manager.getDID("default");
-    const expiresAt = new Date(Date.now() + (state === "expired" ? -3_600_000 : 3_600_000)).toISOString();
+    const expiresAt = new Date(Date.now() + (state === "expired" ? -3_600_000 : state === "live" ? 7_200_000 : 3_600_000)).toISOString();
     const prepared = wasm.prepareSession({
       abilities: {
         capabilities: { "": ["tinycloud.capabilities/read"] },
@@ -177,6 +177,7 @@ async function seedImportedSession(
   home: string,
   profileName: string,
   seeded: { delegation: PortableDelegation; sessionDid: string; spaceId: string; jwk: object },
+  extras: Record<string, unknown> = {},
 ): Promise<void> {
   await withTinyCloudStateRoot(home, () => writeJsonAtomic(sessionPath(profileName), {
     delegationHeader: seeded.delegation.delegationHeader,
@@ -184,6 +185,7 @@ async function seedImportedSession(
     spaceId: seeded.spaceId,
     jwk: seeded.jwk,
     verificationMethod: seeded.sessionDid,
+    ...extras,
   }));
 }
 
@@ -370,6 +372,41 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
       await rm(home, { recursive: true, force: true });
     }
   }, 60_000);
+  // TC-674 regression: fails before the fix
+  test("rejects an expired, real cross-user compact grant without persisting it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-cross-user-expired-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      await seedProfile(home, "owner-openkey", "live");
+      const profile = await withTinyCloudStateRoot(home, async () =>
+        JSON.parse(await readFile(profileConfigPath("expired"), "utf8")) as { did: string });
+      const profileBefore = await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("expired"), "utf8"));
+      const sessionBefore = await withTinyCloudStateRoot(home, () => readFile(sessionPath("expired"), "utf8"));
+      const imported = await mintCompactDelegation({
+        audience: profile.did,
+        expSecs: expiry,
+        host: node.url.origin,
+      });
+      const artifactPath = join(home, "cross-user-expired.json");
+      await writeFile(artifactPath, JSON.stringify(imported.delegation));
+      requests.length = 0;
+      const result = await runBuiltCli(
+        home,
+        ["--profile", "expired", "--json", "auth", "import", artifactPath],
+        expiry * 1000,
+      );
+      expect(result).toMatchObject({ exitCode: 1, error: { code: "DELEGATION_EXPIRED" } });
+      const { readAdditionalDelegations } = await import("@tinycloud/operations/state");
+      const { readGrantHistory } = await import("../lib/permissions.js");
+      expect(await withTinyCloudStateRoot(home, () => readAdditionalDelegations("expired"))).toEqual([]);
+      expect(await withTinyCloudStateRoot(home, () => readGrantHistory("expired"))).toEqual([]);
+      expect(await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("expired"), "utf8"))).toBe(profileBefore);
+      expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("expired"), "utf8"))).toBe(sessionBefore);
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
   // TC-674 control: a live imported delegation still reads a real encrypted secret.
   test("imports a live hermetic delegation and reads its encrypted secret", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc-import-live-hermetic-"));
@@ -467,12 +504,36 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     }
   }, 60_000);
   // TC-674 regression: fails before the fix
+  test("context reports signed expiry rather than future unsigned imported metadata", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-imported-context-expiry-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      const seeded = await seedImportedProfile(home, "context-expiry", expiry);
+      await seedImportedSession(home, "context-expiry", seeded, {
+        expiresAt: new Date((expiry + 3600) * 1000).toISOString(),
+      });
+      requests.length = 0;
+      const context = await runBuiltCli(
+        home,
+        ["--profile", "context-expiry", "--json", "context"],
+        expiry * 1000,
+      );
+      expect(context.exitCode).toBe(0);
+      expect(JSON.parse(context.stdout)).toMatchObject({
+        session: { state: "expired", expiresAt: new Date(expiry * 1000).toISOString() },
+      });
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+  // TC-674 regression: fails before the fix
   test("rejects an older imported session before node access", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc-imported-old-expiry-"));
     const expiry = Math.floor(Date.now() / 1000) + 3600;
     try {
       const seeded = await seedImportedProfile(home, "older", expiry);
-      await seedImportedSession(home, "older", seeded);
+      await seedImportedSession(home, "older", seeded, { expiresAt: new Date((expiry + 3600) * 1000).toISOString() });
       requests.length = 0;
       for (const argv of [
         ["--profile", "older", "--json", "kv", "get", "KEY"],
@@ -488,6 +549,12 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
         });
         expect(requests).toEqual([]);
       }
+      const context = await runBuiltCli(home, ["--profile", "older", "--json", "context"], expiry * 1000);
+      expect(context.exitCode).toBe(0);
+      expect(JSON.parse(context.stdout)).toMatchObject({
+        session: { state: "expired", expiresAt: new Date(expiry * 1000).toISOString() },
+      });
+      expect(requests).toEqual([]);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -544,20 +611,19 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     }
   }, 60_000);
 
-  // TC-674 control: passes before and after
-  test("auth request without --grant probes local discovery using an expired session's fallback host", async () => {
-    const home = await mkdtemp(join(tmpdir(), "tc-auth-request-expired-"));
+  // TC-674 control: passes before and after; no grant is applied.
+  test("E-R1 emits an auth request using the expired session's fallback host", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-auth-request-expired-r1-"));
     const expiry = Math.floor(Date.now() / 1000) + 3600;
     try {
       const seeded = await seedImportedProfile(home, "requester", expiry, localNode.url.origin);
       await seedImportedSession(home, "requester", seeded);
       requests.length = 0;
       localRequests.length = 0;
-      const argv = [
+      const request = await runBuiltCli(home, [
         "--profile", "requester", "--json", "auth", "request",
         "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get", "--emit",
-      ];
-      const request = await runBuiltCli(home, argv, expiry * 1000);
+      ], expiry * 1000);
       expect(request.exitCode).toBe(0);
       expect(JSON.parse(request.stdout)).toMatchObject({ host: localNode.url.origin });
       const records = await withTinyCloudStateRoot(home, async () =>
@@ -565,9 +631,24 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
       expect(records[0]?.host).toBe(localNode.url.origin);
       expect(localRequests).toEqual(["GET /healthz", "GET /info"]);
       expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
 
+  // TC-674 regression: grant requires auth and must reject before discovery.
+  test("E-R2 grant request rejects an expired imported session before local probes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-auth-request-expired-r2-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      const seeded = await seedImportedProfile(home, "requester", expiry, localNode.url.origin);
+      await seedImportedSession(home, "requester", seeded);
+      requests.length = 0;
       localRequests.length = 0;
-      const granted = await runBuiltCli(home, [...argv, "--grant", "--yes"], expiry * 1000);
+      const granted = await runBuiltCli(home, [
+        "--profile", "requester", "--json", "auth", "request",
+        "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get", "--emit", "--grant", "--yes",
+      ], expiry * 1000);
       expect(granted.exitCode).toBe(3);
       expect(granted.error).toMatchObject({ code: "AUTH_REQUIRED" });
       expect(localRequests).toEqual([]);

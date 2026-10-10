@@ -211,9 +211,9 @@ describe("scoped first login", () => {
   }
 
   // TC-674 regression: fails before the fix
-  test("an expired imported session does not block scoped paste login", async () => {
+  test("signed expiry lets hinted paste login replace imported state despite future unsigned expiry", async () => {
     const exp = Math.floor(Date.now() / 1000) - 60;
-    const session = await persistImportedSession(exp);
+    const session = await persistImportedSession(exp, { expiresAt: new Date((exp + 3600) * 1000).toISOString() });
     expect(sessionExpiresAt(session)).toBe(new Date(exp * 1000).toISOString());
     let calls = 0;
     await refreshOpenKeySession("scoped", host, {

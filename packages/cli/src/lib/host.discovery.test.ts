@@ -74,7 +74,7 @@ async function configuredProfile(): Promise<void> {
   expect(infoChecks).toBe(0);
 });
 
-// TC-674 control: passes before and after
+// TC-674 new-API regression: requires completeDeferredLocalDiscovery; not a base-runnable control.
 test("deferred discovery completes while the context still uses its fallback", async () => {
   await configuredProfile();
   const ctx = {
