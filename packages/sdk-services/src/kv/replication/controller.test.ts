@@ -13,7 +13,7 @@ const identity = canonicalReplicationIdentity({ host: "https://node.example", sp
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus }: {
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes }: {
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -32,6 +32,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   afterPendingRead?: () => void | Promise<void>;
   statusImpl?: (call: number) => Promise<LocalReplicaStatus> | LocalReplicaStatus;
   inspectStatus?: (signal: AbortSignal) => Promise<LocalReplicaStatus | undefined>;
+  prefixes?: string[];
 } = {}) {
   let now = 1_000_000;
   let listReads = 0;
@@ -83,7 +84,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   };
   const authority = { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" as const } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime" as const, parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" as const }); }, async mint(_deviceDid: string, _prefix: string, signal: AbortSignal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } };
   const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
-  const createController = () => createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event) });
+  const createController = () => createKVReplication({ options: { ...options, prefixes, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event) });
   const controller = createController();
   return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
@@ -363,12 +364,14 @@ describe("pending record evidence boundaries", () => {
     expect(env.counters().opens).toBe(0);
   });
 
-  test("a persisted inspection error reports unavailable with its code", async () => {
+  test("locked persisted inspections report unavailable for every replica", async () => {
     const env = setup({
-      inspectStatus: async () => { throw Object.assign(new Error("read-only inspection failed"), { code: "SQLITE_READONLY" }); },
+      prefixes: ["notes", "docs"],
+      inspectStatus: async () => { throw Object.assign(new Error("database is locked"), { code: "REPLICA_BUSY" }); },
     });
     expect(await env.controller.status()).toMatchObject([
-      { state: "unavailable", reason: "replica_unavailable", errorCode: "SQLITE_READONLY" },
+      { prefix: "notes", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
+      { prefix: "docs", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
     ]);
     await env.controller.close();
   });

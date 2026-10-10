@@ -274,7 +274,7 @@ export class SqliteReplicaStore implements ReplicaStore {
     let db: SqliteDatabase | undefined;
     try {
       db = opener(dbPath, { readonly: true });
-      db.exec("PRAGMA busy_timeout = 3000");
+      db.exec("PRAGMA busy_timeout = 0");
       checkAbort();
       const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -290,6 +290,9 @@ export class SqliteReplicaStore implements ReplicaStore {
       }
       throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica changed during status inspection.");
     } catch (error) {
+      if (/SQLITE_BUSY|database is locked/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica is busy during status inspection.", undefined, { cause: error });
+      }
       throw storageError(error, "Inspecting the replica");
     } finally {
       db?.close();

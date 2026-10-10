@@ -128,6 +128,41 @@ describe("SQLite status inspection lifecycle", () => {
     expect(check?.status.lastSyncAt).toBe("2026-10-10T00:00:00.000Z");
   });
 
+  test("locked replicas fail inspection without blocking timers or sequential status", async () => {
+    const dirsToLock = [await makeStore(), await makeStore()];
+    const children = dirsToLock.map((dir) => {
+      const dbPath = join(dir, "replica.db");
+      const script = `const { Database } = require("bun:sqlite"); const db = new Database(${JSON.stringify(dbPath)}); db.exec("PRAGMA journal_mode=WAL; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE"); console.log("ready"); process.stdin.resume();`;
+      return Bun.spawn([process.execPath, "-e", script], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    });
+    const readers = children.map((child) => child.stdout.getReader());
+    try {
+      for (const reader of readers) expect(new TextDecoder().decode((await reader.read()).value)).toContain("ready");
+      const timerStarted = performance.now();
+      let timerFiredAt: number | undefined;
+      // This integration check measures event-loop responsiveness while real SQLite locks are held; fake timers cannot observe thread blocking.
+      const timer = new Promise<void>((resolve) => setTimeout(() => {
+        timerFiredAt = performance.now();
+        resolve();
+      }, 100));
+      const statusStarted = performance.now();
+      const results = await Promise.all(dirsToLock.map((dir) => SqliteReplicaStore.inspect(dir).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      )));
+      const statusDuration = performance.now() - statusStarted;
+      await timer;
+
+      expect(statusDuration).toBeLessThan(3_000);
+      expect(timerFiredAt! - timerStarted).toBeLessThan(250);
+      expect(results.every((result) => "error" in result && result.error.code === "REPLICA_BUSY")).toBe(true);
+    } finally {
+      for (const child of children) child.kill();
+      await Promise.all(children.map((child) => child.exited));
+      for (const reader of readers) reader.releaseLock();
+    }
+  });
+
 
   test("Bun releases database descriptors after inspection, cancellation, and repeated inspection", async () => {
     const dir = await makeStore();
