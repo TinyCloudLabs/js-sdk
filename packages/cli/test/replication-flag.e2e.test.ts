@@ -397,7 +397,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       app_id: "tc858-caveated-scope",
       space: "default",
       permissions: [
-        { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+        { service: "tinycloud.kv", path: "notes", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
       ],
     }));
     const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes"], { profile: "caveated-scope" });
