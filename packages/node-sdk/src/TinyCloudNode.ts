@@ -1884,6 +1884,9 @@ export class TinyCloudNode {
 
     if (!bootstrapped) {
       this.scheduleAccountRegistrySync();
+      // The registry sync performs writes on the same node connection. Drain
+      // its best-effort queue before callers can issue their first KV write.
+      await this.accountRegistryTail;
     }
 
     this.notificationHandler.success("Successfully signed in");

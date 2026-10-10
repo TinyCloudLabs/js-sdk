@@ -174,6 +174,41 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   return { node, wasm, syncAccessible };
 }
 
+describe("sign-in account registry barrier", () => {
+  test("waits for queued registry writes before resolving", async () => {
+    const { node } = makeNode();
+    const registry = Promise.withResolvers<void>();
+    const scheduled = Promise.withResolvers<void>();
+    const core = Reflect.get(node, "tc");
+    if (core === null || typeof core !== "object") throw new Error("TinyCloud core is unavailable");
+    const auth = Reflect.get(node, "auth");
+    if (auth === null || typeof auth !== "object") throw new Error("Node authorization is unavailable");
+    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+    Reflect.set(core, "signIn", async () => {});
+    Reflect.set(node, "initializeServices", async () => {});
+    Reflect.set(node, "registerPrimarySessionGrant", () => {});
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
+    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+    Reflect.set(node, "scheduleAccountRegistrySync", () => {
+      Reflect.set(node, "accountRegistryTail", registry.promise);
+      scheduled.resolve();
+    });
+
+    let settled = false;
+    const signIn = node.signIn().then(() => {
+      settled = true;
+    });
+    await scheduled.promise;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    registry.resolve();
+    await signIn;
+    expect(settled).toBe(true);
+  });
+});
+
 describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
   test("default non-manifest recap (no space entry) → skips syncAccessible", async () => {
     const { node, wasm, syncAccessible } = makeNode();

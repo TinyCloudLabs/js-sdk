@@ -686,7 +686,8 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     });
     try {
       await node.signIn();
-      expect((await node.kv.put("notes", "exact")).ok).toBe(true);
+      const exactWrite = await node.kv.put("notes", "exact");
+      expect(exactWrite.ok, JSON.stringify(exactWrite.ok ? undefined : exactWrite.error)).toBe(true);
       expect((await node.kv.put("notes/a", "descendant")).ok).toBe(true);
       await node.replication!.sync();
       expect(await node.replication!.status()).toMatchObject([

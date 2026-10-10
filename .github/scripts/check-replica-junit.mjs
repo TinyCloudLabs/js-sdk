@@ -20,11 +20,16 @@ for (const suite of suites) {
     failed = true;
     continue;
   }
-  const cases = [...xml.matchAll(/<testcase\b[^>]*(?:\/>|>[\s\S]*?<\/testcase>)/g)].map(([testcase]) => testcase);
+  const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map(([testcase]) => testcase);
   const skipped = cases.filter((testcase) => /<skipped\b/.test(testcase)).length;
-  console.log(`${suite.name}: tests=${cases.length} skipped=${skipped} minimum=${suite.min}`);
+  const failures = cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length;
+  console.log(`${suite.name}: tests=${cases.length} failures=${failures} skipped=${skipped} minimum=${suite.min}`);
   if (cases.length < suite.min) {
     console.error(`${suite.name}: ran ${cases.length} tests; expected at least ${suite.min}`);
+    failed = true;
+  }
+  if (failures !== 0) {
+    console.error(`${suite.name}: ${failures} test(s) failed`);
     failed = true;
   }
   if (skipped !== 0) {
