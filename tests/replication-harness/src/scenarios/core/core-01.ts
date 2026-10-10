@@ -42,7 +42,7 @@ export const core01: Scenario<"sdk>cli"> = {
     ctx.check("CLI replica list succeeded", replicaList.ok, replicaList);
     ctx.eq("CLI replica list source", replicaList.read?.source, "replica");
     ctx.eq("SDK network list source", sourceList.read?.source, "network");
-    const listsPresent = sourceList.keys !== undefined && replicaList.keys !== undefined;
+    const listsPresent = Array.isArray(sourceList.keys) && Array.isArray(replicaList.keys);
     ctx.check("SDK network and CLI replica keys are present", listsPresent, { sourceList, replicaList });
     if (listsPresent) ctx.eq("CLI replica list equals SDK network list", replicaList.keys, sourceList.keys);
 
