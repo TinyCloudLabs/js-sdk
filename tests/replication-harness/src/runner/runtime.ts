@@ -19,6 +19,9 @@ export interface HarnessClientFactories {
 export interface HarnessRuntimeAdapters extends HarnessClientFactories {
   resolveSut: SutResolver;
   collectClientSecrets: ClientSecretCollector;
+  resolveAnchoredPackage(prefix: string, name: string): Promise<{ packageJson: string; data: Record<string, unknown> }>;
+  checkInstalledIntegrity(prefix: string, packageJson: string, name: string, expected?: string): Promise<void>;
+  resolveSdkLoader(root: string, source: "workspace" | "published"): Promise<string>;
 }
 
 export interface HarnessRuntime {
@@ -61,6 +64,9 @@ export async function loadS2RuntimeAdapters(): Promise<HarnessRuntimeAdapters> {
     createCliClient: required<ClientConstructor>(cli, "createCliClient", "cli-client.ts"),
     createSdkClient: required<ClientConstructor>(sdk, "createSdkClient", "sdk-client.ts"),
     createSharedFixture: required<SharedFixtureFactory>(shared, "createSharedEndpointStorageDeviceFixture", "shared-fixture.ts"),
+    resolveAnchoredPackage: required<(prefix: string, name: string) => Promise<{ packageJson: string; data: Record<string, unknown> }>>(sut, "resolveAnchoredPackage", "sut.ts"),
+    checkInstalledIntegrity: required<(prefix: string, packageJson: string, name: string, expected?: string) => Promise<void>>(sut, "checkInstalledIntegrity", "sut.ts"),
+    resolveSdkLoader: required<(root: string, source: "workspace" | "published") => Promise<string>>(sut, "resolveSdkLoader", "sut.ts"),
     resolveSut: required<SutResolver>(sut, "resolveSut", "sut.ts"),
     collectClientSecrets: async (_client, spec, runId) => {
       const registered = registeredIdentityKey(runId, spec.identity);

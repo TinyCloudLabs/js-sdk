@@ -29,10 +29,11 @@ export interface GateRuntime {
   exportSutArtifacts(outDir: string, sut: RunInputs["sut"]): Promise<void>;
   topologyFactory: TopologyFactory;
   collectClientSecrets?: (client: KvClient, spec: ClientSpec, runId: string) => Promise<readonly string[]>;
+  junitPrecondition?(subject: Subject, directory?: string): Promise<JunitPrecondition | null>;
   fetchInfo?(url: string): Promise<{ version: string; features: string[] }>;
-  junitPrecondition?(subject: Subject): Promise<JunitPrecondition | null>;
   probeRequirement?: ProbeRequirement;
-  createRunEnvironment(inputs: RunInputs, resultsDir: string): Promise<RunEnvironment> | RunEnvironment;
+  createRunEnvironment(inputs: RunInputs, resultsDir: string, inputsDir?: string): Promise<RunEnvironment> | RunEnvironment;
+  disposeRunEnvironment?(environment: RunEnvironment): Promise<void>;
 }
 
 let runtime: GateRuntime | undefined;
@@ -140,7 +141,8 @@ async function buildResolveOptions(args: { options: Record<string, string | true
     ? `${process.env.GITHUB_SERVER_URL}/${event.repository.full_name}/actions/runs/${runIdValue}` : undefined;
   const subject = subjectFromEvent(event, { eventName, ref, sha, ...(runIdValue ? { runId: runIdValue } : {}),
     ...(runAttemptValue ? { runAttempt: Number(runAttemptValue) } : {}), ...(runUrl ? { runUrl } : {}) });
-  const junit = await services.junitPrecondition?.(subject);
+  const junitDir = option(args.options, "junit-dir");
+  const junit = await services.junitPrecondition?.(subject, junitDir);
   const tierArg = parseList(option(args.options, "tier"));
   const backendArg = parseList(option(args.options, "backend"));
   const tiers = dispatchString(dispatch, "tier", "tiers") ? selectedTiers(dispatch) : (tierArg.length ? tierArg as Tier[] : selectedTiers(dispatch));
@@ -250,6 +252,18 @@ async function resolveScenarioImages(rows: ReturnType<typeof expandScenarios>, i
   }
   return images;
 }
+export function assertLegSutMatches(expected: RunInputs["sut"], actual: RunEnvironment["sut"]): void {
+  if (expected.source !== actual.source) throw new Error(`SUT_SOURCE_MISMATCH: expected ${expected.source}, got ${actual.source}`);
+  if (expected.source === "workspace") {
+    if (expected.gitSha !== actual.gitSha) throw new Error(`SUT_GIT_SHA_MISMATCH: expected ${expected.gitSha}, got ${actual.gitSha}`);
+    if (expected.distSha256 !== actual.distSha256) throw new Error(`SUT_DIST_SHA256_MISMATCH: expected ${expected.distSha256}, got ${actual.distSha256}`);
+    return;
+  }
+  if (expected.lockfileSha256 !== actual.lockfileSha256) throw new Error(`SUT_LOCKFILE_SHA256_MISMATCH: expected ${expected.lockfileSha256}, got ${actual.lockfileSha256}`);
+  if (expected.cli.integrity !== actual.cli.integrity || expected.nodeSdk.integrity !== actual.nodeSdk.integrity) {
+    throw new Error("SUT_PACKAGE_INTEGRITY_MISMATCH: installed CLI or node-sdk integrity differs from resolved inputs");
+  }
+}
 
 async function runS3aLeg(entry: LocalGatePlan["matrix"][number], inputs: RunInputs, resultsDir: string, inputsPath: string, services: GateRuntime): Promise<LegEvidence> {
   await mkdir(resultsDir, { recursive: true });
@@ -260,8 +274,8 @@ async function runS3aLeg(entry: LocalGatePlan["matrix"][number], inputs: RunInpu
   const context = contextFor(inputs, tiers, [selected.backend]);
   const rows = expandScenarios(scenarioRegistry, { tiers, set: selected.set, backends: [selected.backend] }, context, services.probeRequirement);
   const images = await resolveScenarioImages(rows, inputs, services);
-  const createdEnvironment = await services.createRunEnvironment(inputs, resultsDir);
-  if (canonicalSha256(createdEnvironment.sut) !== canonicalSha256(inputs.sut)) throw new Error("runtime SUT does not match resolved inputs");
+  const createdEnvironment = await services.createRunEnvironment(inputs, resultsDir, dirname(inputsPath));
+  assertLegSutMatches(inputs.sut, createdEnvironment.sut);
   const env: RunEnvironment = { ...createdEnvironment, image: (ref) => {
     const expected = images.get(imageRefKey(ref));
     if (!expected) throw new Error(`image was not pre-resolved: ${imageRefKey(ref)}`);
@@ -274,7 +288,7 @@ async function runS3aLeg(entry: LocalGatePlan["matrix"][number], inputs: RunInpu
   const reportBase = createRunReportBase({ kind: "leg", runId: reportId, startedAt: new Date().toISOString(), tiers, set: selected.set, only: null,
     backends: [selected.backend], concurrency: Number(process.env.TC893_CONCURRENCY ?? 4), argv: process.argv.slice(2), filtered: false,
     subject: inputs.subject, harnessSha: inputs.harnessSha, harnessDirty: harnessDirty(), inputsSha256: inputs.inputsSha256, manifestSha256,
-    environment: reportEnvironment(), sut: inputs.sut, image: inputs.image });
+    environment: reportEnvironment(), sut: env.sut, image: inputs.image });
   const clientArtifactsRoot = await mkdtemp(join(tmpdir(), "tc893-client-captures-"));
   const secrets: string[] = [];
   try {
@@ -286,7 +300,8 @@ async function runS3aLeg(entry: LocalGatePlan["matrix"][number], inputs: RunInpu
     return { name: entry.name, directory: resultsDir, report: output.report, reportSha256: createHash("sha256").update(bytes).digest("hex") };
   } finally {
     await rm(clientArtifactsRoot, { recursive: true, force: true });
-  }
+    await services.disposeRunEnvironment?.(createdEnvironment);
+}
 }
 
 export async function runLegCommand(args: { options: Record<string, string | true> }): Promise<void> {

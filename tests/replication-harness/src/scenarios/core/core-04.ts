@@ -1,6 +1,8 @@
 import type { Scenario } from "../../contracts/scenario";
 import type { ClientKind } from "../../contracts/common";
-import { checkWrite, flagOn, oneNode, ownerClient, replication, replicationBound, text, waitUntil } from "./shared";
+import { waitFor } from "../../contracts/clock";
+import { checkWrite, flagOn, oneNode, ownerClient, replication, replicationBound, text } from "./shared";
+
 
 export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
   id: "CORE-04",
@@ -37,8 +39,8 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
     ctx.eq("warm read source", warmedRead.read?.source, "replica");
 
     const update = await writer.put("notes/b", v2, { ...callOptions, ...flagOn(writer) });
-    checkWrite(ctx, writer, update, "write v2", true);
     const writeAt = ctx.clock.now();
+    checkWrite(ctx, writer, update, "write v2", true);
 
     const defaultRead = await reader.get("notes/b", { ...callOptions, ...flagOn(reader), ...replicationBound(reader, 60_000) });
     ctx.check("immediate bounded read succeeds", defaultRead.ok && defaultRead.found, defaultRead);
@@ -52,9 +54,9 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
     }
 
     let sawV2 = immediateValue === "v2";
-    let visibleAt = sawV2 ? ctx.clock.now() : undefined;
+    let visibleAt: number | undefined = sawV2 ? ctx.clock.now() : undefined;
     if (!sawV2) {
-      await waitUntil(ctx, reader, async () => {
+      await waitFor(ctx.clock, async () => {
         const result = await reader.get("notes/b", { ...callOptions, ...flagOn(reader), ...replicationBound(reader, 3_000) });
         ctx.check("bounded polling read succeeds", result.ok && result.found, result);
         const value = text(result.value);
@@ -67,7 +69,7 @@ export const core04: Scenario<"sdk>cli" | "cli>sdk"> = {
         sawV2 = true;
         visibleAt = ctx.clock.now();
         return result;
-      }, "reader observes v2 within its deadline", 100);
+      }, { deadlineMs: Math.max(0, ctx.deadline(reader) - (ctx.clock.now() - writeAt)), describe: "reader observes v2 within its deadline", intervalMs: 100, signal: ctx.signal });
     }
     ctx.check("reader observed v2", sawV2);
     const afterVisibility = await reader.get("notes/b", { ...callOptions, ...flagOn(reader), ...replicationBound(reader, 3_000) });

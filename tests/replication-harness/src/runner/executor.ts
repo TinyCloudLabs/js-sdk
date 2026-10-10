@@ -8,8 +8,8 @@ import type { RunEnvironment, TopologyFactory, Topology, DisposeReport } from ".
 import type { ScenarioResult } from "../contracts/report";
 import type { ScenarioRow } from "./registry";
 import { createScenarioContext, ScenarioSkip, AssertionFailure, type ScenarioContextState, type ScenarioArtefactFile, writeScenarioArtefacts, normalizeArtefactName } from "./context";
+import { redactBytes, redactText } from "./redact";
 import { initialResult } from "./status";
-import { redactText } from "./redact";
 
 export type ScenarioExecutor = {
   executeRow(row: ScenarioRow, signal: AbortSignal): Promise<ScenarioResult>;
@@ -42,7 +42,8 @@ async function indexCollectedArtefacts(files: readonly ScenarioArtefactFile[], d
       await mkdir(dirname(target), { recursive: true });
       await rename(source, target);
     }
-    const bytes = await readFile(target);
+    const bytes = redactBytes(await readFile(target), secrets);
+    await writeFile(target, bytes);
     indexed.push({ path: safeName, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") });
   }
   return indexed;

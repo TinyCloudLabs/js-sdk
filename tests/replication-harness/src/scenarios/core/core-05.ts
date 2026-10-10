@@ -1,6 +1,6 @@
 import type { Scenario } from "../../contracts/scenario";
 import type { ClientKind } from "../../contracts/common";
-import { checkWrite, flagOn, oneNode, ownerClient, replication, replicationBound, waitUntil } from "./shared";
+import { checkWrite, flagOn, listHasOmission, oneNode, ownerClient, replication, replicationBound, waitUntil } from "./shared";
 
 export const core05: Scenario<"sdk>cli" | "cli>sdk"> = {
   id: "CORE-05",
@@ -46,7 +46,8 @@ export const core05: Scenario<"sdk>cli" | "cli>sdk"> = {
     const replicaList = await reader.list("notes/", readerOptions);
     ctx.check("reader replica list succeeds", replicaList.ok, replicaList);
     ctx.eq("list after deletion comes from replica", replicaList.read?.source, "replica");
-    ctx.check("list omits notes/b", !replicaList.keys?.includes("notes/b"), replicaList.keys);
+    ctx.check("replica list keys are present", replicaList.keys !== undefined, replicaList);
+    ctx.check("list omits notes/b", listHasOmission(replicaList.keys, "notes/b"), replicaList.keys);
 
     await ctx.topo.proxy("client:r->a").disable({ signal: ctx.signal });
     const offline = await reader.get("notes/b", { ...readerOptions, ...replicationBound(reader, 0) });

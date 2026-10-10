@@ -49,6 +49,10 @@ export function flagOn(client: KvClient): { flag?: "on" } {
 }
 
 export function replicationBound(client: KvClient, maxStalenessMs: number): { replication?: { maxStalenessMs: number } } {
-  return client.kind === "cli" ? { replication: { maxStalenessMs } } : {};
+  return { replication: { maxStalenessMs } };
+}
+
+export function listHasOmission(keys: string[] | undefined, key: string): boolean {
+  return keys !== undefined && !keys.includes(key);
 }
 

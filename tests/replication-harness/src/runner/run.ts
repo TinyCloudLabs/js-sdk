@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { redactValue } from "./redact";
 import { AssertionFailure, ScenarioSkip } from "./context";
 import type { Clock } from "../contracts/clock";
 import type { RunReport, ScenarioResult } from "../contracts/report";
@@ -83,7 +87,16 @@ export async function runRows(options: RunRowsOptions): Promise<RunRowsOutput> {
   const remaining = options.rows.filter((row) => !preflights.includes(row) && !(preflightFailed && row.tier === "core"));
   const scheduled = await scheduleRows(remaining, options.concurrency, addRow);
   results.push(...scheduled.map(({ value }) => value));
-  if (options.runSignal?.aborted) interrupted = true;
+  for (const result of results) {
+    const rowDir = join(options.reportDirectory, result.artefactDir);
+    const resultPath = join(rowDir, "result.json");
+    const resultForFile = redactValue({ ...result, artefacts: result.artefacts.filter((file) => file.path !== "result.json") }, options.secrets ?? []);
+    const bytes = Buffer.from(`${JSON.stringify(resultForFile, null, 2)}\n`);
+    await mkdir(rowDir, { recursive: true });
+    await writeFile(resultPath, bytes);
+    result.artefacts = [...result.artefacts.filter((file) => file.path !== "result.json"),
+      { path: "result.json", bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") }];
+  }
   const quarantined = applyQuarantine(results, options.quarantine ?? await loadQuarantine());
   const finishedAt = new Date(options.clock.wallNow()).toISOString();
   const report: RunReport = { ...options.report, startedAt: options.report.startedAt || new Date(startWall).toISOString(), finishedAt,

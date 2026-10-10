@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Scenario } from "../src/contracts/scenario";
 import type { ScenarioResult } from "../src/contracts/report";
 import type { RunContextView } from "../src/contracts/scenario";
@@ -214,9 +214,14 @@ describe("S3a scenario expansion", () => {
         await writeFile(join(captureDir, "stderr.log"), `client stderr ${secret}\n`);
         await writeFile(join(captureDir, "events.jsonl"), `${JSON.stringify({ token: secret })}\n`);
         const client = { id: "c1", kind: "cli", capabilities: new Set(), home: () => home, artifactDirectoryPath: () => captureDir } as unknown as KvClient;
-        const clients = new Map([["c1", client]]);
-        return { id: options.topoId, backend: options.backend, spec: topologySpec, client: (id: string) => clients.get(id)!,
-          collectArtefacts: async (outputDir: string) => ({ dir: outputDir, files: [] }),
+        return { id: options.topoId, backend: options.backend, spec: topologySpec, client: (id: string) => id === "c1" ? client : undefined,
+          collectArtefacts: async (outputDir: string) => {
+            const nodeLog = join(outputDir, "nodes/n1.log");
+            await mkdir(dirname(nodeLog), { recursive: true });
+            await writeFile(nodeLog, `node secret ${secret}\n`);
+            const bytes = await readFile(nodeLog);
+            return { dir: outputDir, files: [{ path: "nodes/n1.log", bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+          },
           dispose: async () => ({ removed: [], leaked: [], errors: [], clients: [] }) } as unknown as Topology;
       } };
       const rows = expandScenarios([fixtureScenario], { tiers: ["edge"], set: null, backends: ["sqlite"] }, view);
@@ -243,6 +248,12 @@ describe("S3a scenario expansion", () => {
         expect(file.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
       }
       expect(await readFile(join(dir, row.artefactDir, "clients/c1/stderr.log"), "utf8")).toContain("[REDACTED]");
+      const nodeLogEntry = row.artefacts.find((file) => file.path === "nodes/n1.log");
+      expect(nodeLogEntry).toBeDefined();
+      const nodeLog = await readFile(join(dir, row.artefactDir, "nodes/n1.log"));
+      expect(nodeLog.toString("utf8")).not.toContain(secret);
+      expect(nodeLog.toString("utf8")).toContain("[REDACTED]");
+      expect(nodeLogEntry?.sha256).toBe(createHash("sha256").update(nodeLog).digest("hex"));
       const scenarioLog = await readFile(join(dir, row.artefactDir, "scenario.log"), "utf8");
       expect(scenarioLog).not.toContain(secret);
       expect(scenarioLog).toContain("[REDACTED]");

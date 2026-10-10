@@ -55,23 +55,19 @@ export const core00: Scenario = {
     const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(actualNodeVersion);
     ctx.check("HARNESS_NODE --version succeeds", nodeVersionExit === 0, { exit: nodeVersionExit, error: nodeVersionError });
     ctx.check("HARNESS_NODE runtime is at least 22.13", Boolean(match) && (Number(match?.[1]) > 22 || (Number(match?.[1]) === 22 && Number(match?.[2]) >= 13)), actualNodeVersion);
-    const root = ctx.env.sut.root;
-    ctx.check("resolved SUT root is available for SDK preflight", typeof root === "string", ctx.env.sut);
-    if (!root) return;
-    const sdkLoader = ctx.env.sut.source === "published"
-      ? join(root, "tc893-load-node-sdk.mjs")
-      : join(root, "node_modules", ".tc893", "load-node-sdk.mjs");
+    const sdkEntry = ctx.env.sut.nodeSdk.entry;
+    ctx.check("resolved SDK entry is available for SDK preflight", typeof sdkEntry === "string", ctx.env.sut);
+    if (!sdkEntry) return;
     const replicaDir = join(ctx.env.resultsDir, ctx.env.runId, ctx.topo.id, "preflight-replica");
     await mkdir(replicaDir, { recursive: true, mode: 0o700 });
     const source = [
-      'import { pathToFileURL } from "node:url";',
-      'const { sdk } = await import(pathToFileURL(process.env.TC893_LOADER).href);',
+      'const sdk = await import(process.env.TC893_SDK_ENTRY);',
       'const storage = sdk.sqliteReplicaStorage({ dir: process.env.TC893_REPLICA_DIR });',
       'const node = new sdk.TinyCloudNode({ host: "http://127.0.0.1:1", domain: "127.0.0.1", autoCreateSpace: false, autoBootstrapAccount: false, enablePublicSpace: false, replication: { enabled: true, storage, prefixes: ["notes/"], mode: "foreground" } });',
-      'process.stdout.write(JSON.stringify({ hasReplication: "replication" in node }));',
+      'process.stdout.write(JSON.stringify({ replication: node.replication }));',
     ].join("\n");
     const processResult = Bun.spawn([process.env.HARNESS_NODE ?? "node", "--input-type=module", "-e", source], {
-      env: { PATH: process.env.PATH, TC893_LOADER: sdkLoader, TC893_REPLICA_DIR: replicaDir },
+      env: { PATH: process.env.PATH, TC893_SDK_ENTRY: sdkEntry, TC893_REPLICA_DIR: replicaDir },
       stdout: "pipe", stderr: "pipe", signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(15_000)]),
     });
     const [exit, output, error] = await Promise.all([
@@ -80,7 +76,7 @@ export const core00: Scenario = {
       new Response(processResult.stderr).text(),
     ]);
     ctx.check("SDK TinyCloudNode preflight process succeeds", exit === 0, { exit, error });
-    const probe = JSON.parse(output) as { hasReplication: boolean };
-    ctx.check("TinyCloudNode constructed with replication exposes node.replication", probe.hasReplication, probe);
+    const probe = JSON.parse(output) as { replication?: unknown };
+    ctx.check("TinyCloudNode constructed with replication has a defined node.replication value", probe.replication !== undefined, probe);
   },
 };

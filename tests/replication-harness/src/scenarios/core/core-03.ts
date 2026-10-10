@@ -29,6 +29,8 @@ export const core03: Scenario<"cli" | "sdk"> = {
     const deletion = await client.del("notes/k", options);
     const missing = await client.get("notes/k", options);
     sequenceEvents.push(...deletion.events, ...missing.events);
+    if (client.kind === "sdk") ctx.check("SDK delete succeeded", deletion.ok, deletion);
+    if (client.kind === "sdk") ctx.check("SDK missing get succeeded", missing.ok, missing);
     if (client.kind === "cli") ctx.eq("CLI missing key exit code", missing.exit, 4);
     ctx.check("deleted key is not found", !missing.found, missing);
     ctx.check("deleted key does not return prior bytes", !missing.value || Buffer.compare(missing.value, deletedValue) !== 0, missing);

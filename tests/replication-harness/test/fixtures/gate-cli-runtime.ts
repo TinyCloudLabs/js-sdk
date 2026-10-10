@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJunitPrecondition } from "../../src/gate/junit";
 import { configureGateRuntime } from "../../bin/gate-adapters";
 import { registerScenarios, scenarioRegistry } from "../../src/runner/registry";
 import type { Scenario } from "../../src/contracts/scenario";
@@ -66,7 +67,8 @@ export function registerGateRuntime(configure: typeof configureGateRuntime): voi
       image: () => inputs.image, slackMs: 0, teardownMs: 100,
     }),
     fetchInfo: async () => ({ version: "1.20.0", features: ["replication-v1"] }),
-    junitPrecondition: async (subject) => {
+    junitPrecondition: async (subject, directory) => {
+      if (directory) return readJunitPrecondition(directory, subject);
       if (subject.event === "pull_request") return {
         schema: "tc893.junit-precondition/v1", minimumsVersion: 1, testedSha: subject.headSha!,
         association: { prNumber: subject.prNumber!, headSha: subject.headSha!, baseSha: subject.baseSha! },
