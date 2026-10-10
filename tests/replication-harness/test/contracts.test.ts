@@ -152,14 +152,16 @@ describe("serialized contracts", () => {
     expect(validAggregate.companion[0].passed).toBe(false);
   });
 
-  test("CLI runs the owned list command and exposes owned command boundaries", async () => {
-    const owners = { manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b", doctor: "S1", gc: "S1" };
+  test("CLI runs S3a list/run wiring and preserves S1/S3b command ownership", async () => {
+    const owners = { manifest: "S3b", resolve: "S3b", aggregate: "S3b", "verify-aggregate": "S3b" };
     for (const [command, slice] of Object.entries(owners) as [Command, string][]) {
       expect(parseArgs([command]).command).toBe(command);
       await expect(runCommand([command])).rejects.toThrow(`${command} is owned by ${slice}`);
     }
     await expect(runCommand(["run"])).rejects.toThrow("run requires the topology runner to be configured");
     await expect(runCommand(["list"])).resolves.toBeUndefined();
+    expect(parseArgs(["doctor"]).command).toBe("doctor");
+    expect(parseArgs(["gc", "--older-than", "2h"])).toEqual({ command: "gc", positionals: [], options: { "older-than": "2h" } });
     expect(parseArgs(["verify-aggregate", "aggregate.json", "--gate", "tc858-phase1-beta", "--print", "cli.version"]))
       .toEqual({ command: "verify-aggregate", positionals: ["aggregate.json"], options: { gate: "tc858-phase1-beta", print: "cli.version" } });
   });
