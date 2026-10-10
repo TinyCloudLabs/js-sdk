@@ -80,9 +80,12 @@ conclusion even if every serialized row says `pass`.
 
 
 `aggregate` exits 0 when the core gate passes, 3 when it fails, and 1 when
-a non-gate run has any non-passing or quarantined row. Companion verdicts do
-not alter the core gate exit status; `verify-aggregate` maps companion failure
-to the separate escalation status 5.
+a non-gate run has any non-passing or quarantined row, a failed or
+cancelled leg-job conclusion, or missing or mismatched matrix evidence
+(a leg absent from the matrix, an extra leg, or a mismatched
+`inputsSha256`). Companion verdicts do not alter the core gate exit
+status; `verify-aggregate` maps companion failure to the separate
+escalation status 5.
 
 ### D1 fail-fast production smoke
 
