@@ -3,7 +3,7 @@ import { ErrorCodes, err, ok, serviceError, type Result } from "../../types";
 import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
 import { kvPrefixCovers, requiresSecretsOptIn } from "./scope";
 import { classifyWriteOutcome } from "./outcome";
-import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, pinnedKeys, settle } from "./pendingWrites";
+import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, emptyPendingState, pinnedKeys, settle } from "./pendingWrites";
 import { localGet, type LocalGetResponse } from "./localResponse";
 import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
@@ -13,7 +13,8 @@ const CLOSE_TIMEOUT_MS = 3_000;
 const STATUS_REFRESH_TIMEOUT_MS = CLOSE_TIMEOUT_MS;
 type SyncAbortCause = "timeout" | "caller" | "close" | "purge";
 interface SyncContext { abortCause?: SyncAbortCause }
-interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; syncContext?: SyncContext; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean }
+interface StatusInspection { abort: AbortController; settled: Promise<void> }
+interface Opened { handle?: KVReplicaHandle; opening?: Promise<KVReplicaHandle>; sync?: Promise<LocalSyncResult>; syncContext?: SyncContext; abort?: AbortController; mintAbort?: AbortController; timer?: () => void; lastError?: string; reason?: ReplicationReason; strategy?: "session" | "minted" | "installed"; retryAt?: number; failures?: number; unsupported?: boolean; authorityRevoked?: boolean }
 const nowDate = (now: number) => new Date(now).toISOString();
 const errorCode = (e: unknown): string => typeof e === "object" && e !== null && "code" in e && typeof e.code === "string" ? e.code : "REPLICA_UNAVAILABLE";
 function raceSignal<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -30,13 +31,24 @@ function raceSignal<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
 export function createKVReplication(deps: KVReplicationDeps): KVReplicationController {
   const { options, mode, storage, identity, session, authority, pending, scheduler } = deps;
   const replicas = new Map<string, Opened>();
+  const statusInspections = new Set<StatusInspection>();
   let isClosed = false;
   let purgeStarted = false;
+  let purgeInProgress = false;
   let previous = deps.previous;
   let pinnedStateReported = false;
   const inProcessProof = new Set<string>();
   const emit = (event: ReplicationEventInput) => emitEvent(deps.emit, scheduler, event);
   const configuredPrefix = (path: string) => options.prefixes.find((prefix) => kvPrefixCovers(prefix, path));
+  function recordRevocation(prefix: string, error: unknown): void {
+    if (errorCode(error) !== "GRANT_REVOKED") return;
+    const state = replicas.get(prefix) ?? {};
+    state.authorityRevoked = true;
+    state.reason = "grant_revoked";
+    state.lastError = "GRANT_REVOKED";
+    replicas.set(prefix, state);
+  }
+
 
   async function open(prefix: string): Promise<KVReplicaHandle> {
     if (isClosed || purgeStarted) throw Object.assign(new Error("Replication controller is closed"), { code: "REPLICA_CLOSED" });
@@ -101,7 +113,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     })();
     try { return await state.opening; } catch (error) {
       const code = errorCode(error);
-      state.reason = "replica_unavailable";
+      recordRevocation(prefix, error);
+      if (code !== "GRANT_REVOKED") state.reason = "replica_unavailable";
       state.lastError = code;
       state.failures = (state.failures ?? 0) + 1;
       if (code === "RUNTIME_UNSUPPORTED") state.unsupported = true;
@@ -151,7 +164,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         emit({ type: "replication.sync", space: session.space, replica: prefix, trigger, outcome: "ok", durationMs: scheduler.now() - started, lagMs: null, pendingCleared: cleared, pages: result.pages, changes: result.changes, deleted: result.deleted, fetched: result.fetched, contentMissing: result.contentMissing, coverage: result.coverage });
         return result;
       } catch (error) {
-        const code = errorCode(error); state.lastError = code;
+        const code = errorCode(error); state.lastError = code; recordRevocation(prefix, error);
         emit({ type: "replication.sync", space: session.space, replica: prefix, trigger, outcome: abort.signal.aborted ? "aborted" : "error", class: code === "NETWORK_ERROR" || code === "TIMEOUT" ? "offline" : "node", code, durationMs: scheduler.now() - started, lagMs: null });
         throw error;
       } finally { signal?.removeEventListener("abort", abortFromCaller); state.abort = undefined; }
@@ -428,6 +441,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     let fresh: Awaited<ReturnType<typeof freshness>>;
     try { fresh = await freshness(prefix, handle, r.signal); }
     catch (error) {
+      recordRevocation(prefix, error);
       if (r.signal.aborted) return abortedResult(r.signal);
       const value = await r.network();
       readEvent("get", r.path, prefix, "network", "replica_error", value.ok ? "found" : "error", started, { code: errorCode(error) });
@@ -454,6 +468,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       try { validateReadMeta(local.meta); }
       catch (error) {
         const code = errorCode(error);
+        recordRevocation(prefix, error);
         const value = await r.network();
         readEvent("get", r.path, prefix, "network", reasonForReadMetaCode(code), value.ok ? "found" : "error", started, { code });
         return value;
@@ -478,6 +493,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       readEvent("get", r.path, prefix, "replica", reason, result.ok ? "found" : result.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started, event);
       return result as LocalGetResponse<T>;
     } catch (error) {
+      recordRevocation(prefix, error);
       if (r.signal.aborted) return abortedResult(r.signal);
       const value = await r.network();
       readEvent("get", r.path, prefix, "network", "replica_error", value.ok ? "found" : "error", started, { code: errorCode(error) });
@@ -519,6 +535,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     let fresh: Awaited<ReturnType<typeof freshness>>;
     try { fresh = await freshness(prefix, handle, r.signal); }
     catch (error) {
+      recordRevocation(prefix, error);
       if (r.signal.aborted) return abortedResult(r.signal);
       if (cursor && decoded) return restart();
       const result = await r.network();
@@ -558,6 +575,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     } catch (error) {
       if (r.signal.aborted) return abortedResult(r.signal);
       const code = errorCode(error);
+      recordRevocation(prefix, error);
       if (cursor && decoded) return restart();
       const reason = reasonForReadMetaCode(code);
       const result = await r.network();
@@ -600,15 +618,73 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     emit({ type: "replication.read", op: r.op, space: r.space, key: r.path, replica: null, source: "network", reason: "NETWORK_REQUESTED", outcome: r.outcome, latencyMs: r.latencyMs, stalenessMs: null, coverage: null, authority: null });
   }
 
+  async function inspectPersistedStatus(prefix: string): Promise<{ missing: boolean; local?: LocalReplicaStatus; errorCode?: string }> {
+    if (!storage.inspectStatus || isClosed || purgeInProgress) return { missing: false };
+    const sessionGrant = authority.sessionGrant(prefix);
+    const device = "refused" in sessionGrant ? undefined : sessionGrant.device;
+    const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
+    const abort = new AbortController();
+    const job = Promise.resolve().then(() => storage.inspectStatus!(spec, { signal: abort.signal }));
+    const settled = job.then(() => undefined, () => undefined);
+    const inspection = { abort, settled };
+    statusInspections.add(inspection);
+    void settled.then(() => statusInspections.delete(inspection));
+    let cancel = () => {};
+    const timeout = new Promise<{ timedOut: true }>((resolve) => {
+      cancel = scheduler.setTimeout(() => {
+        abort.abort(Object.assign(new Error("Replica status inspection timed out"), { code: "STATUS_TIMEOUT" }));
+        resolve({ timedOut: true });
+      }, STATUS_REFRESH_TIMEOUT_MS);
+    });
+    try {
+      const result = await Promise.race([job.then((local) => ({ local })), timeout]);
+      if ("timedOut" in result) return { missing: false, errorCode: "STATUS_TIMEOUT" };
+      return { missing: result.local === undefined, ...(result.local ? { local: result.local } : {}) };
+    } catch (error) {
+      return { missing: false, errorCode: errorCode(error) };
+    } finally { cancel(); }
+  }
+
+  function cancelStatusInspections(): Promise<void> {
+    const active = [...statusInspections];
+    for (const inspection of active) inspection.abort.abort(Object.assign(new Error("Replica status inspection cancelled"), { code: "ABORTED" }));
+    return Promise.all(active.map((inspection) => inspection.settled)).then(() => undefined);
+  }
+
   async function status(): Promise<ReplicaStatusEntry[]> {
-    const snapshot = await pending.read();
-    return Promise.all(options.prefixes.map(async (prefix) => {
-      const state = replicas.get(prefix);
+    const persistedSnapshot = pending.readExisting ? await pending.readExisting() : await pending.read();
+    const snapshot = persistedSnapshot ?? emptyPendingState(identity);
+    const entries = await Promise.all(options.prefixes.map(async (prefix): Promise<ReplicaStatusEntry | undefined> => {
       const records = snapshot.records.filter((r) => kvPrefixCovers(prefix, r.key));
-      let local;
-      if (state?.handle) { try { local = await state.handle.status(); } catch { /* status is best-effort */ } }
-      return { prefix, state: isClosed ? "closed" as const : local?.authority.state === "revoked" ? "revoked" as const : state?.reason === "grant_missing" ? "grant_missing" as const : local?.authority.state === "valid" ? "ready" as const : state?.reason ? "unavailable" as const : "idle" as const, ...(state?.reason ? { reason: state.reason } : {}), ...(local ?? {}), pending: { inFlight: records.filter((r) => r.state === "in_flight").length, committed: records.filter((r) => r.state === "committed").length, ambiguous: records.filter((r) => r.state === "ambiguous").length }, pinned: pinnedKeys(snapshot, prefix, scheduler.now()), lagMs: local?.lastSyncAt ? scheduler.now() - Date.parse(local.lastSyncAt) : null };
+      const opened = replicas.get(prefix);
+      let local: LocalReplicaStatus | undefined;
+      if (opened?.handle) {
+        try { local = await opened.handle.status(); }
+        catch { /* A generation-fenced or unavailable handle has no live status. */ }
+      }
+      let inspected: Awaited<ReturnType<typeof inspectPersistedStatus>> = { missing: false };
+      if (!local && !opened?.opening && !opened?.authorityRevoked) inspected = await inspectPersistedStatus(prefix);
+      local ??= inspected.local;
+      if (inspected.missing && !opened?.reason && !opened?.authorityRevoked && !opened?.opening && !isClosed) return undefined;
+      const revoked = opened?.authorityRevoked === true || local?.authority.state === "revoked";
+      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
+      return {
+        prefix,
+        state,
+        ...(opened?.reason ? { reason: opened.reason } : inspected.errorCode ? { reason: "replica_unavailable" as const } : {}),
+        ...(inspected.errorCode ? { errorCode: inspected.errorCode } : {}),
+        ...(local ?? {}),
+        ...(revoked ? { authority: { state: "revoked" as const, expiresAt: local?.authority.expiresAt ?? null } } : {}),
+        pending: {
+          inFlight: records.filter((r) => r.state === "in_flight").length,
+          committed: records.filter((r) => r.state === "committed").length,
+          ambiguous: records.filter((r) => r.state === "ambiguous").length,
+        },
+        pinned: pinnedKeys(snapshot, prefix, scheduler.now()),
+        lagMs: local?.lastSyncAt ? scheduler.now() - Date.parse(local.lastSyncAt) : null,
+      };
     }));
+    return entries.filter((entry): entry is ReplicaStatusEntry => entry !== undefined);
   }
 
   async function sync(o?: { prefix?: string; signal?: AbortSignal }): Promise<void> {
@@ -624,6 +700,9 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
 
   function purge(o?: { timeoutMs?: number }): Promise<{ purged: string[]; failed: Array<{ prefix: string; code: string }> }> {
     purgeStarted = true;
+    purgeInProgress = true;
+    const hasStatusInspections = statusInspections.size > 0;
+    const statusDrain = cancelStatusInspections();
     for (const state of replicas.values()) {
       state.timer?.();
       state.timer = undefined;
@@ -642,11 +721,14 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         try { return await Promise.race([job, timeout]); }
         finally { cancel(); }
       };
-      const drain = Promise.all([...replicas.values()].flatMap((state) => [
-        state.opening?.catch(() => undefined),
-        state.sync?.catch(() => undefined),
-        state.handle?.close().catch(() => undefined),
-      ]));
+      const drain = Promise.all([
+        ...[...replicas.values()].flatMap((state) => [
+          state.opening?.catch(() => undefined),
+          state.sync?.catch(() => undefined),
+          state.handle?.close().catch(() => undefined),
+        ]),
+        ...(hasStatusInspections ? [statusDrain] : []),
+      ]);
       let drainCode: string | undefined;
       try { await withTimeout(drain); } catch (error) { drainCode = errorCode(error); }
       const jobs = options.prefixes.map(async (prefix) => {
@@ -656,6 +738,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
           const sessionDeviceDid = replicas.get(prefix)?.handle?.deviceDid ?? ("refused" in grant ? undefined : grant.device.did);
           await withTimeout(storage.purge({ identity, space: session.space, prefix, ...(sessionDeviceDid ? { sessionDeviceDid } : {}) }));
           await pending.update((s) => clearPrefix(s, prefix));
+          replicas.delete(prefix);
+          inProcessProof.delete(prefix);
           report.purged.push(prefix);
           emit({ type: "replication.state", space: session.space, replica: prefix, state: "purged" });
         } catch (error) {
@@ -666,12 +750,14 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       });
       await Promise.all(jobs);
       return report;
-    });
+    }).finally(() => { purgeInProgress = false; });
   }
 
   async function close(): Promise<void> {
     if (isClosed) return;
     isClosed = true;
+    const hasStatusInspections = statusInspections.size > 0;
+    const statusDrain = cancelStatusInspections();
     for (const [prefix, state] of replicas) {
       state.timer?.();
       state.timer = undefined;
@@ -680,11 +766,14 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       state.abort?.abort();
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "closed" });
     }
-    const drain = Promise.all([...replicas.values()].map(async (state) => {
-      await state.opening?.catch(() => undefined);
-      await state.sync?.catch(() => undefined);
-      await state.handle?.close().catch(() => undefined);
-    }));
+    const drain = Promise.all([
+      ...[...replicas.values()].map(async (state) => {
+        await state.opening?.catch(() => undefined);
+        await state.sync?.catch(() => undefined);
+        await state.handle?.close().catch(() => undefined);
+      }),
+      ...(hasStatusInspections ? [statusDrain] : []),
+    ]);
     let cancel = () => {};
     let drained = false;
     void drain.then(

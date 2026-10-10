@@ -6,14 +6,14 @@ import { canonicalReplicationIdentity } from "./identity";
 import { createKVReplication } from "./controller";
 import { encodeTcr1 } from "./listLocal";
 import { createMemoryPendingStore } from "./memoryPendingStore";
-import type { KVListPage, KVReplicaHandle, KVReplicaStorage, LocalReplicaStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
 import { RequestTimeoutError } from "../../errors";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl }: {
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes }: {
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -31,6 +31,8 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   beforePendingRead?: () => void | Promise<void>;
   afterPendingRead?: () => void | Promise<void>;
   statusImpl?: (call: number) => Promise<LocalReplicaStatus> | LocalReplicaStatus;
+  inspectStatus?: (signal: AbortSignal) => Promise<LocalReplicaStatus | undefined>;
+  prefixes?: string[];
 } = {}) {
   let now = 1_000_000;
   let listReads = 0;
@@ -73,9 +75,18 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
     },
     async status() { statusCalls++; return statusImpl ? statusImpl(statusCalls) : localStatus; }, async close() {},
   } as unknown as KVReplicaHandle;
-  const storage: KVReplicaStorage = { kind: "sqlite", async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; }, async purge(target) { await purgeImpl?.(target); }, pendingWrites() { return pending; } };
-  const controller = createKVReplication({ options: { ...options, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority: { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime", parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" }); }, async mint(_deviceDid, _prefix, signal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } }, pending, scheduler: { now: () => now, setTimeout: setTimeoutImpl }, emit: (event) => events.push(event) });
-  return { controller, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
+  const storage: KVReplicaStorage = {
+    kind: "sqlite",
+    async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; },
+    ...(inspectStatus ? { inspectStatus: async (_spec: KVReplicaSpec, { signal }: { signal: AbortSignal }) => inspectStatus(signal) } : {}),
+    async purge(target) { await purgeImpl?.(target); },
+    pendingWrites() { return pending; },
+  };
+  const authority = { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" as const } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime" as const, parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" as const }); }, async mint(_deviceDid: string, _prefix: string, signal: AbortSignal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } };
+  const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
+  const createController = () => createKVReplication({ options: { ...options, prefixes, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event) });
+  const controller = createController();
+  return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
@@ -259,6 +270,112 @@ describe("pending record evidence boundaries", () => {
     await env.controller.get(readRequest(env.network));
     expect(env.events.filter((event) => event.type === "replication.state" && event.state === "pinned")).toHaveLength(1);
   });
+  test("status reports revoked authority in-process after discovery and in a fresh controller", async () => {
+    const revoked = {
+      ...status(),
+      authority: { state: "revoked" as const, expiresAt: null },
+      counts: { keys: 0, contentMissing: 0, tombstones: 0 },
+      bytes: 0,
+      lastError: { at: new Date(1_200_001).toISOString(), code: "GRANT_REVOKED", message: "delegation-revoked" },
+    };
+    let inspections = 0;
+    const env = setup({
+      onSync: () => {
+        throw Object.assign(new Error("The replica's grant was revoked"), { code: "GRANT_REVOKED" });
+      },
+      statusImpl: (call) => {
+        if (call === 1) return status();
+        throw Object.assign(new Error("The old handle was generation fenced"), { code: "RESET_REQUIRED" });
+      },
+      inspectStatus: async () => {
+        inspections++;
+        return revoked;
+      },
+    });
+    env.setNow(1_200_001);
+    await env.controller.get(readRequest(env.network));
+    expect((await env.controller.status())[0]).toMatchObject({
+      state: "revoked",
+      authority: { state: "revoked" },
+    });
+    expect(inspections).toBe(0);
+
+    const restoredProcess = env.createController();
+    expect((await restoredProcess.status())[0]).toMatchObject({
+      state: "revoked",
+      authority: { state: "revoked" },
+      counts: { keys: 0, contentMissing: 0, tombstones: 0 },
+    });
+    expect(inspections).toBe(1);
+});
+
+  test("persisted status inspection is cancelled and settled by close", async () => {
+    const { promise: started, resolve: startedResolve } = Promise.withResolvers<void>();
+    let settled = false;
+    const env = setup({
+      inspectStatus: (signal) => {
+        startedResolve();
+        const { promise, resolve } = Promise.withResolvers<LocalReplicaStatus | undefined>();
+        signal.addEventListener("abort", () => {
+          settled = true;
+          resolve(undefined);
+        }, { once: true });
+        if (signal.aborted) {
+          settled = true;
+          resolve(undefined);
+        }
+        return promise;
+      },
+    });
+    const statusJob = env.controller.status();
+    await started;
+    await env.controller.close();
+    await statusJob;
+    expect(settled).toBe(true);
+    expect(env.counters().opens).toBe(0);
+  });
+
+  test("persisted status inspection times out without a handle", async () => {
+    // This uses the real scheduler because the contract under test is an actual wall-clock deadline.
+    const env = setup({
+      inspectStatus: (signal) => {
+        const { promise, resolve } = Promise.withResolvers<LocalReplicaStatus | undefined>();
+        signal.addEventListener("abort", () => resolve(undefined), { once: true });
+        if (signal.aborted) resolve(undefined);
+        return promise;
+      },
+      setTimeoutImpl: (fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        return () => clearTimeout(timer);
+      },
+    });
+    const started = Date.now();
+    await env.controller.status();
+    expect(Date.now() - started).toBeLessThan(3_500);
+    expect(env.counters().opens).toBe(0);
+    await env.controller.close();
+  });
+  test("status omits an absent replica without opening or recreating it", async () => {
+    const env = setup({ inspectStatus: async () => undefined });
+    expect(await env.controller.status()).toEqual([]);
+    expect(env.counters().opens).toBe(0);
+    await env.controller.purge();
+    expect(await env.controller.status()).toEqual([]);
+    expect(env.counters().opens).toBe(0);
+  });
+
+  test("locked persisted inspections report unavailable for every replica", async () => {
+    const env = setup({
+      prefixes: ["notes", "docs"],
+      inspectStatus: async () => { throw Object.assign(new Error("database is locked"), { code: "REPLICA_BUSY" }); },
+    });
+    expect(await env.controller.status()).toMatchObject([
+      { prefix: "notes", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
+      { prefix: "docs", state: "unavailable", reason: "replica_unavailable", errorCode: "REPLICA_BUSY" },
+    ]);
+    await env.controller.close();
+  });
+
 });
 describe("KVReplication inline verification", () => {
   test("reports divergence but returns the replica answer", async () => {

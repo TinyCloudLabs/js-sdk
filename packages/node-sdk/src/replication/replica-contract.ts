@@ -455,5 +455,6 @@ export interface ReplicaRuntime {
 export interface SqliteRuntime {
   SqliteReplicaStore: {
     open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore>;
+    inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{ state: ReplicaState; status: ReplicaStatus } | null>;
   };
 }

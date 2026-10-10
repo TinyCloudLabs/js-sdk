@@ -62,5 +62,6 @@ describe("replica contract: every member the adapter calls exists", () => {
 
   test("@tinycloud/replica/sqlite exports", () => {
     expect(typeof realSqlite.SqliteReplicaStore.open).toBe("function");
+    expect(typeof realSqlite.SqliteReplicaStore.inspect).toBe("function");
   });
 });

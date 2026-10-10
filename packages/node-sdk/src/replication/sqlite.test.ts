@@ -178,6 +178,17 @@ async function partitionDirs(root: string): Promise<string[]> {
   return readdir(root);
 }
 
+async function filesNamed(root: string, filename: string): Promise<string[]> {
+  if (!existsSync(root)) return [];
+  const found: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) found.push(...await filesNamed(path, filename));
+    else if (entry.name === filename) found.push(path);
+  }
+  return found;
+}
+
 // ---------------------------------------------------------------------------
 // FilePendingWriteStore (§6.3)
 // ---------------------------------------------------------------------------
@@ -495,6 +506,50 @@ describe("identity partition isolation (§6.3)", () => {
 // ---------------------------------------------------------------------------
 // Replica handles: open, grants, fence, purge
 // ---------------------------------------------------------------------------
+
+describe("read-only replica status inspection", () => {
+  test("a never-opened prefix is absent without creating profile files", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions({ dir }));
+
+    expect(await storage.inspectStatus!(spec(), { signal: new AbortController().signal })).toBeUndefined();
+    const pending = storage.pendingWrites(identity());
+    expect(await pending.readExisting?.()).toBeUndefined();
+    expect(await readdir(dir)).toEqual([]);
+    await pending.update((state) => { state.seq = 1; });
+    expect(await pending.readExisting?.()).toMatchObject({ seq: 1, identity: identity() });
+  });
+
+  test("inspection bypasses a held mutation guard and missing replicas stay missing after purge", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions({ dir }));
+    const handle = await storage.open(spec());
+    await handle.close();
+
+    const hold = Promise.withResolvers<void>();
+    const heldGuard = async <T>(section: () => Promise<T>): Promise<T> => {
+      await hold.promise;
+      return section();
+    };
+    const reader = createSqliteReplicaStorage(storageOptions({ dir, guard: heldGuard }));
+    const inspection = reader.inspectStatus!(spec(), { signal: new AbortController().signal });
+    const { promise: deadline, resolve: expire } = Promise.withResolvers<{ timedOut: true }>();
+    // A real deadline ensures this fails promptly if inspection ever queues on the held guard.
+    const timer = setTimeout(() => expire({ timedOut: true }), 3_500);
+    const result = await Promise.race([
+      inspection.then((value) => ({ timedOut: false as const, value })),
+      deadline,
+    ]);
+    clearTimeout(timer);
+    expect(result.timedOut).toBe(false);
+    if (result.timedOut) throw new Error("Read-only status inspection waited on the mutation guard.");
+    expect(result.value).toMatchObject({ coverage: "empty", authority: { state: "valid" } });
+
+    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" });
+    expect(await storage.inspectStatus!(spec(), { signal: new AbortController().signal })).toBeUndefined();
+    expect(await filesNamed(dir, "replica.db")).toEqual([]);
+  });
+});
 
 describe("sqlite replica handle", () => {
   test("open creates the §6.3 partition layout; delegate posture never writes device.jwk", async () => {

@@ -178,6 +178,7 @@ function errnoOf(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
 
+
 /** A directory's entries; only a directory that does not exist is empty. */
 async function entriesOf(path: string): Promise<string[]> {
   try {
@@ -243,6 +244,59 @@ export class SqliteReplicaStore implements ReplicaStore {
     this.#now = options.now ?? Date.now;
     this.#faults = (options as InternalOptions)[FAULTS] ?? {};
     this.#guard = options.guard ?? ((section) => section());
+  }
+
+  /**
+   * Read-only status snapshot; does not create a replica, migrate, recover
+   * revocation cleanup, or enter the mutation guard. An existing database is
+   * opened normally in read-only WAL mode so committed WAL state is visible.
+   */
+
+  static async inspect(
+    dir: string,
+    options: { now?: () => number; signal?: AbortSignal } = {},
+  ): Promise<{ state: ReplicaState; status: ReplicaStatus } | null> {
+    const checkAbort = () => {
+      if (options.signal?.aborted) throw options.signal.reason ?? new ReplicaError(ReplicaErrorCode.CLOSED, "Replica status inspection was cancelled.");
+    };
+    checkAbort();
+    const dbPath = join(dir, "replica.db");
+    let ino: number;
+    try {
+      ino = (await stat(dbPath)).ino;
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT") return null;
+      throw storageError(error, "Inspecting the replica");
+    }
+    checkAbort();
+    const opener = await loadSqlite();
+    checkAbort();
+    let db: SqliteDatabase | undefined;
+    try {
+      db = opener(dbPath, { readonly: true });
+      db.exec("PRAGMA busy_timeout = 0");
+      checkAbort();
+      const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const before = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
+        const state = await store.open();
+        checkAbort();
+        if (state === null) return null;
+        const status = await store.status();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        checkAbort();
+        const after = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
+        if (before === after) return { state, status };
+      }
+      throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica changed during status inspection.");
+    } catch (error) {
+      if (/SQLITE_BUSY|database is locked/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica is busy during status inspection.", undefined, { cause: error });
+      }
+      throw storageError(error, "Inspecting the replica");
+    } finally {
+      db?.close();
+    }
   }
 
   /**

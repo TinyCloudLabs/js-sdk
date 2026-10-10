@@ -448,6 +448,7 @@ describe("node replication integration", () => {
     const token = `${header}.${payload}.${signature}`;
     const opened: KVReplicaHandle[] = [];
     const closed: string[] = [];
+    let persistedStatus: LocalReplicaStatus | undefined;
     const storage: KVReplicaStorage = {
       kind: "sqlite",
       async open(spec) {
@@ -461,6 +462,7 @@ describe("node replication integration", () => {
           bytes: 0,
           lastError: null,
         };
+        persistedStatus = state;
         const grant = {
           cid: "bafy-installed",
           parentCid: spec.identity.space === space ? signed.proof.delegationCid : "bafy-compact-parent",
@@ -474,14 +476,15 @@ describe("node replication integration", () => {
           async get(key) { return { status: "absent", key, meta: { asOf: new Date().toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 } }; },
           async list() { return { keys: [], meta: { asOf: new Date().toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 } }; },
           async grant() { return spec.identity.space === space ? grant : null; },
-          async installGrant() { state.grant = grant; return grant; },
-          async sync({ syncStartEpoch }) { state.syncedThroughEpoch = syncStartEpoch; return { status: "synced", pages: 0, changes: 0, deleted: 0, fetched: 0, contentMissing: 0, coverage: "complete", syncedThroughEpoch: syncStartEpoch }; },
+          async installGrant() { state.grant = grant; persistedStatus = state; return grant; },
+          async sync({ syncStartEpoch }) { state.syncedThroughEpoch = syncStartEpoch; persistedStatus = state; return { status: "synced", pages: 0, changes: 0, deleted: 0, fetched: 0, contentMissing: 0, coverage: "complete", syncedThroughEpoch: syncStartEpoch }; },
           async status() { return state; },
           async close() { closed.push(spec.identity.host); },
         };
         opened.push(handle);
         return handle;
       },
+      async inspectStatus() { return persistedStatus; },
       async purge() {},
       pendingWrites: createMemoryPendingStore,
     };
@@ -509,7 +512,9 @@ describe("node replication integration", () => {
         tinycloudHosts: ["https://signed-restore.example"],
       });
       expect(closed).toEqual(["https://signed-restore.example"]);
-      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "idle" }]);
+      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "ready" }]);
+      expect(opened).toHaveLength(1);
+      expect(closed).toEqual(["https://signed-restore.example"]);
       await node.replication!.sync();
       expect(opened).toHaveLength(2);
       expect(opened[1]!.spec.identity).toMatchObject({

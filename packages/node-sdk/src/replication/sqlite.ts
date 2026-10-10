@@ -335,6 +335,35 @@ function serializePendingWrite<T>(file: string, section: () => Promise<T>): Prom
   return entered;
 }
 
+function parsePendingState(text: string, file: string, identity: ReplicationIdentity): PendingWriteState {
+  let state: unknown;
+  try {
+    state = JSON.parse(text);
+  } catch (error) {
+    throw storageError("STORAGE_ERROR", `Parsing ${file}`, error);
+  }
+  if (
+    state === null ||
+    typeof state !== "object" ||
+    !("v" in state) ||
+    state.v !== 2 ||
+    !("identity" in state) ||
+    !("committedEpoch" in state) ||
+    typeof state.committedEpoch !== "number" ||
+    !("seq" in state) ||
+    typeof state.seq !== "number" ||
+    !("records" in state) ||
+    !Array.isArray(state.records)
+  ) {
+    throw new ReplicaStorageError("STORAGE_ERROR", `Pending-write state at ${file} is corrupt.`);
+  }
+  const storedIdentity = identityRecordOf(state.identity);
+  if (storedIdentity === undefined || !sameIdentity(storedIdentity, identity)) {
+    throw new ReplicaStorageError("STORAGE_ERROR", `Pending-write state at ${file} belongs to a different identity.`);
+  }
+  return state as PendingWriteState;
+}
+
 export class FilePendingWriteStore implements PendingWriteStore {
   readonly durable = true;
   readonly identity: ReplicationIdentity;
@@ -387,38 +416,25 @@ export class FilePendingWriteStore implements PendingWriteStore {
       }
       throw storageError("STORAGE_ERROR", `Reading ${file}`, error);
     }
-    let state: unknown;
+    return parsePendingState(text, file, this.identity);
+  }
+
+  async readExisting(): Promise<PendingWriteState | undefined> {
+    let file: string;
     try {
-      state = JSON.parse(text);
+      file = join(await realpath(this.#dir), "pending.json");
     } catch (error) {
-      throw storageError("STORAGE_ERROR", `Parsing ${file}`, error);
+      if (isNotFound(error)) return undefined;
+      throw storageError("STORAGE_ERROR", `Resolving pending-write state in ${this.#dir}`, error);
     }
-    if (
-      state === null ||
-      typeof state !== "object" ||
-      !("v" in state) ||
-      state.v !== 2 ||
-      !("identity" in state) ||
-      !("committedEpoch" in state) ||
-      typeof state.committedEpoch !== "number" ||
-      !("seq" in state) ||
-      typeof state.seq !== "number" ||
-      !("records" in state) ||
-      !Array.isArray(state.records)
-    ) {
-      throw new ReplicaStorageError(
-        "STORAGE_ERROR",
-        `Pending-write state at ${file} is corrupt.`,
-      );
+    try {
+      const text = await readFile(file, "utf8");
+      return parsePendingState(text, file, this.identity);
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      if (error instanceof ReplicaStorageError) throw error;
+      throw storageError("STORAGE_ERROR", `Reading ${file}`, error);
     }
-    const identity = identityRecordOf(state.identity);
-    if (identity === undefined || !sameIdentity(identity, this.identity)) {
-      throw new ReplicaStorageError(
-        "STORAGE_ERROR",
-        `Pending-write state at ${file} belongs to a different identity.`,
-      );
-    }
-    return state as PendingWriteState;
   }
 
   async update<T>(mutate: (state: PendingWriteState) => T): Promise<T> {
@@ -997,6 +1013,60 @@ export function createSqliteReplicaStorage(
     });
   }
 
+  async function inspectStatus(spec: KVReplicaSpec, { signal }: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined> {
+    const checkAbort = () => {
+      if (signal.aborted) throw signal.reason ?? Object.assign(new Error("Replica status inspection was aborted"), { code: "ABORTED" });
+    };
+    checkAbort();
+    const idDir = partitionDirOf(root, spec.identity);
+    if (!(await pathExists(idDir))) return undefined;
+    checkAbort();
+    const identityFile = join(idDir, "identity.json");
+    const storedIdentity = identityRecordOf(await readJsonFile(identityFile));
+    if (storedIdentity === undefined || !sameIdentity(storedIdentity, spec.identity)) {
+      throw new ReplicaStorageError("STORAGE_ERROR", `The partition at ${idDir} belongs to a different identity or has no identity record.`);
+    }
+    checkAbort();
+    let device = spec.device;
+    if (device === undefined) {
+      const deviceFile = join(idDir, "device.jwk");
+      const storedDevice = await readJsonFile(deviceFile);
+      if (storedDevice === undefined) return undefined;
+      device = deviceRecordOf(storedDevice);
+      if (device === undefined) throw new ReplicaStorageError("STORAGE_ERROR", `The replica device key at ${deviceFile} is unreadable.`);
+    }
+    checkAbort();
+    const replicaDir = join(idDir, "replicas", replicaHashOf(spec.prefix, device.did));
+    if (!(await pathExists(replicaDir))) return undefined;
+    checkAbort();
+    const [replica, sqlite] = (await Promise.all([
+      // @ts-ignore — TS2307 when replica's dist is absent (CI builds node-sdk first).
+      import("@tinycloud/replica"),
+      // @ts-ignore — same as above.
+      import("@tinycloud/replica/sqlite"),
+    ])) as [ReplicaRuntime, SqliteRuntime];
+    checkAbort();
+    const inspected = await sqlite.SqliteReplicaStore.inspect(replicaDir, { signal });
+    checkAbort();
+    if (inspected === null) return undefined;
+    const { state, status } = inspected;
+    if (state.config.host !== spec.identity.host || state.config.space !== spec.space || state.config.prefix !== spec.prefix || principalOf(state.config.deviceDid) !== principalOf(device.did)) {
+      throw new ReplicaStorageError("STORAGE_ERROR", `The replica at ${replicaDir} does not match the requested identity, space, prefix, or device.`);
+    }
+    const syncedThroughEpoch = await readFence(replicaDir);
+    checkAbort();
+    return {
+      coverage: status.coverage,
+      lastSyncAt: status.lastSyncAt,
+      syncedThroughEpoch,
+      authority: { state: status.authority.state, expiresAt: status.authority.expiresAt },
+      grant: newestGrantInfo(replica, state.pendingGrant ?? state.grant, state.pendingGrant, spec),
+      counts: status.counts,
+      bytes: status.bytes,
+      lastError: status.lastError,
+    };
+  }
+
   async function purgePartition(target: PurgeTarget): Promise<void> {
     // Literal specifiers, as in openHandle, so bundlers follow the dependency.
     const [replica, sqlite] = (await Promise.all([
@@ -1086,6 +1156,7 @@ export function createSqliteReplicaStorage(
   return {
     kind: "sqlite",
     open: openHandle,
+    inspectStatus,
     purge: purgePartition,
     // Always the durable partitioned file store (review): the runtime
     // must never fall back to volatile in-memory pending state — a
