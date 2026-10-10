@@ -49,7 +49,7 @@ export async function createNode(input: { docker: Docker; env: RunEnvironment; l
   }
   return { handle, volume, container };
 }
-class DockerNodeHandle implements NodeHandle {
+export class DockerNodeHandle implements NodeHandle {
   constructor(private readonly docker: Docker, readonly id: string, readonly backend: Backend, readonly image: ResolvedImage, private container: string, private readonly volume: string, public diagnosticsUrl: string, private readonly env: RunEnvironment, private readonly redactions: string[]) {}
   async info(options: CallOptions = {}): Promise<NodeInfo> {
     try { const response = await fetch(`${this.diagnosticsUrl}/info`, { signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(Math.min(options.deadlineMs ?? 10_000, 10_000))]) : AbortSignal.timeout(10_000) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json() as NodeInfo; }
@@ -87,7 +87,12 @@ class DockerNodeHandle implements NodeHandle {
   async upgrade(): Promise<never> { throw new HarnessError("NOT_IMPLEMENTED", "upgrade belongs to S6a"); }
   async sql(): Promise<never> { throw new HarnessError("NOT_IMPLEMENTED", "sql belongs to S6a"); }
   async scanVolume(): Promise<never> { throw new HarnessError("NOT_IMPLEMENTED", "scanVolume is outside S1"); }
-  async logs(options: { tailBytes?: number } = {}): Promise<string> { const result = await this.docker.tryRun(["logs", this.container]); let text = `${result.stdout}${result.stderr}`; for (const value of this.redactions) text = text.replaceAll(value, "[REDACTED]"); return text.slice(-(options.tailBytes ?? 1_048_576)); }
+  async logs(options: { tailBytes?: number; deadlineMs?: number; signal?: AbortSignal } = {}): Promise<string> {
+    const result = await this.docker.tryRun(["logs", this.container], { deadlineMs: options.deadlineMs, signal: options.signal });
+    let text = `${result.stdout}${result.stderr}`;
+    for (const value of this.redactions) text = text.replaceAll(value, "[REDACTED]");
+    return text.slice(-(options.tailBytes ?? 1_048_576));
+  }
   private async refreshPort(options: CallOptions = {}): Promise<void> { const port = (await this.docker.run(["port", this.container, "8000/tcp"], options)).stdout.trim(); this.diagnosticsUrl = `http://127.0.0.1:${port.slice(port.lastIndexOf(":") + 1)}`; }
 }
 

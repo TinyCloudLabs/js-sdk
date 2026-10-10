@@ -7,16 +7,20 @@ import { Docker, labels, remainingMs } from "./docker";
 import { ResourceLedger } from "./ledger";
 
 interface ProxyConfig { name: string; listen: string; upstream: string; enabled?: boolean; toxics?: { name: string; type: string; stream: string; toxicity: number; attributes: Record<string, number> }[] }
+interface ProxyEdge { name: string; node: string; hostPort?: number }
 export class Toxiproxy {
   readonly handles = new Map<string, ProxyHandle>();
   private readonly api: string;
   constructor(private readonly docker: Docker, private readonly container: string, apiPort: number, private readonly ports: Map<string, number>) { this.api = `http://127.0.0.1:${apiPort}`; }
-  static async create(input: { docker: Docker; env: RunEnvironment; ledger: ResourceLedger; topoId: string; network: string; edges: { name: string; node: string }[]; deadlineAt: number; signal?: AbortSignal }): Promise<Toxiproxy> {
+  static async create(input: { docker: Docker; env: RunEnvironment; ledger: ResourceLedger; topoId: string; network: string; edges: ProxyEdge[]; deadlineAt: number; signal?: AbortSignal }): Promise<Toxiproxy> {
     const { docker, env, ledger, topoId, network } = input;
     const name = `tc893-${topoId}-tp`, resourceLabels = { "tc893.run": env.runId, "tc893.topo": topoId };
     await ledger.intent("container", name, resourceLabels);
     const args = ["run", "-d", "--name", name, "--network", network, ...labels(env.runId, topoId), "-p", "127.0.0.1::8474"];
-    for (let index = 0; index < input.edges.length; index++) args.push("-p", `127.0.0.1::${20001 + index}`);
+    for (let index = 0; index < input.edges.length; index++) {
+      const edge = input.edges[index];
+      args.push("-p", `127.0.0.1:${edge.hostPort ?? ""}:${20001 + index}`);
+    }
     args.push("ghcr.io/shopify/toxiproxy:2.12.0");
     await docker.run(args, { signal: input.signal, deadlineMs: remainingMs(env.clock, input.deadlineAt) });
     await ledger.created({ kind: "container", name, labels: resourceLabels });

@@ -16,14 +16,17 @@ export async function collectTopologyArtefacts(input: { dir: string; resources: 
   };
   await writeFile(join(input.dir, "topology.json"), `${JSON.stringify({ spec: safeSpec, resources: input.resources }, null, 2)}\n`, { mode: 0o600 });
   for (const [id, node] of input.nodes) {
-    if (Date.now() >= deadline) break;
-    await writeFile(join(input.dir, "nodes", `${id}.log`), await node.logs({ tailBytes: 2_000_000 }), { mode: 0o600 });
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const logs = node.logs as (this: NodeHandle, options?: { tailBytes?: number; deadlineMs?: number }) => Promise<string>;
+    await writeFile(join(input.dir, "nodes", `${id}.log`), await logs.call(node, { tailBytes: 2_000_000, deadlineMs: remaining }), { mode: 0o600 });
   }
   if (input.proxies) {
     const proxyState: Record<string, unknown> = {};
     for (const [name, proxy] of input.proxies.handles) {
-      if (Date.now() >= deadline) break;
-      proxyState[name] = { listenUrl: proxy.listenUrl, ...await proxy.state() };
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      proxyState[name] = { listenUrl: proxy.listenUrl, ...await proxy.state({ deadlineMs: remaining }) };
     }
     await writeFile(join(input.dir, "toxiproxy.json"), `${JSON.stringify(proxyState, null, 2)}\n`, { mode: 0o600 });
   }
