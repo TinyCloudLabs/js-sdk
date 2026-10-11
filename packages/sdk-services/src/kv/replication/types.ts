@@ -288,6 +288,7 @@ export interface KVReadThrough {
     space: string;
     entries: ReadonlyArray<{ path: string; body?: Blob | string }>;
     signal: AbortSignal;
+    conditional?: boolean;
     network: () => Promise<Result<T>>;
   }): Promise<Result<T>>;
   /**

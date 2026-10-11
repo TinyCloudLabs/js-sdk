@@ -1025,6 +1025,7 @@ export class KVService extends BaseService implements IKVService {
           space: this.context.session!.spaceId,
           entries: [{ path, body }],
           signal: request.signal,
+          conditional: options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined,
           network,
         });
       } catch (error) {
@@ -1746,6 +1747,7 @@ export class KVService extends BaseService implements IKVService {
           space: this.context.session!.spaceId,
           entries: [{ path }],
           signal: request.signal,
+          conditional: options?.ifMatch !== undefined,
           network,
         });
       } catch (error) {

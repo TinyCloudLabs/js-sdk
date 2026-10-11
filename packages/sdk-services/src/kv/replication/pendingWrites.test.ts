@@ -45,9 +45,11 @@ describe("pending write transitions", () => {
 });
 
 describe("write outcome classifier", () => {
-  const rows: Array<[string, "put" | "delete" | "batchPut", ReturnType<typeof ok> | ReturnType<typeof failure>, "committed" | "failed" | "ambiguous"]> = [
+  const rows: Array<[string, "put" | "delete" | "batchPut", ReturnType<typeof ok> | ReturnType<typeof failure>, "committed" | "failed" | "ambiguous", boolean?]> = [
     ["successful response", "put", ok(undefined), "committed"],
-    ["delete not-found answer", "delete", failure(ErrorCodes.KV_NOT_FOUND), "committed"],
+    ["conditional delete not-found answer", "delete", failure(ErrorCodes.KV_NOT_FOUND), "failed", true],
+    ["unconditional delete not-found answer", "delete", failure(ErrorCodes.KV_NOT_FOUND), "committed"],
+    ["conditional put precondition failure", "put", failure(ErrorCodes.KV_PRECONDITION_FAILED, { status: 412 }), "failed", true],
     ["not dispatched", "batchPut", failure(ErrorCodes.NETWORK_ERROR, { requestMayHaveDispatched: false }), "failed"],
     ["definitive error code", "put", failure(ErrorCodes.KV_PRECONDITION_FAILED), "failed"],
     ["unconfirmed batch", "batchPut", failure(ErrorCodes.NETWORK_ERROR, { outcome: "batch-unconfirmed", status: 200 }), "ambiguous"],
@@ -55,8 +57,20 @@ describe("write outcome classifier", () => {
     ["5xx", "put", failure(ErrorCodes.KV_CONFLICT, { status: 503 }), "ambiguous"],
     ["timeout without status", "put", failure(ErrorCodes.TIMEOUT), "ambiguous"],
   ];
-  for (const [name, op, result, expected] of rows) test(name, () => expect(classifyWriteOutcome(op, result)).toBe(expected));
+  for (const [name, op, result, expected, conditional] of rows) {
+    test(name, () => {
+      expect(classifyWriteOutcome(op, result, { conditional })).toBe(expected);
+      if (name === "conditional delete not-found answer") {
+        const state = { v: 2 as const, identity, committedEpoch: 0, seq: 0, records: [] as ReturnType<typeof begin> };
+        begin(state, "conditional-delete", [{ key: "notes/missing", op: "delete" }], at);
+        settle(state, "conditional-delete", expected, at, result.ok ? undefined : result.error.code);
+        expect(state.committedEpoch).toBe(0);
+        expect(state.records).toEqual([]);
+      }
+    });
+  }
 });
+
 
 test("memory pending stores canonicalize identity and serialize updates per store", async () => {
   const first = createMemoryPendingStore(identity);
