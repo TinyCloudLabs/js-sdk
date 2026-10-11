@@ -1,5 +1,11 @@
 # @tinycloud/replica
 
+## 0.1.1-beta.1
+
+### Patch Changes
+
+- 8b56ee8: Republish. The 0.1.1-beta.0 release was reported as published but never reached the npm registry, so `@tinycloud/node-sdk@3.2.0-beta.3` and `@tinycloud/cli@1.2.0-beta.3` failed to install (`ETARGET`). This release publishes the same code under a new version, and moves the dependents onto it.
+
 ## 0.1.1-beta.0
 
 ### Patch Changes

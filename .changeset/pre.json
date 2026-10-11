@@ -28,6 +28,7 @@
     "@tinycloud/sdk-services-test": "17.0.0"
   },
   "changesets": [
+    "republish-replica-beta",
     "tc-672-stored-grant-replay",
     "tc-673-auth-grants",
     "tc-674-imported-session-expiry",
