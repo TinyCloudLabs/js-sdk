@@ -65,13 +65,14 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.kv.list@1",
     "tinycloud.kv.put@1",
     "tinycloud.secrets.get@1",
+    "tinycloud.secrets.status@1",
     "tinycloud.sql.execute@1",
     "tinycloud.sql.query@1",
     "tinycloud.sql.schema.inspect@1",
     "tinycloud.status.get@1",
   ]);
-  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(16);
-  expect(catalog.operations).toHaveLength(16);
+  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(17);
+  expect(catalog.operations).toHaveLength(17);
 
   for (const operation of catalog.operations) {
     expect(operation.input).toBeDefined();

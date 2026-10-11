@@ -172,6 +172,20 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud.secrets.status",
+      "operationId": "tinycloud.secrets.status",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
       "name": "tinycloud_sql_execute",
       "operationId": "tinycloud.sql.execute",
       "operationVersion": 1,

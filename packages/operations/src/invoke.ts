@@ -62,7 +62,7 @@ export async function invokeOperation(
       operationError("INPUT_INVALID", "The invocation target is invalid."),
     );
   }
-  return withTinyCloudStateRoot(target.stateRoot, async () => {
+  const run = withTinyCloudStateRoot(target.stateRoot, async () => {
     const prepared = await prepareInvocation(
       operationId,
       operationVersion,
@@ -72,6 +72,44 @@ export async function invokeOperation(
     if (isPreparedError(prepared)) return prepared.result;
     return withRuntimeWarnings(await executePreparedInvocation(prepared), prepared);
   });
+  // Lazy like prepareInvocation's lookup: the packed root entrypoint stays
+  // free of registry/SDK initialization until a call is made.
+  const { lookupOperation } = await import("./registry.js");
+  const lookup = lookupOperation(operationId, operationVersion);
+  const deadlineMs = lookup.status === "found" ? lookup.definition.deadlineMs : undefined;
+  if (deadlineMs === undefined) return run;
+  return withResponseDeadline(run, deadlineMs, () => errorResult(
+    { operationId, operationVersion },
+    unresolvedContextSummary(target),
+    operationError(
+      "NODE_UNREACHABLE",
+      `The operation did not finish within ${deadlineMs / 1000} s.`,
+      { retryable: true },
+    ),
+  ));
+}
+
+/**
+ * Returns `run`'s result, or the deadline result once `deadlineMs` passes.
+ * The abandoned run is never cancelled: it keeps running to completion, and
+ * its eventual rejection is absorbed so nothing reports it as unhandled.
+ */
+async function withResponseDeadline(
+  run: Promise<OperationResult<unknown>>,
+  deadlineMs: number,
+  expired: () => OperationResult<unknown>,
+): Promise<OperationResult<unknown>> {
+  run.catch(() => {});
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<OperationResult<unknown>>((resolve) => {
+    timer = setTimeout(() => resolve(expired()), deadlineMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([run, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -365,7 +403,7 @@ async function prepareInvocation(
   }
   if (
     target.privateKey === undefined &&
-    definition.runtime === "authenticated" &&
+    requiresRuntime(definition.runtime) &&
     isOwnerPosture(inspectionResolution.context.summary.posture) &&
     target.allowOwnerProfile !== true
   ) {
@@ -382,15 +420,16 @@ async function prepareInvocation(
   const runtimeResolution =
     definition.runtime === "inspection"
       ? inspectionResolution
-      : await resolveRuntime(target, "authenticated");
+      : await resolveRuntime(target, definition.runtime);
   if (!runtimeResolution.ok) {
+    // Runtime-preparation errors share the execution errors' detail allowlist.
     return { status: "error", result: errorResult(
       operation,
       runtimeResolution.context,
-      runtimeResolution.error,
+      redactOperationError(definition, runtimeResolution.error),
     ) };
   }
-  if (definition.runtime === "authenticated") {
+  if (requiresRuntime(definition.runtime)) {
     const actualPosture = runtimeResolution.context.summary.posture;
     if (!definition.postures.includes(actualPosture)) {
       return { status: "error", result: errorResult(
@@ -1026,6 +1065,17 @@ function internalOperationErrorResult(
 
 function isOwnerPosture(posture: OperationContextSummary["posture"]): boolean {
   return posture === "owner-openkey" || posture === "local-owner-key";
+}
+
+/** Runtimes that build a TinyCloud node from the profile, and so need the owner and posture gates. */
+function requiresRuntime(requirement: OperationRuntimeRequirement): boolean {
+  switch (requirement) {
+    case "authenticated":
+    case "restored":
+      return true;
+    case "inspection":
+      return false;
+  }
 }
 
 function zodIssueDetails(error: ZodError): Readonly<Record<string, unknown>> {

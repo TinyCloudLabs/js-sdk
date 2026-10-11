@@ -15,15 +15,22 @@ import {
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
-import { resolveInvocationProfile, resolvePosture } from "./profile.js";
+import { isLocalOwnerProfile, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
+import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
 import {
   profilePath,
+  readAdditionalDelegations,
   readJson,
   readProfile,
   readSession,
 } from "./state.js";
-import { replayProfileDelegations } from "./delegation-binding.js";
+import {
+  bindingMigrationRecorded,
+  replayProfileDelegations,
+  replayStoredDelegationRecords,
+  storedDelegationKind,
+} from "./delegation-binding.js";
 
 export type InvocationRuntimeResolution =
   | Readonly<{ ok: true; context: OperationContext }>
@@ -64,6 +71,10 @@ export function createInvocationRuntime(
 ): Promise<AuthenticatedRuntimeResolution>;
 export function createInvocationRuntime(
   target: InvocationTarget,
+  requirement: "restored",
+): Promise<AuthenticatedRuntimeResolution>;
+export function createInvocationRuntime(
+  target: InvocationTarget,
   requirement: "inspection",
 ): Promise<InvocationRuntimeResolution>;
 export function createInvocationRuntime(
@@ -86,6 +97,9 @@ export async function createInvocationRuntime(
   const summary = resolved.context;
   if (requirement === "inspection") {
     return { ok: true, context: { summary } };
+  }
+  if (requirement === "restored") {
+    return createRestoredRuntime(target, resolved);
   }
 
   const profileName = summary.profile;
@@ -206,6 +220,8 @@ export async function createInvocationRuntime(
       node,
       granted: canonicalizeCapabilities(livePermissions),
       ...(warnings.length === 0 ? {} : { warnings }),
+      localOwner: explicitPrivateKeyOverride || isLocalOwnerProfile(profile),
+      skippedGrantReasons: warnings.map((warning) => warning.reason),
     };
     return {
       ok: true,
@@ -218,6 +234,131 @@ export async function createInvocationRuntime(
             ? { ownerDid: livePrincipalDid }
             : {}),
           ...(authenticatedSpace === undefined ? {} : { space: authenticatedSpace }),
+          ...(activeSessionDid === undefined ? {} : { sessionDid: activeSessionDid }),
+        },
+        runtime,
+      },
+    };
+  } catch {
+    return failed(summary, operationError(
+      "NODE_ERROR",
+      "The selected profile runtime could not be initialized.",
+      { retryable: true },
+    ));
+  }
+}
+
+/**
+ * The `"restored"` runtime: the profile's stored session and stored grants,
+ * and nothing else. It never signs in, never migrates, never takes a profile
+ * lock and writes nothing under TC_HOME; every file access is a lock-free
+ * read. Its only node requests are `/delegate` re-registrations of unchanged
+ * stored grants (and the operation's own invocations).
+ */
+async function createRestoredRuntime(
+  target: InvocationTarget,
+  resolved: Extract<InvocationProfileResolution, { ok: true }>,
+): Promise<InvocationRuntimeResolution> {
+  const summary = resolved.context;
+  const profileName = summary.profile;
+  const profile = resolved.profile;
+  // Before any read beyond the profile, any node construction or request.
+  if (typeof target.privateKey === "string") {
+    return failed(summary, operationError(
+      "AUTH_REQUIRED",
+      "This operation never signs in; an explicit private key has no stored session.",
+      { details: { reason: "explicit_key" } },
+    ));
+  }
+
+  try {
+    const actualPosture = resolvePosture(profile);
+    const selectedPosture = profile.authMethod === "local" ? "local-owner-key" : summary.posture;
+    if (actualPosture !== summary.posture || selectedPosture !== summary.posture) {
+      return failed(
+        { ...summary, posture: actualPosture !== summary.posture ? actualPosture : selectedPosture },
+        operationError(
+          "PROFILE_POSTURE_NOT_ALLOWED",
+          "The selected profile changed posture during runtime resolution.",
+        ),
+      );
+    }
+
+    const [session, key] = await Promise.all([
+      readSession<StoredSession>(profileName),
+      readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
+    ]);
+    const activeSession = session === null ? undefined : normalizeSession(session, key);
+    // No sign-in fallback, even for a local profile holding its key.
+    if (activeSession === undefined) {
+      return failed(summary, operationError(
+        "SESSION_NOT_FOUND",
+        "The selected profile does not have an active session. This operation never signs in.",
+        { details: { recovery: signInRecovery(profileName, summary.posture) } },
+      ));
+    }
+
+    // Migration writes profile state under the lock, so it is left to an
+    // authenticated command. Without it, an unbound compact record could
+    // still be one the migration would bind.
+    if (!await bindingMigrationRecorded(profileName)) {
+      const records = await readAdditionalDelegations<unknown>(profileName);
+      if (records.some((entry) =>
+        storedDelegationKind(entry) === "compact" &&
+        !("authorityRequest" in (entry as Record<string, unknown>))
+      )) {
+        return failed(summary, operationError(
+          "PROFILE_MIGRATION_REQUIRED",
+          `Profile "${profileName}" has a one-time stored-grant upgrade to finish. Run one authenticated command on it (tc --profile <profile> auth caps), then retry.`,
+          { retryable: false, details: { recovery: migrationRecovery(profileName) } },
+        ));
+      }
+    }
+
+    const { TinyCloudNode: TinyCloudNodeConstructor } = nodeSdk;
+    // Wallet-mode restore needs the profile's own key when it has one.
+    const node = new TinyCloudNodeConstructor({
+      host: summary.host,
+      ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
+    });
+    try {
+      await node.restoreSession(activeSession);
+    } catch (error) {
+      if (isRecord(error) && error.code === "AUTH_EXPIRED") {
+        return failed(summary, operationError(
+          "AUTH_REQUIRED",
+          "The stored session has expired or is no longer valid. Sign in again.",
+          { retryable: false, details: { recovery: signInRecovery(profileName, summary.posture) } },
+        ));
+      }
+      throw error;
+    }
+
+    const activeSessionDid = normalizeDid(node.sessionDid);
+    const livePrincipalDid = normalizeDid(node.did);
+    const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
+    const replay = await replayStoredDelegationRecords(
+      profileName,
+      node as unknown as RuntimeDelegationActivator,
+      { host: summary.host, resolveSpace: operationSpaceResolver(node, summary.space) },
+    );
+    for (const installed of replay.installed) {
+      livePermissions.push(...installed.effectivePermissions);
+    }
+
+    const runtime: OperationRuntime = {
+      node,
+      granted: canonicalizeCapabilities(livePermissions),
+      ...(replay.warnings.length === 0 ? {} : { warnings: replay.warnings }),
+      localOwner: isLocalOwnerProfile(profile),
+      skippedGrantReasons: replay.warnings.map((warning) => warning.reason),
+    };
+    return {
+      ok: true,
+      context: {
+        summary: {
+          ...summary,
+          ...(livePrincipalDid === undefined ? {} : { principalDid: livePrincipalDid }),
           ...(activeSessionDid === undefined ? {} : { sessionDid: activeSessionDid }),
         },
         runtime,

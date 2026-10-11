@@ -106,7 +106,7 @@ function kvRefusal(body: string | object): KVService {
 
 async function projectedRefusal(error: unknown): Promise<Record<string, unknown>> {
   const { authorizationFailure } = await import(new URL(
-    "../../operations/src/operations/exploration.ts",
+    "../../operations/src/kv-failure.ts",
     import.meta.url,
   ).href) as {
     authorizationFailure: (error: unknown, action: string) => { status: string; error: { code: string } } | undefined;

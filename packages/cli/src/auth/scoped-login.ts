@@ -1,7 +1,8 @@
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
-import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
+import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
@@ -57,15 +58,6 @@ export function openKeyExpiryParam(expiry: RequestedExpiry): string {
     throw new CLIError("INVALID_EXPIRY", "--expiry must be at least 1 minute: OpenKey does not sign shorter sessions.", ExitCode.USAGE_ERROR);
   }
   return `${seconds}s`;
-}
-
-/**
- * Whether a profile holds a local owner key. An explicit posture does not
- * hide `authMethod: "local"` or a stored private key, which `tc auth login
- * --method local` leaves on any profile it signs in.
- */
-export function isLocalOwnerProfile(profile: ProfileConfig): boolean {
-  return resolveProfilePosture(profile) === "local-owner-key" || profile.authMethod === "local" || typeof profile.privateKey === "string";
 }
 
 /**

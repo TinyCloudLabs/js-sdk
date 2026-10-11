@@ -1,5 +1,6 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Cbor } from "ox";
@@ -114,6 +115,26 @@ function hasExactCapability(
   );
 }
 
+/** One HTTP request the loopback node received; the Authorization value is kept only as its hash. */
+export interface HermeticRequestRecord {
+  readonly method: string;
+  readonly path: string;
+  readonly authorizationSha256?: string;
+}
+
+/** One capability a verified `/invoke` invocation exercised, as decoded to authorize it. */
+export interface HermeticInvocationRecord {
+  readonly service: string;
+  readonly action: string;
+  readonly space: string;
+  readonly path: string;
+}
+
+/** SHA-256 (hex) of an Authorization header value, as {@link HermeticRequestRecord} records it. */
+export function hermeticAuthorizationSha256(authorization: string): string {
+  return createHash("sha256").update(authorization).digest("hex");
+}
+
 class LoopbackEncryptedNode {
   readonly wasm = new NodeWasmBindings();
   readonly nodePrivateKey = new Uint8Array(32).fill(17);
@@ -138,6 +159,9 @@ class LoopbackEncryptedNode {
     kvWrites: 0,
   };
 
+  readonly requestLog: HermeticRequestRecord[] = [];
+  readonly invocationLog: HermeticInvocationRecord[] = [];
+
   private readonly server: Server;
   private readonly listening: Promise<void>;
   private envelope?: InlineEncryptedEnvelope;
@@ -160,6 +184,14 @@ class LoopbackEncryptedNode {
         const chunks: Buffer[] = [];
         for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
         const body = Buffer.concat(chunks);
+        const authorization = incoming.headers.authorization;
+        this.requestLog.push({
+          method: incoming.method ?? "GET",
+          path: new URL(incoming.url ?? "/", "http://loopback").pathname,
+          ...(typeof authorization === "string"
+            ? { authorizationSha256: hermeticAuthorizationSha256(authorization) }
+            : {}),
+        });
         const request = new Request(
           new URL(incoming.url ?? "/", this.host),
           {
@@ -555,6 +587,12 @@ class LoopbackEncryptedNode {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
+      for (const [resource, actions] of Object.entries(payload.att ?? {})) {
+        const [space = "", service = "", ...path] = resource.split("/");
+        for (const action of Object.keys(actions)) {
+          this.invocationLog.push({ service, action, space, path: path.join("/") });
+        }
+      }
       if (payload.prf?.some((cid) => this.revokedDelegationCids.has(cid))) {
         this.observed.revokedInvocations += 1;
         return new Response("delegation has been revoked", { status: 403 });
@@ -891,6 +929,10 @@ export interface HermeticEncryptedNode {
     kvReads: number;
     kvWrites: number;
   }>;
+  /** Every HTTP request received so far, in order. */
+  requests(): readonly HermeticRequestRecord[];
+  /** Every capability of every verified `/invoke` invocation so far, in order. */
+  invocations(): readonly HermeticInvocationRecord[];
   rejectRootRawCidActivations(refuse: boolean): void;
   provisionKvSpace(spaceId: string): void;
   /** Serve the encrypted secret without minting a delegation, for grants authorized elsewhere. */
@@ -1108,6 +1150,8 @@ export async function createHermeticEncryptedNode(
       kvReads: transport.observed.kvReads,
       kvWrites: transport.observed.kvWrites,
     }),
+    requests: () => [...transport.requestLog],
+    invocations: () => [...transport.invocationLog],
     rejectRootRawCidActivations: (refuse) => transport.rejectRootRawCidActivations(refuse),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
     provisionSecret: () => transport.configure({

@@ -5,7 +5,6 @@ import * as nodeSdk from "@tinycloud/node-sdk";
 import { OperationInvocationError, operationError } from "./errors.js";
 
 const DEFAULT_SECRETS_SPACE = "secrets";
-const SECRET_MANAGER_BASE_URL = "https://secrets.tinycloud.xyz";
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 
@@ -154,22 +153,10 @@ function canonicalizeSpaceUri(space: string): string {
 }
 
 /**
- * Builds a setup action URL without ever accepting a secret value. It opens
- * Secret Manager's app with the secret's name (and scope) filled in.
+ * The operations scope canonicalizer: trims, lowercases and folds every other
+ * character to `-`. Empty means unscoped; `default`/`global` are refused.
  */
-export function buildSecretSetupUrl(reference: SecretReference): string {
-  const parameters = [
-    ["secret", reference.name],
-    ...(reference.scope === undefined ? [] : [["scope", reference.scope] as const]),
-    ["space", reference.space],
-  ] as const;
-  const query = parameters
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
-  return `${SECRET_MANAGER_BASE_URL}/app?${query}`;
-}
-
-function canonicalizeSecretScope(scope: string | undefined): string | undefined {
+export function canonicalizeSecretScope(scope: string | undefined): string | undefined {
   if (scope === undefined || scope === "") return undefined;
 
   const trimmed = scope.trim();

@@ -44,6 +44,16 @@
       "import": "./dist/secret-capabilities.js",
       "require": "./dist/secret-capabilities.cjs"
     },
+    "./secret-request": {
+      "types": "./dist/secret-request.d.ts",
+      "import": "./dist/secret-request.js",
+      "require": "./dist/secret-request.cjs"
+    },
+    "./recovery": {
+      "types": "./dist/recovery.d.ts",
+      "import": "./dist/recovery.js",
+      "require": "./dist/recovery.cjs"
+    },
     "./operations.json": "./generated/operations.json"
   },
   "engines": {
@@ -55,7 +65,7 @@
     "coverage.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts",
+    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts --entry src/secret-request.ts --entry src/recovery.ts",
     "clean": "rm -rf dist",
     "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",

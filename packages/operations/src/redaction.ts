@@ -4,6 +4,7 @@ import type {
   OperationRef,
 } from "./contract.js";
 import type { OperationError, OperationErrorCode } from "./errors.js";
+import { isSafeRecovery } from "./recovery.js";
 import { safeOriginHost, safeSessionDid } from "./safe-values.js";
 
 export const REDACTED_VALUE = "[REDACTED]";
@@ -126,6 +127,36 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
   INPUT_INVALID: {
     issues: (value) =>
       Array.isArray(value) ? safeIssueCodes(value) : undefined,
+    reason: (value) =>
+      value === "OWNER_MISMATCH" || value === "OWNER_DID_UNKNOWN" ? value : undefined,
+  },
+  AUTH_REQUIRED: {
+    recovery: (value) => isSafeRecovery(value, "sign_in") ? { ...value } : undefined,
+    reason: (value) => value === "explicit_key" ? value : undefined,
+  },
+  SESSION_NOT_FOUND: {
+    recovery: (value) => isSafeRecovery(value, "sign_in") ? { ...value } : undefined,
+  },
+  PROFILE_MIGRATION_REQUIRED: {
+    recovery: (value) => isSafeRecovery(value, "complete_migration") ? { ...value } : undefined,
+  },
+  // `secrets.get` not found for an identity no request link serves.
+  KV_NOT_FOUND: {
+    recoveryKind: (value) =>
+      value === "put_locally" || value === "not_requestable" ? value : undefined,
+    names: (value) =>
+      Array.isArray(value) && value.length >= 1 && value.length <= 10 &&
+        value.every((name) => typeof name === "string" && name.length <= 256 && /^[A-Z][A-Z0-9_]*$/.test(name))
+        ? [...value]
+        : undefined,
+    scope: (value) =>
+      typeof value === "string" && value.length <= 256 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(value)
+        ? value
+        : undefined,
+    owner: (value) =>
+      typeof value === "string" && /^did:pkh:eip155:[1-9][0-9]*:0x[0-9a-fA-F]{40}$/.test(value)
+        ? value
+        : undefined,
   },
   OPERATION_VERSION_UNSUPPORTED: {
     supportedVersions: (value) =>

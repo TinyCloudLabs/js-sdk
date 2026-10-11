@@ -143,6 +143,20 @@ export function resolvePosture(profile: Pick<StoredProfile, "posture" | "authMet
   return "owner-openkey";
 }
 
+/**
+ * Whether a profile holds a local owner key. An explicit posture does not
+ * hide `authMethod: "local"` or a stored private key, which `tc auth login
+ * --method local` leaves on any profile it signs in. The one predicate for
+ * "this identity is its own owner" across the CLI and operations; posture
+ * resolution and the posture gate are deliberately unchanged.
+ */
+export function isLocalOwnerProfile(
+  profile: Readonly<{ posture?: unknown; authMethod?: unknown; privateKey?: unknown }>,
+): boolean {
+  return resolvePosture(profile) === "local-owner-key" || profile.authMethod === "local" ||
+    typeof profile.privateKey === "string";
+}
+
 function profileNotFound(profile: string): Extract<InvocationContextResolution, { ok: false }> {
   return {
     ok: false,

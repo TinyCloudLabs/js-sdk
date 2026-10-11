@@ -33,6 +33,10 @@ interface HermeticEncryptedNode {
   readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  /** Every HTTP request the loopback node received, in order; Authorization only as its SHA-256. */
+  requests(): readonly { readonly method: string; readonly path: string; readonly authorizationSha256?: string }[];
+  /** Every capability of every verified `/invoke` invocation, in order. */
+  invocations(): readonly { readonly service: string; readonly action: string; readonly space: string; readonly path: string }[];
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<StoredRuntimeDelegation>;
   mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;
