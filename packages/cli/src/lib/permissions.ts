@@ -6,6 +6,8 @@ import {
   type PermissionRequestArtifact,
 } from "@tinycloud/operations/artifacts";
 import type { OperationWarning } from "@tinycloud/operations/delegation-binding";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
@@ -558,23 +560,35 @@ async function secretPermissionsFromAppManifest(
 }
 
 /**
- * The owner's default secrets network. The owner is the profile's recorded
- * owner (or a local owner key's own did:pkh), else `--owner`. A key-only
- * profile's `did` is its session did:key, which owns no secrets network.
+ * The owner's default secrets network, for the owner `resolveSecretsOwner`
+ * picks: a local key's own account, the recorded owner, a delegate session's
+ * space owner, a pkh principal, then `--owner`. A key-only profile's `did` is
+ * its session did:key, which owns no secrets network.
  */
 async function defaultSecretsNetworkId(profileName: string, requestedOwner: string | undefined): Promise<string> {
   const profile = await ProfileManager.getProfile(profileName);
-  const ownDid = profile.did?.split("#")[0];
-  const recorded = profile.ownerDid ?? (ownDid?.startsWith("did:pkh:") ? ownDid : undefined);
-  const owner = (recorded ?? requestedOwner)?.split("#")[0];
-  if (!owner) {
-    throw new CLIError(
-      "OWNER_DID_UNKNOWN",
-      `Cannot determine the secrets owner for profile "${profileName}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
-      ExitCode.AUTH_REQUIRED,
-    );
+  const requested = requestedOwner === undefined ? undefined : canonicalOwnerDid(requestedOwner.split("#")[0]!);
+  const resolution = resolveSecretsOwner({
+    local: isLocalOwnerProfile(profile),
+    posture: resolveProfilePosture(profile),
+    ...(profile.ownerDid === undefined ? {} : { ownerDid: profile.ownerDid.split("#")[0] }),
+    ...(profile.did === undefined ? {} : { principalDid: profile.did.split("#")[0] }),
+    ...(profile.spaceId === undefined ? {} : { space: profile.spaceId }),
+  }, requested);
+  if (!resolution.ok) {
+    throw resolution.code === "OWNER_MISMATCH"
+      ? new CLIError(
+        "OWNER_MISMATCH",
+        `--owner does not match the secrets owner of profile "${profileName}". ${resolution.message}`,
+        ExitCode.USAGE_ERROR,
+      )
+      : new CLIError(
+        "OWNER_DID_UNKNOWN",
+        `Cannot determine the secrets owner for profile "${profileName}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
+        ExitCode.AUTH_REQUIRED,
+      );
   }
-  return `urn:tinycloud:encryption:${canonicalOwnerDid(owner, "Secrets owner")}:default`;
+  return `urn:tinycloud:encryption:${resolution.owner}:default`;
 }
 
 export function diffPermissions(

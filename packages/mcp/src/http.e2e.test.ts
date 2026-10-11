@@ -70,6 +70,13 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   const tools = await client.listTools();
   expect(tools.tools).toHaveLength(17);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
+  // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
+  // reauthorization path for a server-revoked session (TC-896).
+  expect(tools.tools.map((tool) => tool.name)).not.toContain("tinycloud_secrets_status");
+  const unknownTool = await client.callTool({ name: "tinycloud_secrets_status", arguments: { names: ["MCP_TEST_SECRET"] } })
+    .then((value) => JSON.stringify(value), (error: unknown) => String(error));
+  expect(unknownTool).toMatch(/tinycloud_secrets_status not found|Unknown tool/i);
+  expect(unknownTool).not.toContain("tinycloud.secrets.status");
 
   const result = await client.callTool({ name: "tinycloud_connect", arguments: {} });
   const structured = result.structuredContent;

@@ -14,7 +14,7 @@ import type {
 } from "../contract.js";
 import { OperationInvocationError, operationError, storageFullOperationError } from "../errors.js";
 import { operationSpaceResolver } from "../secrets.js";
-import { authorizationFailure } from "./exploration.js";
+import { authorizationFailure } from "../kv-failure.js";
 
 const DEFAULT_MAX_ROWS = 100;
 const MAX_MAX_ROWS = 1_000;

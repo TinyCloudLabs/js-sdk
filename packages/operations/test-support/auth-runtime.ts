@@ -19,6 +19,13 @@ export interface StoredRuntimeDelegation {
   readonly host?: string;
 }
 
+/** One HTTP request the loopback node received; Authorization only as its SHA-256. */
+export interface HermeticRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly authorizationSha256?: string;
+}
+
 interface HermeticEncryptedNode {
   readonly host: string;
   readonly restorableSession: {
@@ -33,6 +40,10 @@ interface HermeticEncryptedNode {
   readonly applicationsSpaceId: string;
   readonly permissions: readonly PermissionEntry[];
   readonly unrelatedAudience: string;
+  /** Every HTTP request the loopback node received, in order. */
+  requests(): readonly HermeticRequest[];
+  /** Every capability of every verified `/invoke` invocation, in order. */
+  invocations(): readonly { readonly service: string; readonly action: string; readonly space: string; readonly path: string }[];
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
   mintDelegation(): Promise<StoredRuntimeDelegation>;
   mintDelegationWithPermissions(permissions: PermissionEntry[]): Promise<StoredRuntimeDelegation>;

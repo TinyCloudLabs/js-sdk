@@ -33,8 +33,12 @@ var init_constants = __esm({
       PERMISSION_DENIED: 5,
       NETWORK_ERROR: 6,
       NODE_ERROR: 7,
+      /** `tc secrets wait` only: the deadline passed while a secret was still missing. */
+      PENDING: 8,
       /** A write was refused because the owner's TinyCloud storage is full. */
-      STORAGE_FULL: 10
+      STORAGE_FULL: 10,
+      /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
+      CANCELLED: 130
     };
   }
 });
@@ -119,7 +123,7 @@ function warningLine(warnings) {
   return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
 }
 function outputError(code3, message, hint, details = {}) {
-  const { meta, warnings = [] } = details;
+  const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
@@ -138,6 +142,9 @@ function outputError(code3, message, hint, details = {}) {
       error: { code: code3, message }
     };
     if (hint) payload.error.hint = hint;
+    if (recovery) payload.error.recovery = recovery;
+    if (setup) payload.error.setup = setup;
+    if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
@@ -267,6 +274,13 @@ var init_storage = __esm({
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { isSafeRecovery } from "@tinycloud/operations/recovery";
+import {
+  buildSecretRequestUrl,
+  isSafeRequestAccessRecovery,
+  isValidSecretName,
+  SECRET_REQUEST_MAX_NAMES
+} from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 function setActiveProfileName(name) {
   activeProfileName = name;
@@ -342,11 +356,63 @@ function handleError(error) {
     meta.resource = capability.resource;
     meta.requiredAction = capability.requiredAction;
   }
+  const deniedNames = cliError.metadata?.deniedNames;
+  const recovery = safeCliRecovery(cliError.metadata?.recovery, {
+    deniedNames: Array.isArray(deniedNames) && deniedNames.every((name) => typeof name === "string") ? deniedNames : []
+  });
+  const setup = cliError.code === "NOT_FOUND" || cliError.code === "PERMISSION_DENIED" ? safeCliSetup(cliError.metadata?.setup) : void 0;
+  const progress = cliError.code === "NETWORK_ERROR" || cliError.code === "CANCELLED" ? safeCliProgress(cliError.metadata?.progress) : void 0;
   outputError(cliError.code, cliError.message, hint, {
+    ...recovery ? { recovery } : {},
+    ...setup ? { setup } : {},
+    ...progress ? { progress } : {},
     ...Object.keys(meta).length ? { meta } : {},
     warnings: mergeWarnings(drainWarnings(), operationWarnings(cliError.metadata?.warnings))
   });
   process.exit(cliError.exitCode);
+}
+function safeCliRecovery(value, context) {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || !("action" in value)) return void 0;
+  const action = value.action;
+  switch (action) {
+    case "sign_in":
+    case "complete_migration":
+      return isSafeRecovery(value, action) ? { ...value } : void 0;
+    case "request_access":
+      return isSafeRequestAccessRecovery(value, context.deniedNames) ? { ...value, names: [...value.names] } : void 0;
+    default:
+      return void 0;
+  }
+}
+function safeCliSetup(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const setup = { ...value };
+  if (!Object.keys(setup).every((key) => SETUP_KEYS[key] === true)) return void 0;
+  const { url, names, scope, owner, action } = setup;
+  if (action !== "add_secret" || typeof url !== "string" || typeof owner !== "string") return void 0;
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) return void 0;
+  if (scope !== void 0 && typeof scope !== "string") return void 0;
+  try {
+    const link2 = buildSecretRequestUrl({ owner, names, ...scope !== void 0 ? { scope } : {} });
+    if (link2.url !== url || link2.owner !== owner || link2.names.length !== names.length) return void 0;
+  } catch {
+    return void 0;
+  }
+  return { url, names: [...names], ...scope !== void 0 ? { scope } : {}, owner, action };
+}
+function safeNameList(value) {
+  if (!Array.isArray(value) || value.length > SECRET_REQUEST_MAX_NAMES) return void 0;
+  if (!value.every((name) => typeof name === "string" && isValidSecretName(name))) return void 0;
+  if (new Set(value).size !== value.length) return void 0;
+  return [...value];
+}
+function safeCliProgress(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  if (!("present" in value) || !("pending" in value) || Object.keys(value).length !== 2) return void 0;
+  const present = safeNameList(value.present);
+  const pending = safeNameList(value.pending);
+  if (!present || !pending || present.some((name) => pending.includes(name))) return void 0;
+  return { present, pending };
 }
 function buildAuthHint(error) {
   const capability = validatedCapabilityOf({ meta: error.metadata });
@@ -409,7 +475,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError;
+var activeProfileName, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -428,6 +494,7 @@ var init_errors = __esm({
       }
       status;
     };
+    SETUP_KEYS = { url: true, names: true, scope: true, owner: true, action: true };
   }
 });
 
@@ -5464,6 +5531,8 @@ import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact
 } from "@tinycloud/operations/artifacts";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
@@ -5501,14 +5570,17 @@ var init_permissions = __esm({
 });
 
 // src/auth/session-expired.ts
+import { signInRecovery } from "@tinycloud/operations/recovery";
 function signInAgainHint(profileName, posture) {
-  if (posture === "local-owner-key") {
-    return `Sign in again with: tc --profile ${profileName} auth login --method local`;
+  const delegate = posture === "delegate-session";
+  const { command } = signInRecovery(
+    profileName,
+    delegate ? "delegate-session" : posture === "local-owner-key" ? "local-owner-key" : "owner-openkey"
+  );
+  if (command === void 0) {
+    return delegate ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with tc auth login --method openkey --paste --manifest <manifest.json>.` : `Sign in again to profile ${JSON.stringify(profileName)} with tc auth login.`;
   }
-  if (posture === "delegate-session") {
-    return `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
-  }
-  return `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
+  return delegate ? `Have the owner approve a new scoped login: ${command}. Pass the owner's code on stdin, newline-terminated.` : `Sign in again with: ${command}`;
 }
 function sessionExpiredError(profileName, posture) {
   return new CLIError(

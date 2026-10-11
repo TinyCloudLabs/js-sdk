@@ -14,6 +14,7 @@ import {
   SECRET_NAME_RE,
   type ResolvedSecretPath,
   type SecretScopeOptions,
+  type SecretPutOptions,
 } from "./paths";
 
 function invalidSecretInput(message: string): Result<never, ServiceError> {
@@ -77,17 +78,20 @@ export class SecretsService implements ISecretsService {
   async put(
     name: string,
     value: string,
-    options?: SecretScopeOptions,
+    options?: SecretPutOptions,
   ): Promise<Result<void, SecretsError>> {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
     const now = new Date().toISOString();
-    return this.vault.put(secretPath.vaultKey, {
+    const payload = {
       value,
       createdAt: now,
       updatedAt: now,
-    } satisfies SecretPayload);
+    } satisfies SecretPayload;
+    return options?.ifAbsent === true
+      ? this.vault.put(secretPath.vaultKey, payload, { ifNoneMatch: "*" })
+      : this.vault.put(secretPath.vaultKey, payload);
   }
 
   async delete(

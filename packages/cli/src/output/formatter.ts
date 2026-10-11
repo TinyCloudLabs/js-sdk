@@ -20,17 +20,32 @@ function warningLine(warnings: readonly OperationWarningOutput[]): string {
 }
 
 /**
- * Write a command error to stderr. `meta` (validated authorization fields)
- * and `warnings` (fixed-code diagnostics) appear only in the JSON form; the
- * human form adds one warnings line.
+ * Value-free structured fields an error may carry in its JSON form. Each one
+ * is validated by `handleError` before it reaches here.
+ */
+export interface ErrorOutputDetails {
+  readonly meta?: Record<string, unknown>;
+  readonly warnings?: readonly OperationWarningOutput[];
+  /** `{url, names, scope?, owner, action: "add_secret"}`: the canonical request link for missing names. */
+  readonly setup?: Record<string, unknown>;
+  /** `sign_in`, `complete_migration` or `request_access`, exact shapes. */
+  readonly recovery?: Record<string, unknown>;
+  /** `{present, pending}` of the last successful `wait` attempt. */
+  readonly progress?: { readonly present: readonly string[]; readonly pending: readonly string[] };
+}
+
+/**
+ * Write a command error to stderr. `meta` (validated authorization fields),
+ * `warnings` (fixed-code diagnostics), `setup`, `recovery` and `progress`
+ * appear only in the JSON form; the human form adds one warnings line.
  */
 export function outputError(
   code: string,
   message: string,
   hint?: string,
-  details: { readonly meta?: Record<string, unknown>; readonly warnings?: readonly OperationWarningOutput[] } = {},
+  details: ErrorOutputDetails = {},
 ): void {
-  const { meta, warnings = [] } = details;
+  const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
@@ -47,6 +62,9 @@ export function outputError(
         code: string;
         message: string;
         hint?: string;
+        recovery?: Record<string, unknown>;
+        setup?: Record<string, unknown>;
+        progress?: ErrorOutputDetails["progress"];
         meta?: Record<string, unknown>;
         warnings?: readonly OperationWarningOutput[];
       };
@@ -54,6 +72,9 @@ export function outputError(
       error: { code, message },
     };
     if (hint) payload.error.hint = hint;
+    if (recovery) payload.error.recovery = recovery;
+    if (setup) payload.error.setup = setup;
+    if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");

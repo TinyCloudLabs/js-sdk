@@ -5234,10 +5234,18 @@ export class TinyCloudNode {
     }
 
     const targetHost = delegation.host ?? this.config.host!;
-    const activateResult = await activateSessionWithHost(
-      targetHost,
-      delegation.delegationHeader,
-    );
+    let activateResult: SpaceHostResult;
+    try {
+      activateResult = await activateSessionWithHost(
+        targetHost,
+        delegation.delegationHeader,
+      );
+    } catch (cause) {
+      throw Object.assign(
+        new Error("The TinyCloud host could not be reached to activate the delegation."),
+        { code: "ACTIVATION_TRANSPORT_FAILED", cause },
+      );
+    }
     if (!activateResult.success) {
       if (
         this.operationsFromDelegation(delegation).some((operation) =>

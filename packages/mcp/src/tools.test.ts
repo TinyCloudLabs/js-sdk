@@ -24,8 +24,9 @@ test("has exactly the reviewed KV CRUD and SQLite operation mapping", () => {
     expect.objectContaining({ name: "tinycloud_sql_query", operationId: "tinycloud.sql.query", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_sql_execute", operationId: "tinycloud.sql.execute", operationVersion: 1 }),
     expect.objectContaining({ name: "tinycloud_secrets_get", operationId: "tinycloud.secrets.get", operationVersion: 1 }),
+    expect.objectContaining({ name: "tinycloud_secrets_status", operationId: "tinycloud.secrets.status", operationVersion: 1, surfaces: ["local"] }),
   ]);
-  expect((catalog as { operations: unknown[] }).operations).toHaveLength(16);
+  expect((catalog as { operations: unknown[] }).operations).toHaveLength(17);
 });
 
 test("registers exact SQL read and mutation annotations", () => {
@@ -59,4 +60,20 @@ test("does not register a continuation tool or any non-tool MCP surface", async 
   expect(toolSource).not.toContain("registerResource");
   expect(toolSource).not.toContain("registerPrompt");
   expect(toolSource).not.toContain("elicitation");
+});
+
+test("binds secrets status read-only and to the local surface only", () => {
+  const bindings = toolBindingsForTest();
+  expect(bindings.find((candidate) => candidate.name === "tinycloud_secrets_status")).toEqual({
+    name: "tinycloud_secrets_status",
+    operationId: "tinycloud.secrets.status",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+    surfaces: ["local"],
+  });
+  expect(bindings.filter((binding) => binding.surfaces !== undefined).map((binding) => binding.name))
+    .toEqual(["tinycloud_secrets_status"]);
 });

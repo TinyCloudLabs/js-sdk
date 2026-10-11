@@ -66,7 +66,7 @@ const loaded = format === "esm"
 const tools = [];
 loaded.registerTinyCloudTools(
   { registerTool(name, definition) { tools.push({ name, title: definition.title }); } },
-  { profile: "packed", explicitProfile: true, allowOwnerProfile: false },
+  { surface: "local", profile: "packed", explicitProfile: true, allowOwnerProfile: false },
   loaded.createJsonSchemaValidator(),
 );
 process.stdout.write(JSON.stringify(tools));
@@ -93,6 +93,7 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_sql_query: "tinycloud.sql.query",
     tinycloud_sql_execute: "tinycloud.sql.execute",
     tinycloud_secrets_get: "tinycloud.secrets.get",
+    tinycloud_secrets_status: "tinycloud.secrets.status",
   };
   for (const format of ["esm", "cjs"] as const) {
     const result = Bun.spawnSync([
@@ -107,7 +108,7 @@ process.stdout.write(JSON.stringify(tools));
       name: string;
       title: string;
     }>;
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     expect(tools.map((tool) => tool.title)).toEqual(
       tools.map((tool) => titlesByOperation.get(operationByTool[tool.name]!)!),
     );

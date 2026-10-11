@@ -194,6 +194,8 @@ export const RUNTIME_DELEGATION_REJECTIONS = [
   "resources_mismatch",
   "unsupported",
   "activation_rejected",
+  "activation_unavailable",
+  "activation_unauthenticated",
 ] as const;
 
 export type RuntimeDelegationRejection = typeof RUNTIME_DELEGATION_REJECTIONS[number];
@@ -206,6 +208,27 @@ export class RuntimeDelegationRejectedError extends Error {
     this.name = "RuntimeDelegationRejectedError";
     this.reason = reason;
   }
+}
+
+/**
+ * Classify an activation failure. Transport failures and transient host
+ * statuses (408, 429, 5xx) are `activation_unavailable`; a plain 401 is
+ * `activation_unauthenticated`; everything else stays `activation_rejected`.
+ */
+function activationRejectionReason(error: unknown): RuntimeDelegationRejection {
+  if (typeof error !== "object" || error === null) return "activation_rejected";
+  if ("code" in error && error.code === "ACTIVATION_TRANSPORT_FAILED") {
+    return "activation_unavailable";
+  }
+  const cause = "cause" in error ? error.cause : undefined;
+  const status =
+    typeof cause === "object" && cause !== null && "status" in cause
+      ? cause.status
+      : undefined;
+  if (typeof status !== "number") return "activation_rejected";
+  if (status === 408 || status === 429 || status >= 500) return "activation_unavailable";
+  if (status === 401) return "activation_unauthenticated";
+  return "activation_rejected";
 }
 
 function reject(reason: RuntimeDelegationRejection, message: string): never {
@@ -742,7 +765,10 @@ export async function activateValidatedRuntimeDelegation(
       await node.useRuntimeDelegation(installedCandidate);
     }
   } catch (error) {
-    reject("activation_rejected", error instanceof Error ? error.message : String(error));
+    reject(
+      activationRejectionReason(error),
+      error instanceof Error ? error.message : String(error),
+    );
   }
   const installed = node
     .getRuntimePermissionDelegations()

@@ -3,6 +3,10 @@
   "tools": [
     {
       "name": "tinycloud_account_applications_list",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.account.applications.list",
       "operationVersion": 1,
       "effects": [
@@ -17,6 +21,10 @@
     },
     {
       "name": "tinycloud_account_spaces_list",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.account.spaces.list",
       "operationVersion": 1,
       "effects": [
@@ -31,6 +39,10 @@
     },
     {
       "name": "tinycloud_auth_capabilities",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.auth.capabilities",
       "operationVersion": 1,
       "effects": [
@@ -45,6 +57,10 @@
     },
     {
       "name": "tinycloud_auth_import",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.auth.import",
       "operationVersion": 1,
       "effects": [
@@ -59,6 +75,10 @@
     },
     {
       "name": "tinycloud_auth_request",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.auth.request",
       "operationVersion": 1,
       "effects": [
@@ -73,6 +93,10 @@
     },
     {
       "name": "tinycloud_auth_status",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.auth.status",
       "operationVersion": 1,
       "effects": [
@@ -88,6 +112,10 @@
     },
     {
       "name": "tinycloud_kv_delete",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.kv.delete",
       "operationVersion": 1,
       "effects": [
@@ -102,6 +130,10 @@
     },
     {
       "name": "tinycloud_kv_get",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.kv.get",
       "operationVersion": 1,
       "effects": [
@@ -116,6 +148,10 @@
     },
     {
       "name": "tinycloud_kv_head",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.kv.head",
       "operationVersion": 1,
       "effects": [
@@ -130,6 +166,10 @@
     },
     {
       "name": "tinycloud_kv_list",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.kv.list",
       "operationVersion": 1,
       "effects": [
@@ -144,6 +184,10 @@
     },
     {
       "name": "tinycloud_kv_put",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.kv.put",
       "operationVersion": 1,
       "effects": [
@@ -158,6 +202,10 @@
     },
     {
       "name": "tinycloud_secrets_get",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.secrets.get",
       "operationVersion": 1,
       "effects": [
@@ -172,7 +220,28 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud_secrets_status",
+      "surfaces": [
+        "local"
+      ],
+      "operationId": "tinycloud.secrets.status",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
       "name": "tinycloud_sql_execute",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.sql.execute",
       "operationVersion": 1,
       "effects": [
@@ -188,6 +257,10 @@
     },
     {
       "name": "tinycloud_sql_query",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.sql.query",
       "operationVersion": 1,
       "effects": [
@@ -202,6 +275,10 @@
     },
     {
       "name": "tinycloud_sql_schema_inspect",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.sql.schema.inspect",
       "operationVersion": 1,
       "effects": [
@@ -216,6 +293,10 @@
     },
     {
       "name": "tinycloud_status",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
       "operationId": "tinycloud.status.get",
       "operationVersion": 1,
       "effects": [

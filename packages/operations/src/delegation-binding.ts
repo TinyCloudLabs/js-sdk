@@ -352,6 +352,19 @@ export async function replayProfileDelegations(
   options: { readonly host: string; readonly migrate: boolean; readonly resolveSpace: OperationSpaceResolver },
 ): Promise<{ installed: ValidatedRuntimeDelegation[]; warnings: OperationWarning[] }> {
   await prepareStoredDelegationReplay(profile, node, { host: options.host, migrate: options.migrate });
+  return replayStoredDelegationRecords(profile, node, options);
+}
+
+/**
+ * Replays the profile's stored records as they are, under the replay rule,
+ * without migrating: no lock, no store or marker write. Runtimes that must
+ * never write profile state (the `"restored"` runtime) call only this.
+ */
+export async function replayStoredDelegationRecords(
+  profile: string,
+  node: RuntimeDelegationActivator,
+  options: { readonly host: string; readonly resolveSpace: OperationSpaceResolver },
+): Promise<{ installed: ValidatedRuntimeDelegation[]; warnings: OperationWarning[] }> {
   const installed: ValidatedRuntimeDelegation[] = [];
   const warnings: OperationWarning[] = [];
   const seen = new Set<string>();
