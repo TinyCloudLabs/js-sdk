@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_GRANT } from "@tinycloud/courier";
+import { registerCourierCommand } from "./courier.ts";
 
 // Runs the built CLI (`bun run --cwd packages/cli build` first) under Node, as users do.
 const CLI = fileURLToPath(new URL("../../dist/index.js", import.meta.url));
@@ -15,7 +17,7 @@ function tc(args: string[]) {
     encoding: "utf8",
     env: { ...process.env, HOME: home, TC_HOME: join(home, ".tinycloud"), COURIER_HOME: join(home, ".courier"), NO_COLOR: "1" },
   });
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr, home };
 }
 
 describe("tc courier", () => {
@@ -38,10 +40,38 @@ describe("tc courier", () => {
     expect(manifest.permissions).toEqual(AGENT_GRANT);
   });
 
-  test("tc options before courier are rejected", () => {
-    const result = tc(["--profile", "p", "courier", "manifest"]);
+  for (const argv of [
+    ["--profile", "p", "courier", "manifest"],
+    ["-vp", "p", "courier", "manifest"],
+    ["-qH", "https://node.example", "courier", "manifest"],
+    ["-vpp", "courier", "manifest"],
+    ["-Hhttps://node.example", "courier", "manifest"],
+    ["--profile=p", "courier", "manifest"],
+    ["--json", "courier", "manifest"],
+    ["--", "courier", "manifest"],
+    ["-v", "--", "courier", "manifest"],
+  ]) {
+    test(`tc ${argv.join(" ")} is rejected`, () => {
+      const result = tc(argv);
+      expect(result.code).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("~/.courier");
+    });
+  }
+
+  test("tc options before courier never let tc consume Courier's --host", () => {
+    const result = tc(["-vp", "p", "courier", "init", "--request", "--host", "https://node.example"]);
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain("~/.courier");
+    expect(result.stdout).toBe("");
+    expect(existsSync(join(result.home, ".courier"))).toBe(false);
+  });
+
+  test("the Commander courier command refuses instead of running Courier", async () => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} })
+      .option("-H, --host <url>");
+    registerCourierCommand(program);
+    await expect(program.parseAsync(["courier", "init", "--request", "--host", "https://node.example"], { from: "user" }))
+      .rejects.toMatchObject({ exitCode: 2, code: "tc.courier.options" });
   });
 
   test("unknown Courier command is a usage error", () => {
@@ -71,3 +101,4 @@ describe("tc courier", () => {
     expect(result.stdout).toMatch(/^\s+courier \[args\.\.\.\]/m);
   });
 });
+

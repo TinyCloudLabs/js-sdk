@@ -58,10 +58,43 @@ function fail(code: string, message: string): never {
 
 // ---------- init ----------
 
+/** A value flag's value, or undefined when absent. parseArgs records a value-less flag as 'true'. */
+function initValue(args: ParsedArgs, name: string): string | undefined {
+  if (!args.has(name)) return undefined;
+  const value = args.get(name)!;
+  if (value === 'true' || value === '') fail('usage', `--${name} needs a value.`);
+  return value;
+}
+
+function initUrl(args: ParsedArgs, name: string): string | undefined {
+  if (!args.has(name)) return undefined;
+  const value = args.get(name)!;
+  let url: URL | undefined;
+  try { url = new URL(value); } catch { /* reported below */ }
+  if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:')) fail('usage', `--${name} needs a URL.`);
+  return value;
+}
+
 export async function cmdInit(args: ParsedArgs) {
   if (args.has('key') || args.has('key-file') || args.has('force')) {
     fail('usage', `Owner private-key flags are not supported. Use \`${cmd('init --request')}\` and approve the restricted grant in OpenKey.`);
   }
+  const hostFlag = initUrl(args, 'host');
+  const openkeyHostFlag = initUrl(args, 'openkey-host');
+  const apiHostFlag = initUrl(args, 'openkey-api-host');
+  const labelFlag = initValue(args, 'label');
+  const handleFlag = initValue(args, 'handle');
+  const expiry = args.get('expiry') ?? AGENT_GRANT_EXPIRY;
+  const expiryMs = durationMs(expiry);
+  if (!expiryMs || expiryMs > AGENT_GRANT_MAX_MS) fail('usage', `--expiry must be a duration such as 7d, at most ${AGENT_GRANT_EXPIRY}.`);
+  const grantFile = args.has('grant-file')
+    ? requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`)
+    : undefined;
+  // Read the grant before touching the profile, so a bad path or empty stdin cannot cost the key.
+  // --request returns before the grant is used, so never block on stdin for it.
+  const grantRaw = grantFile === undefined || args.has('request')
+    ? undefined
+    : grantFile === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(grantFile, 'utf8');
   if (args.has('resume')) {
     if (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key')) {
       fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
@@ -77,25 +110,22 @@ export async function cmdInit(args: ParsedArgs) {
   const rotate = args.has('rotate-key');
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
   const key = prior ? loadKey() : newAgentKey();
-  const host = args.get('host') ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
-  const openkeyHost = args.get('openkey-host') ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
-  const expiry = args.get('expiry') ?? AGENT_GRANT_EXPIRY;
-  const expiryMs = durationMs(expiry);
-  if (!expiryMs || expiryMs > AGENT_GRANT_MAX_MS) fail('usage', `--expiry must be a duration such as 7d, at most ${AGENT_GRANT_EXPIRY}.`);
+  const host = hostFlag ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
+  const openkeyHost = openkeyHostFlag ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
   const profile: Profile = prior ?? {
     version: 3,
     host,
     openkeyHost,
-    label: args.get('label') ?? `courier · ${os.hostname()}`,
-    ...(args.get('handle') ? { selfHandle: args.get('handle') } : {}),
+    label: labelFlag ?? `courier · ${os.hostname()}`,
+    ...(handleFlag ? { selfHandle: handleFlag } : {}),
     courierDid: bareDid(key.did),
     status: 'awaiting-grant',
     peers: {},
   };
   profile.host = host;
   profile.openkeyHost = openkeyHost;
-  profile.label = args.get('label') ?? profile.label;
-  if (args.get('handle')) profile.selfHandle = args.get('handle');
+  profile.label = labelFlag ?? profile.label;
+  if (handleFlag) profile.selfHandle = handleFlag;
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;
@@ -107,8 +137,6 @@ export async function cmdInit(args: ParsedArgs) {
   profile.courierDid = bareDid(key.did);
   saveKey(key);
   saveProfile(profile);
-  const apiHostFlag = args.get('openkey-api-host');
-  if (apiHostFlag === 'true') fail('usage', '--openkey-api-host needs a URL.');
   const request = courierGrantRequest(profile, key, expiry, { openkeyApiHost: apiHostFlag });
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
 
@@ -119,10 +147,8 @@ export async function cmdInit(args: ParsedArgs) {
   }
 
   let payload;
-  if (args.has('grant-file')) {
-    const file = requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`);
-    const raw = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
-    payload = await grantFromInput(raw, key, { apiHost: request.openkeyApiHost });
+  if (grantRaw !== undefined) {
+    payload = await grantFromInput(grantRaw, key, { apiHost: request.openkeyApiHost });
   } else {
     payload = await receiveGrant(request, { paste: args.has('paste') });
   }

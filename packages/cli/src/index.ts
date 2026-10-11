@@ -1,3 +1,4 @@
+import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
@@ -83,15 +84,26 @@ configureShareCommandServices({
 });
 
 const argv = process.argv.slice(2);
-const globalOptionsWithValues = new Set(["--profile", "-p", "--host", "-H"]);
+// Mirrors Commander's parsing of tc's global options: clustered shorts (-vp p, -vpp),
+// attached values (-Hurl, --host=url), separate values and `--`.
+const globalLongOptionsWithValues: Record<string, true> = { "--profile": true, "--host": true };
+const globalShortOptionsWithValues: Record<string, true> = { p: true, H: true };
 function firstCommandToken(values: readonly string[]): string | undefined {
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index]!;
     if (value === "--") return values[index + 1];
-    if (globalOptionsWithValues.has(value)) { index += 1; continue; }
-    if (value.startsWith("--profile=") || value.startsWith("--host=")) continue;
-    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json") continue;
-    if (value.startsWith("-")) continue;
+    if (value.startsWith("--")) {
+      if (globalLongOptionsWithValues[value]) index += 1;
+      continue;
+    }
+    if (value.length > 1 && value.startsWith("-")) {
+      for (let char = 1; char < value.length; char += 1) {
+        if (!globalShortOptionsWithValues[value[char]!]) continue;
+        if (char === value.length - 1) index += 1; // value is the next argument
+        break; // otherwise the rest of this argument is the value
+      }
+      continue;
+    }
     return value;
   }
   return undefined;
@@ -123,9 +135,7 @@ if (argv[0] === "courier") {
   const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
   if (code !== 0) process.exit(code);
 } else if (commandToken === "courier") {
-  process.stderr.write(
-    'tc courier takes no tc options and does not use tc profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. tc courier init --host <url>.\n',
-  );
+  process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}\n`);
   process.exit(2);
 } else {
   if (commandToken === "share") {
