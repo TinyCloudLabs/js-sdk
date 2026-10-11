@@ -593,19 +593,19 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       entry.actions.includes("tinycloud.kv/sync"),
     );
     expect(signedRootSync).toBeDefined();
-    const seeded = await tc(["kv", "put", "notes/a.txt", "root-value"], { profile: "root-prefix" });
+    const seeded = await tc(["kv", "put", "notes/a", "root-value"], { profile: "root-prefix" });
     expect(seeded.code, seeded.stderr).toBe(0);
 
     const profilePath = join(home, ".tinycloud", "profiles", "root-prefix", "profile.json");
     const saved = JSON.parse(await readFile(profilePath, "utf8")) as { replication?: { prefixes: string[]; allowSecrets?: boolean } };
     await writeFile(profilePath, JSON.stringify({ ...saved, replication: { prefixes: ["notes"] } }, null, 2));
-    const invalidSavedPrefix = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "root-prefix", replication: "on" });
+    const invalidSavedPrefix = await tc(["kv", "get", "notes/a", "--raw"], { profile: "root-prefix", replication: "on" });
     expect(invalidSavedPrefix.code).toBe(2);
     expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
     expect(invalidSavedPrefix.stderr).toContain("purging a replica alone does not change this profile setting");
     await writeFile(profilePath, JSON.stringify(saved, null, 2));
 
-    const firstRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "root-prefix", replication: "on" });
+    const firstRead = await tc(["kv", "get", "notes/a", "--raw"], { profile: "root-prefix", replication: "on" });
     expect(firstRead.code, firstRead.stderr).toBe(0);
     expect(firstRead.stdout.toString()).toBe("root-value");
     const report = await ok<{
@@ -623,7 +623,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       expect(directRootChanges.ok, JSON.stringify(directRootChanges)).toBe(true);
       expect(rootStatus, JSON.stringify(rootStatus)).toMatchObject({ state: "ready", coverage: "complete" });
       expect(rootStatus!.counts?.keys).toBeGreaterThan(0);
-      const offlineGet = await tc(["kv", "get", "notes/a.txt", "--raw"], {
+      const offlineGet = await tc(["kv", "get", "notes/a", "--raw"], {
         profile: "root-prefix", preload: NO_NETWORK, replication: "on",
       });
       expect(offlineGet.code).toBe(0);
@@ -633,12 +633,12 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
         profile: "root-prefix", preload: NO_NETWORK, replication: "on",
       });
       expect(offlineList.code).toBe(0);
-      expect(offlineList.stdout.toString()).toContain("notes/a.txt");
+      expect(offlineList.stdout.toString()).toContain("notes/a");
       const offlineRootList = await tc(["kv", "list"], {
         profile: "root-prefix", preload: NO_NETWORK, replication: "on",
       });
       expect(offlineRootList.code).toBe(0);
-      expect(offlineRootList.stdout.toString()).toContain("notes/a.txt");
+      expect(offlineRootList.stdout.toString()).toContain("notes/a");
     } else {
       expect(rootStatus).toMatchObject({ state: "unavailable", errorCode: "REPLICATION_ROOT_UNSUPPORTED" });
     }
