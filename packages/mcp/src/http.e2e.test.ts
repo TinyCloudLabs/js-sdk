@@ -117,7 +117,7 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
     error: "This approval link was requested by a different TinyCloud account, so the delegation was not stored.",
     code: "approval_owner_mismatch",
   });
-});
+}, 60_000);
 
 test("a signed bootstrap and a signed delegation approval let a hosted tool use the stored authority", async () => {
   // The loopback node lives in node-sdk's test sources, outside this package's

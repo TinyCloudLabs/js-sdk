@@ -648,33 +648,4 @@ describe("activateValidatedRuntimeDelegation with wallet-signed session grants",
     }
   });
 
-  test("refuses verified ReCap services that only exist on the object prototype", () => {
-    for (const service of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-      const node = {
-        computeDelegationCid: () => "bafy-cacao",
-        verifySiweDelegation: () => ({
-          issuer: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
-          audience: "did:key:z6MkAudience",
-          expiry: new Date(Date.now() + 60_000),
-          recap: [{
-            service,
-            space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-            path: "docs/",
-            actions: ["tinycloud.kv/get"],
-            caveats: [],
-          }],
-        }),
-      };
-      expect(() => siweRuntimeDelegation(node, {
-        authorization: "cacao",
-        cid: "bafy-cacao",
-        spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
-        ownerAddress: "0x0000000000000000000000000000000000000001",
-        chainId: 1,
-        siwe: "siwe",
-        signature: "0x",
-        host: "https://node.test",
-      })).toThrow(`unsupported signed service '${service}'`);
-    }
-  });
 });

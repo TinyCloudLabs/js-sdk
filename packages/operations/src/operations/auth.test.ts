@@ -6,7 +6,7 @@ import {
   PrivateKeySigner,
   siweRuntimeDelegation,
   type PortableDelegation,
-  type SiweDelegationVerifier,
+  type RuntimeDelegationActivator,
 } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { z } from "zod";
@@ -561,15 +561,16 @@ test("imports only delegation authority contained by the exact stored request, i
 });
 
 test("a SIWE delegation replays under every request binding import accepts", async () => {
-  const fixture = await createAuthRuntimeFixture();
+  const source = await createAuthRuntimeFixture();
+  const fixture = ownerAuthFixture(source);
   try {
     const runtime = await runtimeContext(fixture.profile);
-    const space = fixture.hermetic.restorableSession.spaceId;
+    const space = fixture.hermetic.ownerRestorableSession.spaceId;
     const delegation = await signedLoginDelegation(fixture, runtime);
     for (const requested of [
       { path: "agents/", actions: ["tinycloud.kv/get"] },
-      { path: "agents/demo/profile", actions: ["tinycloud.kv/*"] },
-      { path: "agents/demo/profile", actions: ["tinycloud.kv/get"] },
+      { path: "agents/demo/settings", actions: ["tinycloud.kv/*"] },
+      { path: "agents/demo/settings", actions: ["tinycloud.kv/get"] },
       { path: "agents/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
     ]) {
       await writeJsonAtomic(additionalDelegationsPath(fixture.profile), []);
@@ -587,10 +588,11 @@ test("a SIWE delegation replays under every request binding import accepts", asy
 });
 
 test("a request-bound re-import binds a SIWE delegation stored without its request", async () => {
-  const fixture = await createAuthRuntimeFixture();
+  const source = await createAuthRuntimeFixture();
+  const fixture = ownerAuthFixture(source);
   try {
     const runtime = await runtimeContext(fixture.profile);
-    const space = fixture.hermetic.restorableSession.spaceId;
+    const space = fixture.hermetic.ownerRestorableSession.spaceId;
     const delegation = await signedLoginDelegation(fixture, runtime);
     // As the legacy `tc auth import` route stores it: no request binding.
     await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{
@@ -602,7 +604,7 @@ test("a request-bound re-import binds a SIWE delegation stored without its reque
     const requestId = await storeLegacyRequest(fixture, [{
       service: "tinycloud.kv",
       space,
-      path: "agents/demo/profile",
+      path: "agents/demo/settings",
       actions: ["tinycloud.kv/get"],
     }]);
     expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
@@ -872,11 +874,20 @@ async function readAuthRequestRecords(profile: string): Promise<Record<string, u
 
 const SIGNED_LOGIN_GRANT = expect.objectContaining({
   service: "tinycloud.kv",
-  path: "agents/demo/profile",
+  path: "agents/demo/settings",
   actions: ["tinycloud.kv/get"],
 });
 
-/** An OpenKey-style signed-login (CACAO) delegation of `get` on agents/demo/profile. */
+/** Use the signer and session belonging to the same owner, as hosted approval does. */
+function ownerAuthFixture(fixture: AuthRuntimeFixture): AuthRuntimeFixture {
+  return {
+    ...fixture,
+    profile: fixture.ownerProfile,
+    sessionDid: fixture.hermetic.ownerRestorableSession.verificationMethod.split("#", 1)[0]!,
+  };
+}
+
+/** An OpenKey-style signed-login (CACAO) delegation of `get` on agents/demo/settings. */
 async function signedLoginDelegation(
   fixture: AuthRuntimeFixture,
   runtime: RuntimeOperationContext,
@@ -886,18 +897,18 @@ async function signedLoginDelegation(
   const address = await signer.getAddress();
   const issuedAt = new Date();
   const prepared = wasm.prepareSession({
-    abilities: { kv: { "agents/demo/profile": ["tinycloud.kv/get"] } },
+    abilities: { kv: { "agents/demo/settings": ["tinycloud.kv/get"] } },
     address,
     chainId: 1,
     domain: "openkey.test",
     issuedAt: issuedAt.toISOString(),
     expirationTime: new Date(issuedAt.getTime() + 60 * 60_000).toISOString(),
-    spaceId: fixture.hermetic.restorableSession.spaceId,
-    jwk: fixture.hermetic.restorableSession.jwk as object,
+    spaceId: fixture.hermetic.ownerRestorableSession.spaceId,
+    jwk: fixture.hermetic.ownerRestorableSession.jwk as object,
   });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
-  return siweRuntimeDelegation(runtime.runtime.node as SiweDelegationVerifier, {
+  return siweRuntimeDelegation(runtime.runtime.node as RuntimeDelegationActivator, {
     authorization: session.delegationHeader.Authorization,
     cid: session.delegationCid,
     spaceId: prepared.spaceId,
