@@ -24,5 +24,13 @@
       "paired OpenCredentials worktree not found",
       "ReferenceError: HTMLElement is not defined"
     ]
-  }
+  },
+  "nonReplicaGrowth": [
+    {
+      "ticket": "TC-628",
+      "reason": "storage.status() and the storage.full event; measured as this check's delta on PR #450 minus master 5b6066cf",
+      "index.mjs": 1742,
+      "index.cjs": 1536
+    }
+  ]
 }
