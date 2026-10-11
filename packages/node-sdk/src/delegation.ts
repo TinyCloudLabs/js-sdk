@@ -709,9 +709,6 @@ export async function activateValidatedRuntimeDelegation(
   if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
     throw new Error("Runtime delegation is not authorized for this runtime.");
   }
-  if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
-    throw new Error("Runtime delegation is not authorized for this runtime.");
-  }
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()
     .find((candidate) => candidate.cid === cid);
@@ -868,7 +865,7 @@ function portableFromSignedAuthority(
   cid: string,
   authorization: string,
   signed: SignedRuntimeAuthority,
-  transport: { readonly ownerAddress: string; readonly chainId: number; readonly host: string },
+  transport: { readonly ownerAddress: string; readonly chainId: number; readonly host: string; readonly spaceId?: string },
 ): PortableDelegation {
   const primary = signed.resources[0]!;
   const signedSpace = signed.permissions.find(
@@ -881,7 +878,7 @@ function portableFromSignedAuthority(
     chainId: transport.chainId,
     delegatorDID: signed.issuer,
     authHeader: authorization,
-    spaceId: signedSpace ?? primary.space,
+    spaceId: signedSpace ?? transport.spaceId ?? primary.space,
     path: primary.path,
     actions: [...primary.actions],
     ...(primary.caveats === undefined ? {} : { caveats: primary.caveats }),

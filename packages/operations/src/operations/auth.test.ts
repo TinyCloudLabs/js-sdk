@@ -560,6 +560,34 @@ test("imports only delegation authority contained by the exact stored request, i
   }
 });
 
+test("expired signed-login import is refused before contacting the node", async () => {
+  const fixture = ownerAuthFixture(await createAuthRuntimeFixture());
+  const now = Date.now();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const delegation = await signedLoginDelegation(fixture, runtime);
+    const requestId = await storeLegacyRequest(fixture, [{
+      service: "tinycloud.kv",
+      space: fixture.hermetic.ownerRestorableSession.spaceId,
+      path: "agents/demo/settings",
+      actions: ["tinycloud.kv/get"],
+    }]);
+    const install = spyOn(runtime.runtime.node as RuntimeDelegationActivator, "useRuntimeDelegation");
+    try {
+      setSystemTime(delegation.expiry.getTime() + 1);
+      const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+      expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_EXPIRED" } });
+      expect(install).not.toHaveBeenCalled();
+      expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+    } finally {
+      install.mockRestore();
+    }
+  } finally {
+    setSystemTime(now);
+    fixture.hermetic.stop();
+  }
+});
+
 test("a SIWE delegation replays under every request binding import accepts", async () => {
   const source = await createAuthRuntimeFixture();
   const fixture = ownerAuthFixture(source);

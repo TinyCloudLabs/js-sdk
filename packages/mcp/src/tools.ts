@@ -42,8 +42,6 @@ export interface McpStartupSelection {
   readonly stateRoot?: string;
   /** Hosted transports may attach a browser approval URL to canonical results. */
   readonly transformOperationResult?: (result: unknown) => Promise<unknown>;
-  /** Tools this transport does not expose. */
-  readonly excludeTools?: readonly ToolName[];
 }
 
 export interface McpInvocationTarget {
@@ -153,6 +151,9 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     idempotentHint: true,
     destructiveHint: false,
     openWorldHint: false,
+    // Hosted delegations must arrive through the owner/request-bound OpenKey callback,
+    // not a caller-supplied import artifact.
+    surfaces: ["local"],
   },
   {
     name: "tinycloud_account_spaces_list",
@@ -287,7 +288,6 @@ export function registerTinyCloudTools(
 
   for (const binding of TOOL_BINDINGS) {
     if (!bindingSurfaces(binding).includes(selection.surface)) continue;
-    if (selection.excludeTools?.includes(binding.name) === true) continue;
     const operation = definitions.get(`${binding.operationId}@${binding.operationVersion}`);
     if (operation === undefined) {
       throw new Error(`Generated operations catalog is missing ${binding.operationId}@${binding.operationVersion}.`);

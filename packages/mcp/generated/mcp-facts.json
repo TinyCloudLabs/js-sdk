@@ -58,8 +58,7 @@
     {
       "name": "tinycloud_auth_import",
       "surfaces": [
-        "local",
-        "hosted"
+        "local"
       ],
       "operationId": "tinycloud.auth.import",
       "operationVersion": 1,

@@ -10,7 +10,7 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_account_applications_list` -> `tinycloud.account.applications.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_account_spaces_list` -> `tinycloud.account.spaces.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_auth_capabilities` -> `tinycloud.auth.capabilities@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_auth_import` -> `tinycloud.auth.import@1`; surfaces: local, hosted; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_auth_import` -> `tinycloud.auth.import@1`; surfaces: local; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_request` -> `tinycloud.auth.request@1`; surfaces: local, hosted; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_status` -> `tinycloud.auth.status@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
 - `tinycloud_kv_delete` -> `tinycloud.kv.delete@1`; surfaces: local, hosted; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
