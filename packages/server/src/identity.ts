@@ -97,7 +97,49 @@ export async function createServerIdentity(
 //    Only a 401 refreshes, so a real 502 or 403 is never overridden by a `401`
 //    later in its body.
 // 3. With no status, session wording on the unstripped message decides.
-const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"|(?<![\p{L}\p{N}\p{M}_])'(?:[^'\\]|\\.|'(?=[\p{L}\p{N}\p{M}_]))*'(?![\p{L}\p{N}\p{M}_])/gu;
+const NAME_CHARACTER_PATTERN = /[\p{L}\p{N}\p{M}_]/u;
+
+/** Strip standalone quoted names without retrying failed scans of the same quote type. */
+export function stripQuotedNames(message: string): string {
+  let parts: string[] | undefined;
+  let literalStart = 0;
+  let noDoubleClose = false;
+  let noSingleClose = false;
+  for (let i = 0; i < message.length; i += 1) {
+    const quote = message[i];
+    const double = quote === '"';
+    if (!double && quote !== "'") continue;
+    if (double ? noDoubleClose : noSingleClose) continue;
+    if (!double && i > 0 && NAME_CHARACTER_PATTERN.test(message[i - 1]!)) continue;
+
+    let end = i + 1;
+    while (end < message.length) {
+      if (message[end] === "\\") {
+        end += 2;
+      } else if (message[end] === quote &&
+        (double || end + 1 === message.length || !NAME_CHARACTER_PATTERN.test(message[end + 1]!))) {
+        break;
+      } else {
+        end += 1;
+      }
+    }
+    if (end >= message.length) {
+      // Later openings of this type see the same suffix and escape pairing,
+      // so none can close either.
+      if (double) noDoubleClose = true;
+      else noSingleClose = true;
+      if (noDoubleClose && noSingleClose) break;
+      continue;
+    }
+    (parts ??= []).push(message.slice(literalStart, i), '""');
+    i = end;
+    literalStart = end + 1;
+  }
+  if (!parts) return message;
+  parts.push(message.slice(literalStart));
+  return parts.join("");
+}
+
 const DIAGNOSTIC_STATUS_PATTERN =
   /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 const SESSION_ERROR_PATTERN =
@@ -105,7 +147,7 @@ const SESSION_ERROR_PATTERN =
 
 /** The first HTTP error status in a diagnostic position, ignoring quoted strings. */
 function diagnosticStatusOf(message: string): number | undefined {
-  const unquoted = message.replace(QUOTED_STRING_PATTERN, '""');
+  const unquoted = stripQuotedNames(message);
   for (const match of unquoted.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
     const status = Number(match.slice(1).find((group) => group !== undefined));
     if (status >= 400 && status <= 599) return status;
@@ -124,9 +166,7 @@ export function isTinyCloudSessionError(error: unknown): boolean {
   if (verdict !== undefined) {
     return verdict === "unauthenticated";
   }
-  // Unmatched quote candidates can make the fallback scan quadratic; bound
-  // untyped message heuristics without truncating typed authorization verdicts.
-  const message = (error instanceof Error ? error.message : String(error)).slice(0, 2048);
+  const message = error instanceof Error ? error.message : String(error);
   const status = diagnosticStatusOf(message);
   if (status !== undefined) {
     return status === 401;

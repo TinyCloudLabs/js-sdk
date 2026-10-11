@@ -21,6 +21,9 @@ import {
   withSessionRefresh,
 } from ".";
 import type { PortableDelegation, TinyCloudNode } from "@tinycloud/node-sdk";
+import { stripQuotedNames } from "./identity.js";
+
+const REFERENCE_PATTERN = /"(?:[^"\\]|\\.)*"|(?<![\p{L}\p{N}\p{M}_])'(?:[^'\\]|\\.|'(?=[\p{L}\p{N}\p{M}_]))*'(?![\p{L}\p{N}\p{M}_])/gu;
 const PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const ACCOUNT = privateKeyToAccount(PRIVATE_KEY);
 
@@ -209,6 +212,38 @@ describe("@tinycloud/server sharing session refresh", () => {
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
 
+  test.each([401, 403] as const)("kv.put long quoted key %i keeps the actual status", async (status) => {
+    const key = "HTTP 401 " + "x".repeat(2191);
+    let fetchCalls = 0;
+    let signInCalls = 0;
+    let signedIn = false;
+    const kv = new KVService({});
+    kv.initialize(new ServiceContext({
+      hosts: ["https://node.example"],
+      session: {
+        delegationHeader: { Authorization: "Bearer session" },
+        delegationCid: "bafy-session",
+        spaceId: "tinycloud:test-space",
+        verificationMethod: "did:key:zSession#zSession",
+        jwk: {},
+      },
+      invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+      fetch: async () => {
+        fetchCalls += 1;
+        return signedIn ? new Response(null, { status: 200 }) : new Response("Forbidden", { status });
+      },
+    }));
+    const node = { signIn: async () => { signInCalls += 1; signedIn = true; } } as unknown as TinyCloudNode;
+    const failure = await rejectionOf(withSessionRefresh(node, async () => {
+      const result = await kv.put(key, "value");
+      if (!result.ok) throw new Error(result.error.message);
+    }));
+    expect(failure === undefined).toBe(status === 401);
+    if (status === 403) expect(String(failure?.message).endsWith(": 403 - Forbidden")).toBe(true);
+    expect(signInCalls).toBe(status === 401 ? 1 : 0);
+    expect(fetchCalls).toBe(status === 401 ? 2 : 1);
+  });
+
   /** Run `failure` through `withSessionRefresh`; report whether it signed in and retried. */
   async function refreshed(failure: unknown): Promise<boolean> {
     let calls = 0;
@@ -301,15 +336,34 @@ describe("@tinycloud/server sharing session refresh", () => {
     expect(await refreshed(new Error(message))).toBe(refreshes);
   });
 
-  test("withSessionRefresh ignores a status and session text beyond the 2 KiB message cap", async () => {
-    expect(await refreshed(new Error(`${"x".repeat(2048)} HTTP 401 session expired`))).toBe(false);
+  test("withSessionRefresh honors an untyped status beyond 2 KiB", async () => {
+    expect(await refreshed(new Error(`${"x".repeat(2048)} HTTP 401 - Forbidden`))).toBe(true);
   });
 
-  test("unmatched apostrophes in a 16 KiB untyped message finish within one second", () => {
-    const message = " 'a".repeat(Math.ceil(16 * 1024 / 3)).slice(0, 16 * 1024);
+  test("linear quoted-name scanner matches the prior pattern on 20,000 seeded strings", () => {
+    const alphabet = ["'", '"', "\\", "a", "é", "1", " ", ":", "_", "東", "\u0301"];
+    let state = 0xc0ffee;
+    const next = () => (state = (Math.imul(state, 1664525) + 1013904223) | 0) >>> 0;
+    for (let sample = 0; sample < 20_000; sample += 1) {
+      const length = next() % 25;
+      let input = "";
+      for (let i = 0; i < length; i += 1) input += alphabet[next() % alphabet.length]!;
+      expect(stripQuotedNames(input)).toBe(input.replace(REFERENCE_PATTERN, '""'));
+    }
+  });
+
+  test.each([
+    ["space apostrophe letter", " 'a"],
+    ["apostrophe escape", "'\\"],
+    ["double quote escape", '"\\'],
+    ["hyphen apostrophe letters", "-'ab"],
+    ["space apostrophe escaped x", " 'a\\x"],
+    ["paren apostrophes", "('a'a"],
+  ] as const)("quote scanning stays under 500 ms on 64 KiB of %s", (_name, unit) => {
+    const message = unit.repeat(Math.ceil(64 * 1024 / unit.length)).slice(0, 64 * 1024);
     const start = performance.now();
-    expect(isTinyCloudSessionError(new Error(message))).toBe(false);
-    expect(performance.now() - start).toBeLessThan(1000);
+    isTinyCloudSessionError(new Error(message));
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   test.each(
