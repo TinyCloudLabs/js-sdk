@@ -29,6 +29,7 @@
   },
   "changesets": [
     "tc-672-stored-grant-replay",
-    "tc-673-auth-grants"
+    "tc-673-auth-grants",
+    "tc-674-imported-session-expiry"
   ]
 }
