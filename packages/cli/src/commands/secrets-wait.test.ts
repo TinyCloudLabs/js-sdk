@@ -11,6 +11,7 @@ import {
   secretsSpaceId,
   snapshotHome,
   startWaitHermetic,
+  writeCompactSessionProfileWithoutOwner,
   writeDelegateProfile,
   writeLocalOwnerProfile,
   writeOwnerOpenKeyProfile,
@@ -268,6 +269,16 @@ describe("S3-T7 R4-2 identity: the child resolves the owner from its live identi
     const run = await wait(current, "agent", [CANARY, "--timeout", "0"]);
     expect(run.exitCode).toBe(3);
     expect(expectErrorKeys(run)).toMatchObject({ code: "AUTH_REQUIRED", recovery: { action: "sign_in", command: DELEGATE_LOGIN } });
+    expect(current.hermetic.requests().length).toBe(requestsBefore);
+  }, 30_000);
+
+  test("compact-UCAN delegate session with no ownerDid or spaceId → 3 OWNER_DID_UNKNOWN, zero requests (S2-T10(f))", async () => {
+    const current = await setup();
+    await writeCompactSessionProfileWithoutOwner(current.home, current.hermetic, "agent");
+    const requestsBefore = current.hermetic.requests().length;
+    const run = await wait(current, "agent", [CANARY, "--timeout", "0"]);
+    expect(run.exitCode).toBe(3);
+    expect(expectErrorKeys(run).code).toBe("OWNER_DID_UNKNOWN");
     expect(current.hermetic.requests().length).toBe(requestsBefore);
   }, 30_000);
 });

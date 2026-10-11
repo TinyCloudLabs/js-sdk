@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, TinyCloudNode } from "@tinycloud/node-sdk";
 
 import type { OperationResult } from "../contract.js";
 import type { OperationError } from "../errors.js";
@@ -21,6 +21,7 @@ import {
   createAuthRuntimeFixture,
   persistRuntimeDelegations,
   type AuthRuntimeFixture,
+  type HermeticRequest,
   type StoredRuntimeDelegation,
 } from "../../test-support/auth-runtime.js";
 
@@ -112,12 +113,15 @@ function status(profile: string, target: Record<string, unknown> = {}) {
   return invokeOperation("tinycloud.secrets.status", 1, { profile, ...target }, { names: [CANARY] });
 }
 
-/** Runs one status invocation and checks the remote-write and TC_HOME invariants (S2-T6, S2-T7). */
+/**
+ * Runs one status invocation and checks the remote-write and TC_HOME
+ * invariants (S2-T6, S2-T7). `requests` is only what this invocation sent.
+ */
 async function assertReadOnlyStatus(
   current: AuthRuntimeFixture,
   profile: string,
   target: Record<string, unknown> = {},
-): Promise<Awaited<ReturnType<typeof status>>> {
+): Promise<{ result: OperationResult<unknown>; requests: readonly HermeticRequest[] }> {
   const allowedDelegations = await storedAuthorizationHashes([profile]);
   const before = await snapshot(home);
   const requestStart = current.hermetic.requests().length;
@@ -144,7 +148,7 @@ async function assertReadOnlyStatus(
   }
   expect(requests.some((request) => request.path.startsWith("/peer/generate"))).toBe(false);
   expect(requests.some((request) => request.path.startsWith("/encryption/"))).toBe(false);
-  return result;
+  return { result, requests };
 }
 
 async function assertZeroRequests(
@@ -165,12 +169,13 @@ async function assertZeroRequests(
 test("S2-T6/S2-T7 delegate-session: only kv/get invocations and stored-grant re-registration, TC_HOME unchanged", async () => {
   fixture = await createAuthRuntimeFixture();
   await persistRuntimeDelegations(fixture, [await fixture.hermetic.mintDelegation()]);
-  const result = await assertReadOnlyStatus(fixture, fixture.profile);
+  const { result } = await assertReadOnlyStatus(fixture, fixture.profile);
   expect(result).toMatchObject({
     status: "ok",
     output: { status: "ready", owner: fixture.hermetic.ownerDid, present: [CANARY], pending: [], denied: [] },
   });
-  expect(fixture.hermetic.requests().filter((request) => request.path === "/delegate").length).toBeGreaterThan(0);
+  // A session-only node may re-register without a POST, so no count here;
+  // the helper already requires every /delegate of this call to be a stored grant.
 });
 
 test("S2-T6/S2-T7 owner-openkey with a stored session and a stored cli-grant", async () => {
@@ -178,14 +183,14 @@ test("S2-T6/S2-T7 owner-openkey with a stored session and a stored cli-grant", a
   await writeOwnerProfile(fixture, "openkey-owner");
   const audience = fixture.hermetic.ownerRestorableSession.verificationMethod.split("#", 1)[0]!;
   await persistCliGrant("openkey-owner", fixture, await fixture.hermetic.mintDelegationForAudience(audience));
-  const result = await assertReadOnlyStatus(fixture, "openkey-owner", { allowOwnerProfile: true });
+  const { result } = await assertReadOnlyStatus(fixture, "openkey-owner", { allowOwnerProfile: true });
   expect(result).toMatchObject({ status: "ok", output: { owner: fixture.hermetic.ownerDid, names: [CANARY] } });
 });
 
 test("S2-T6/S2-T7 local-owner-key with a stored session", async () => {
   fixture = await createAuthRuntimeFixture();
   await fixture.hermetic.mintDelegation();
-  const result = await assertReadOnlyStatus(fixture, fixture.ownerProfile, { allowOwnerProfile: true });
+  const { result } = await assertReadOnlyStatus(fixture, fixture.ownerProfile, { allowOwnerProfile: true });
   expect(result).toMatchObject({ status: "ok", output: { owner: fixture.hermetic.ownerDid, names: [CANARY] } });
 });
 
@@ -193,10 +198,21 @@ test("S2-T6/S2-T7 hybrid privateKey + OpenKey profile with a session", async () 
   fixture = await createAuthRuntimeFixture();
   await fixture.hermetic.mintDelegation();
   await writeOwnerProfile(fixture, "hybrid", fixture.hermetic.ownerPrivateKey);
-  const result = await assertReadOnlyStatus(fixture, "hybrid", { allowOwnerProfile: true });
+  const { result } = await assertReadOnlyStatus(fixture, "hybrid", { allowOwnerProfile: true });
   expect(result).toMatchObject({ status: "ok", output: { owner: fixture.hermetic.ownerDid, names: [CANARY] } });
   // A local identity never gets a request link (the hint case is in secrets-status.test.ts).
   expect(JSON.stringify(result)).not.toContain("secrets.tinycloud.xyz");
+});
+
+test("S2-T6/S2-T7 hybrid privateKey + owner-openkey profile with one stored grant re-registers only that grant", async () => {
+  fixture = await createAuthRuntimeFixture();
+  await writeOwnerProfile(fixture, "hybrid-grant", fixture.hermetic.ownerPrivateKey);
+  const audience = fixture.hermetic.ownerRestorableSession.verificationMethod.split("#", 1)[0]!;
+  await persistCliGrant("hybrid-grant", fixture, await fixture.hermetic.mintDelegationForAudience(audience));
+  const { result, requests } = await assertReadOnlyStatus(fixture, "hybrid-grant", { allowOwnerProfile: true });
+  expect(result).toMatchObject({ status: "ok", output: { owner: fixture.hermetic.ownerDid, names: [CANARY] } });
+  // This status call itself POSTed the stored grant (the helper checks each one is stored).
+  expect(requests.filter((request) => request.path === "/delegate").length).toBeGreaterThanOrEqual(1);
 });
 
 test("S2-T6/S2-T7 zero requests: local owner without a session, an explicit key, a pending migration", async () => {
@@ -222,6 +238,45 @@ test("S2-T6/S2-T7 zero requests: local owner without a session, an explicit key,
   expect(await bindingMigrationRecorded(fixture.profile)).toBe(false);
 });
 
+test("S2-T10(b) a SIWE-less compact session with no ownerDid or spaceId → INPUT_INVALID OWNER_DID_UNKNOWN, zero requests", async () => {
+  fixture = await createAuthRuntimeFixture();
+  const manager = new NodeWasmBindings().createSessionManager();
+  const sessionDid = manager.getDID("default");
+  const jwk: unknown = JSON.parse(manager.jwk("default")!);
+  // node-sdk's compact-UCAN minter lives outside this package's rootDir.
+  const { mintCompactDelegation } = await import(
+    new URL("../../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href
+  ) as {
+    mintCompactDelegation(options: { audience: string; expSecs: number }): Promise<{
+      delegation: { delegationHeader: { Authorization: string }; cid: string };
+      spaceId: string;
+    }>;
+  };
+  const imported = await mintCompactDelegation({
+    audience: sessionDid.split("#", 1)[0]!,
+    expSecs: Math.floor(Date.now() / 1000) + 3600,
+  });
+  await writeProfile("ownerless", {
+    host: fixture.hermetic.host,
+    chainId: 1,
+    did: sessionDid,
+    sessionDid,
+    posture: "delegate-session",
+    operatorType: "agent",
+    authMethod: "openkey",
+  }, {
+    delegationHeader: imported.delegation.delegationHeader,
+    delegationCid: imported.delegation.cid,
+    spaceId: imported.spaceId,
+    jwk,
+    verificationMethod: sessionDid,
+  });
+  await writeJsonAtomic(join(profilePath("ownerless"), "key.json"), jwk);
+
+  const result = await assertZeroRequests(fixture, "ownerless", {}, "INPUT_INVALID");
+  expect(errorOf(result).details).toMatchObject({ reason: "OWNER_DID_UNKNOWN" });
+});
+
 test("S2-T7 a migration marker, or no unbound compact record, lets status proceed", async () => {
   fixture = await createAuthRuntimeFixture();
   const delegation = await fixture.hermetic.mintDelegation();
@@ -229,13 +284,13 @@ test("S2-T7 a migration marker, or no unbound compact record, lets status procee
   // Bound records only, no marker: nothing for the migration to bind.
   await persistRuntimeDelegations(fixture, [delegation]);
   expect(await bindingMigrationRecorded(fixture.profile)).toBe(false);
-  expect(await assertReadOnlyStatus(fixture, fixture.profile)).toMatchObject({ status: "ok", output: { status: "ready" } });
+  expect((await assertReadOnlyStatus(fixture, fixture.profile)).result).toMatchObject({ status: "ok", output: { status: "ready" } });
   expect(await bindingMigrationRecorded(fixture.profile)).toBe(false);
 
   // An unbound record after the migration is refused by replay, never migrated here.
   await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation, permissions: [] }]);
   await writeJsonAtomic(bindingMigrationPath(fixture.profile), { formatVersion: 1, migratedAt: "2026-07-15T00:00:00.000Z", bound: [], unbound: [] });
-  const result = await assertReadOnlyStatus(fixture, fixture.profile);
+  const { result } = await assertReadOnlyStatus(fixture, fixture.profile);
   expect(result).toMatchObject({ status: "ok", warnings: [{ code: "STORED_GRANT_SKIPPED", reason: "unbound" }] });
 });
 

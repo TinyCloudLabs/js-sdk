@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { NodeWasmBindings } from "@tinycloud/node-sdk";
 import {
   additionalDelegationsPath,
   profileConfigPath,
+  profilePath,
   sessionPath,
   withTinyCloudStateRoot,
   writeJsonAtomic,
@@ -51,6 +53,16 @@ export interface WaitHermetic {
 const hermeticModule = await import(
   new URL("../../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href
 ) as { createHermeticEncryptedNode(options?: { secretPresent?: boolean }): Promise<WaitHermetic> };
+
+// Same rootDir constraint for node-sdk's compact-UCAN minter.
+const compactModule = await import(
+  new URL("../../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href
+) as {
+  mintCompactDelegation(options: { audience: string; expSecs: number; host?: string }): Promise<{
+    delegation: { cid: string; delegationHeader: { Authorization: string } };
+    spaceId: string;
+  }>;
+};
 
 export function startWaitHermetic(options: { secretPresent?: boolean } = {}): Promise<WaitHermetic> {
   return hermeticModule.createHermeticEncryptedNode(options);
@@ -143,6 +155,48 @@ export async function writeOwnerOpenKeyProfile(
         authorityRequestAudit: { source: "cli-grant", recordedAt: "2026-07-15T00:00:00.000Z", note: "fixture" },
       }]);
     }
+  });
+}
+
+/**
+ * A delegate-session profile whose stored session is an imported compact
+ * UCAN (no SIWE) addressed to the profile's own key, with neither `ownerDid`
+ * nor `spaceId` recorded: the restored principal is a `did:key`, so no
+ * secrets owner can be resolved.
+ */
+export async function writeCompactSessionProfileWithoutOwner(
+  home: string,
+  hermetic: WaitHermetic,
+  name: string,
+): Promise<void> {
+  const manager = new NodeWasmBindings().createSessionManager();
+  const sessionDid = manager.getDID("default");
+  const jwk: unknown = JSON.parse(manager.jwk("default")!);
+  const imported = await compactModule.mintCompactDelegation({
+    audience: sessionDid.split("#", 1)[0]!,
+    expSecs: Math.floor(Date.now() / 1000) + 3600,
+    host: hermetic.host,
+  });
+  await withTinyCloudStateRoot(home, async () => {
+    await writeJsonAtomic(profileConfigPath(name), {
+      ...profileBase,
+      name,
+      host: hermetic.host,
+      chainId: 1,
+      did: sessionDid,
+      sessionDid,
+      posture: "delegate-session",
+      operatorType: "agent",
+      authMethod: "openkey",
+    });
+    await writeJsonAtomic(join(profilePath(name), "key.json"), jwk);
+    await writeJsonAtomic(sessionPath(name), {
+      delegationHeader: imported.delegation.delegationHeader,
+      delegationCid: imported.delegation.cid,
+      spaceId: imported.spaceId,
+      jwk,
+      verificationMethod: sessionDid,
+    });
   });
 }
 
