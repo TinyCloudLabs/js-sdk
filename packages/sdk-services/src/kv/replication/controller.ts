@@ -30,6 +30,7 @@ function raceSignal<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
 
 export function createKVReplication(deps: KVReplicationDeps): KVReplicationController {
   const { options, mode, storage, identity, session, authority, pending, scheduler } = deps;
+  const emit = (event: ReplicationEventInput): void => emitEvent(deps.emit, scheduler, event);
   const replicas = new Map<string, Opened>();
   const statusInspections = new Set<StatusInspection>();
   let isClosed = false;
@@ -47,7 +48,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     state.lastError = "GRANT_REVOKED";
     replicas.set(prefix, state);
   }
-  function unsupportedRoot(prefix: string): Error {
+  function markRootUnsupported(prefix: string): void {
     const state = replicas.get(prefix) ?? {};
     const firstRefusal = state.lastError !== "REPLICATION_ROOT_UNSUPPORTED";
     state.reason = "replica_unavailable";
@@ -56,6 +57,9 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (firstRefusal) {
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "unavailable", code: "REPLICATION_ROOT_UNSUPPORTED" });
     }
+  }
+  function unsupportedRoot(prefix: string): Error {
+    markRootUnsupported(prefix);
     return Object.assign(new Error("This node doesn't support whole-space sync yet."), { code: "REPLICATION_ROOT_UNSUPPORTED" });
   }
 
@@ -671,6 +675,9 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const persistedSnapshot = pending.readExisting ? await pending.readExisting() : await pending.read();
     const snapshot = persistedSnapshot ?? emptyPendingState(identity);
     const entries = await Promise.all(options.prefixes.map(async (prefix): Promise<ReplicaStatusEntry | undefined> => {
+      if (prefix === "/" && deps.nodeFeatures !== undefined && !deps.nodeFeatures.includes("kv-sync-root")) {
+        markRootUnsupported(prefix);
+      }
       const records = snapshot.records.filter((r) => kvPrefixCovers(prefix, r.key));
       const opened = replicas.get(prefix);
       let local: LocalReplicaStatus | undefined;

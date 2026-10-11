@@ -497,7 +497,11 @@ describe("node replication integration", () => {
     });
     const originalFetch = globalThis.fetch;
     try {
-      globalThis.fetch = async () => new Response(JSON.stringify({ activated: [space, delegateSpace], skipped: [] }), {
+      globalThis.fetch = async (input) => new Response(JSON.stringify(
+        String(input).endsWith("/info")
+          ? { protocol: wasm.protocolVersion(), version: "test", features: ["kv-sync-v1"] }
+          : { activated: [space, delegateSpace], skipped: [] },
+      ), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
