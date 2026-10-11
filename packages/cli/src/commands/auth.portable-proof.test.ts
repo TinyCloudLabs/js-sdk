@@ -42,6 +42,7 @@ mock.module("../output/errors.js", () => ({
   cliErrorFromService: (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
     Object.assign(new Error(error.message), { code: error.code, exitCode: 1, metadata: error.meta }),
   handleError: (error: unknown) => { recordedErrors.push(error); },
+  wrapError: (error: unknown) => error,
   setActiveProfileName: () => {},
 }));
 mock.module("../output/formatter.js", () => ({

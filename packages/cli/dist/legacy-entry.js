@@ -21045,17 +21045,14 @@ function registerAuthCommand(program, options) {
           ExitCode.USAGE_ERROR
         );
       }
-      const profile = await ProfileManager.getProfile(ctx.profile);
-      const key = await ProfileManager.getKey(ctx.profile);
-      const audience = imported.delegation.delegateDID;
-      const targetsPersistedKey = typeof audience === "string" && (typeof profile.sessionDid === "string" && principalDidEquals(audience, profile.sessionDid) || key !== null && principalDidEquals(audience, keyToDID(key)));
-      if (kind === "other" && targetsPersistedKey) {
+      if (kind === "other") {
         throw new CLIError(
           "INVALID_AUTH_IMPORT",
-          "A delegation addressed to this session key must carry verifiable signed proof.",
+          "Imported delegation must carry verifiable signed proof.",
           ExitCode.USAGE_ERROR
         );
       }
+      const profile = await ProfileManager.getProfile(ctx.profile);
       let bootstrap;
       let node;
       try {
@@ -21084,19 +21081,10 @@ function registerAuthCommand(program, options) {
         if (bootstrap) await bootstrap.abandon(refusal);
         throw refusal;
       }
-      const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals(signedAudience, node.sessionDid) || kind === "other" && typeof imported.delegation.delegateDID === "string" && principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
+      const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals(signedAudience, node.sessionDid);
       let activated = false;
       let permissions = imported.permissions;
       if (targetsSessionKey) {
-        if (kind === "other") {
-          const refusal = new CLIError(
-            "INVALID_AUTH_IMPORT",
-            "A delegation addressed to this session key must carry verifiable signed proof.",
-            ExitCode.USAGE_ERROR
-          );
-          if (bootstrap) await bootstrap.abandon(refusal);
-          throw refusal;
-        }
         let record2;
         try {
           record2 = await activateUnboundImport(

@@ -443,6 +443,37 @@ test.each(runtimes)("public %s cross-user import stays stored without replay war
   }
 }, 30_000);
 
+test.each(runtimes)("public %s refuses a proofless cross-user import before any store write or node request", async (_name, runtime) => {
+  const grant = await fixture.hermetic.mintDelegation();
+  const artifact = join(home, `proofless-cross-user-${_name}.json`);
+  const path = additionalDelegationsPath(fixture.ownerProfile);
+  await writeJsonAtomic(path, []);
+  const before = await readFile(path, "utf8");
+  const { readGrantHistory } = await import("../lib/permissions.js");
+  const history = await readGrantHistory(fixture.ownerProfile);
+  await writeFile(artifact, JSON.stringify({
+    ...grant, delegationHeader: { Authorization: "old proofless grant" },
+  }));
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
+  delete env.TC_HOST;
+  delete env.TC_PRIVATE_KEY;
+  try {
+    const attempts = fixture.hermetic.nativeBearerStats().delegationAttempts;
+    const child = Bun.spawn([...runtime, "--quiet", "--json", "--profile", fixture.ownerProfile,
+      "auth", "import", artifact], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect({ code, stdout }).toEqual({ code: 2, stdout: "" });
+    expect(JSON.parse(stderr).error).toMatchObject({ code: "INVALID_AUTH_IMPORT" });
+    expect(fixture.hermetic.nativeBearerStats().delegationAttempts).toBe(attempts);
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(await readGrantHistory(fixture.ownerProfile)).toEqual(history);
+  } finally {
+    await rm(artifact, { force: true });
+  }
+}, 30_000);
+
 test.each(runtimes)("public %s tampered transport audience warns and is not listed as another key", async (_name, runtime) => {
   const grant = await fixture.hermetic.mintDelegation();
   const path = additionalDelegationsPath(fixture.profile);

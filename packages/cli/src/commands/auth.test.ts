@@ -488,6 +488,7 @@ mock.module("../output/errors.js", () => ({
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },
+  wrapError: (error: unknown) => error,
   setActiveProfileName: () => {},
 }));
 
@@ -908,10 +909,8 @@ describe("CLI auth import command", () => {
     expect(authNodeGrantDelegations).toEqual([]);
   }
 
-  test("persists a cross-user delegation without installing it as a runtime grant", async () => {
-    // Audience is the importer's stable identity DID (did:pkh), not the session
-    // key. The node would reject this via useRuntimeDelegation, so import must
-    // persist it for later activation through useDelegation.
+  test("refuses a proofless cross-user portable grant without persistence or activation", async () => {
+    // A transport audience for another key cannot substitute for signed proof.
     const delegation = makePortableDelegation({
       delegateDID: "did:pkh:eip155:1:0xAgent",
       cid: "bafy-cross-user",
@@ -921,15 +920,11 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(importRecorded.appendedDelegations[0].delegation.cid).toBe("bafy-cross-user");
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_AUTH_IMPORT", exitCode: 2 })]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
     expect(importRecorded.useRuntimeDelegation).toEqual([]);
-    expect(recorded.outputs[0]).toMatchObject({
-      imported: true,
-      activated: false,
-      delegationCid: "bafy-cross-user",
-    });
+    expect(operationRecorded.calls).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("refuses a delegation whose header is not a single string Authorization before storing or activating it", async () => {
@@ -1171,7 +1166,7 @@ describe("CLI auth import command", () => {
     expect(importRecorded.bootstrappedDelegations).toEqual([]);
   });
 
-  test("keeps a genuinely unbound v1 envelope on the documented legacy path", async () => {
+  test("refuses an unbound proofless v1 envelope before persistence", async () => {
     const source = join(tempDir, "unbound-v1.json");
     await writeFile(source, JSON.stringify({
       kind: "tinycloud.auth.delegation",
@@ -1184,14 +1179,11 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_AUTH_IMPORT", exitCode: 2 })]);
     expect(operationRecorded.calls).toEqual([]);
-    expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(recorded.outputs[0]).toMatchObject({
-      requestId: null,
-      delegationCid: "bafy-unbound-legacy",
-      activated: false,
-    });
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("routes a request-bound v1 delegation through invokeOperation", async () => {
@@ -1410,7 +1402,7 @@ describe("CLI auth import command", () => {
     expect(importRecorded.appendedDelegations).toEqual([]);
   });
 
-  test("accepts a cross-user stored delegation wrapper without installing it", async () => {
+  test("refuses a proofless cross-user stored wrapper despite its display permissions", async () => {
     const source = join(tempDir, "stored-wrapper.json");
     await writeFile(source, JSON.stringify({
       delegation: makePortableDelegation({ delegateDID: "did:pkh:eip155:1:0xAgent", cid: "bafy-stored-wrapper" }),
@@ -1424,11 +1416,10 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.appendedDelegations[0]?.permissions).toEqual([
-      expect.objectContaining({ service: "tinycloud.kv", path: "vault/secrets/ANTHROPIC_API_KEY" }),
-    ]);
-    expect(recorded.outputs[0]).toMatchObject({ delegationCid: "bafy-stored-wrapper", activated: false });
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_AUTH_IMPORT", exitCode: 2 })]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("accepts a v1 permission artifact without the legacy command field", async () => {

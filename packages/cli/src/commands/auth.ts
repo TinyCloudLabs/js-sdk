@@ -583,22 +583,19 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.USAGE_ERROR,
           );
         }
-        // Identify the persisted key before a session restore can replay old
-        // grants, or the first-session bootstrap can modify local profile data.
-        const profile = await ProfileManager.getProfile(ctx.profile);
-        const key = await ProfileManager.getKey(ctx.profile);
-        const audience = imported.delegation.delegateDID;
-        const targetsPersistedKey = typeof audience === "string" && (
-          (typeof profile.sessionDid === "string" && principalDidEquals(audience, profile.sessionDid)) ||
-          (key !== null && principalDidEquals(audience, keyToDID(key)))
-        );
-        if (kind === "other" && targetsPersistedKey) {
+        // Neither a session grant nor a cross-user wallet-mode grant can be
+        // imported without verifiable signed bytes. Reject before restoring a
+        // session, writing a row, or recording grant history.
+        if (kind === "other") {
           throw new CLIError(
             "INVALID_AUTH_IMPORT",
-            "A delegation addressed to this session key must carry verifiable signed proof.",
+            "Imported delegation must carry verifiable signed proof.",
             ExitCode.USAGE_ERROR,
           );
         }
+        // Identify the persisted profile before a session restore can replay
+        // old grants, or first-session bootstrap can modify local profile data.
+        const profile = await ProfileManager.getProfile(ctx.profile);
         let bootstrap: DelegatedSessionBootstrap | undefined;
         let node;
         try {
@@ -635,20 +632,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         const targetsSessionKey = kind === "signed-login" || (
           signedAudience !== undefined && principalDidEquals(signedAudience, node.sessionDid)
-        ) || (kind === "other" && typeof imported.delegation.delegateDID === "string" &&
-          principalDidEquals(imported.delegation.delegateDID, node.sessionDid));
+        );
         let activated = false;
         let permissions = imported.permissions;
         if (targetsSessionKey) {
-          if (kind === "other") {
-            const refusal = new CLIError(
-              "INVALID_AUTH_IMPORT",
-              "A delegation addressed to this session key must carry verifiable signed proof.",
-              ExitCode.USAGE_ERROR,
-            );
-            if (bootstrap) await bootstrap.abandon(refusal);
-            throw refusal;
-          }
           let record;
           try {
             // Activation validates the signed authority before any store write.
