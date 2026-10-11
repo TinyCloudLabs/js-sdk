@@ -54,6 +54,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
   let node: ChildProcess | undefined;
   let space: string;
   let deviceGrantCid: string;
+  let supportsRootSync = false;
   const nodeSecret = randomBytes(48).toString("base64url");
 
   async function startNode(): Promise<void> {
@@ -155,6 +156,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     await startNode();
     const info = (await (await fetch(`${host}/info`)).json()) as { features?: string[] };
     expect(info.features).toContain("kv-sync-v1");
+    supportsRootSync = info.features?.includes("kv-sync-root") === true;
   }, 60_000);
 
   afterAll(async () => {
@@ -296,12 +298,18 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
       ],
     }));
     const rootSync = await tc(["replica", "sync", "--prefix", "/", "--replica", "whole-space", "--allow-secrets"], { profile: "root-device" });
-    expect({ code: rootSync.code, stderr: rootSync.stderr }).toMatchObject({
-      code: 7,
-      stderr: expect.stringContaining("REPLICATION_ROOT_UNSUPPORTED"),
-    });
-    const rootStatus = await ok<{ lastError: { code: string } }>(["replica", "status", "--replica", "whole-space"], "root-device");
-    expect(rootStatus.lastError.code).toBe("REPLICATION_ROOT_UNSUPPORTED");
+    if (supportsRootSync) {
+      expect({ code: rootSync.code, stderr: rootSync.stderr }).toMatchObject({ code: 0 });
+      const rootStatus = await ok<{ lastError: { code: string } | null }>(["replica", "status", "--replica", "whole-space"], "root-device");
+      expect(rootStatus.lastError).toBeNull();
+    } else {
+      expect({ code: rootSync.code, stderr: rootSync.stderr }).toMatchObject({
+        code: 7,
+        stderr: expect.stringContaining("REPLICATION_ROOT_UNSUPPORTED"),
+      });
+      const rootStatus = await ok<{ lastError: { code: string } }>(["replica", "status", "--replica", "whole-space"], "root-device");
+      expect(rootStatus.lastError.code).toBe("REPLICATION_ROOT_UNSUPPORTED");
+    }
   }, 180_000);
 
   test("an expired grant blocks offline reads; a retain grant keeps them, marked expired, until retainUntil", async () => {
