@@ -13,6 +13,7 @@ import {
   createServerDelegateClient,
   deriveDstackPrivateKey,
   issueSessionToken,
+  isTinyCloudSessionError,
   parseSecretPayload,
   serverDidForPrivateKey,
   verifySessionToken,
@@ -298,6 +299,17 @@ describe("@tinycloud/server sharing session refresh", () => {
 
   test.each(MESSAGE_TABLE)("withSessionRefresh message %j refreshes=%p", async (message, refreshes) => {
     expect(await refreshed(new Error(message))).toBe(refreshes);
+  });
+
+  test("withSessionRefresh ignores a status and session text beyond the 2 KiB message cap", async () => {
+    expect(await refreshed(new Error(`${"x".repeat(2048)} HTTP 401 session expired`))).toBe(false);
+  });
+
+  test("unmatched apostrophes in a 16 KiB untyped message finish within one second", () => {
+    const message = " 'a".repeat(Math.ceil(16 * 1024 / 3)).slice(0, 16 * 1024);
+    const start = performance.now();
+    expect(isTinyCloudSessionError(new Error(message))).toBe(false);
+    expect(performance.now() - start).toBeLessThan(1000);
   });
 
   test.each(

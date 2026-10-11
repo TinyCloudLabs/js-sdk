@@ -124,7 +124,9 @@ export function isTinyCloudSessionError(error: unknown): boolean {
   if (verdict !== undefined) {
     return verdict === "unauthenticated";
   }
-  const message = error instanceof Error ? error.message : String(error);
+  // Unmatched quote candidates can make the fallback scan quadratic; bound
+  // untyped message heuristics without truncating typed authorization verdicts.
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 2048);
   const status = diagnosticStatusOf(message);
   if (status !== undefined) {
     return status === 401;
