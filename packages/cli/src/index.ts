@@ -3,12 +3,13 @@ import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
+import { closeReplication } from "./lib/replication-registry.js";
 
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
 import { theme } from "./output/theme.js";
-import { setJsonOutputRequested, shouldOutputJson } from "./output/formatter.js";
+import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
@@ -39,7 +40,10 @@ program
   .option("-v, --verbose", "Enable verbose output")
   .option("--no-cache", "Disable caching")
   .option("-q, --quiet", "Suppress non-essential output")
-  .option("--json", "Force JSON output");
+  .option("--json", "Force JSON output")
+  .option("--replication", "Enable read-through replication for this invocation")
+  .option("--no-replication", "Disable read-through replication for this invocation")
+  .option("--replication-debug", "Write replication diagnostics to stderr")
 
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
@@ -72,6 +76,10 @@ program.hook("preAction", async (thisCommand) => {
       // Config dir doesn't exist yet — that's fine, commands will handle it
     }
   }
+});
+
+program.hook("postAction", () => {
+  outputWarnings([]);
 });
 
 configureShareCommandServices({
@@ -152,7 +160,17 @@ if (argv[0] === "courier") {
 
   try {
     await program.parseAsync(process.argv);
+    if (await closeReplication()) {
+      process.exitCode = 0;
+      const stdoutFlushed = Promise.withResolvers<void>();
+      process.stdout.write("", () => stdoutFlushed.resolve());
+      await stdoutFlushed.promise;
+      const stderrFlushed = Promise.withResolvers<void>();
+      process.stderr.write("", () => stderrFlushed.resolve());
+      await stderrFlushed.promise;
+      process.exit();
+    }
   } catch (error) {
-    handleError(error);
+    await handleError(error);
   }
 }

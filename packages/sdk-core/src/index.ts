@@ -568,6 +568,10 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  appSecretScope,
+  SECRET_SCOPE_RE,
+  MAX_SECRET_SCOPE_LENGTH,
+  TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
@@ -578,6 +582,7 @@ export {
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,
   type SecretScopeOptions,
+  type SecretPutOptions,
   // Encryption Service (network-scoped)
   EncryptionService,
   DecryptTransportResponseError,
@@ -654,6 +659,41 @@ export {
   type DiscoverySource,
   type NodeDescriptorFetcher,
   type WellKnownDescriptorFetcher,
+} from "@tinycloud/sdk-services";
+export type {
+  AuthorityRefusal,
+  KVListPage,
+  KVReadThrough,
+  KVReplicaHandle,
+  KVReplicaSpec,
+  KVReplicaStorage,
+  KVReplicationController,
+  KVReplicationDeps,
+  LocalGetResult,
+  LocalListResult,
+  LocalReadMeta,
+  LocalReplicaStatus,
+  LocalSyncResult,
+  PendingWriteRecord,
+  PendingWriteState,
+  PendingWriteStore,
+  PinnedKey,
+  PurgeTarget,
+  ReplicaAuthorityState,
+  ReplicaCoverage,
+  ReplicaDevice,
+  ReplicaGrantInfo,
+  ReplicaState,
+  ReplicaStatusEntry,
+  ReplicationAuthority,
+  ReplicationControl,
+  ReplicationEvent,
+  ReplicationIdentity,
+  ReplicationOptions,
+  ReplicationPurgeReport,
+  ReplicationReason,
+  ReplicationScheduler,
+  ResolvedReplicationOptions,
 } from "@tinycloud/sdk-services";
 
 export { httpResponseError } from "./http-error";
@@ -990,6 +1030,7 @@ export {
   type SubsetCheckResult,
   type WasmRecapEntry,
 } from "./capabilities";
+export { grantPathsForSelector } from "./replication/selector";
 
 // Default lifetimes for delegation flows. See `expiry.ts` for the
 // "pick a tier, not a number" rationale.

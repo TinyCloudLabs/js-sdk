@@ -45,6 +45,7 @@ type ProfileLike = {
   authMethod?: "openkey" | "local";
   privateKey?: string;
   address?: string;
+  replication?: { prefixes: string[]; allowSecrets?: boolean };
   openkeyHost?: string;
 };
 
@@ -98,6 +99,7 @@ const recorded = {
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
   removedReplicaProfiles: [] as string[],
+  removedReplicationProfiles: [] as string[],
 };
 
 const grantedDelegation = {
@@ -137,6 +139,7 @@ function resetState(): void {
   recorded.grantedRequests.length = 0;
   recorded.localGrantArtifacts.length = 0;
   recorded.removedReplicaProfiles.length = 0;
+  recorded.removedReplicationProfiles.length = 0;
   recorded.grantHistory.length = 0;
 
   activeProfile = "default";
@@ -238,9 +241,10 @@ mock.module("../config/profiles.js", () => ({
   },
 }));
 mock.module("../lib/profile-replicas.js", () => ({
-  removeProfileReplicas: async (profile: string) => {
+  removeProfileReplicasAndReplication: async (profile: string) => {
     recorded.removedReplicaProfiles.push(profile);
-    return ["notes"];
+    recorded.removedReplicationProfiles.push(profile);
+    return ["notes", "replication/idHash/replicaHash"];
   },
 }));
 
@@ -288,7 +292,10 @@ mock.module("../auth/local-key.js", () => ({
   keyToDID: (jwk: { did?: string }) => jwk.did ?? "did:key:from-key",
 }));
 
+const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+
 mock.module("@tinycloud/node-sdk", () => ({
+  TinyCloudNode,
   grantAuthRequest: async (_node: unknown, request: Record<string, unknown>) => {
     recorded.grantedRequests.push(request);
     return {
@@ -310,8 +317,8 @@ mock.module("@tinycloud/node-sdk", () => ({
       };
     }
   },
+  signedCompactUcanExpiry: () => undefined,
 }));
-
 const operationRecorded = {
   calls: [] as Array<{
     operationId: string;
@@ -382,6 +389,7 @@ mock.module("../lib/sdk.js", () => ({
       },
     };
   },
+  restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
 }));
 
 mock.module("../lib/permissions.js", () => ({
@@ -393,6 +401,13 @@ mock.module("../lib/permissions.js", () => ({
     entry: { delegation: { cid: string }; permissions: unknown[] },
   ) => {
     importRecorded.appendedDelegations.push(entry);
+  },
+  appendAdditionalDelegationIfUnexpired: async (
+    _profile: string,
+    entry: { delegation: { cid: string }; permissions: unknown[] },
+  ) => {
+    importRecorded.appendedDelegations.push(entry);
+    return true;
   },
   appendAdditionalDelegations: async (
     _profile: string,
@@ -414,6 +429,8 @@ mock.module("../lib/permissions.js", () => ({
   },
   cliGrantRecord: async (_node: unknown, delegation: object, permissions: object[]) => ({ delegation, permissions }),
   compactPermission: () => "",
+  loadLocalGrantArtifacts: async () => [],
+  removeStoredDelegations: async () => 0,
   loadAdditionalDelegations: async () => [],
   loadManifestPermissions: async () => [],
   loadPermissionRequest: async () => [],
@@ -482,6 +499,7 @@ mock.module("../output/errors.js", () => ({
   handleError: (error: unknown) => {
     recorded.errors.push(error);
   },
+  wrapError: (error: unknown) => error,
   setActiveProfileName: () => {},
 }));
 
@@ -553,6 +571,37 @@ describe("CLI auth rotate command", () => {
         spaceId: "space-openkey-new",
       },
     ]);
+  });
+
+  test("rotation replays the previously scoped permissions after clearing the session", async () => {
+    profiles.set("default", makeProfile({
+      replication: { prefixes: ["applications/apps/"] },
+    }));
+    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "old", d: "private" });
+    sessions.set("default", {
+      permissions: [{
+        service: "tinycloud.kv",
+        space: "applications",
+        path: "",
+        actions: ["tinycloud.kv/get"],
+      }],
+    });
+    generatedKeys.push({
+      jwk: { kty: "OKP", crv: "Ed25519", x: "new", d: "new-private" },
+      did: "did:key:new-openkey",
+    });
+
+    await runAuthCommand(["auth", "rotate", "--paste"]);
+
+    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
+      space: "applications",
+      path: "applications/apps/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+    }));
+    expect(recorded.startAuthFlows[0]?.options.permissions).not.toContainEqual(expect.objectContaining({
+      space: "default",
+      path: "",
+    }));
   });
 
   test("passes --no-popup through owner OpenKey rotation", async () => {
@@ -670,9 +719,18 @@ describe("CLI auth login command", () => {
 
   test("non-interactive OpenKey login keeps the requested browser/paste flow instead of switching to device mode", async () => {
     const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-    profiles.set("default", makeProfile({ did: "did:key:openkey-session", sessionDid: "did:key:openkey-session", authMethod: "openkey" }));
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+      replication: { prefixes: ["notes/"] },
+    }));
     keys.set("default", key);
-    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session" };
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      verificationMethod: "did:key:openkey-session",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+    };
 
     await runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup"]);
 
@@ -680,6 +738,13 @@ describe("CLI auth login command", () => {
     expect(recorded.startAuthFlows).toEqual([
       { did: "did:key:openkey-session", options: expect.objectContaining({ noPopup: true, jwk: key }) },
     ]);
+    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual({
+      service: "tinycloud.kv",
+      space: "default",
+      path: "notes/",
+      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+    });
+    expect(recorded.setProfiles.at(-1)?.data.replication).toEqual({ prefixes: ["notes/"] });
     expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
   });
 
@@ -768,10 +833,11 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.clearSessions).toEqual(["owner"]);
     expect(keys.get("owner")).toBe(key);
     expect(recorded.removedReplicaProfiles).toEqual(["owner"]);
+    expect(recorded.removedReplicationProfiles).toEqual(["owner"]);
     expect(recorded.outputs).toEqual([{
       profile: "owner",
       authenticated: false,
-      replicasRemoved: ["notes"],
+      replicasRemoved: ["notes", "replication/idHash/replicaHash"],
       replicasKept: false,
       warning: expect.stringContaining("delegations and grants on the node stay valid until they expire"),
     }]);
@@ -784,6 +850,7 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.errors).toEqual([]);
     expect(recorded.clearSessions).toEqual(["owner"]);
     expect(recorded.removedReplicaProfiles).toEqual([]);
+    expect(recorded.removedReplicationProfiles).toEqual([]);
     expect(recorded.outputs).toEqual([expect.objectContaining({
       replicasRemoved: [],
       replicasKept: true,
@@ -801,6 +868,18 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.startAuthFlows).toEqual([]);
     expect(recorded.outputs).toEqual([]);
     expect(profiles.has("owner")).toBe(false);
+  });
+  test("local login bootstraps a profile that does not yet exist", async () => {
+    generatedKeys.push({ jwk: { kty: "OKP", crv: "Ed25519", x: "local-session", d: "private" }, did: "did:key:local-session" });
+    await runAuthCommand(["auth", "login", "--method", "local"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(profiles.get("owner")).toEqual(expect.objectContaining({
+      name: "owner",
+      authMethod: "local",
+      posture: "local-owner-key",
+    }));
+    expect(recorded.outputs).toContainEqual(expect.objectContaining({ authenticated: true, profile: "owner" }));
   });
 
   test("OpenKey login on an existing profile without a key keeps NO_KEY with a hint for that profile", async () => {
@@ -902,10 +981,8 @@ describe("CLI auth import command", () => {
     expect(authNodeGrantDelegations).toEqual([]);
   }
 
-  test("persists a cross-user delegation without installing it as a runtime grant", async () => {
-    // Audience is the importer's stable identity DID (did:pkh), not the session
-    // key. The node would reject this via useRuntimeDelegation, so import must
-    // persist it for later activation through useDelegation.
+  test("refuses a proofless cross-user portable grant without persistence or activation", async () => {
+    // A transport audience for another key cannot substitute for signed proof.
     const delegation = makePortableDelegation({
       delegateDID: "did:pkh:eip155:1:0xAgent",
       cid: "bafy-cross-user",
@@ -915,15 +992,11 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(importRecorded.appendedDelegations[0].delegation.cid).toBe("bafy-cross-user");
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_AUTH_IMPORT", exitCode: 2 })]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
     expect(importRecorded.useRuntimeDelegation).toEqual([]);
-    expect(recorded.outputs[0]).toMatchObject({
-      imported: true,
-      activated: false,
-      delegationCid: "bafy-cross-user",
-    });
+    expect(operationRecorded.calls).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("refuses a delegation whose header is not a single string Authorization before storing or activating it", async () => {
@@ -947,7 +1020,27 @@ describe("CLI auth import command", () => {
     expect(importRecorded.bootstrappedDelegations).toEqual([]);
   });
 
-  test("installs a delegation that targets the active session key as a runtime grant", async () => {
+  test("refuses a proofless session-targeted import before restore, bootstrap or persistence", async () => {
+    const delegation = makePortableDelegation({
+      delegateDID: "did:key:z6MkSession",
+      cid: "bafy-proofless-session",
+    });
+    profiles.set("default", makeProfile({ sessionDid: "did:key:z6MkSession" }));
+    keys.set("default", { did: "did:key:z6MkSession" });
+    const source = join(tempDir, "proofless.json");
+    await writeFile(source, JSON.stringify(delegation), "utf8");
+    ensureAuthenticatedError = new Error("restore must not run");
+
+    await runAuthCommand(["auth", "import", source]);
+
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 2 });
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.grantHistory).toEqual([]);
+  });
+
+  test("does not persist a proofless delegation targeting the active session key", async () => {
     const delegation = makePortableDelegation({
       delegateDID: "did:key:z6MkSession",
       cid: "bafy-self-session",
@@ -957,19 +1050,15 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-self-session" }]);
-    expect(recorded.outputs[0]).toMatchObject({
-      imported: true,
-      activated: true,
-      delegationCid: "bafy-self-session",
-    });
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 2 });
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.grantHistory).toEqual([]);
   });
 
-  test("bootstraps a fresh delegate-session profile from its first imported delegation", async () => {
-    profiles.set("default", makeProfile({ posture: "delegate-session" }));
-    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "delegate", d: "private" });
+  test("refuses a proofless first delegate grant before bootstrap", async () => {
+    profiles.set("default", makeProfile({ posture: "delegate-session", sessionDid: "did:key:z6MkSession" }));
+    keys.set("default", { did: "did:key:z6MkSession" });
     ensureAuthenticatedError = new Error("Not authenticated");
     const delegation = makePortableDelegation({
       delegateDID: "did:key:z6MkSession",
@@ -980,10 +1069,10 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.bootstrappedDelegations).toEqual([{ cid: "bafy-first-delegation" }]);
-    expect(importRecorded.useRuntimeDelegation).toEqual([{ cid: "bafy-first-delegation" }]);
-    expect(recorded.outputs[0]).toMatchObject({ imported: true, activated: true });
+    expect(recorded.errors.pop()).toMatchObject({ code: "INVALID_AUTH_IMPORT", exitCode: 2 });
+    expect(importRecorded.bootstrappedDelegations).toEqual([]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
   });
 
   test("routes a v1 delegation artifact with an optional host and requestId canonically", async () => {
@@ -1149,7 +1238,7 @@ describe("CLI auth import command", () => {
     expect(importRecorded.bootstrappedDelegations).toEqual([]);
   });
 
-  test("keeps a genuinely unbound v1 envelope on the documented legacy path", async () => {
+  test("refuses an unbound proofless v1 envelope before persistence", async () => {
     const source = join(tempDir, "unbound-v1.json");
     await writeFile(source, JSON.stringify({
       kind: "tinycloud.auth.delegation",
@@ -1162,14 +1251,11 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_AUTH_IMPORT", exitCode: 2 })]);
     expect(operationRecorded.calls).toEqual([]);
-    expect(importRecorded.appendedDelegations).toHaveLength(1);
-    expect(recorded.outputs[0]).toMatchObject({
-      requestId: null,
-      delegationCid: "bafy-unbound-legacy",
-      activated: false,
-    });
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("routes a request-bound v1 delegation through invokeOperation", async () => {
@@ -1388,10 +1474,10 @@ describe("CLI auth import command", () => {
     expect(importRecorded.appendedDelegations).toEqual([]);
   });
 
-  test("accepts a stored delegation wrapper from the legacy on-disk shape", async () => {
+  test("refuses a proofless cross-user stored wrapper despite its display permissions", async () => {
     const source = join(tempDir, "stored-wrapper.json");
     await writeFile(source, JSON.stringify({
-      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkSession", cid: "bafy-stored-wrapper" }),
+      delegation: makePortableDelegation({ delegateDID: "did:pkh:eip155:1:0xAgent", cid: "bafy-stored-wrapper" }),
       permissions: [{
         service: "tinycloud.kv",
         space: "tinycloud:pkh:eip155:1:0xOwner:secrets",
@@ -1402,11 +1488,10 @@ describe("CLI auth import command", () => {
 
     await runAuthCommand(["auth", "import", source]);
 
-    expect(recorded.errors).toEqual([]);
-    expect(importRecorded.appendedDelegations[0]?.permissions).toEqual([
-      expect.objectContaining({ service: "tinycloud.kv", path: "vault/secrets/ANTHROPIC_API_KEY" }),
-    ]);
-    expect(recorded.outputs[0]).toMatchObject({ delegationCid: "bafy-stored-wrapper", activated: true });
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_AUTH_IMPORT", exitCode: 2 })]);
+    expect(importRecorded.appendedDelegations).toEqual([]);
+    expect(importRecorded.useRuntimeDelegation).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
 
   test("accepts a v1 permission artifact without the legacy command field", async () => {

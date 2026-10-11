@@ -47,7 +47,7 @@ export function registerSpaceCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -64,7 +64,7 @@ export function registerSpaceCommand(program: Command): void {
         const spaceId = await node.hostOwnedSpace(name);
         outputJson({ spaceId, name, hosted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -84,7 +84,7 @@ it directly with \`tc space host <name>\` (no request needed).
     .action(async (name: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const profile = await ProfileManager.getProfile(ctx.profile);
 
         // Pure local emit — no node contact, mirroring `tc auth request --emit`.
@@ -123,7 +123,7 @@ it directly with \`tc space host <name>\` (no request needed).
 
         await emitHostRequestArtifact(artifact, options.emit);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -149,7 +149,7 @@ it directly with \`tc space host <name>\` (no request needed).
           host: ctx.host,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -159,13 +159,13 @@ it directly with \`tc space host <name>\` (no request needed).
     .action(async (name: string, _options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         await ProfileManager.updateProfile(ctx.profile, (profile) => ({ ...profile, spaceName: name }));
 
         outputJson({ profile: ctx.profile, spaceName: name, switched: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

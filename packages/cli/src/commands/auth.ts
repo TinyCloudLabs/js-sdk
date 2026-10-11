@@ -6,9 +6,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
-import { removeProfileReplicas } from "../lib/profile-replicas.js";
+import { removeProfileReplicasAndReplication } from "../lib/profile-replicas.js";
 import { ProfileManager } from "../config/profiles.js";
 import {
   outputJson,
@@ -79,12 +79,15 @@ import {
   keyToDID,
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
-import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
+import { registerAuthGrantsCommand } from "./auth-grants.js";
+import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
 import { withSignInHint } from "../auth/session-expired.js";
+import { delegationExpiredError, isActivationExpiry } from "../auth/delegation-expiry.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendLocalGrantArtifact,
   appendAdditionalDelegation,
+  appendAdditionalDelegationIfUnexpired,
   appendAdditionalDelegations,
   appendPermissionRequestArtifact,
   createPermissionRequestArtifact,
@@ -105,6 +108,7 @@ import {
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
+import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
 export type OpenKeyAcquisition = typeof startAuthFlow;
@@ -140,8 +144,9 @@ async function promptAuthMethod(): Promise<AuthMethod> {
   });
 }
 
-export function registerAuthCommand(program: Command): void {
+export function registerAuthCommand(program: Command, options?: { openKeyAcquisition?: OpenKeyAcquisition }): void {
   const auth = program.command("auth").description("Authentication management");
+  registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
 
   auth
     .command("login")
@@ -154,6 +159,8 @@ export function registerAuthCommand(program: Command): void {
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
+    .option("--replication-prefix <prefix>", "Add replication get+sync authority for this prefix (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
+    .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
       try {
         if (options.device && options.paste) {
@@ -171,11 +178,23 @@ export function registerAuthCommand(program: Command): void {
           );
         }
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
           : undefined;
+        const profileConfig = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
+          if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return undefined;
+          throw error;
+        });
+        const replicationOptions: ReplicationLoginOptions = {
+          prefixes: options.replicationPrefix ?? profileConfig?.replication?.prefixes ?? [],
+          ...(options.replicationAllowSecrets === true || profileConfig?.replication?.allowSecrets === true ? { allowSecrets: true } : {}),
+          ...(owner === undefined ? {} : { ownerDid: owner }),
+        };
+        const loginPermissions = permissions === undefined
+          ? undefined
+          : buildReplicationLoginRequest(permissions, replicationOptions);
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
         // discovered local node stay one-off.
@@ -186,13 +205,15 @@ export function registerAuthCommand(program: Command): void {
             profileName: ctx.profile,
             nodeOrigin: ctx.host,
             shareOrigin: DEFAULT_SHARE_ORIGIN,
-            permissions: permissions!,
+            permissions: loginPermissions!,
             ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
           });
+          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
           reportDeclined(result.declined);
           outputJson({
             authenticated: true,
@@ -235,20 +256,26 @@ export function registerAuthCommand(program: Command): void {
         }
 
         if (method === "local") {
-          await handleLocalAuth(ctx.profile, ctx.host);
+          buildReplicationLoginRequest(undefined, replicationOptions);
+          await handleLocalAuth(ctx.profile, ctx.host, { replication: replicationOptions });
+          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
           await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
-            permissions,
+            permissions: loginPermissions,
+            replication: replicationOptions,
             expiry: parseExpiryOption(options.expiry),
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
           });
+          await persistReplicationLogin(ctx.profile, replicationOptions);
+          if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -259,11 +286,13 @@ export function registerAuthCommand(program: Command): void {
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
         await ProfileManager.clearSession(ctx.profile);
-        const replicasRemoved = options.keepReplicas ? [] : await removeProfileReplicas(ctx.profile);
+        const replicasRemoved = options.keepReplicas
+          ? []
+          : await removeProfileReplicasAndReplication(ctx.profile);
         outputJson({
           profile: ctx.profile,
           authenticated: false,
@@ -272,7 +301,7 @@ export function registerAuthCommand(program: Command): void {
           warning: "Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.",
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -284,13 +313,13 @@ export function registerAuthCommand(program: Command): void {
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         await rotateAuthKey(ctx.profile, ctx.host, {
           paste: options.paste,
           noPopup: options.popup === false,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -300,7 +329,7 @@ export function registerAuthCommand(program: Command): void {
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const hasKey = await ProfileManager.getKey(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile);
@@ -348,7 +377,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -375,7 +404,8 @@ export function registerAuthCommand(program: Command): void {
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        // Without --grant, the request records the host it is for and no session is restored.
+        const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
         const profile = await ProfileManager.getProfile(ctx.profile);
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
@@ -532,7 +562,7 @@ export function registerAuthCommand(program: Command): void {
           expiry,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -570,7 +600,7 @@ export function registerAuthCommand(program: Command): void {
         const imported = normalizeDelegationImport(parsed);
         // Loaded on use: a static import would evaluate the operations
         // delegation-binding bundle in every command that registers `auth`.
-        const { activateUnboundCompactImport, storedDelegationKind } = await import(
+        const { activateUnboundImport, storedDelegationKind, verifiedCompactAudience, STORED_GRANT_SKIP_REASONS } = await import(
           "@tinycloud/operations/delegation-binding"
         );
         const kind = storedDelegationKind({ delegation: imported.delegation });
@@ -581,56 +611,119 @@ export function registerAuthCommand(program: Command): void {
             ExitCode.USAGE_ERROR,
           );
         }
+        // Neither a session grant nor a cross-user wallet-mode grant can be
+        // imported without verifiable signed bytes. Reject before restoring a
+        // session, writing a row, or recording grant history.
+        if (kind === "other") {
+          throw new CLIError(
+            "INVALID_AUTH_IMPORT",
+            "Imported delegation must carry verifiable signed proof.",
+            ExitCode.USAGE_ERROR,
+          );
+        }
+        // Identify the persisted profile before a session restore can replay
+        // old grants, or first-session bootstrap can modify local profile data.
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        let bootstrap: DelegatedSessionBootstrap | undefined;
         let node;
         try {
           node = await ensureAuthenticated(ctx);
         } catch (error) {
-          const profile = await ProfileManager.getProfile(ctx.profile);
           const session = await ProfileManager.getSession(ctx.profile);
           if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
-          node = (await bootstrapDelegatedSession(ctx, imported.delegation)).node;
+          bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+          node = bootstrap.node;
         }
-        // A delegation whose audience is this profile's own session key can be
-        // installed as a runtime grant (useRuntimeDelegation activates it for
-        // matching service calls). A cross-user delegation — audience is this
-        // profile's stable identity DID or another principal — cannot: the node
-        // rejects runtime delegations that don't target the session key. Persist
-        // it and let the read path activate it via useDelegation in wallet mode.
-        const targetsSessionKey =
-          typeof imported.delegation.delegateDID === "string" &&
-          principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
+        // Only signed compact bytes can classify an import as cross-user.
+        // Transport metadata cannot turn a damaged session grant into a silent
+        // wallet-mode import. Signed-login proofs are validated by activation.
+        const signedAudience = kind === "compact"
+          ? verifiedCompactAudience(node as unknown as RuntimeDelegationActivator, imported.delegation)
+          : undefined;
+        let transportMatchesAudience = false;
+        if (signedAudience !== undefined) {
+          try {
+            transportMatchesAudience = principalDidEquals(imported.delegation.delegateDID, signedAudience);
+          } catch {
+            // Malformed transport DIDs never qualify as a foreign grant.
+          }
+        }
+        if (kind === "compact" && (signedAudience === undefined || !transportMatchesAudience)) {
+          const reason = signedAudience === undefined ? "proof_invalid" : "audience_mismatch";
+          const refusal = new CLIError(
+            "DELEGATION_REJECTED",
+            `Imported delegation was rejected (${reason}). No grant was stored.`,
+            ExitCode.ERROR,
+          );
+          if (bootstrap) await bootstrap.abandon(refusal);
+          throw refusal;
+        }
+        const targetsSessionKey = kind === "signed-login" || (
+          signedAudience !== undefined && principalDidEquals(signedAudience, node.sessionDid)
+        );
+        let importExpiry = imported.delegation.expiry;
+        let signedExpiry: Date | undefined;
+        if (!targetsSessionKey && kind === "compact") {
+          signedExpiry = signedCompactUcanExpiry(imported.delegation.delegationHeader.Authorization);
+          if (signedExpiry === undefined || importExpiry.getTime() !== signedExpiry.getTime()) {
+            throw new CLIError(
+              "DELEGATION_REJECTED",
+              "Imported delegation was rejected (authority_invalid). No grant was stored.",
+              ExitCode.ERROR,
+            );
+          }
+          if (signedExpiry.getTime() <= Date.now()) throw delegationExpiredError();
+          importExpiry = signedExpiry;
+        }
         let activated = false;
         let permissions = imported.permissions;
-        if (targetsSessionKey && kind === "compact") {
-          // No stored request contains this compact UCAN, so it is validated as
-          // replay validates it and bound to exactly the capabilities it signs.
-          // Replay then holds the stored record to that binding.
-          const record = await activateUnboundCompactImport(
-            node as unknown as RuntimeDelegationActivator,
-            imported.delegation,
-            ctx.host,
-          );
+        if (targetsSessionKey) {
+          let record;
+          try {
+            // Activation validates the signed authority before any store write.
+            record = await activateUnboundImport(
+              node as unknown as RuntimeDelegationActivator,
+              imported.delegation,
+              ctx.host,
+            );
+          } catch (error) {
+            const candidate = error !== null && typeof error === "object" && "reason" in error
+              ? error.reason : undefined;
+            const reason = typeof candidate === "string" &&
+              (STORED_GRANT_SKIP_REASONS as readonly string[]).includes(candidate)
+              ? candidate : "invalid";
+            const refusal = isActivationExpiry(error)
+              ? delegationExpiredError()
+              : new CLIError(
+                "DELEGATION_REJECTED",
+                `Imported delegation was rejected (${reason}). No grant was stored.`,
+                ExitCode.ERROR,
+              );
+            if (bootstrap) await bootstrap.abandon(refusal);
+            throw refusal;
+          }
           await appendAdditionalDelegation(ctx.profile, record);
+          importExpiry = record.delegation.expiry;
           permissions = record.permissions;
           activated = true;
         } else {
-          await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
-            imported.delegation,
+          const record = storedAdditionalDelegation(
+            { ...imported.delegation, expiry: importExpiry },
             imported.permissions,
-          ));
-          if (targetsSessionKey) {
-            await node.useRuntimeDelegation({
-              ...imported.delegation,
-              delegationHeader: { Authorization: imported.delegation.delegationHeader.Authorization },
-            });
-            activated = true;
+          );
+          if (!targetsSessionKey && kind === "compact") {
+            if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record, signedExpiry)) {
+              throw delegationExpiredError();
+            }
+          } else {
+            await appendAdditionalDelegation(ctx.profile, record);
           }
         }
         await appendGrantHistory(ctx.profile, {
           addedCaps: permissions,
           source: "cli",
           delegationCid: imported.delegation.cid,
-          expiry: imported.delegation.expiry.toISOString(),
+          expiry: importExpiry.toISOString(),
         });
 
         outputJson({
@@ -640,10 +733,10 @@ export function registerAuthCommand(program: Command): void {
           requestId: imported.requestId ?? null,
           delegationCid: imported.delegation.cid,
           permissions,
-          expiry: imported.delegation.expiry.toISOString(),
+          expiry: importExpiry.toISOString(),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -697,7 +790,7 @@ export function registerAuthCommand(program: Command): void {
         });
         outputJson(grant);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -755,7 +848,7 @@ export function registerAuthCommand(program: Command): void {
           command: isPermissionRequestArtifact(artifact) ? artifact.command ?? null : null,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -827,7 +920,7 @@ export function registerAuthCommand(program: Command): void {
           ) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -837,7 +930,7 @@ export function registerAuthCommand(program: Command): void {
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile);
@@ -874,7 +967,7 @@ export function registerAuthCommand(program: Command): void {
           process.stdout.write(formatField("Authenticated", authenticated) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }
@@ -1032,7 +1125,7 @@ type AuthImportOutput = {
 };
 
 async function importRequestBoundDelegationWithBootstrap(
-  ctx: { profile: string; host: string },
+  ctx: CLIContext,
   artifact: unknown,
 ): Promise<void> {
   const session = await ProfileManager.getSession(ctx.profile);
@@ -1210,6 +1303,13 @@ export async function ensureDelegationAuthority(params: {
   }
 
   if (params.profile.authMethod === "openkey") {
+    if (params.requested.some(isRawCidRevocationPermission)) {
+      throw new CLIError(
+        "RAW_RECAP_RESOURCE_UNSUPPORTED",
+        "OpenKey cannot sign raw urn:cid revocation authority.",
+        ExitCode.PERMISSION_DENIED,
+      );
+    }
     const key = await ProfileManager.getKey(params.ctx.profile);
     if (!key) {
       throw new CLIError(
@@ -1230,29 +1330,14 @@ export async function ensureDelegationAuthority(params: {
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     if (params.persist === false) {
       const request = grantRequestPermissions(params.requested, anchorSpace);
-      let delegationData: Awaited<ReturnType<OpenKeyAcquisition>>;
-      try {
-        delegationData = await acquireOpenKey(params.profile.did, {
-          jwk: key,
-          host: params.ctx.host,
-          permissions: request,
-          reason: permissionGrantReason(params.reason, request),
-          openkeyHost,
-          expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
-        });
-      } catch (error) {
-        if (
-          params.requested.some(isRawCidRevocationPermission) &&
-          /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))
-        ) {
-          throw new CLIError(
-            "RAW_RECAP_RESOURCE_UNSUPPORTED",
-            "The OpenKey/WASM ReCap encoder does not support raw urn:cid revocation resources.",
-            ExitCode.PERMISSION_DENIED,
-          );
-        }
-        throw error;
-      }
+      const delegationData = await acquireOpenKey(params.profile.did, {
+        jwk: key,
+        host: params.ctx.host,
+        permissions: request,
+        reason: permissionGrantReason(params.reason, request),
+        openkeyHost,
+        expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+      });
       const delegation = portableFromOpenKeyDelegation(
         delegationData,
         request,
@@ -1565,8 +1650,13 @@ async function rotateAuthKey(
 
   // One transaction: a concurrent login commit either lands before (and this
   // rotation then discards its session) or sees the new key and refuses.
+  let permissions: PermissionEntry[] | undefined;
   await ProfileManager.withLock(profileName, async () => {
     const current = await ProfileManager.getProfile(profileName);
+    if (current.replication?.prefixes.length) {
+      const previousSession = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+      if (Array.isArray(previousSession?.permissions)) permissions = previousSession.permissions as PermissionEntry[];
+    }
     await ProfileManager.setKey(profileName, jwk);
     await ProfileManager.clearSession(profileName);
     await ProfileManager.setProfile(profileName, {
@@ -1583,6 +1673,7 @@ async function rotateAuthKey(
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
     noPopup: options.noPopup,
+    permissions,
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }
@@ -1647,7 +1738,7 @@ type LocalAuthResult = {
 async function handleLocalAuth(
   profileName: string,
   host: string,
-  options: { emitOutput?: boolean; forceSessionKey?: boolean } = {},
+  options: { emitOutput?: boolean; forceSessionKey?: boolean; replication?: ReplicationLoginOptions } = {},
 ): Promise<LocalAuthResult> {
   const snapshot = await readProfileSnapshot(profileName);
   const profile = snapshot.profile;
@@ -1658,7 +1749,7 @@ async function handleLocalAuth(
   let did: string;
   let sessionDid = profile?.sessionDid;
 
-  if ((profile?.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
+  if (profile && (profile.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
     // Reuse existing local key
     privateKey = profile.privateKey;
     address = profile.address ?? await deriveAddress(privateKey);
@@ -1703,7 +1794,12 @@ async function handleLocalAuth(
 
   // Sign in using the private key
   const sessionResult = await withSpinner("Signing in...", async () => {
-    return localKeySignIn({ privateKey, host });
+    const replication = options.replication ?? profile?.replication;
+    return localKeySignIn({
+      privateKey,
+      host,
+      ...(replication?.prefixes.length ? { profile: profileName, replication } : {}),
+    });
   });
 
   const session = {
@@ -1801,12 +1897,31 @@ function reportDeclined(declined: PermissionEntry[], signed?: PermissionEntry[])
     process.stderr.write(`${theme.warn("OpenKey signed decrypt inside the space; the TinyCloud node refuses that. The OpenKey deployment is too old for agent secret reads.")}\n`);
   }
 }
+async function persistReplicationLogin(profileName: string, settings: ReplicationLoginOptions): Promise<void> {
+  await ProfileManager.updateProfile(profileName, (profile) => {
+    const { replication: _previous, ...rest } = profile;
+    return settings.prefixes.length === 0
+      ? rest
+      : {
+          ...rest,
+          replication: {
+            prefixes: [...settings.prefixes],
+            ...(settings.allowSecrets === true ? { allowSecrets: true } : {}),
+          },
+        };
+  });
+}
+
+function writeReplicationSecretsWarning(): void {
+  process.stderr.write(`${theme.warn("Warning:")} replication copies encrypted secret material to this device. The allow-secrets option does not grant decrypt.\n`);
+}
 
 interface OpenKeyLoginOptions {
   paste?: boolean;
   noPopup?: boolean;
   /** Manifest scope for first login: one space, verified before persistence. */
   permissions?: PermissionEntry[];
+  replication?: ReplicationLoginOptions;
   expiry?: string | number;
   expectedOwner?: string;
   /** Scoped login: replace a live session the approved scope would narrow. */
@@ -1833,17 +1948,28 @@ export async function refreshOpenKeySession(
       ExitCode.AUTH_REQUIRED,
     );
   }
-  // The requested scope: the manifest plus the capability read OpenKey needs to sign it.
-  if (options.permissions !== undefined) validateLoginPermissions(options.permissions);
-  const permissions = options.permissions === undefined ? undefined : scopedLoginPermissions(options.permissions);
-  if (permissions !== undefined) {
-    assertNotLocalOwner(profileName, profile, "Scoped browser login");
-  }
-  // Resolve before consent so an invalid --expiry, owner conflict or live
-  // session in use never opens OpenKey.
+  // Resolve before consent so an invalid scope, --expiry, owner conflict or
+  // live session in use never opens OpenKey.
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
   const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
   const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
+  const replication = options.replication ?? profile.replication ?? { prefixes: [] };
+  const previousSession = options.replication === undefined && profile.replication?.prefixes.length
+    ? await ProfileManager.getSession(profileName) as Record<string, unknown> | null
+    : null;
+  const rememberedPermissions = Array.isArray(previousSession?.permissions)
+    ? previousSession.permissions as PermissionEntry[]
+    : undefined;
+  const baseRequest = options.permissions ?? rememberedPermissions;
+  const requested = buildReplicationLoginRequest(baseRequest, {
+    ...replication,
+    ...(expectedOwner === undefined ? {} : { ownerDid: expectedOwner }),
+  });
+  if (requested !== undefined) validateLoginPermissions(requested);
+  const permissions = requested === undefined ? undefined : scopedLoginPermissions(requested);
+  if (permissions !== undefined) {
+    assertNotLocalOwner(profileName, profile, "Scoped browser login");
+  }
   if (permissions !== undefined && options.replaceSession !== true) {
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);

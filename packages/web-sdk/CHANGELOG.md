@@ -1,5 +1,110 @@
 # @tinycloudlabs/web-sdk
 
+## 3.2.0-beta.4
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.0-beta.4
+
+## 3.2.0-beta.3
+
+### Patch Changes
+
+- df18325: Generate the CoordinationOS vendor manifest from its pinned compatibility contract version, independent of the package's release version, so vendor builds remain reproducible after package version bumps.
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-core@3.2.0-beta.3
+  - @tinycloud/node-sdk@3.2.0-beta.3
+
+## 3.2.0-beta.2
+
+### Minor Changes
+
+- 4f851e6: Create-only secret writes, app-derived secret scopes, typed vault write errors, and classified delegation activation failures.
+  - **New:** `appSecretScope(appId)` derives the canonical secret scope for an app id (`com.listen.app` → `com-listen-app`), with `SECRET_SCOPE_RE`, `MAX_SECRET_SCOPE_LENGTH` (64) and `TC832_RESERVED_SCOPES` exported from every SDK package.
+  - **New:** `secrets.put(name, value, { ifAbsent: true })` (type `SecretPutOptions`) writes only when the secret does not exist. An existing secret fails with vault error `ALREADY_EXISTS` (KV 412; `meta.status` and the typed KV error as `cause`) and is never overwritten. `DataVaultService.put` accepts `{ ifNoneMatch: "*" }` for network-encrypted vaults; a legacy (key-blob) vault refuses it with `STORAGE_ERROR` before any KV call. The Node and Web secrets wrappers forward the option unchanged.
+  - **New:** a refused vault write keeps its authorization classification. A refused write is `AUTH_UNAUTHORIZED` only for HTTP 401 (sign-in needed). A 403 is `PERMISSION_DENIED`. Both keep `meta.status` and the typed KV error as `cause`, so `validatedCapabilityOf` still finds the missing capability. Other failures stay `STORAGE_ERROR`, now with `meta` and the KV error chained as the cause.
+  - **Fix:** KV `get`/`head`/`delete` now honour their timeout and abort signal while reading a 404 body that never finishes, instead of hanging; `createSignedReadUrl` error bodies get the same fix.
+  - **New:** node-sdk classifies delegation activation failures. `useRuntimeDelegation` reports an unreachable host as an error with `code: "ACTIVATION_TRANSPORT_FAILED"`. `RuntimeDelegationRejection` gains `activation_unavailable` (transport failure, 408, 429, 5xx) and `activation_unauthenticated` (401); every other activation failure stays `activation_rejected`.
+
+  **Breaks:**
+  - Code that matched `STORAGE_ERROR` for a vault or secrets write refused by authorization now receives `AUTH_UNAUTHORIZED` (401) or `PERMISSION_DENIED` (403, or no status).
+  - `VaultError`/`VaultErrorInput` gain the `ALREADY_EXISTS`, `AUTH_UNAUTHORIZED` and `PERMISSION_DENIED` variants, so exhaustive `switch`es over the vault error code need the new cases.
+  - Code that enumerates `RuntimeDelegationRejection` / `RUNTIME_DELEGATION_REJECTIONS` sees two new reasons; activation failures that were `activation_rejected` may now be `activation_unavailable` or `activation_unauthenticated`.
+
+### Patch Changes
+
+- Updated dependencies [4f851e6]
+  - @tinycloud/sdk-core@3.2.0-beta.2
+  - @tinycloud/node-sdk@3.2.0-beta.2
+
+## 3.2.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [6a7fa64]
+  - @tinycloud/node-sdk@3.2.0-beta.1
+
+## 3.2.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [ad4a11f]
+  - @tinycloud/sdk-core@3.2.0-beta.0
+  - @tinycloud/node-sdk@3.2.0-beta.0
+
+## 3.1.0
+
+### Minor Changes
+
+- a074fa5: TC-619: When the owner's storage is full, reads keep working and writes fail with one typed error.
+  - `db.migrations.apply()` reads the applied-migration list first. A database that is already up to date is opened with that one read and is never written, so an app that ensures its schema on open still loads on a full space or with a read-only session. The metadata table is created only when it is missing and a migration is pending. Before this, every call wrote a batch first, and a full space failed with `SQL batch failed: 402 - Storage quota exceeded…`.
+  - KV, SQL and DuckDB report a write rejected for storage with the same codes: `STORAGE_QUOTA_EXCEEDED` (HTTP 402, storage is full) or `STORAGE_LIMIT_REACHED` (HTTP 413, the write is larger than what is left). The message explains that nothing was saved, that reading still works, and what to do. `meta` carries `status`, `usedBytes` and `limitBytes`. A 413 without the node's storage text, such as a proxy's request-size limit, stays `KV_WRITE_FAILED`. Behaviour change: SQL and DuckDB previously reported a 402 as `NETWORK_ERROR`.
+  - Vault and secrets writes keep the storage code, message and byte counts. Behaviour change: they previously wrapped them in `STORAGE_ERROR`.
+  - New exports `isStorageFullError(error)`, `STORAGE_FULL_MESSAGE` and `STORAGE_WRITE_TOO_LARGE_MESSAGE` let an app detect "storage full" in one place and switch to a read-only view.
+  - `account.spaces.list({ preferIndex: true })` still lists accessible spaces when the account space is full. An explicit `account.spaces.syncAccessible()` still reports the failure.
+  - node-sdk's sign-in registry sync stops after the first storage-full rejection instead of retrying it three times.
+
+- 045c2d3: Share reads preserve the Node's HTTP status and bounded diagnostic text, even when reading the response body fails. A cached recipient session is re-admitted only after a typed 401/403 (or a legacy untyped error ending in `(401)` or `(403)`); a typed non-auth error retains the session even if its body mentions authorization.
+- 1f44a61: Add `DelegateToOptions.onPrepared` so callers can durably record a grant before it goes live (TC-839). `delegateTo` calls `onPrepared(delegation)` with the exact `PortableDelegation` it then returns as `result.delegation` (CID included), after signing and before host activation, on both the session-key and runtime-grant paths. If the hook rejects, no `/delegate` activation request is sent and `delegateTo` rejects with that same error. Passing `onPrepared` together with `forceWalletSign: true` throws before anything is signed, because the wallet path activates as part of signing. `TinyCloudWeb.delegateTo` passes the option through unchanged. Calls without `onPrepared` behave as before.
+
+### Patch Changes
+
+- Updated dependencies [02b6773]
+- Updated dependencies [0652195]
+- Updated dependencies [6de6688]
+- Updated dependencies [6484eba]
+- Updated dependencies [b7fd979]
+- Updated dependencies [dca972f]
+- Updated dependencies [dca972f]
+- Updated dependencies [a074fa5]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [b0972e5]
+- Updated dependencies [698654e]
+- Updated dependencies [2c703fc]
+- Updated dependencies [1f44a61]
+  - @tinycloud/sdk-core@3.1.0
+  - @tinycloud/node-sdk@3.1.0
+  - @tinycloud/share-envelope@1.1.0
+  - @tinycloud/share-sdk@1.1.0
+
+## 3.1.0-beta.15
+
+### Minor Changes
+
+- 1f44a61: Add `DelegateToOptions.onPrepared` so callers can durably record a grant before it goes live (TC-839). `delegateTo` calls `onPrepared(delegation)` with the exact `PortableDelegation` it then returns as `result.delegation` (CID included), after signing and before host activation, on both the session-key and runtime-grant paths. If the hook rejects, no `/delegate` activation request is sent and `delegateTo` rejects with that same error. Passing `onPrepared` together with `forceWalletSign: true` throws before anything is signed, because the wallet path activates as part of signing. `TinyCloudWeb.delegateTo` passes the option through unchanged. Calls without `onPrepared` behave as before.
+
+### Patch Changes
+
+- Updated dependencies [1f44a61]
+  - @tinycloud/node-sdk@3.1.0-beta.15
+
 ## 3.1.0-beta.14
 
 ### Patch Changes

@@ -8,7 +8,7 @@ import type {
   DecryptCapabilityProof,
   IEncryptionService,
 } from "../encryption";
-import type { PermissionHint } from "../types";
+import type { PermissionHint, ServiceError } from "../types";
 
 export interface VaultNetworkEncryptionConfig {
   /** Default encryption network used for inline vault envelopes. */
@@ -43,6 +43,11 @@ export interface VaultPutOptions {
   contentType?: string;
   /** Custom serializer (default: JSON.stringify for objects) */
   serialize?: (value: unknown) => Uint8Array;
+  /**
+   * `"*"` writes only when no value exists at the key. An existing value
+   * fails with `ALREADY_EXISTS`; it is never overwritten.
+   */
+  ifNoneMatch?: "*";
 }
 
 /**
@@ -53,8 +58,10 @@ export interface VaultGetOptions<T = unknown> {
   deserialize?: (data: Uint8Array) => T;
   /** Return raw decrypted bytes without deserialization */
   raw?: boolean;
+  /** Force the underlying KV read to bypass replica read-through. */
+  source?: "network";
   /** Delegated KV service for reading from the grantor's space (used by getShared) */
-  kv?: { get<V>(key: string, options?: { raw?: boolean }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
+  kv?: { get<V>(key: string, options?: { raw?: boolean; source?: "network" }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
 }
 
 /**
@@ -63,8 +70,9 @@ export interface VaultGetOptions<T = unknown> {
 export interface VaultListOptions {
   /** Prefix filter for key names */
   prefix?: string;
-  /** Remove prefix from returned keys */
   removePrefix?: boolean;
+  /** Force the underlying KV list to bypass replica read-through. */
+  source?: "network";
   /** Maximum number of keys to return. */
   limit?: number;
   /** Opaque cursor returned by a prior bounded page. */
@@ -129,7 +137,31 @@ export type VaultErrorInput =
   | { code: "GRANT_NOT_FOUND"; grantor: string; key: string; message?: string }
   | { code: "VAULT_LOCKED"; message?: string }
   | { code: "PUBLIC_KEY_NOT_FOUND"; did: string; message?: string }
-  | { code: "STORAGE_ERROR"; cause: Error; message?: string }
+  | { code: "STORAGE_ERROR"; cause: Error; message?: string; meta?: Record<string, unknown> }
+  | {
+      code: "ALREADY_EXISTS";
+      key: string;
+      message?: string;
+      meta?: Record<string, unknown>;
+      /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
+  | {
+      /** HTTP 401 only: the session must sign in again. */
+      code: "AUTH_UNAUTHORIZED";
+      message: string;
+      meta?: Record<string, unknown>;
+      /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
+  | {
+      /** A 403, or an authorization refusal without a status: signing in again does not help. */
+      code: "PERMISSION_DENIED";
+      message: string;
+      meta?: Record<string, unknown>;
+      /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
   | {
       code: "STORAGE_QUOTA_EXCEEDED" | "STORAGE_LIMIT_REACHED";
       message: string;

@@ -12,8 +12,8 @@ import {
   type TinyCloudPosture,
 } from "../contract.js";
 import { OperationInvocationError, operationError } from "../errors.js";
+import { missingSecretRecovery, ownerOfSpace } from "../secret-request.js";
 import {
-  buildSecretSetupUrl,
   normalizeSecretsGetInput,
   operationSpaceResolver,
   resolveSecretReference,
@@ -157,31 +157,19 @@ async function executeSecretGet(
     };
   }
 
-  return classifySecretRead(reference, result);
+  return classifySecretRead(reference, result, context.runtime?.localOwner === true);
 }
 
 function classifySecretRead(
   reference: SecretReference,
   result: SecretReadResult,
+  localOwner: boolean,
 ): OperationExecutionOutcome<SecretsGetOutput> {
   switch (result.status) {
     case "ok":
       return { status: "ok", output: { value: result.value } };
     case "not_found":
-      return {
-        status: "setup_required",
-        setup: {
-          kind: "secret_manager",
-          secret: {
-            name: reference.name,
-            ...(reference.scope === undefined ? {} : { scope: reference.scope }),
-            space: reference.space,
-          },
-          url: buildSecretSetupUrl(reference),
-          message: "Enter this secret in Secret Manager, then retry the operation.",
-        },
-        requiresCallerInput: true,
-      };
+      return missingSecretOutcome(reference, localOwner);
     case "permission_required":
       return {
         status: "authority_required",
@@ -225,6 +213,56 @@ function classifySecretRead(
   return {
     status: "error",
     error: operationError("SECRET_READ_FAILED", "The secret read failed."),
+  };
+}
+
+/**
+ * A missing secret: a `/request` link for the owner of the secret's space, or,
+ * for a local identity or a secret no link can express, `KV_NOT_FOUND` with
+ * the value-free recovery kind.
+ */
+function missingSecretOutcome(
+  reference: SecretReference,
+  localOwner: boolean,
+): OperationExecutionOutcome<SecretsGetOutput> {
+  const owner = ownerOfSpace(reference.space);
+  const recovery = missingSecretRecovery({
+    owner,
+    local: localOwner,
+    names: [reference.name],
+    ...(reference.scope === undefined ? {} : { scope: reference.scope }),
+  });
+  if (recovery.kind === "add_secret") {
+    const { setup } = recovery;
+    return {
+      status: "setup_required",
+      setup: {
+        kind: "secret_manager",
+        action: setup.action,
+        url: setup.url,
+        names: setup.names,
+        ...(setup.scope === undefined ? {} : { scope: setup.scope }),
+        owner: setup.owner,
+        secret: {
+          name: reference.name,
+          ...(reference.scope === undefined ? {} : { scope: reference.scope }),
+          space: reference.space,
+        },
+        message: "Ask the owner to add this secret in Secret Manager, then retry the operation.",
+      },
+      requiresCallerInput: true,
+    };
+  }
+  return {
+    status: "error",
+    error: operationError("KV_NOT_FOUND", recovery.hint, {
+      details: {
+        names: [reference.name],
+        ...(reference.scope === undefined ? {} : { scope: reference.scope }),
+        ...(owner === undefined ? {} : { owner }),
+        recoveryKind: recovery.kind,
+      },
+    }),
   };
 }
 

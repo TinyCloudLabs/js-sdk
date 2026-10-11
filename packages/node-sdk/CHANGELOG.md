@@ -1,5 +1,156 @@
 # @tinycloudlabs/node-sdk
 
+## 3.2.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [8b56ee8]
+  - @tinycloud/replica@0.1.1-beta.1
+
+## 3.2.0-beta.3
+
+### Minor Changes
+
+- df18325: Add the Phase 1 replication B-node surface for the TC-858 read-through flag: `sqliteReplicaStorage` (Node entry only), the per-prefix `ReplicationAuthority`, `planDelegation`/`replicationAuthority`, `replicationSignInEntries()`, and sign-in augmentation.
+  - `replication` config (enabled, prefixes, storage, allowSecrets) is validated at construction: storage is required, prefixes must be non-empty and non-overlapping, and `vault/` prefixes require `allowSecrets`.
+  - Sign-in requests gain one `{tinycloud.kv, space, prefix, [get, sync]}` entry per configured prefix already covered by an unrestricted `get` under the same `isCapabilitySubset` semantics the signed-recap check uses — an exact-path `get(notes)` never authorizes a `notes/private` entry, and secrets-primary coverage is measured against the effective secrets request, not `defaultActions`; `replicationSignInEntries()` returns the same augmentation the SIWE recap carries for the restore check (Phase 2).
+  - `sqliteReplicaStorage({ dir, guard })` provides durable SQLite replicas partitioned by canonical identity (host + space + principal), ALWAYS-durable `pending.json` pending state (never an in-memory fallback; a guard serializes cross-process read-modify-write), a per-replica `syncedThroughEpoch` fence persisted only on successful sync, and purge across the deduplicated device union. Purge bumps the replica's generation before removing it, so a handle opened beforehand fails `RESET_REQUIRED` on its next call. Grant reuse reports `unconstrained` computed from the signed `att`; caveated grants are never installed. `@tinycloud/replica`, `/sqlite` and the WASM binding load lazily and require Node ≥ 22.13.
+  - `TinyCloudNode.planDelegation()` is the pure parent selection `delegateTo` runs; `replicationAuthority()` backs the controller's session/runtime grant strategies, refusing `CAVEATED_AUTHORITY` for caveat-only coverage.
+  - The node now owns one lazy replication runtime across session replacement and restore. It binds to canonical host + primary space + principal, shares durable pending state for the same identity, attaches read-through only to primary-space KV services, and unbinds those services when the graph retires. Runtime controls expose status, sync, purge and pending cleanup; the runtime stays in the Node entry and does not enter the web bundle.
+  - Pending partition updates re-resolve the canonical path on every write and fail closed with `STORAGE_ERROR` after a symlink target changes. Existing unconstrained grants are reused only when parent/expiry policy permits; an offline mint cannot replace a constrained grant.
+
+  Consumers that instantiate `TinyCloudNode` with `replication.enabled: true` must now supply `replication.storage`.
+  Replication-enabled `/core` consumers may register a browser-safe runtime and authority loader with `registerReplicationLoaders()`; `/core` itself still does not import the controller. The runtime and authority loaders are available at public ESM/CJS subpaths. Every primary-space KV view, including views created during a rebind and restored `SpaceService` factories, waits for the current binding before routing. Compact delegate restores verify the signed UCAN and derive the owner principal from its signed space resource locally; mismatched unsigned `spaceId` metadata disables replica use with `SESSION_SCOPE_MISMATCH` and does not trigger `/delegate`. Compact delegate sessions can serve only prefixes covered by their own signed grant, never a storage-device grant.
+  - Purge stops timers and aborts syncs synchronously before its asynchronous drain; every bind/unbind preserves the full outstanding close chain so later storage opens cannot overtake an earlier close.
+
+  The replication authority checks compact-session signature, CID, audience, and signed resource scope before local use. Delegate posture is network-only when its signed get+sync coverage does not include the configured prefix; installed grants cannot widen it.
+
+### Patch Changes
+
+- df18325: Bound the sign-in account-registry drain to four seconds and abort its SQL, KV, and hosting requests on expiry. Registry failures remain warning-only, so sign-in succeeds after the bounded drain.
+- df18325: Keep published segment-aware replica selection unchanged while using sdk-core capability containment only for authority. Bare selectors now request get/sync grants for the exact path and slash descendants through the shared public `grantPathsForSelector` helper; root and trailing-slash selectors remain single-path grants. LIST local serving requires complete selection coverage, and nested LIST pending writes force network fallback or cursor restart.
+- df18325: Run account-registry SQL, KV, and hosting requests through a dedicated per-operation context so the sign-in deadline cannot abort unrelated requests or persist in cached space-scoped services. Await SQL and DuckDB error-body reads before disposing request cancellation listeners.
+- df18325: Replica status reads existing SQLite state read-only without creating a replica, identity, device, or blob directories, and never recreates a database that does not exist or was purged. Existing databases use normal read-only WAL mode so committed revocation and reset state is visible; SQLite may create its own WAL or shared-memory sidecars. Missing databases remain untouched, and open/read failures report unavailable rather than healthy. Inspection explicitly finalizes prepared statements before closing both inspection and ordinary store handles. Status inspection is bounded and cancelled on controller close or purge; in-process grant revocation remains visible after the handle is generation-fenced.
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-services@3.2.0-beta.3
+  - @tinycloud/sdk-core@3.2.0-beta.3
+  - @tinycloud/replica@0.1.1-beta.0
+
+## 3.2.0-beta.2
+
+### Minor Changes
+
+- 4f851e6: Create-only secret writes, app-derived secret scopes, typed vault write errors, and classified delegation activation failures.
+  - **New:** `appSecretScope(appId)` derives the canonical secret scope for an app id (`com.listen.app` → `com-listen-app`), with `SECRET_SCOPE_RE`, `MAX_SECRET_SCOPE_LENGTH` (64) and `TC832_RESERVED_SCOPES` exported from every SDK package.
+  - **New:** `secrets.put(name, value, { ifAbsent: true })` (type `SecretPutOptions`) writes only when the secret does not exist. An existing secret fails with vault error `ALREADY_EXISTS` (KV 412; `meta.status` and the typed KV error as `cause`) and is never overwritten. `DataVaultService.put` accepts `{ ifNoneMatch: "*" }` for network-encrypted vaults; a legacy (key-blob) vault refuses it with `STORAGE_ERROR` before any KV call. The Node and Web secrets wrappers forward the option unchanged.
+  - **New:** a refused vault write keeps its authorization classification. A refused write is `AUTH_UNAUTHORIZED` only for HTTP 401 (sign-in needed). A 403 is `PERMISSION_DENIED`. Both keep `meta.status` and the typed KV error as `cause`, so `validatedCapabilityOf` still finds the missing capability. Other failures stay `STORAGE_ERROR`, now with `meta` and the KV error chained as the cause.
+  - **Fix:** KV `get`/`head`/`delete` now honour their timeout and abort signal while reading a 404 body that never finishes, instead of hanging; `createSignedReadUrl` error bodies get the same fix.
+  - **New:** node-sdk classifies delegation activation failures. `useRuntimeDelegation` reports an unreachable host as an error with `code: "ACTIVATION_TRANSPORT_FAILED"`. `RuntimeDelegationRejection` gains `activation_unavailable` (transport failure, 408, 429, 5xx) and `activation_unauthenticated` (401); every other activation failure stays `activation_rejected`.
+
+  **Breaks:**
+  - Code that matched `STORAGE_ERROR` for a vault or secrets write refused by authorization now receives `AUTH_UNAUTHORIZED` (401) or `PERMISSION_DENIED` (403, or no status).
+  - `VaultError`/`VaultErrorInput` gain the `ALREADY_EXISTS`, `AUTH_UNAUTHORIZED` and `PERMISSION_DENIED` variants, so exhaustive `switch`es over the vault error code need the new cases.
+  - Code that enumerates `RuntimeDelegationRejection` / `RUNTIME_DELEGATION_REJECTIONS` sees two new reasons; activation failures that were `activation_rejected` may now be `activation_unavailable` or `activation_unauthenticated`.
+
+### Patch Changes
+
+- Updated dependencies [4f851e6]
+  - @tinycloud/sdk-services@3.2.0-beta.2
+  - @tinycloud/sdk-core@3.2.0-beta.2
+
+## 3.2.0-beta.1
+
+### Patch Changes
+
+- 6a7fa64: A SIWE-less session created by `tc auth import` now expires locally at the compact UCAN's signed `exp`; expired restores throw `AUTH_EXPIRED` before host lookup, including sessions imported by earlier releases. The new `signedCompactUcanExpiry` export reads that signed lifetime. CACAO-headed sessions remain refused only by the node.
+
+  A request-bound compact import whose signed expiry passes during its locked store write now reports `DELEGATION_EXPIRED` and rolls back the grant and any provisional session. If a fresh delegate profile's provisional session expires during import, it is rolled back unless another writer has since changed the profile. Cross-user compact imports require transport expiry to match signed `exp`, and persist the signed expiry. An import that is already expired or expires before activation also reports `DELEGATION_EXPIRED` without storing a grant.
+
+  The client clock is authoritative. `context` reports imported-session expiry, and the scoped paste login named by the hint is no longer blocked by an unknown expiry. Before probing a configured local node, session-using commands verify the stored session locally; this also covers older imported sessions. Login, logout, rotate, status, whoami, context, node, profile, `space host-request|switch`, `enable`, `auth request` without `--grant`, explicit private-key commands, and profiles without a stored session retain discovery behavior. Deferred discovery after owner refresh respects a context copied with another host.
+
+## 3.2.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [ad4a11f]
+  - @tinycloud/sdk-core@3.2.0-beta.0
+
+## 3.1.0
+
+### Minor Changes
+
+- 02b6773: New canonical `agents` space; existing accounts run one bootstrap repair on next sign-in to add it. Bootstrap repair keeps existing account space records (renamed, archived, custom permissions) and only adds missing ones; new `AccountService.spaces.registerMissing()`. A sign-in that skips a non-account canonical space now repairs instead of re-seeding.
+- 0652195: Session refresh and account-registry retry now decide from the typed HTTP status instead of the error text.
+  - **Typed classification.** The new `authorizationVerdictOf(error)` reads a 4xx/5xx `status`, `statusCode` or `meta.status`, or the `AUTH_UNAUTHORIZED` code. It follows the `cause` chain from the outside in and skips success statuses. The outermost error status decides.
+  - **Session refresh.** `withSessionRefresh` signs in again only after a 401. A 403 never triggers a refresh, whatever its body says. To keep the typed status, throw the `ServiceError` or an `Error` with it as `cause`.
+  - **Untyped errors.** Message matching is now only a fallback. It drops double-quoted strings first (escape-aware), then takes the first 400-599 status in one of the SDK's diagnostic positions (`: 403` followed by whitespace or the end, `HTTP 401`, `returned 401`, `rejected (401)`, or a trailing `(403)`), and refreshes only if that status is 401. With no status, session wording on the original message decides. Numbers inside paths, ids, ports, byte counts or quoted keys no longer count.
+  - **KV messages.** KV 401/403 errors now read `<operation>: <status> - <server text>`. They keep the server text, and `meta` is unchanged. Keys in KV error messages are written with `JSON.stringify`, so a key containing quotes stays well-formed.
+  - **Hooks errors.** `HooksService` HTTP failures now carry `meta.status` (and `statusText`).
+  - **Account-registry sync.** The wrappers keep the service error or host result as `cause`. These wrappers are `applications.register`, `spaces.syncAccessible`, owned-space activation, owned-space hosting and post-create re-activation. A 401 or 403 therefore stops after one request, even when the body is `Forbidden` or empty, and every wrapper message carries the status.
+  - **Owner delegation import.** A failed activation during owner delegation import now keeps the activation result as `cause`.
+  - **New method.** `NodeUserAuthorization.hostOwnedSpaceResult()` returns the full `SpaceHostResult`. `hostOwnedSpace()` still returns `boolean`.
+
+- b7fd979: `activateValidatedRuntimeDelegation` takes a new `authorize` option. It sees the capabilities read from the signed delegation before anything is activated or installed, and returning `false` refuses the delegation.
+- a074fa5: TC-619: When the owner's storage is full, reads keep working and writes fail with one typed error.
+  - `db.migrations.apply()` reads the applied-migration list first. A database that is already up to date is opened with that one read and is never written, so an app that ensures its schema on open still loads on a full space or with a read-only session. The metadata table is created only when it is missing and a migration is pending. Before this, every call wrote a batch first, and a full space failed with `SQL batch failed: 402 - Storage quota exceeded…`.
+  - KV, SQL and DuckDB report a write rejected for storage with the same codes: `STORAGE_QUOTA_EXCEEDED` (HTTP 402, storage is full) or `STORAGE_LIMIT_REACHED` (HTTP 413, the write is larger than what is left). The message explains that nothing was saved, that reading still works, and what to do. `meta` carries `status`, `usedBytes` and `limitBytes`. A 413 without the node's storage text, such as a proxy's request-size limit, stays `KV_WRITE_FAILED`. Behaviour change: SQL and DuckDB previously reported a 402 as `NETWORK_ERROR`.
+  - Vault and secrets writes keep the storage code, message and byte counts. Behaviour change: they previously wrapped them in `STORAGE_ERROR`.
+  - New exports `isStorageFullError(error)`, `STORAGE_FULL_MESSAGE` and `STORAGE_WRITE_TOO_LARGE_MESSAGE` let an app detect "storage full" in one place and switch to a read-only view.
+  - `account.spaces.list({ preferIndex: true })` still lists accessible spaces when the account space is full. An explicit `account.spaces.syncAccessible()` still reports the failure.
+  - node-sdk's sign-in registry sync stops after the first storage-full rejection instead of retrying it three times.
+
+- 045c2d3: Preserve typed HTTP status and bounded server response text in node-info, encryption-network, and V3 delivery failures using the shared sdk-core helper. Bootstrap, owned-space hosting, and runtime/delegation activation failures retain rejected host results through error causes and status-bearing messages. `hostOwnedSpace()` reports rejected host delegations without collapsing their status to a boolean.
+- 698654e: TC-736: KV change feed client for `tinycloud.kv/sync` (tinycloud-node TC-732).
+  - `kv.changes({ prefix, cursor?, limit?, retentionGrant?, signal?, timeout? })` reads one page of the ordered, delete-aware feed for a prefix and returns `{ changes, more, cursor, source, authority }`. Each change is a key's latest state (`{ key, deleted: false, etag, metadata }` or `{ key, deleted: true }`); read content with `get`/`batchGet` and check it against the ETag. A page never splits one invocation, so it can hold more than `limit` changes, and it can be empty with `more: true`. The cursor is opaque. The node must advertise `kv-sync-v1` in `/info`.
+  - `prefix` and the returned keys are full paths in the space; the service's configured prefix is not applied. On a prefixed `KVService` such as `DelegatedAccess.kv`, strip that prefix before calling `get(change.key)`, or use `kv.withPrefix(path).changes()`, which follows everything under `path/` and returns keys relative to it. An empty prefix, on either form, is refused with `INVALID_INPUT`.
+  - Errors: HTTP 410 is `KV_SYNC_RESET_REQUIRED` with `meta.reason` (`cursor-invalid` or `position-unknown`): discard sync state and restart without a cursor. A 401 naming `delegation-revoked` or `delegation-ancestor-revoked` is `AUTH_DELEGATION_REVOKED` or `AUTH_DELEGATION_ANCESTOR_REVOKED`. A refused retention grant (403) is `KV_RETENTION_GRANT_REFUSED` with `meta.reason`. A 404 for an unhosted space is `KV_NOT_FOUND`. The timeout and abort signal stay in force while an error body is read.
+  - `KVAction.SYNC`, `KVAction.RETAIN`, `KV.SYNC` and `KV.RETAIN` name the new abilities. The vendored capability registry is re-vendored from tinycloud-node `d7f511f`, which registers both.
+  - `tinycloud.kv/sync` and `tinycloud.kv/retain` must be granted by name. `actionContains` (exported with the new `isExplicitOnlyAction`), `SharingService.preflightGenerate()`/`generate()` and node-sdk's runtime-grant check no longer let `*` or `tinycloud.kv/*` cover them, matching the node. No default session or manifest includes them. Behaviour changes: a session holding only `tinycloud.kv/*` can no longer delegate either ability onward without a prompt, and a share asking for either under a `*` registry entry now goes to `onRootDelegationNeeded`. `SharingService` now uses `actionContains` for every action, so a `tinycloud.kv/*` registry entry covers the other KV actions there too, as it already did elsewhere.
+  - Type-level break for outside implementers: `IKVService` (and the `IKVServiceLike` that `PrefixedKVService` wraps) gains a required `changes(options)` member, and `IPrefixedKVService` gains `changes(options?)`. A custom class or object that implements these interfaces must add the method to compile.
+  - `secrets.listAll()` now fails with `INVALID_INPUT` when the node repeats a continuation cursor, instead of looping on a node that ignores list cursors.
+
+- 1f44a61: Add `DelegateToOptions.onPrepared` so callers can durably record a grant before it goes live (TC-839). `delegateTo` calls `onPrepared(delegation)` with the exact `PortableDelegation` it then returns as `result.delegation` (CID included), after signing and before host activation, on both the session-key and runtime-grant paths. If the hook rejects, no `/delegate` activation request is sent and `delegateTo` rejects with that same error. Passing `onPrepared` together with `forceWalletSign: true` throws before anything is signed, because the wallet path activates as part of signing. `TinyCloudWeb.delegateTo` passes the option through unchanged. Calls without `onPrepared` behave as before.
+
+### Patch Changes
+
+- dca972f: An expired stored session now asks for a new sign-in instead of looking like a node failure (TC-607). When node-sdk refuses a persisted signed session as expired or no longer valid (`AUTH_EXPIRED`), the operations runtime returns a non-retryable `AUTH_REQUIRED` (the code TC-634 uses for a node's 401) instead of a retryable `NODE_ERROR`, and the CLI reports `AUTH_REQUIRED` (exit 3) with a sign-in hint for the profile's kind (scoped paste login for a delegate, `--method local` for a local owner key, `--method openkey` for an OpenKey owner). This covers `tc secrets get/list/put/delete`, `tc auth import` of a request-bound delegation, and every other command that restores a stored session; the refusal happens before any node request. Share commands keep their share-publishing sign-in guidance. Operations and MCP consumers that switch on error codes see `AUTH_REQUIRED` where they previously saw `NODE_ERROR` for this case. Any service result coded `AUTH_REQUIRED` or `PERMISSION_DENIED` without an HTTP status now exits 3 or 5 instead of 1 in commands using `cliErrorFromService` (account, delegation, duckdb, kv, secrets list/put/delete, space, sql, vars and vault); for example, `tc secrets list` without a grant returns the NodeSecretsService's status-less `PERMISSION_DENIED` with exit 5. `tc secrets get` and `tc auth import` also supply the profile kind's sign-in hint for `AUTH_REQUIRED`. A delegate session bootstrapped by `tc auth import` carries no signed expiry and is still refused by the node instead.
+
+  Interactive secret escalation and `tc auth request --grant` now send OpenKey `/delegate` a request it signs, and the approved grant now authorizes `secrets get` (TC-609). Each request adds `tinycloud.capabilities/read` on its space root, keeps raw decrypt in the `encryption` pseudo-space with an EIP-55 owner, and anchors a decrypt-only request in the secrets space (`--space` when given) or, for `auth request --grant`, the profile's primary space. The signed proof is verified before anything is activated or stored; the added `capabilities/read` counts as requested, and any other authority beyond the request is refused.
+
+  `activateValidatedRuntimeDelegation` now accepts wallet-signed CACAO session grants (OpenKey `/delegate`, `grantRuntimePermissions`) as well as compact UCANs. Such a grant must carry `siweProof` (its SIWE and signature, now set by `grantRuntimePermissions` and by the CLI when it stores an OpenKey grant); it is verified with the new `TinyCloudNode.verifySessionGrant` against the live session key, must be signed by the session's owner for one owner space and owner networks, and installs exactly the verified ReCap. The CLI stores each such grant (`tc auth request --grant`, secret-read approvals) with its `siweProof` and an `authorityRequest` binding to exactly its signed capabilities as validated activation reads them (`cli-grant:<cid>`, new `bindCliGrant` in `@tinycloud/operations/delegation-binding`), so the request-binding replay rule installs it in the CLI, `secrets get` and MCP; a signed-login record with a proof but no valid binding installs nothing. Grants stored without a proof by earlier releases are not used by operations. `replayStoredDelegation` now returns `{ status: "installed" | "skipped" | "not-replayed" }` with a fixed skip `reason` instead of the installed delegation or `undefined`. Refusals throw `RuntimeDelegationRejectedError` with a stable `reason` (`RUNTIME_DELEGATION_REJECTIONS`). Operation results gain an optional `warnings` array: every unexpired stored grant the runtime skips is listed as `{ code: "STORED_GRANT_SKIPPED", reason, grantCid? }` with a fixed reason code (including `unbound` and `outside_request` for the request-binding rule) and never error text, node responses or stored URLs (expired grants are still dropped silently); `grantCid` appears only when it is the CID recomputed from the stored authorization bytes. The CLI prints them inside its JSON error, beside TC-634's `meta` (also when an `-o` write or browser approval fails), as one JSON line on stderr after a successful command's output, or as one human-readable line. `--json` now selects JSON errors and warnings, and suppresses progress spinners, the banner and the missing-profile notice, even when stdout is a terminal; it is read from the parsed options, so a `--json` operand after `--` does not count. `secrets get` reports missing authority as `PERMISSION_DENIED` with exit 5 instead of exit 1.
+
+- dca972f: A local-key grant of only raw decrypt on the owner's encryption network can be stored and used again (TC-609). `tc auth request --grant` and a secret read's escalation activated such a grant, then refused to store it, because verifying it reused the persisted-session check that a session's ReCap authorizes its primary space, and a raw network names no space. The new WASM export `validateSessionGrant` (optional `IWasmBindings.validateSessionGrant`, implemented by `NodeWasmBindings`) runs the same signature, signer, audience, lifetime, ReCap and CID checks, and waives the space check only for a grant whose ReCap holds nothing but raw encryption-network resources; a grant with no ReCap authority is refused. `TinyCloudNode.verifySessionGrant` uses it, falling back to `validatePersistedSession` (which refuses decrypt-only grants) for bindings without it. Restoring a session still uses `validatePersistedSession` and its space check.
+- 2c703fc: SDK Core carries an explicit target-space and command-scoped authority CID when signing CLI revocations. The node SDK preserves raw CID ReCap resources and maps root raw-CID activation failures to the CLI's CID-bound owner-space fallback; the no-options `revokeDelegation(cid)` API retains its existing behavior.
+- Updated dependencies [02b6773]
+- Updated dependencies [ee4fd2d]
+- Updated dependencies [37123c3]
+- Updated dependencies [0652195]
+- Updated dependencies [6484eba]
+- Updated dependencies [dca972f]
+- Updated dependencies [a074fa5]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [698654e]
+- Updated dependencies [4df61ed]
+- Updated dependencies [2c703fc]
+- Updated dependencies [d11a8b6]
+  - @tinycloud/sdk-core@3.1.0
+  - @tinycloud/sdk-services@3.1.0
+  - @tinycloud/node-sdk-wasm@1.7.7
+
+## 3.1.0-beta.15
+
+### Minor Changes
+
+- 1f44a61: Add `DelegateToOptions.onPrepared` so callers can durably record a grant before it goes live (TC-839). `delegateTo` calls `onPrepared(delegation)` with the exact `PortableDelegation` it then returns as `result.delegation` (CID included), after signing and before host activation, on both the session-key and runtime-grant paths. If the hook rejects, no `/delegate` activation request is sent and `delegateTo` rejects with that same error. Passing `onPrepared` together with `forceWalletSign: true` throws before anything is signed, because the wallet path activates as part of signing. `TinyCloudWeb.delegateTo` passes the option through unchanged. Calls without `onPrepared` behave as before.
+
 ## 3.1.0-beta.14
 
 ### Patch Changes

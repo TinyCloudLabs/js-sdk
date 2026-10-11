@@ -25,6 +25,7 @@ interface HermeticNode {
   readonly host: string;
   readonly ownerPrivateKey: string;
   readonly ownerDid: string;
+  readonly applicationsSpaceId: string;
   provisionSecret(): void;
   stop(): void;
 }
@@ -161,11 +162,39 @@ test("an approved escalation authorizes secrets get in the same process and in a
   expect({ exitCode: fresh.exitCode, stderr: fresh.stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(JSON.parse(fresh.stdout)).toEqual({ name: SECRET, value: CANARY });
 
+  // A second real owner-signed grant permits list on the applications space,
+  // where the hermetic node has a KV map. No further approval is required.
+  const owner = new PrivateKeySigner(hermetic.ownerPrivateKey);
+  const address = await owner.getAddress();
+  const appSpace = hermetic.applicationsSpaceId;
+  const listExpiry = new Date(Date.now() + 3600_000).toISOString();
+  const preparedList = wasm.prepareSession({
+    abilities: { kv: { "vault/secrets/": ["tinycloud.kv/list"] } },
+    address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId: appSpace, jwk: sessionKey,
+    issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: listExpiry,
+  });
+  const listSignature = await owner.signMessage(preparedList.siwe);
+  const signedList = wasm.completeSessionSetup({ ...preparedList, signature: listSignature });
+  const listPermissions = [{ service: "tinycloud.kv", space: appSpace, path: "vault/secrets/", actions: ["tinycloud.kv/list"] }];
+  const listRecord = {
+    delegation: {
+      cid: signedList.delegationCid, delegationHeader: signedList.delegationHeader,
+      spaceId: appSpace, path: "vault/secrets/", actions: ["tinycloud.kv/list"],
+      resources: [{ service: "kv", space: appSpace, path: "vault/secrets/", actions: ["tinycloud.kv/list"] }],
+      expiry: listExpiry, delegateDID: sessionDid, ownerAddress: address, chainId: 1, host: hermetic.host,
+      siweProof: { siwe: preparedList.siwe, signature: listSignature },
+    },
+    permissions: listPermissions,
+    authorityRequest: { requestId: `cli-grant:${signedList.delegationCid}`, requested: listPermissions },
+  };
+  listGrant = listRecord;
   // A copy left by an earlier release, with neither its proof nor a binding,
   // is skipped; the read still succeeds and stderr stays machine-readable.
   const { siweProof: _proof, ...proofless } = stored[0]!.delegation;
   const { authorityRequest: _binding, authorityRequestAudit: _audit, ...unbound } = stored[0]!;
-  await writeJsonAtomic(additionalDelegationsPath("owner"), [stored[0], { ...unbound, delegation: proofless }]);
+  activeGrant = stored[0]!;
+  staleGrant = { ...unbound, delegation: proofless };
+  await writeJsonAtomic(additionalDelegationsPath("owner"), [activeGrant, listGrant, staleGrant]);
   const upgraded = await freshRead();
   expect(upgraded.exitCode).toBe(0);
   expect(JSON.parse(upgraded.stdout)).toEqual({ name: SECRET, value: CANARY });
@@ -177,6 +206,14 @@ test("an approved escalation authorizes secrets get in the same process and in a
 
 // Set by the test above, which leaves a stale copy of the grant beside the real one.
 let staleGrantCid: string | undefined;
+type TestGrantRecord = {
+  delegation: { cid: string; siweProof?: unknown };
+  authorityRequest?: { requestId?: unknown };
+  authorityRequestAudit?: unknown;
+};
+let activeGrant: TestGrantRecord;
+let staleGrant: TestGrantRecord;
+let listGrant: TestGrantRecord;
 const staleWarning = () => ({ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: staleGrantCid });
 
 const cliRuntimes: Array<[string, string[]]> = [
@@ -225,9 +262,12 @@ test.skipIf(process.getuid?.() === 0).each(cliRuntimes)(
 
 /** Run the CLI with stdout on a pseudo-terminal and stderr on a pipe. */
 async function ptyRun(command: string[], args: string[]): Promise<{ exit: number; stdout: string; stderr: string }> {
+  // CI enables Chalk colors on a PTY even though stderr is piped. Keep the
+  // terminal real, but make its human warning prefix deterministic.
+  const env = { ...cliEnv(), TERM: "xterm", NO_COLOR: "1", FORCE_COLOR: "0" };
   const runner = Bun.spawn([
     "python3", join(import.meta.dir, "../../test-support/pty-run.py"), ...command, ...args,
-  ], { env: cliEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  ], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [report, runnerStderr, runnerExit] = await Promise.all([
     new Response(runner.stdout).text(),
     new Response(runner.stderr).text(),
@@ -247,6 +287,11 @@ test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps stderr 
     expect(JSON.parse(read.stderr)).toEqual({ warnings: [staleWarning()] });
   }
 
+  const human = await ptyRun(command, ["--quiet", "--profile", "owner", "secrets", "list", "--space", "applications"]);
+  expect(human.exit).toBe(0);
+  expect(JSON.parse(human.stdout)).toMatchObject({ secrets: [], count: 0 });
+  expect(human.stderr.split("\n").filter((line) => line.startsWith("! "))).toHaveLength(1);
+
   const shown = await ptyRun(command, ["--json", "--profile", "owner", "profile", "show", "owner"]);
   expect({ exit: shown.exit, stderr: shown.stderr }).toEqual({ exit: 0, stderr: "" });
   expect(JSON.parse(shown.stdout)).toMatchObject({ name: "owner" });
@@ -263,6 +308,69 @@ test.each(cliRuntimes)("under %s, --json with stdout on a terminal keeps stderr 
   expect(operand.stderr).toContain("✗");
   // Five CLI processes in a row; Node startup alone can approach the 5s default.
 }, 30_000);
+
+test.each(cliRuntimes)("under %s, fresh KV get and secrets list succeed with one JSON warning", async (_runtime, command) => {
+  for (const args of [
+    ["kv", "get", `vault/secrets/${SECRET}`],
+    ["secrets", "list", "--space", "applications"],
+  ]) {
+    const child = Bun.spawn([
+      ...command, "--quiet", "--json", "--profile", "owner", ...args,
+    ], { env: cliEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect({ args, exitCode, stderr }).toEqual({
+      args, exitCode: 0, stderr: JSON.stringify({ warnings: [staleWarning()] }) + "\n",
+    });
+    expect(JSON.parse(stdout)).toMatchObject(args[0] === "kv"
+      ? { key: `vault/secrets/${SECRET}` }
+      : { secrets: [], count: 0 });
+  }
+}, 30_000);
+
+test("an approval after a refused replay merges canonical and CLI warnings at maximum multiplicity", async () => {
+  const malformedOne = { ...activeGrant, delegation: { ...activeGrant.delegation, cid: "free-text-cid-one" } };
+  const malformedTwo = { ...activeGrant, delegation: { ...activeGrant.delegation, cid: "free-text-cid-two" } };
+  await writeJsonAtomic(additionalDelegationsPath("owner"), [staleGrant, malformedOne, malformedTwo]);
+  const openKey = openKeyDelegate({
+    wasm, signer: new PrivateKeySigner(hermetic.ownerPrivateKey), sessionKey, sessionDid,
+  });
+  let acquisitions = 0;
+  let stdout = "";
+  let stderr = "";
+  const out = process.stdout as unknown as { write: (chunk: unknown) => boolean };
+  const err = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+  const previousOut = out.write;
+  const previousErr = err.write;
+  const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  out.write = (chunk: unknown) => { stdout += String(chunk); return true; };
+  err.write = (chunk: unknown) => { stderr += String(chunk); return true; };
+  Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+  try {
+    const program = new Command();
+    program.option("-p, --profile <name>").option("--json");
+    registerSecretsCommand(program, async (did, options) => {
+      acquisitions += 1;
+      return openKey.delegate(did, options);
+    });
+    await program.parseAsync(["node", "tc", "--profile", "owner", "secrets", "get", SECRET], { from: "node" });
+  } finally {
+    out.write = previousOut;
+    err.write = previousErr;
+    if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
+    else Reflect.deleteProperty(process.stderr, "isTTY");
+    await writeJsonAtomic(additionalDelegationsPath("owner"), [activeGrant, listGrant, staleGrant]);
+  }
+  expect(acquisitions).toBe(1);
+  expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
+  expect(JSON.parse(stderr)).toEqual({ warnings: [
+    staleWarning(),
+    { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
+    { code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" },
+  ] });
+  expect(stderr).not.toContain("free-text-cid");
+});
 
 test("a plain error from browser approval still carries the skipped grant", async () => {
   expect(staleGrantCid).toBeDefined();

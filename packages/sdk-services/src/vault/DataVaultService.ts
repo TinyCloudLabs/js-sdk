@@ -20,8 +20,9 @@ import {
   serviceError,
   IServiceContext,
   ServiceSession,
+  ServiceError,
 } from "../types";
-import { parsePermissionHint, wrapError } from "../errors";
+import { authorizationVerdictOf, parsePermissionHint, wrapError } from "../errors";
 import type { IKVService } from "../kv/IKVService";
 import type { KVService } from "../kv/KVService";
 import type {
@@ -189,6 +190,9 @@ function defaultVaultMessage(input: VaultErrorInput): string {
     case "VAULT_LOCKED": return input.message ?? "Vault is locked";
     case "PUBLIC_KEY_NOT_FOUND": return input.message ?? `Public key not found for ${input.did}`;
     case "STORAGE_ERROR": return input.message ?? input.cause.message;
+    case "ALREADY_EXISTS": return input.message ?? `A value already exists at ${input.key}`;
+    case "AUTH_UNAUTHORIZED": return input.message;
+    case "PERMISSION_DENIED": return input.message;
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
@@ -205,12 +209,31 @@ function vaultError(input: VaultErrorInput): Result<never, VaultError> {
 }
 
 /**
+ * Carry a KV `ServiceError` as an `Error` cause without losing its typed
+ * fields (`code`, `service`, `meta`, nested `cause`), so a `VaultError` stays
+ * assignable to `ServiceError` and capability walkers can still read it.
+ */
+function typedKvCause(error: ServiceError): ServiceError & Error {
+  return Object.assign(new Error(error.message), {
+    name: "ServiceError",
+    code: error.code,
+    service: error.service,
+    ...(error.meta !== undefined ? { meta: error.meta } : {}),
+    ...(error.cause !== undefined ? { cause: error.cause } : {}),
+  });
+}
+
+/**
  * Wrap a failed KV write. A storage rejection keeps its code, message and
- * byte counts so callers can tell "storage full" from other failures.
+ * byte counts so callers can tell "storage full" from other failures. An
+ * authorization refusal is split by the SDK's own verdict: a 401 stays
+ * `AUTH_UNAUTHORIZED` (sign in again); a 403, or a refusal without a status,
+ * becomes `PERMISSION_DENIED`. Both keep the KV `meta` and the typed KV error
+ * as `cause`, so capability hints survive the vault layer.
  */
 function kvWriteError(
   context: string,
-  error: { code: string; message: string; meta?: Record<string, unknown> }
+  error: ServiceError
 ): Result<never, VaultError> {
   if (
     error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED ||
@@ -218,9 +241,20 @@ function kvWriteError(
   ) {
     return vaultError({ code: error.code, message: error.message, meta: error.meta });
   }
+  const message = `${context}: ${error.message}`;
+  if (error.code === ErrorCodes.AUTH_UNAUTHORIZED) {
+    const code = authorizationVerdictOf(error) === "unauthenticated" ? "AUTH_UNAUTHORIZED" : "PERMISSION_DENIED";
+    return vaultError({
+      code,
+      message,
+      ...(error.meta !== undefined ? { meta: error.meta } : {}),
+      cause: typedKvCause(error),
+    });
+  }
   return vaultError({
     code: "STORAGE_ERROR",
-    cause: new Error(`${context}: ${error.message}`),
+    cause: new Error(message, { cause: typedKvCause(error) }),
+    ...(error.meta !== undefined ? { meta: error.meta } : {}),
   });
 }
 
@@ -612,11 +646,25 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         });
       }
 
-      const valuePutResult = await this.tc.kv.put(
-        `vault/${key}`,
-        JSON.stringify(envelopeResult.data),
-      );
+      const valuePath = `vault/${key}`;
+      const valueBody = JSON.stringify(envelopeResult.data);
+      const valuePutResult = options?.ifNoneMatch !== undefined
+        ? await this.tc.kv.put(valuePath, valueBody, { ifNoneMatch: options.ifNoneMatch })
+        : await this.tc.kv.put(valuePath, valueBody);
       if (!valuePutResult.ok) {
+        if (
+          options?.ifNoneMatch !== undefined &&
+          valuePutResult.error.code === ErrorCodes.KV_PRECONDITION_FAILED
+        ) {
+          return vaultError({
+            code: "ALREADY_EXISTS",
+            key,
+            ...(valuePutResult.error.meta !== undefined
+              ? { meta: valuePutResult.error.meta }
+              : {}),
+            cause: typedKvCause(valuePutResult.error),
+          });
+        }
         return kvWriteError("Failed to store encrypted value", valuePutResult.error);
       }
 
@@ -650,6 +698,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     try {
       const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
         raw: true,
+        ...(options?.source === undefined ? {} : { source: options.source }),
       });
       if (!valueResult.ok) {
         return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -707,7 +756,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
 
     let valueResult: Awaited<ReturnType<IKVService["get"]>>;
     try {
-      valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true });
+      valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true, source: "network" });
     } catch {
       return { status: "node_unreachable" };
     }
@@ -801,6 +850,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     try {
       const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
         raw: true,
+        source: "network",
       });
       if (!valueResult.ok) {
         return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -833,6 +883,15 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     return this.withTelemetry("put", key, async () => {
       if (this.usesNetworkEncryption) {
         return this.putNetworkEncrypted(key, value, options);
+      }
+
+      if (options?.ifNoneMatch !== undefined) {
+        return vaultError({
+          code: "STORAGE_ERROR",
+          cause: new Error(
+            "ifNoneMatch is only supported by network-encrypted vaults",
+          ),
+        });
       }
 
       if (!this._isUnlocked || !this.masterKey) {
@@ -966,6 +1025,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         // Fetch encrypted entry key from key space
         const keyResult = await this.tc.kv.get<string>(`keys/${key}`, {
           raw: true,
+          ...(options?.source === undefined ? {} : { source: options.source }),
         });
         if (!keyResult.ok) {
           return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -978,6 +1038,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         // Fetch encrypted value from data space
         const valueResult = await this.tc.kv.get<string>(`vault/${key}`, {
           raw: true,
+          ...(options?.source === undefined ? {} : { source: options.source }),
         });
         if (!valueResult.ok) {
           return vaultError({ code: "KEY_NOT_FOUND", key });
@@ -1117,6 +1178,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           prefix: listPrefix,
           removePrefix: true,
           ...(options?.limit === undefined ? {} : { limit: options.limit }),
+          ...(options?.source === undefined ? {} : { source: options.source }),
           ...(options?.cursor === undefined ? {} : { cursor: options.cursor }),
         });
 

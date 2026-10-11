@@ -36,6 +36,7 @@
 // Register Node.js-specific defaults (NodeWasmBindings, PrivateKeySigner)
 // This must be imported before TinyCloudNode is used, so it runs on module load.
 import "./nodeDefaults";
+import "./replication/node-loader";
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
@@ -66,6 +67,41 @@ export type {
   TinyCloudDebugLevel,
   TinyCloudDebugEnableOptions,
   TinyCloudDebugTimer,
+} from "@tinycloud/sdk-core";
+export type {
+  AuthorityRefusal,
+  KVListPage,
+  KVReadThrough,
+  KVReplicaHandle,
+  KVReplicaSpec,
+  KVReplicaStorage,
+  KVReplicationController,
+  KVReplicationDeps,
+  LocalGetResult,
+  LocalListResult,
+  LocalReadMeta,
+  LocalReplicaStatus,
+  LocalSyncResult,
+  PendingWriteRecord,
+  PendingWriteState,
+  PendingWriteStore,
+  PinnedKey,
+  PurgeTarget,
+  ReplicaAuthorityState,
+  ReplicaCoverage,
+  ReplicaDevice,
+  ReplicaGrantInfo,
+  ReplicaState,
+  ReplicaStatusEntry,
+  ReplicationAuthority,
+  ReplicationControl,
+  ReplicationEvent,
+  ReplicationIdentity,
+  ReplicationOptions,
+  ReplicationPurgeReport,
+  ReplicationReason,
+  ReplicationScheduler,
+  ResolvedReplicationOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export core values for extensibility
@@ -240,6 +276,7 @@ export {
   grantAuthRequest,
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
+  signedCompactUcanExpiry,
   RUNTIME_DELEGATION_REJECTIONS,
   RuntimeDelegationRejectedError,
 } from "./delegation";
@@ -330,6 +367,10 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  appSecretScope,
+  SECRET_SCOPE_RE,
+  MAX_SECRET_SCOPE_LENGTH,
+  TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
@@ -355,6 +396,7 @@ export type {
   ResolvedSecretPath,
   ParsedSecretCatalogKey,
   SecretScopeOptions,
+  SecretPutOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export encryption service values and helpers
@@ -569,3 +611,8 @@ export {
   type WasmKeyProviderConfig,
   createWasmKeyProvider,
 } from "./keys/WasmKeyProvider";
+
+// Read-through replication storage (TC-858 §11.1): Node entry ONLY —
+// loading the adapter is lazy (replica/sqlite/wasm import at first use),
+// but the export itself must never reach `@tinycloud/node-sdk/core`.
+export { sqliteReplicaStorage } from "./replication/sqlite";

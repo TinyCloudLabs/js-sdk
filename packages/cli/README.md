@@ -84,8 +84,14 @@ tc kv list
 
 # Manage network-encrypted secrets on the default network
 tc secrets network init
-tc secrets put ANTHROPIC_API_KEY "sk-..."
+printf '%s' "$ANTHROPIC_API_KEY" | tc secrets put ANTHROPIC_API_KEY --stdin
 tc secrets get ANTHROPIC_API_KEY
+
+# Ask the owner for a secret an agent needs, then wait for it
+# (call TinyCloud's CLI by absolute path: a bare `tc` can be iproute2's /usr/sbin/tc)
+TC_BIN="$(npm prefix --global)/bin/tc"
+"$TC_BIN" --profile agent secrets request OPENAI_API_KEY --json   # offline; prints the owner's link
+"$TC_BIN" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 pending
 
 # Manage spaces
 tc space list
@@ -127,6 +133,9 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc secrets network show` | Show a secrets decryption network |
 | `tc secrets network init` | Create or fetch the default secrets network |
 | `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tc secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
+| `tc secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
+| `tc secrets manage` | Print or open the Secret Manager page, `{url, opened}` |
 | `tc vars` | Manage environment variables |
 | `tc doctor` | Run diagnostic checks |
 | `tc completion` | Generate shell completions |
@@ -147,7 +156,28 @@ network grant` takes the short name, resolves the network, and grants
 -q, --quiet             Suppress non-essential output
     --json              Force JSON output
     --no-cache          Disable caching
+    --replication       Enable read-through replication (or TC_REPLICATION=1)
+    --no-replication    Disable replication for this invocation
+    --replication-debug Write replication diagnostics to stderr
 ```
+
+Replication is off by default. `--replication` enables it for one invocation;
+`--no-replication` overrides `TC_REPLICATION=1`, and `--replication-debug`
+writes diagnostics to stderr. Save explicit login prefixes with
+`tc auth login --replication-prefix notes`; saved prefixes are reapplied on
+later logins and rotation. Only an unrestricted covering `get` can receive added
+`sync` authority. `--replication-allow-secrets` is required for a `secrets`
+space or `vault` prefix and stores ciphertext only.
+Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
+prints a warning because later commits can be read as stale until a subsequent
+sync. `auth logout` removes both legacy replicas and the flag-owned
+`replication/` root; `auth logout --keep-replicas` keeps both. B-int release
+acceptance must verify the OpenKey `tc auth request --grant` fallback against
+a real OpenKey using a test account and no production writes: approve the
+request, confirm the grant is stored, start a fresh process, and verify the
+saved prefixes are replayed and the covered read is served locally. If OpenKey
+rejects explicit `kv/get` plus `sync`, stop before release and resolve the
+protocol contract.
 
 ## Output Modes
 
@@ -208,7 +238,8 @@ file.
 | Variable | Description |
 |----------|-------------|
 | `TC_HIDE_BANNER` | Set to `1` to suppress the startup banner |
-| `TC_OPENKEY_HOST` | Override the active profile's OpenKey base URL for this invocation. |
+| `TC_REPLICATION` | Set to `1` to enable replication by default; `--no-replication` overrides it. |
+| `TC_REPLICATION_DEBUG` | Set to `1` to enable replication diagnostics on stderr. |
 
 ## Development
 

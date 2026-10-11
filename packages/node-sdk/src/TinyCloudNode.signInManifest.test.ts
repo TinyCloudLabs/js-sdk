@@ -977,83 +977,65 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const accountSpaceId =
       "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
     const ensureOwnedSpaceHostedById = mock(async () => {});
-    const put = mock(async () => ({ ok: true, data: undefined, headers: {} }));
-    const spacesList = mock(async () => ({ ok: true, data: [] }));
-
+    const kvPaths: string[] = [];
+    const originalInvoke = wasm.invoke;
+    wasm.invoke = async (session, service, path, action, facts) => {
+      if (service === "kv") kvPaths.push(path);
+      return originalInvoke(session, service, path, action, facts);
+    };
+    const writes: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const sqlRequests: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/info")) {
+        return Response.json({ protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" });
+      }
+      if (url.endsWith("/delegate")) {
+        return Response.json({ activated: ["space://test"], skipped: [] });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      if (typeof body.action === "string") sqlRequests.push(body);
+      if (body.app_id === manifest.app_id) writes.push({ url, body });
+      return Response.json({ columns: [], rows: [], rowCount: 0, changes: 1, results: [] });
+    }) as unknown as typeof fetch;
     (node as any).ensureOwnedSpaceHostedById = ensureOwnedSpaceHostedById;
-    Object.defineProperty(node, "spaces", {
-      configurable: true,
-      value: {
-        get: (spaceId: string) => {
-          expect(spaceId).toBe(accountSpaceId);
-          return { kv: { put } };
-        },
-        // syncAccessible() (part of the real registry sync this test opts
-        // into) reads this via `config.getSpaces().list()`.
-        list: spacesList,
-      },
-    });
 
-    // The real registry sync also runs `index.ensure()` (fire-and-forget)
-    // and, via `applications.register()`, an `indexHasApplicationHash()`
-    // SQL pre-read before every write. None of that has a real server to
-    // answer it here — stub it away so no `/invoke` escapes this test's
-    // fetch mock and forces the retry backoff in withAccountRegistryRetry
-    // (250ms/1s/3s), which would otherwise make this test slow and still
-    // timing-dependent.
-    (node.account as any).indexHasApplicationHash = async () => false;
-    (node.account as any).index.ensure = async () => ({
-      ok: true,
-      data: { database: "account" },
-    });
-    (node.account as any).upsertApplicationIndexQuietly = async () => {};
-
-    // scheduleAccountRegistrySync fires `withAccountRegistryRetry(...)`
-    // detached (`void`) so signIn() can return without waiting on it.
-    // Capture the promise it returns so this test can await the *entire*
-    // retry-wrapped chain settling before its own withFetchResponses window
-    // closes — waiting only for `put` to have been called proves the write
-    // happened, but not that the scheduler is done, and any part of it that
-    // runs after this test's fetch mock is torn down is exactly the leak
-    // this fix (TC-372) exists to prevent.
     let registrySync: Promise<void> | undefined;
     const originalWithAccountRegistryRetry = (node as any).withAccountRegistryRetry.bind(node);
-    (node as any).withAccountRegistryRetry = (task: () => Promise<void>) => {
-      registrySync = originalWithAccountRegistryRetry(task);
+    (node as any).withAccountRegistryRetry = (task: () => Promise<void>, signal: AbortSignal) => {
+      registrySync = originalWithAccountRegistryRetry(task, signal);
       return registrySync;
     };
+    try {
+      await node.signIn();
+      await registrySync;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
-    await withFetchResponses(
-      [
-        new Response(
-          JSON.stringify({
-            protocol: 1,
-            version: "test",
-            features: [],
-            nodeId: "did:key:z6MkNode",
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ],
-      async () => {
-        await node.signIn();
-        await registrySync;
-      },
-      expectedActivationAuthorizationFor(wasm),
+    expect(ensureOwnedSpaceHostedById).toHaveBeenCalledWith(
+      accountSpaceId,
+      expect.any(AbortSignal),
     );
-
-    expect(ensureOwnedSpaceHostedById).toHaveBeenCalledWith(accountSpaceId);
-    expect(put).toHaveBeenCalledTimes(1);
-    expect(put).toHaveBeenCalledWith("applications/com.listen.app", {
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.url).toBe("https://tinycloud.test/invoke");
+    expect(writes[0]?.body).toMatchObject({
       app_id: "com.listen.app",
       manifests: [manifest],
       manifest_hash: expect.any(String),
       updated_at: expect.any(String),
     });
+    expect(kvPaths).toContain("applications/com.listen.app");
+    expect(sqlRequests.some(
+      (request) => request.action !== "query" && JSON.stringify(request).includes("applications"),
+    )).toBe(true);
+    expect(sqlRequests.some(
+      (request) => request.action !== "query" && JSON.stringify(request).includes("application_state"),
+    )).toBe(true);
+    expect(JSON.stringify(sqlRequests.filter(
+      (request) => request.action !== "query",
+    ))).toContain("com.listen.app");
   });
 
   test("multiple manifests → recap unions app caps + delegation caps", async () => {

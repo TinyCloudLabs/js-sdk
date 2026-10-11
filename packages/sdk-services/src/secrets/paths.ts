@@ -7,6 +7,56 @@ const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 export interface SecretScopeOptions {
   /** Optional logical scope. Omit for the global secret namespace. */
   scope?: string;
+  /** Bypass replication for existence-sensitive reads. */
+  source?: "network";
+}
+
+/** Canonical secret scope grammar shared with the TC-832 `/request` link. */
+export const SECRET_SCOPE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Longest scope the TC-832 `/request` link accepts. */
+export const MAX_SECRET_SCOPE_LENGTH = 64;
+
+/** Scopes the TC-832 `/request` link refuses. */
+export const TC832_RESERVED_SCOPES: readonly string[] = Object.freeze([
+  "default",
+  "global",
+  "scoped",
+]);
+
+export interface SecretPutOptions extends SecretScopeOptions {
+  /** Write only when no secret exists under this name; never overwrite. */
+  ifAbsent?: boolean;
+}
+
+/**
+ * Derive the canonical secret scope for an app id such as
+ * `xyz.tinycloud.feed-workflows` → `xyz-tinycloud-feed-workflows`.
+ */
+export function appSecretScope(appId: string): string {
+  if (appId.trim() === "") {
+    throw new Error("App id must be non-empty to derive a secret scope.");
+  }
+  const scope = appId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (scope === "") {
+    throw new Error(
+      `App id ${JSON.stringify(appId)} must contain at least one letter or number.`,
+    );
+  }
+  if (scope.length > MAX_SECRET_SCOPE_LENGTH) {
+    throw new Error(
+      `App id ${JSON.stringify(appId)} yields a secret scope longer than ${MAX_SECRET_SCOPE_LENGTH} characters.`,
+    );
+  }
+  if (TC832_RESERVED_SCOPES.includes(scope)) {
+    throw new Error(
+      `App id ${JSON.stringify(appId)} yields the reserved secret scope ${JSON.stringify(scope)}.`,
+    );
+  }
+  return scope;
 }
 
 export interface ResolvedSecretPath {

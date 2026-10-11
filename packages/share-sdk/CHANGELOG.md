@@ -1,5 +1,27 @@
 # @tinycloud/share-sdk
 
+## 1.1.0
+
+### Minor Changes
+
+- 045c2d3: Recipient challenge, delegation, import, and decrypt HTTP rejections now expose a typed response status instead of only embedding it in the message. Notification delivery no longer retries a typed 401/403 refusal and reports `retryable: false` after the first attempt; transient failures retain the existing retry budget.
+- b0972e5: `tc share publish --notify` refuses a share without `read` before publication. Domain invitations use `--to domain:<name> --notify --notify-to <mailbox>` on a node reporting 1.17.3 or later; a session-only publisher may deliver its own signed policy when its sender DID matches the policy owner. Unsupported nodes are refused before upload or registration, and standalone `tc share notify` checks stored read permission and domain node support before delivery. Notifications use an atomic, profile-locked sender-history confirmation; a history write failure warns without hiding successful delivery, and concurrent revocation or invitations retain each other's fields. Publish JSON includes the additive `notification` result, including non-retryable window failures. `ShareNotifyError.code` remains `"delivery-failed"`; its optional `reason` distinguishes an expired delivery window. Confirmed repeats report `already-delivered` using encrypted sender history; a lost response remains a retryable failure rather than a false confirmation.
+
+  Post-publication history writes wait through profile-lock recovery, but a failed initial write no longer hides the published link; the CLI warns that sender-history commands cannot later find that share. Share lock timeouts keep the standard `PROFILE_LOCK_TIMEOUT` retry guidance. OpenKey history signing, identity validation, and key derivation occur outside the profile lock, with the selected profile/key rechecked inside it. Standalone domain notifications reject mismatched recipients and expired delivery windows locally before probing the node. A stalled `/info` response body is classified as unavailable rather than an unsupported version, and publish versus notify errors state precisely whether a share was created.
+
+  Each sender-history operation now pins its profile across bounded salt/key-input retries, preventing a changed default profile from receiving another profile's share record. History identity tracks only local private-key material or the OpenKey session signer JWK and verification method, so unrelated profile edits do not interrupt writes. Failed retries and disappearing profiles return a typed, actionable `SHARE_HISTORY_RETRY` instead of an argument error. Writes waiting more than about two seconds for the profile lock name the profile on stderr once, while keeping the 45-second recovery window.
+
+  A profile missing from the outset retains `PROFILE_NOT_FOUND` and its setup guidance instead of masquerading as a retryable history change. The sender-history adapter remembers observed profiles by name across its operations, so a profile removed between a share read and its post-revocation update returns `SHARE_HISTORY_RETRY` with the warning that node revocation may already have succeeded; another previously unseen profile still returns `PROFILE_NOT_FOUND`. Mismatched resolved signer profiles now return the typed history retry error. Node authentication and every sender-history operation share one command-pinned profile, so a changed default cannot send a published share's link to a different profile. The Share reference also lists the exit-1 lock and history-retry codes.
+
+### Patch Changes
+
+- 6de6688: `tc share publish --to email:<address> --notify` now emails the invitation and exits 0 on tinycloud-node 1.17.2. Exact-email shares now sign their canonical recipient as the envelope's delivery address. Node 1.17.2 requires it before it authorizes an invitation (without it the node answers `403 delivery-authorization-invalid` and the CLI exits 9); 1.17.3 accepts it but no longer requires it. A mailbox the share envelope cannot carry as a delivery address (for example `a/b@example.com`) is published without one, as before, so on nodes before 1.17.3 it cannot be emailed. On those nodes, email shares published by earlier CLI versions cannot be emailed either; publish them again.
+
+  `@tinycloud/share-envelope` exports `isEnvelopeDeliveryEmail`, the rule envelopes apply to `deliveryEmail`. `prepareAddressedShare` in `@tinycloud/share-sdk` now refuses a `deliveryEmail` that rule rejects before any side effect, instead of failing after upload and policy registration.
+
+- Updated dependencies [6de6688]
+  - @tinycloud/share-envelope@1.1.0
+
 ## 1.1.0-beta.2
 
 ### Minor Changes

@@ -17,9 +17,10 @@ const packages = [
   { directory: "packages/sdk-services", name: "@tinycloud/sdk-services", required: ["package/dist/index.js", "package/dist/index.cjs"] },
   { directory: "packages/share-envelope", name: "@tinycloud/share-envelope", required: ["package/dist/index.js", "package/dist/index.cjs"] },
   { directory: "packages/share-sdk", name: "@tinycloud/share-sdk", required: ["package/dist/index.js", "package/dist/index.cjs"] },
-  { directory: "packages/operations", name: "@tinycloud/operations", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/secret-capabilities.js", "package/generated/operations.json", "package/coverage.json"] },
+  { directory: "packages/operations", name: "@tinycloud/operations", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/secret-capabilities.js", "package/dist/secret-request.js", "package/dist/recovery.js", "package/generated/operations.json", "package/coverage.json"] },
   { directory: "packages/cli", name: "@tinycloud/cli", required: ["package/dist/index.js", "package/bin/tc"] },
   { directory: "packages/mcp", name: "@tinycloud/mcp", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/http.js", "package/dist/http-cli.js", "package/bin/tinycloud-mcp-http", "package/generated/mcp-facts.json", "package/skills/tinycloud-delegated-secrets/SKILL.md"] },
+  { directory: "packages/replica", name: "@tinycloud/replica", required: ["package/dist/index.js", "package/dist/index.cjs", "package/dist/sqlite.js", "package/dist/sqlite.cjs"] },
 ] as const;
 
 type PublishedPackage = { manifest: Record<string, any>; bytes: Buffer; filename: string };

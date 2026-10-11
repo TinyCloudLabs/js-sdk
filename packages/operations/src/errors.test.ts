@@ -16,6 +16,7 @@ test("defines every stable v1 operation error code", () => {
     "PROFILE_NOT_FOUND",
     "PROFILE_POSTURE_NOT_ALLOWED",
     "PROFILE_OWNER_OPT_IN_REQUIRED",
+    "PROFILE_MIGRATION_REQUIRED",
     "AUTH_REQUIRED",
     "PERMISSION_DENIED",
     "SESSION_NOT_FOUND",

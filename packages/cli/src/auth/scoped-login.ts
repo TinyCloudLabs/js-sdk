@@ -1,7 +1,8 @@
-import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
-import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
+import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
@@ -60,15 +61,6 @@ export function openKeyExpiryParam(expiry: RequestedExpiry): string {
 }
 
 /**
- * Whether a profile holds a local owner key. An explicit posture does not
- * hide `authMethod: "local"` or a stored private key, which `tc auth login
- * --method local` leaves on any profile it signs in.
- */
-export function isLocalOwnerProfile(profile: ProfileConfig): boolean {
-  return resolveProfilePosture(profile) === "local-owner-key" || profile.authMethod === "local" || typeof profile.privateKey === "string";
-}
-
-/**
  * The owner a re-login must keep. Every profile that recorded an owner is
  * pinned to it, whatever wrote it (`tc init`, `tc profile create`, a scoped
  * or device login); only a local-owner-key profile, whose owner is the local
@@ -111,18 +103,39 @@ export function expectedOwnerFor(profileName: string, profile: ProfileConfig | n
   return pinned ?? requested;
 }
 
-/** Expiry recorded in a saved session (explicit fields, else the SIWE message). */
+/** Expiry for proof-free imports comes only from signed compact UCAN `exp`; proof-bearing sessions use their SIWE/explicit expiry. */
 export function sessionExpiresAt(session: Record<string, unknown> | null): string | null {
   if (session === null) return null;
+  const hasProof = ["siwe", "signature", "address", "chainId"].some((field) => session[field] !== undefined);
+  const header = session.delegationHeader;
+  const hasDelegationHeader = typeof header === "object" && header !== null;
+  const authorization = hasDelegationHeader ? (header as { Authorization?: unknown }).Authorization : undefined;
+  // Imported records have no SIWE proof. Their expiry must come from the compact UCAN's signed payload,
+  // never from mutable local metadata such as `expiresAt`.
+  if (!hasProof && hasDelegationHeader) {
+    return typeof authorization === "string" ? signedCompactUcanExpiry(authorization)?.toISOString() ?? null : null;
+  }
   const candidates = [session.expiresAt, session.expiry, session.expirationTime,
     typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : undefined];
   const value = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
-  return typeof value === "string" ? new Date(value).toISOString() : null;
+  if (typeof value === "string") return new Date(value).toISOString();
+  return null;
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
 export function ownerSpaceId(space: string, ownerDid: string): string {
   return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;
+}
+
+/** Compare login spaces, normalizing owner-qualified aliases before validating scope. */
+export function sameLoginSpace(left: string, right: string, ownerDid?: string): boolean {
+  const normalizedLeft = normalizePkhIdentifier(ownerDid === undefined ? left : ownerSpaceId(left, ownerDid));
+  const normalizedRight = normalizePkhIdentifier(ownerDid === undefined ? right : ownerSpaceId(right, ownerDid));
+  if (normalizedLeft === normalizedRight) return true;
+  if (ownerDid !== undefined) return false;
+  if (left.startsWith("tinycloud:") && !right.startsWith("tinycloud:")) return left.split(":").at(-1) === right;
+  if (right.startsWith("tinycloud:") && !left.startsWith("tinycloud:")) return right.split(":").at(-1) === left;
+  return false;
 }
 
 /** Canonical one-action tuples, so permission sets compare independently of grouping or casing. Caveats are not part of a tuple. */

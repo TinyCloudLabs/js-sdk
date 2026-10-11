@@ -10,6 +10,7 @@ import {
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
   grantAuthRequest,
+  RuntimeDelegationRejectedError,
   type AuthRequestArtifact,
   type DelegationAuthority,
   type RuntimeDelegationActivator,
@@ -279,4 +280,89 @@ describe("activateValidatedRuntimeDelegation", () => {
       host: "https://node.example",
     })).rejects.toThrow("invalid signed redelegation depth");
   });
+});
+
+describe("activation failure classification (TC-834)", () => {
+  async function activateWith(failure: unknown): Promise<unknown> {
+    const privateKey = new Uint8Array(32).fill(51);
+    const issuerDid = `did:key:${base58btc.encode(
+      Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(privateKey)]),
+    )}`;
+    const recipientKey = new Uint8Array(32).fill(52);
+    const recipientDid = `did:key:${base58btc.encode(
+      Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(recipientKey)]),
+    )}`;
+    const resource = "tinycloud://space/kv/docs/report.md";
+    const now = Math.floor(Date.now() / 1000);
+    const compact = await signCompactUcanAuthorization({
+      issuerDid,
+      audienceDid: recipientDid,
+      attenuation: {
+        [resource]: {
+          "tinycloud.kv/get": [
+            { type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource },
+          ],
+        },
+      },
+      facts: [{ remainingRedelegationDepth: 0 }],
+      proofs: ["bafy-parent"],
+      notBefore: now,
+      expiresAt: now + 60,
+      nonce: "compact-runtime-834",
+      sign: async (bytes) => ed25519.sign(bytes, privateKey),
+    });
+    const node: RuntimeDelegationActivator = {
+      sessionDid: recipientDid,
+      computeDelegationCid: (authorization) =>
+        parseCompactUcanAuthorization(authorization).cid,
+      async useRuntimeDelegation() {
+        throw failure;
+      },
+      getRuntimePermissionDelegations: () => [],
+    };
+    try {
+      await activateCompactRuntimeDelegation(node, {
+        authorization: compact.authorization,
+        cid: compact.cid,
+        host: "https://node.example",
+        ownerAddress: "0xowner",
+        chainId: 1,
+      });
+    } catch (error) {
+      return error;
+    }
+    throw new Error("activation unexpectedly succeeded");
+  }
+
+  function hostFailure(status: number): Error {
+    return Object.assign(
+      new Error(`Failed to activate runtime permission delegation: ${status}`),
+      { cause: { success: false, status, error: "failed" } },
+    );
+  }
+
+  const cases: Array<[string, unknown, string]> = [
+    [
+      "transport failure",
+      Object.assign(
+        new Error("The TinyCloud host could not be reached to activate the delegation."),
+        { code: "ACTIVATION_TRANSPORT_FAILED", cause: new TypeError("fetch failed") },
+      ),
+      "activation_unavailable",
+    ],
+    ["503", hostFailure(503), "activation_unavailable"],
+    ["429", hostFailure(429), "activation_unavailable"],
+    ["408", hostFailure(408), "activation_unavailable"],
+    ["401", hostFailure(401), "activation_unauthenticated"],
+    ["403", hostFailure(403), "activation_rejected"],
+    ["400", hostFailure(400), "activation_rejected"],
+  ];
+
+  for (const [label, failure, reason] of cases) {
+    test(`${label} → ${reason}`, async () => {
+      const error = await activateWith(failure);
+      expect(error).toBeInstanceOf(RuntimeDelegationRejectedError);
+      expect((error as RuntimeDelegationRejectedError).reason).toBe(reason);
+    });
+  }
 });

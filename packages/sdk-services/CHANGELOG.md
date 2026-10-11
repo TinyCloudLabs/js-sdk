@@ -1,5 +1,86 @@
 # @tinycloudlabs/sdk-services
 
+## 3.2.0-beta.3
+
+### Minor Changes
+
+- df18325: Add the Phase 1 replication contract, canonical identity and scope helpers, network-only KV read option, and nullable KVService read-through seam. With the seam unset, KV operations retain their existing network behavior. Pending-write stores declare whether their committed epoch and records survive restarts; for non-durable stores, controllers must require a successful in-process sync before serving local reads, otherwise use the network with `REPLICA_UNPROVEN_SINCE_START`. Node/CLI adapters must provide durable pending state and fail closed to network reads rather than silently falling back to memory.
+- df18325: Add the `KVReplication` policy controller and identity-scoped memory pending store, including per-replica catch-up fences, pending-write outcome handling, local get/list parity, and replication events.
+  Stale-read timeouts now refresh replica status before offline admission and distinguish timeout-owned cancellation from aborts of a shared sync by its caller, close, or purge.
+  Local GET and every local LIST probe now require complete coverage and valid authority from read-time metadata; a refusal falls back to network or restarts a `tcr1` continuation.
+  The post-drain status refresh is bounded and caller-cancellable; status failures refuse offline admission.
+- df18325: Move replication controller and memory pending-store factories out of the platform-agnostic root export. They remain available from `@tinycloud/sdk-services/kv/replication` for Node-only runtime integration, preventing Web SDK consumers from bundling the Node replication controller.
+
+  Replication authority can now mark compact delegate sessions as session-only so a refusing session grant cannot fall back to installed device grants; an installed grant also cannot widen a refusal by the current session. KV operations avoid readiness awaits when no read-through is configured.
+
+  In foreground read-through, reaching `staleSyncTimeoutMs` now aborts and drains the sync before serving an eligible replica result offline; a sync that exceeds the drain budget falls back to the network. Settled outcomes during the drain retain their normal classification: synced results proceed through fresh-replica gates, network failures and timeout-caused aborts may serve offline, and busy or other errors use the network with their code.
+
+### Patch Changes
+
+- df18325: Bound the sign-in account-registry drain to four seconds and abort its SQL, KV, and hosting requests on expiry. Registry failures remain warning-only, so sign-in succeeds after the bounded drain.
+- df18325: Keep published segment-aware replica selection unchanged while using sdk-core capability containment only for authority. Bare selectors now request get/sync grants for the exact path and slash descendants through the shared public `grantPathsForSelector` helper; root and trailing-slash selectors remain single-path grants. LIST local serving requires complete selection coverage, and nested LIST pending writes force network fallback or cursor restart.
+- df18325: Run account-registry SQL, KV, and hosting requests through a dedicated per-operation context so the sign-in deadline cannot abort unrelated requests or persist in cached space-scoped services. Await SQL and DuckDB error-body reads before disposing request cancellation listeners.
+- df18325: Replica status reads existing SQLite state read-only without creating a replica, identity, device, or blob directories, and never recreates a database that does not exist or was purged. Existing databases use normal read-only WAL mode so committed revocation and reset state is visible; SQLite may create its own WAL or shared-memory sidecars. Missing databases remain untouched, and open/read failures report unavailable rather than healthy. Inspection explicitly finalizes prepared statements before closing both inspection and ordinary store handles. Status inspection is bounded and cancelled on controller close or purge; in-process grant revocation remains visible after the handle is generation-fenced.
+- df18325: Keep conditional KV write failures out of the replication committed epoch, and preserve timeout and abort error classifications for covered writes while marking their dispatch outcome ambiguous.
+
+## 3.2.0-beta.2
+
+### Minor Changes
+
+- 4f851e6: Create-only secret writes, app-derived secret scopes, typed vault write errors, and classified delegation activation failures.
+  - **New:** `appSecretScope(appId)` derives the canonical secret scope for an app id (`com.listen.app` → `com-listen-app`), with `SECRET_SCOPE_RE`, `MAX_SECRET_SCOPE_LENGTH` (64) and `TC832_RESERVED_SCOPES` exported from every SDK package.
+  - **New:** `secrets.put(name, value, { ifAbsent: true })` (type `SecretPutOptions`) writes only when the secret does not exist. An existing secret fails with vault error `ALREADY_EXISTS` (KV 412; `meta.status` and the typed KV error as `cause`) and is never overwritten. `DataVaultService.put` accepts `{ ifNoneMatch: "*" }` for network-encrypted vaults; a legacy (key-blob) vault refuses it with `STORAGE_ERROR` before any KV call. The Node and Web secrets wrappers forward the option unchanged.
+  - **New:** a refused vault write keeps its authorization classification. A refused write is `AUTH_UNAUTHORIZED` only for HTTP 401 (sign-in needed). A 403 is `PERMISSION_DENIED`. Both keep `meta.status` and the typed KV error as `cause`, so `validatedCapabilityOf` still finds the missing capability. Other failures stay `STORAGE_ERROR`, now with `meta` and the KV error chained as the cause.
+  - **Fix:** KV `get`/`head`/`delete` now honour their timeout and abort signal while reading a 404 body that never finishes, instead of hanging; `createSignedReadUrl` error bodies get the same fix.
+  - **New:** node-sdk classifies delegation activation failures. `useRuntimeDelegation` reports an unreachable host as an error with `code: "ACTIVATION_TRANSPORT_FAILED"`. `RuntimeDelegationRejection` gains `activation_unavailable` (transport failure, 408, 429, 5xx) and `activation_unauthenticated` (401); every other activation failure stays `activation_rejected`.
+
+  **Breaks:**
+  - Code that matched `STORAGE_ERROR` for a vault or secrets write refused by authorization now receives `AUTH_UNAUTHORIZED` (401) or `PERMISSION_DENIED` (403, or no status).
+  - `VaultError`/`VaultErrorInput` gain the `ALREADY_EXISTS`, `AUTH_UNAUTHORIZED` and `PERMISSION_DENIED` variants, so exhaustive `switch`es over the vault error code need the new cases.
+  - Code that enumerates `RuntimeDelegationRejection` / `RUNTIME_DELEGATION_REJECTIONS` sees two new reasons; activation failures that were `activation_rejected` may now be `activation_unavailable` or `activation_unauthenticated`.
+
+## 3.1.0
+
+### Minor Changes
+
+- 0652195: Session refresh and account-registry retry now decide from the typed HTTP status instead of the error text.
+  - **Typed classification.** The new `authorizationVerdictOf(error)` reads a 4xx/5xx `status`, `statusCode` or `meta.status`, or the `AUTH_UNAUTHORIZED` code. It follows the `cause` chain from the outside in and skips success statuses. The outermost error status decides.
+  - **Session refresh.** `withSessionRefresh` signs in again only after a 401. A 403 never triggers a refresh, whatever its body says. To keep the typed status, throw the `ServiceError` or an `Error` with it as `cause`.
+  - **Untyped errors.** Message matching is now only a fallback. It drops double-quoted strings first (escape-aware), then takes the first 400-599 status in one of the SDK's diagnostic positions (`: 403` followed by whitespace or the end, `HTTP 401`, `returned 401`, `rejected (401)`, or a trailing `(403)`), and refreshes only if that status is 401. With no status, session wording on the original message decides. Numbers inside paths, ids, ports, byte counts or quoted keys no longer count.
+  - **KV messages.** KV 401/403 errors now read `<operation>: <status> - <server text>`. They keep the server text, and `meta` is unchanged. Keys in KV error messages are written with `JSON.stringify`, so a key containing quotes stays well-formed.
+  - **Hooks errors.** `HooksService` HTTP failures now carry `meta.status` (and `statusText`).
+  - **Account-registry sync.** The wrappers keep the service error or host result as `cause`. These wrappers are `applications.register`, `spaces.syncAccessible`, owned-space activation, owned-space hosting and post-create re-activation. A 401 or 403 therefore stops after one request, even when the body is `Forbidden` or empty, and every wrapper message carries the status.
+  - **Owner delegation import.** A failed activation during owner delegation import now keeps the activation result as `cause`.
+  - **New method.** `NodeUserAuthorization.hostOwnedSpaceResult()` returns the full `SpaceHostResult`. `hostOwnedSpace()` still returns `boolean`.
+
+- a074fa5: TC-619: When the owner's storage is full, reads keep working and writes fail with one typed error.
+  - `db.migrations.apply()` reads the applied-migration list first. A database that is already up to date is opened with that one read and is never written, so an app that ensures its schema on open still loads on a full space or with a read-only session. The metadata table is created only when it is missing and a migration is pending. Before this, every call wrote a batch first, and a full space failed with `SQL batch failed: 402 - Storage quota exceeded…`.
+  - KV, SQL and DuckDB report a write rejected for storage with the same codes: `STORAGE_QUOTA_EXCEEDED` (HTTP 402, storage is full) or `STORAGE_LIMIT_REACHED` (HTTP 413, the write is larger than what is left). The message explains that nothing was saved, that reading still works, and what to do. `meta` carries `status`, `usedBytes` and `limitBytes`. A 413 without the node's storage text, such as a proxy's request-size limit, stays `KV_WRITE_FAILED`. Behaviour change: SQL and DuckDB previously reported a 402 as `NETWORK_ERROR`.
+  - Vault and secrets writes keep the storage code, message and byte counts. Behaviour change: they previously wrapped them in `STORAGE_ERROR`.
+  - New exports `isStorageFullError(error)`, `STORAGE_FULL_MESSAGE` and `STORAGE_WRITE_TOO_LARGE_MESSAGE` let an app detect "storage full" in one place and switch to a read-only view.
+  - `account.spaces.list({ preferIndex: true })` still lists accessible spaces when the account space is full. An explicit `account.spaces.syncAccessible()` still reports the failure.
+  - node-sdk's sign-in registry sync stops after the first storage-full rejection instead of retrying it three times.
+
+- 045c2d3: KV `list`, `delete`, and `head` now return `AUTH_UNAUTHORIZED` with HTTP status and validated missing-capability metadata for both 401 and 403, rather than `NETWORK_ERROR` on 403. Parsed capability metadata is retained only when the TinyCloud resource and action match the request. Export `validatedCapabilityOf` for clients classifying an authorization refusal without trusting server-supplied resource or action strings.
+- 698654e: TC-736: KV change feed client for `tinycloud.kv/sync` (tinycloud-node TC-732).
+  - `kv.changes({ prefix, cursor?, limit?, retentionGrant?, signal?, timeout? })` reads one page of the ordered, delete-aware feed for a prefix and returns `{ changes, more, cursor, source, authority }`. Each change is a key's latest state (`{ key, deleted: false, etag, metadata }` or `{ key, deleted: true }`); read content with `get`/`batchGet` and check it against the ETag. A page never splits one invocation, so it can hold more than `limit` changes, and it can be empty with `more: true`. The cursor is opaque. The node must advertise `kv-sync-v1` in `/info`.
+  - `prefix` and the returned keys are full paths in the space; the service's configured prefix is not applied. On a prefixed `KVService` such as `DelegatedAccess.kv`, strip that prefix before calling `get(change.key)`, or use `kv.withPrefix(path).changes()`, which follows everything under `path/` and returns keys relative to it. An empty prefix, on either form, is refused with `INVALID_INPUT`.
+  - Errors: HTTP 410 is `KV_SYNC_RESET_REQUIRED` with `meta.reason` (`cursor-invalid` or `position-unknown`): discard sync state and restart without a cursor. A 401 naming `delegation-revoked` or `delegation-ancestor-revoked` is `AUTH_DELEGATION_REVOKED` or `AUTH_DELEGATION_ANCESTOR_REVOKED`. A refused retention grant (403) is `KV_RETENTION_GRANT_REFUSED` with `meta.reason`. A 404 for an unhosted space is `KV_NOT_FOUND`. The timeout and abort signal stay in force while an error body is read.
+  - `KVAction.SYNC`, `KVAction.RETAIN`, `KV.SYNC` and `KV.RETAIN` name the new abilities. The vendored capability registry is re-vendored from tinycloud-node `d7f511f`, which registers both.
+  - `tinycloud.kv/sync` and `tinycloud.kv/retain` must be granted by name. `actionContains` (exported with the new `isExplicitOnlyAction`), `SharingService.preflightGenerate()`/`generate()` and node-sdk's runtime-grant check no longer let `*` or `tinycloud.kv/*` cover them, matching the node. No default session or manifest includes them. Behaviour changes: a session holding only `tinycloud.kv/*` can no longer delegate either ability onward without a prompt, and a share asking for either under a `*` registry entry now goes to `onRootDelegationNeeded`. `SharingService` now uses `actionContains` for every action, so a `tinycloud.kv/*` registry entry covers the other KV actions there too, as it already did elsewhere.
+  - Type-level break for outside implementers: `IKVService` (and the `IKVServiceLike` that `PrefixedKVService` wraps) gains a required `changes(options)` member, and `IPrefixedKVService` gains `changes(options?)`. A custom class or object that implements these interfaces must add the method to compile.
+  - `secrets.listAll()` now fails with `INVALID_INPUT` when the node repeats a continuation cursor, instead of looping on a node that ignores list cursors.
+
+### Patch Changes
+
+- ee4fd2d: Apply the configured request timeout. `SQLService`, `KVService`, and `DuckDbService` documented a `timeout` config (and KV a per-call `timeout` option) but never used it, so a request whose response never arrived hung forever. A request now aborts once its timeout elapses, including while the response body is still being read, and the operation returns an `ErrorCodes.TIMEOUT` error with `meta.timeoutMs`. Caller and sign-out aborts still return `ErrorCodes.ABORTED`. A per-call KV `timeout` overrides the service config, and `0` disables it. There is still no default timeout: services without one configured behave as before. These services also remove, when a request finishes, the abort listeners they add to the service and context signals, which were previously left behind.
+- 37123c3: `KVService.changes()` maps a 401 to `AUTH_DELEGATION_REVOKED` / `AUTH_DELEGATION_ANCESTOR_REVOKED` only when the whole response body is the node's revocation error (`delegation-revoked: <cid>`, or `delegation-ancestor-revoked: ancestor=<cid> invoked=<cid>`, optionally prefixed `Invalid invocation: `). Before, any 401 whose text contained `delegation-revoked`, such as `Unauthorized Action` for a prefix with that name, was reported as a revocation; it is now `AUTH_UNAUTHORIZED`.
+- 4df61ed: `KVService.batchGet` and `batchHead` no longer fail (or misattribute results) when the requested keys are not already in key order. The node returns batch results sorted by path (it flattens invocation abilities from a `BTreeMap`), but the SDK matched them to the request by position, so an unsorted request errored with `NETWORK_ERROR` "KV batch read response did not match the requested keys". Results are now matched by the path each response item carries and returned in the caller's requested order; a response that carries no keys is aligned assuming the node's byte-sorted path order. A response that is missing a requested path, carries an unrequested one, or mixes keyed and keyless items still fails closed with `NETWORK_ERROR`.
+- d11a8b6: Fix the hooks stream supervisor so a failed stream recovers instead of producing an unhandled rejection and crashing Node. Recoverable failures use bounded exponential backoff, including a fresh ticket mint after a stream-open 401/403. Terminal mint refusals reach subscribers as typed service errors. Signing out or ending the session completes active iterators. Stream telemetry is built from an allow-list and does not copy foreign error messages, causes, stacks, or metadata. Retry backoff resets only after an event is received or the stream stays open for at least five seconds. The supervisor yields through a referenced zero-delay timer after each pause so due timers are not starved by repeated immediate retries.
+- Updated dependencies [02b6773]
+- Updated dependencies [698654e]
+  - @tinycloud/bootstrap@2.8.0
+
 ## 3.1.0-beta.14
 
 ### Patch Changes

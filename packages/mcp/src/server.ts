@@ -6,18 +6,21 @@ import { MCP_VERSION } from "./version.js";
 
 export const MCP_SERVER_NAME = "tinycloud-mcp";
 export { MCP_VERSION } from "./version.js";
-export function createTinyCloudMcpServer(selection: McpStartupSelection): McpServer {
+/** The stdio server is always the local surface. */
+export type LocalMcpSelection = Omit<McpStartupSelection, "surface">;
+
+export function createTinyCloudMcpServer(selection: LocalMcpSelection): McpServer {
   const validator = createJsonSchemaValidator();
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: MCP_VERSION },
     { jsonSchemaValidator: validator },
   );
-  registerTinyCloudTools(server, selection, validator);
+  registerTinyCloudTools(server, { ...selection, surface: "local" }, validator);
   return server;
 }
 
 /** Start the only supported MCP transport: local stdio. */
-export function serveTinyCloudMcp(selection: McpStartupSelection): StdioServerHandle {
+export function serveTinyCloudMcp(selection: LocalMcpSelection): StdioServerHandle {
   return serveStdio(
     () => createTinyCloudMcpServer(selection),
     { onerror: () => writeBoundedDiagnostic("MCP transport error") },

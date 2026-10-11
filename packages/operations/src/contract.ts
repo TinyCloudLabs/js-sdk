@@ -61,13 +61,24 @@ export interface OperationRuntime {
   readonly granted: readonly CapabilityRequirement[];
   /** Diagnostics gathered while building the runtime, attached to the result. */
   readonly warnings?: readonly OperationWarning[];
+  /**
+   * Internal, never projected. Whether the live identity is a local owner key
+   * (an explicit key, or a profile `isLocalOwnerProfile` accepts). Set by every
+   * runtime this package builds; optional only for focused definition tests.
+   */
+  readonly localOwner?: boolean;
+  /** Internal, never projected: the reasons stored grants were skipped during replay. */
+  readonly skippedGrantReasons?: readonly StoredGrantSkipReason[];
 }
 
 /**
  * Why a stored grant was not used. A fixed vocabulary: diagnostics never
  * carry exception text, node responses, URLs or other stored transport data.
  * `unbound`: the record has no valid request binding where one is required;
- * `outside_request`: its signed authority exceeds its binding.
+ * `outside_request`: its signed authority exceeds its binding;
+ * `activation_unavailable`: the node could not be reached, timed out, was
+ * rate limited or failed (transport, 408, 429, 5xx) while activating it;
+ * `activation_unauthenticated`: the node answered 401 while activating it.
  */
 export const STORED_GRANT_SKIP_REASONS = [
   "malformed",
@@ -84,6 +95,8 @@ export const STORED_GRANT_SKIP_REASONS = [
   "resources_mismatch",
   "unsupported",
   "activation_rejected",
+  "activation_unavailable",
+  "activation_unauthenticated",
   "invalid",
 ] as const;
 
@@ -155,10 +168,12 @@ export interface OperationSensitivity {
 
 /**
  * An inspection operation may read safe local profile state without creating a
- * node or authenticating. Every other operation requires an authenticated
- * runtime before planning or execution.
+ * node or authenticating. An authenticated operation gets a runtime that may
+ * sign in. A restored operation gets a runtime built only from the profile's
+ * stored session: it never signs in, migrates, takes a profile lock or writes
+ * profile state.
  */
-export type OperationRuntimeRequirement = "authenticated" | "inspection";
+export type OperationRuntimeRequirement = "authenticated" | "inspection" | "restored";
 
 export interface OperationExposure {
   readonly cli: SurfaceDisposition;
@@ -247,6 +262,12 @@ export interface OperationDefinition<I, O> {
   readonly sensitivity: OperationSensitivity;
   /** A definition may give malformed transport artifacts a stable error code. */
   readonly invalidInputErrorCode?: OperationErrorCode;
+  /**
+   * Response deadline. When set, `invokeOperation` returns a retryable
+   * `NODE_UNREACHABLE` if the invocation has not finished within it; work
+   * already started is abandoned, not cancelled.
+   */
+  readonly deadlineMs?: number;
   readonly authority: (
     context: AuthorityPlanningContext,
     input: I,

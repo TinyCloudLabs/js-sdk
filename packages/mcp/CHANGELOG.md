@@ -1,5 +1,120 @@
 # @tinycloud/mcp
 
+## 0.5.0-beta.4
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.0-beta.4
+- @tinycloud/operations@0.5.0-beta.4
+
+## 0.5.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/node-sdk@3.2.0-beta.3
+  - @tinycloud/operations@0.5.0-beta.3
+
+## 0.5.0-beta.2
+
+### Minor Changes
+
+- 4f851e6: Add `tinycloud_secrets_status` (`tinycloud.secrets.status@1`) for local/stdio MCP only; the hosted server does not register it. It is read-only (`readOnlyHint`, `idempotentHint`, `openWorldHint`) and never signs in: it uses the profile's stored session and reports each named secret as `ready`, `pending`, or `consent_required` without saving a permission request.
+
+  Missing-secret `setup` is now the canonical Secret Manager `/request` link (`{url, names, scope?, owner, action: "add_secret"}`) instead of the old setup link. A `complete_migration` recovery in `error.details.recovery` now carries `tool: "tinycloud_auth_capabilities"`, taken from the binding table.
+
+  Tool bindings gain an optional `surfaces` field (`"local"` / `"hosted"`, default both), and `McpStartupSelection` gains a required `surface`; `registerTinyCloudTools` skips bindings not on that surface. Generated `mcp-facts.json` lists each tool's surfaces.
+
+  **Breaks:** direct callers of `registerTinyCloudTools` must pass `surface`; clients that parsed the old setup link shape; the local server now lists 17 tools.
+
+### Patch Changes
+
+- Updated dependencies [4f851e6]
+- Updated dependencies [4f851e6]
+  - @tinycloud/operations@0.5.0-beta.2
+  - @tinycloud/node-sdk@3.2.0-beta.2
+
+## 0.4.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [6a7fa64]
+  - @tinycloud/node-sdk@3.2.0-beta.1
+  - @tinycloud/operations@0.5.0-beta.1
+
+## 0.4.1-beta.0
+
+### Patch Changes
+
+- ad4a11f: Unify stored-grant replay across CLI, operations, and MCP. Refused replay candidates use fixed-code warnings; only a cross-user compact import with a verified signed audience, matching stored transport audience, and correct CID remains separate and silent.
+
+  Breaking behavior for `@tinycloud/cli`:
+  - Grants without a `siweProof` (including CLI <=1.1.0-beta.13 and 1.0.x escalations and non-compact imports without proof) are refused with `proof_missing`. Owners can approve again using `tc auth request --grant [--device]`; delegates can request, receive, and import a new signed grant or reimport the original artifact with its proof. Remove stale rows using `tc auth grants remove <old-cid>`; an owner may add `--revoke`.
+  - Unbound compact grants no longer install before migration binds them (including a busy migration lock, `--private-key` on a local profile, or a session without `verificationMethod`); they report `unbound`. Run an ordinary command, sign in again, or reimport the artifact to recover.
+  - Compact grants with invalid signatures or CIDs are refused locally with `proof_invalid` or `cid_mismatch`; damaged transport audiences are refused rather than silently classified as cross-user. A single `Bearer` prefix is stripped before activation so verified grants authorize reads; a double prefix is refused.
+  - `tc auth import` refuses every proofless non-compact delegation (`INVALID_AUTH_IMPORT`, exit 2), including cross-user artifacts; none is stored or recorded in grant history. A compact or signed-login delegation failing verification returns `DELEGATION_REJECTED` (exit 1). A tampered transport audience cannot turn a session grant into a silent cross-user import. Valid session-targeted imports bind to `unbound-import:<cid>`.
+  - Commands that replay may now emit a `{warnings}` stderr line or include `error.warnings`; `TC_DEBUG_REPLAY` is removed. `--private-key` on an OpenKey profile no longer replays stored grants.
+  - Owner OpenKey `tc delegation revoke` no longer requests raw `urn:cid` authority (unsupported by deployed OpenKey). It uses a CID-bound owner-space fallback, or fails immediately with `RAW_RECAP_RESOURCE_UNSUPPORTED` instead of timing out.
+
+  `@tinycloud/sdk-core` now exposes the verified signed `payload.aud` from `parseSignedCompactUcanAttenuation` and rejects compact tokens without an audience. The audience is read during the existing signature verification, so replay does not decode an unsigned payload separately.
+
+  Breaking behavior for `@tinycloud/operations`:
+  - `replayLimit(entry)` no longer takes `migrated` or returns `"signed"`; `replayStoredDelegation` options no longer take `migrated`; `activateUnboundCompactImport` becomes `activateUnboundImport` and accepts signed-login records. New APIs: `replayProfileDelegations`, `inspectStoredDelegation`, `storedDelegationForAnotherKey`, `verifiedCompactAudience`, `storedDelegationSource`, and `withoutBearer`.
+  - Unbound compact grants are refused before migration; `createInvocationRuntime` replays only for a restored persisted session. `liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` counts only bound, unexpired grants. Invalid compact proofs report `proof_invalid`. `generated/operations.json` changes accordingly.
+
+  `@tinycloud/mcp` receives the shared replay and status behavior through its `@tinycloud/operations` dependency; no MCP-generated schema changes in this release.
+
+- Updated dependencies [ad4a11f]
+  - @tinycloud/operations@0.5.0-beta.0
+  - @tinycloud/node-sdk@3.2.0-beta.0
+
+## 0.4.0
+
+### Minor Changes
+
+- e2ec154: TC-625: Every command and tool reports full TinyCloud storage the same way.
+  - CLI: a write refused because storage is full (`STORAGE_QUOTA_EXCEEDED`) or too small for the write (`STORAGE_LIMIT_REACHED`) exits with the new code 10 (`ExitCode.STORAGE_FULL`) from every command, including `kv`, `sql`, `duckdb`, `vars`, `vault`, `secrets`, `account` and `share`. It prints one message, `TinyCloud storage is full; nothing was written.`, with a hint that gives the account totals when the SDK reports them (`371.7 MiB used of 100 MiB (free plan)`), says reading still works, and links to https://account.tinycloud.xyz/billing. It never shows the per-space limit or the switch-hosts network hint. `tc sql copy` that fills storage part-way keeps its progress instead (`Insert into "notes" failed after 2 row(s): TinyCloud storage is full.`). The node's storage text is read only from an uncoded 402 or 413 response; an error with another code, such as a local `ENOENT`, keeps its own mapping. Behaviour change: `tc kv put` exited 1 and `tc share` exited 4 for a full space; both now exit 10. `tc share` keeps 8 for `UNSAFE_FILENAME`/`OUTPUT_EXISTS` and 9 for notify partial failure. `tc share` reports a write larger than the remaining storage as `STORAGE_LIMIT_REACHED` instead of `UPLOAD_FAILED`.
+  - Operations and MCP: a new `STORAGE_QUOTA_EXCEEDED` operation error code with `retryable: false`. The message says nothing was written, reading still works and the owner must free up space or upgrade; `details.account` carries the account totals when known. Behaviour change: a KV write on full storage was a retryable `NODE_ERROR`, and a SQL write was `SQL_EXECUTION_FAILED` with an unknown outcome.
+  - VFS: a write on full storage fails with `ENOSPC` instead of `EIO`.
+
+- 045c2d3: Classify KV and SQL HTTP authorization refusals in operation and MCP structured results. A plain 401 is nonretryable `AUTH_REQUIRED`; 403 or a 401 naming a validated missing capability is nonretryable `PERMISSION_DENIED`, so an agent does not retry signing in when a capability grant is needed. Keep 5xx node failures retryable except uncertain SQL writes, and never expose node response text or transport metadata in canonical results.
+
+### Patch Changes
+
+- b7fd979: The README describes how imported delegations are bound to their requests, how delegations stored by earlier releases are migrated once, and what a record without a binding does.
+- Updated dependencies [02b6773]
+- Updated dependencies [37123c3]
+- Updated dependencies [f25aa05]
+- Updated dependencies [0652195]
+- Updated dependencies [b7fd979]
+- Updated dependencies [b7fd979]
+- Updated dependencies [dca972f]
+- Updated dependencies [dca972f]
+- Updated dependencies [a074fa5]
+- Updated dependencies [e2ec154]
+- Updated dependencies [7edc599]
+- Updated dependencies [045c2d3]
+- Updated dependencies [045c2d3]
+- Updated dependencies [c923361]
+- Updated dependencies [698654e]
+- Updated dependencies [2c703fc]
+- Updated dependencies [1f44a61]
+  - @tinycloud/node-sdk@3.1.0
+  - @tinycloud/operations@0.4.0
+  - @tinycloud/node-sdk-wasm@1.7.7
+
+## 0.4.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [1f44a61]
+  - @tinycloud/node-sdk@3.1.0-beta.15
+  - @tinycloud/operations@0.4.0-beta.19
+
 ## 0.4.0-beta.18
 
 ### Patch Changes

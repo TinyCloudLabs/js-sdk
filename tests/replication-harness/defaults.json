@@ -1,0 +1,11 @@
+{
+  "images": {
+    "default": "ghcr.io/tinycloudlabs/tinycloud-node:1.20.0-dstack@sha256:10f6114c439a55bfcb8c14ef0df220efd08cb6ee9c894fd780d2e10e10701bac",
+    "previous": "ghcr.io/tinycloudlabs/tinycloud-node:1.19.2-dstack"
+  },
+  "ciPin": "ghcr.io/tinycloudlabs/tinycloud-node:d7f511f",
+  "postgres": "postgres:16",
+  "postgresC": "postgres:16-alpine",
+  "toxiproxy": "ghcr.io/shopify/toxiproxy:2.12.0",
+  "tc12Features": []
+}

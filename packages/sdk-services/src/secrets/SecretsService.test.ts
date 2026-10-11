@@ -161,12 +161,29 @@ describe("SecretsService", () => {
     expect(vault.get).toHaveBeenCalledWith(
       "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
     );
-
     const deleteResult = await secrets.delete("ANTHROPIC_API_KEY", options);
     expect(deleteResult.ok).toBe(true);
     expect(vault.delete).toHaveBeenCalledWith(
       "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
     );
+  });
+
+  it("forwards ifAbsent as ifNoneMatch and keeps the 2-argument call without it", async () => {
+    const vault = new MockVault();
+    const secrets = new SecretsService(vault);
+
+    expect((await secrets.put("API_KEY", "secret", { scope: "app", ifAbsent: true })).ok).toBe(true);
+    expect(vault.put).toHaveBeenLastCalledWith(
+      "secrets/scoped/app/API_KEY",
+      expect.objectContaining({ value: "secret" }),
+      { ifNoneMatch: "*" },
+    );
+
+    expect((await secrets.put("API_KEY", "secret", { scope: "app" })).ok).toBe(true);
+    expect(vault.put.mock.calls.at(-1)).toHaveLength(2);
+
+    expect((await secrets.put("API_KEY", "secret", { ifAbsent: false })).ok).toBe(true);
+    expect(vault.put.mock.calls.at(-1)).toHaveLength(2);
   });
 
   it("validates env-style names before calling the vault", async () => {
@@ -250,11 +267,13 @@ describe("SecretsService", () => {
       prefix: "secrets/",
       removePrefix: true,
       limit: 1000,
+      source: "network",
     });
     expect(vault.listPage).toHaveBeenNthCalledWith(2, {
       prefix: "secrets/",
       removePrefix: true,
       limit: 1000,
+      source: "network",
       cursor: "page-2",
     });
   });

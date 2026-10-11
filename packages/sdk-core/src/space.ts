@@ -35,10 +35,12 @@ export interface SpaceHostResult {
  */
 export async function fetchPeerId(
   host: string,
-  spaceId: string
+  spaceId: string,
+  signal?: AbortSignal
 ): Promise<string> {
   const res = await fetch(
-    `${host}/peer/generate/${encodeURIComponent(spaceId)}`
+    `${host}/peer/generate/${encodeURIComponent(spaceId)}`,
+    { signal }
   );
 
   if (!res.ok) {
@@ -63,11 +65,13 @@ export async function fetchPeerId(
  */
 export async function submitHostDelegation(
   host: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  signal?: AbortSignal
 ): Promise<SpaceHostResult> {
   const res = await fetch(`${host}/delegate`, {
     method: "POST",
     headers,
+    signal,
   });
 
   if (!res.ok) {
@@ -156,8 +160,10 @@ function activationFlightKey(
  */
 export async function activateSessionWithHost(
   host: string,
-  delegationHeader: { Authorization: string }
+  delegationHeader: { Authorization: string },
+  signal?: AbortSignal
 ): Promise<SpaceHostResult> {
+  if (signal) return postSessionActivation(host, delegationHeader, signal);
   const key = activationFlightKey(host, delegationHeader as Record<string, string>);
 
   const existing = inFlightActivations.get(key);
@@ -218,11 +224,13 @@ function startActivationFlight(
 
 async function postSessionActivation(
   host: string,
-  delegationHeader: { Authorization: string }
+  delegationHeader: { Authorization: string },
+  signal?: AbortSignal
 ): Promise<SpaceHostResult> {
   const res = await fetch(`${host}/delegate`, {
     method: "POST",
     headers: delegationHeader,
+    signal,
   });
 
   if (res.ok) {

@@ -208,6 +208,48 @@ export type {
   KVResponseHeaders,
   KVActionType,
 } from "./kv";
+export type {
+  AuthorityRefusal,
+  KVListPage,
+  KVReadThrough,
+  KVReplicaHandle,
+  KVReplicaSpec,
+  KVReplicaStorage,
+  KVReplicationController,
+  KVReplicationDeps,
+  LocalGetResult,
+  LocalListResult,
+  LocalReadMeta,
+  LocalReplicaStatus,
+  LocalSyncResult,
+  PendingWriteRecord,
+  PendingWriteState,
+  PendingWriteStore,
+  PinnedKey,
+  PurgeTarget,
+  ReplicaAuthorityState,
+  ReplicaCoverage,
+  ReplicaDevice,
+  ReplicaGrantInfo,
+  ReplicaState,
+  ReplicaStatusEntry,
+  ReplicationAuthority,
+  ReplicationControl,
+  ReplicationEvent,
+  ReplicationIdentity,
+  ReplicationOptions,
+  ReplicationPurgeReport,
+  ReplicationReason,
+  ReplicationScheduler,
+  ResolvedReplicationOptions,
+} from "./kv/replication";
+export {
+  CLEAR_PENDING_WARNING,
+  canonicalReplicationIdentity,
+  kvPrefixCovers,
+  replicationIdentityKey,
+  requiresSecretsOptIn,
+} from "./kv/replication";
 
 // SQL service
 export { SQLService, DatabaseHandle, SQLMigrations, SQLAction } from "./sql";
@@ -299,6 +341,10 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  appSecretScope,
+  SECRET_SCOPE_RE,
+  MAX_SECRET_SCOPE_LENGTH,
+  TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
@@ -311,6 +357,7 @@ export type {
   ParsedSecretCatalogKey,
   ResolvedSecretPath,
   SecretScopeOptions,
+  SecretPutOptions,
 } from "./secrets";
 
 // Encryption service (network-scoped one-of-one decrypt)

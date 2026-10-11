@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 
+const vaultGetCalls: unknown[] = [];
 const errors: unknown[] = [];
 
 mock.module("../config/profiles.js", () => ({
@@ -11,9 +12,13 @@ mock.module("../config/profiles.js", () => ({
 }));
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => ({
+    replication: { status: async () => [{ state: "ready" }] },
     vault: {
       unlock: async () => ({ ok: true }),
-      get: async () => ({ ok: true, data: { data: "vault-secret" } }),
+      get: async (_key: string, options: unknown) => {
+        vaultGetCalls.push(options);
+        return { ok: true, data: { data: "vault-secret" } };
+      },
     },
     kv: {
       withPrefix: () => ({
@@ -48,6 +53,7 @@ let dir: string;
 afterEach(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
   errors.length = 0;
+  vaultGetCalls.length = 0;
 });
 
 describe("private command get outputs", () => {
@@ -59,6 +65,12 @@ describe("private command get outputs", () => {
 
     expect(errors).toEqual([]);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+  test("vault existence reads stay network-only with replication enabled", async () => {
+    await run(registerVaultCommand, ["vault", "get", "KEY", "--private-key", "test"]);
+
+    expect(errors).toEqual([]);
+    expect(vaultGetCalls).toEqual([{ source: "network" }]);
   });
 
   test("vars get -o creates a 0600 file", async () => {

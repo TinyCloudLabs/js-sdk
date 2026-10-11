@@ -137,7 +137,7 @@ export function registerKvCommand(program: Command): void {
           process.stdout.write(content + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -188,7 +188,7 @@ export function registerKvCommand(program: Command): void {
 
         outputJson({ key, written: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -213,7 +213,7 @@ export function registerKvCommand(program: Command): void {
 
         outputJson({ key, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -260,7 +260,7 @@ export function registerKvCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -296,7 +296,7 @@ export function registerKvCommand(program: Command): void {
           metadata: result.data.headers ?? {},
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

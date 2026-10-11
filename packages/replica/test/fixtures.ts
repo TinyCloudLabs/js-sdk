@@ -106,7 +106,12 @@ export class FakeNode implements ReplicaTransport {
 
   #changesAfter(pos: number): Array<{ key: string; pos: number }> {
     const latest = new Map<string, number>();
-    for (const entry of this.log) if (entry.key.startsWith(this.prefix)) latest.set(entry.key, entry.pos);
+    for (const entry of this.log) {
+      const matches = this.prefix.endsWith("/")
+        ? entry.key.startsWith(this.prefix)
+        : entry.key === this.prefix || entry.key.startsWith(`${this.prefix}/`);
+      if (matches) latest.set(entry.key, entry.pos);
+    }
     return [...latest].filter(([, at]) => at > pos).sort((a, b) => a[1] - b[1]).map(([key, at]) => ({ key, pos: at }));
   }
 

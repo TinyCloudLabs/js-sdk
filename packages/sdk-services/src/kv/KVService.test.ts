@@ -1,4 +1,6 @@
-import { describe, expect, jest, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import type {
   FetchRequestInit,
   FetchResponse,
@@ -1851,5 +1853,190 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
       if (result.ok) return;
       expect(result.error.code).toBe(ErrorCodes.ABORTED);
     });
+  });
+});
+test("KVService uses its existing network path when read-through is unset", async () => {
+  let fetchCount = 0;
+  const service = new KVService({});
+  service.initialize(createContext(async () => {
+    fetchCount += 1;
+    return response(true, 200, "network value");
+  }));
+
+  const result = await service.get("key", { raw: true });
+
+  expect(result).toMatchObject({ ok: true, data: { data: "network value" } });
+  expect(fetchCount).toBe(1);
+});
+test("network-only reads report their settled outcome without reading the replica", async () => {
+  let fetchCount = 0;
+  let localReadCount = 0;
+  const observations: Array<{ op: string; space: string; path: string; reason: string; outcome: string; latencyMs: number; fetchCountAtObservation: number }> = [];
+  const service = new KVService({});
+  service.initialize(createContext(async () => {
+    fetchCount += 1;
+    return fetchCount === 1
+      ? response(true, 200, "network value")
+      : response(true, 200, ["notes/a"]);
+  }));
+  service.setReadThrough({
+    get: async () => {
+      localReadCount += 1;
+      throw new Error("network-only get read the replica");
+    },
+    list: async () => {
+      localReadCount += 1;
+      throw new Error("network-only list read the replica");
+    },
+    write: async () => {
+      throw new Error("unexpected write");
+    },
+    observeNetworkRequested: (observation) => {
+      observations.push({ ...observation, fetchCountAtObservation: fetchCount });
+      throw new Error("best-effort observer failure");
+    },
+  });
+
+  const get = await service.get("key", { source: "network", raw: true });
+  const list = await service.list({ source: "network", prefix: "notes" });
+
+  expect(get).toMatchObject({ ok: true, data: { data: "network value" } });
+  expect(list).toMatchObject({ ok: true, data: { keys: ["notes/a"] } });
+  expect(fetchCount).toBe(2);
+  expect(localReadCount).toBe(0);
+  expect(observations).toEqual([
+    {
+      op: "get",
+      space: "tinycloud:pkh:eip155:1:0xabc:default",
+      path: "key",
+      reason: "NETWORK_REQUESTED",
+      outcome: "found",
+      latencyMs: expect.any(Number),
+      fetchCountAtObservation: 1,
+    },
+    {
+      op: "list",
+      space: "tinycloud:pkh:eip155:1:0xabc:default",
+      path: "notes",
+      reason: "NETWORK_REQUESTED",
+      outcome: "found",
+      latencyMs: expect.any(Number),
+      fetchCountAtObservation: 2,
+    },
+  ]);
+});
+
+test("network-only read outcomes include not-found and error", async () => {
+  const observations: Array<{ op: string; outcome: string; latencyMs: number }> = [];
+  const service = new KVService({});
+  let fetchCount = 0;
+  service.initialize(createContext(async () => {
+    fetchCount++;
+    return fetchCount === 1
+      ? response(false, 404, "Key not found: missing")
+      : response(false, 500, "server failure");
+  }));
+  service.setReadThrough({
+    get: async () => { throw new Error("network-only get read the replica"); },
+    list: async () => { throw new Error("network-only list read the replica"); },
+    write: async () => { throw new Error("unexpected write"); },
+    observeNetworkRequested: ({ op, outcome, latencyMs }) => observations.push({ op, outcome, latencyMs }),
+  });
+
+  const missing = await service.get("missing", { source: "network" });
+  const failedList = await service.list({ source: "network", prefix: "notes" });
+
+  expect(missing).toMatchObject({ ok: false, error: { code: ErrorCodes.KV_NOT_FOUND } });
+  expect(failedList.ok).toBe(false);
+  expect(observations.map(({ op, outcome }) => [op, outcome])).toEqual([
+    ["get", "not_found"],
+    ["list", "error"],
+  ]);
+  expect(observations.every(({ latencyMs }) => latencyMs >= 0)).toBe(true);
+});
+describe("KVService stalled response bodies over loopback HTTP (TC-834)", () => {
+  // A real node:http server: headers arrive, the body starts, and it never
+  // ends. A real fetch must still honour the request timeout and the caller's
+  // abort while the 404 body is classified, and the socket must close.
+  let server: Server;
+  let baseUrl: string;
+  let status = 404;
+  const open = new Set<Socket>();
+  const closed: Array<Promise<void>> = [];
+  const responses = new Set<ServerResponse>();
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const socket = req.socket;
+      if (!open.has(socket)) {
+        open.add(socket);
+        closed.push(new Promise((resolve) => socket.once("close", () => {
+          open.delete(socket);
+          resolve();
+        })));
+      }
+      responses.add(res);
+      res.writeHead(status, { "content-type": "text/plain" });
+      res.write(status === 404 ? "Key not" : "partial");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    for (const res of responses) res.destroy();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  function loopbackService(): KVService {
+    const context: IServiceContext = {
+      ...createContext(fetch as unknown as IServiceContext["fetch"]),
+      hosts: [baseUrl],
+    };
+    const service = new KVService({});
+    service.initialize(context);
+    return service;
+  }
+
+  async function expectSocketClosed(): Promise<void> {
+    const pending = closed.splice(0);
+    expect(pending.length).toBeGreaterThan(0);
+    await Promise.race([
+      Promise.all(pending),
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error("socket stayed open")), 1000)),
+    ]);
+    expect(open.size).toBe(0);
+  }
+
+  for (const op of ["get", "head", "delete"] as const) {
+    test(`${op}: an unfinished 404 body ends with TIMEOUT`, async () => {
+      status = 404;
+      const started = Date.now();
+      const result = await loopbackService()[op]("k", { timeout: 50 });
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.TIMEOUT } });
+      await expectSocketClosed();
+    });
+
+    test(`${op}: an unfinished 404 body ends with ABORTED when the caller aborts`, async () => {
+      status = 404;
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 80);
+      const started = Date.now();
+      const result = await loopbackService()[op]("k", { signal: controller.signal });
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.ABORTED } });
+      await expectSocketClosed();
+    });
+  }
+
+  test("control: an unfinished 200 body ends with TIMEOUT", async () => {
+    status = 200;
+    const started = Date.now();
+    const result = await loopbackService().get("k", { timeout: 50 });
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.TIMEOUT } });
+    await expectSocketClosed();
   });
 });

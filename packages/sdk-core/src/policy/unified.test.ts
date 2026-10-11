@@ -427,6 +427,7 @@ describe("TC-405 unified policy contracts", () => {
     const authorization = `${signingInput}.${Buffer.from(ed25519.sign(new TextEncoder().encode(signingInput), privateKey)).toString("base64url")}`;
     const parsed = parseSignedCompactUcanAttenuation(authorization);
     expect(parsed.payload.att).toEqual(att);
+    expect(parsed.payload.aud).toBe("did:key:audience");
     expect(() => parseSignedCompactUcanAttenuation(authorization, "bafywrong")).toThrow("CID does not match");
   });
 

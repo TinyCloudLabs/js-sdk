@@ -1,13 +1,27 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import {
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
+import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import {
+  buildSecretManagerUrl,
+  buildSecretRequestUrl,
+  canonicalSecretRequestOwner,
+  isValidSecretRequestScope,
+  missingSecretRecovery,
+  ownerOfSpace,
+  resolveSecretsOwner,
+  SecretRequestInputError,
+  type SecretRequestLink,
+  validSecretNames,
+} from "@tinycloud/operations/secret-request";
 import {
   SECRET_DECRYPT_CAPABILITY,
   secretCapabilityAction,
@@ -25,11 +39,16 @@ import {
 } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
+import { mergeWarnings } from "../output/warnings.js";
 import { ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { withSignInHint } from "../auth/session-expired.js";
+import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
+import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
+import { tryOpenBrowser, warnBrowserNotOpened } from "../lib/browser.js";
+import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
+import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,
@@ -58,6 +77,7 @@ export type CanonicalSecretGetResult = Awaited<ReturnType<typeof invokeOperation
 
 interface SecretScopeOptions {
   scope?: string;
+  source?: "network";
 }
 
 interface DelegationCandidate {
@@ -108,6 +128,51 @@ async function readStdin(): Promise<Buffer> {
 function authOptions(options: { privateKey?: string }): { privateKey?: string } | undefined {
   const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
   return privateKey ? { privateKey } : undefined;
+}
+
+/**
+ * D4: a local identity stores its own secrets and never gets a `/request`
+ * link. Local means the shared profile predicate (local posture or auth
+ * method, or a stored `privateKey`), or an explicit `--private-key` /
+ * `TC_PRIVATE_KEY`.
+ */
+function effectiveLocal(profile: ProfileConfig | null, options: { privateKey?: string }): boolean {
+  return (profile !== null && isLocalOwnerProfile(profile)) || authOptions(options) !== undefined;
+}
+
+/** A builder input error is a usage error (exit 2) under its own code. */
+function secretRequestUsageError(error: unknown): unknown {
+  return error instanceof SecretRequestInputError
+    ? new CLIError(error.code, error.message, ExitCode.USAGE_ERROR)
+    : error;
+}
+
+/**
+ * The canonical scope of `--scope S` (CLI canonicalizer) or `--app ID`
+ * (`appSecretScope`); both together is a usage error.
+ */
+function requestedSecretScope(options: { scope?: string; app?: string }): string | undefined {
+  if (options.scope !== undefined && options.app !== undefined) {
+    throw new CLIError("USAGE_ERROR", "Pass either --scope or --app, not both.", ExitCode.USAGE_ERROR);
+  }
+  if (options.app === undefined) return canonicalizeSecretScope(options.scope);
+  try {
+    return appSecretScope(options.app);
+  } catch (error) {
+    throw new CLIError("INVALID_SECRET_SCOPE", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+  }
+}
+
+const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
+
+/** `${user}@${short host}`, or none when the machine's names don't fit the link grammar. */
+function defaultRequester(): string | undefined {
+  try {
+    const requester = `${userInfo().username}@${hostname().split(".")[0]}`;
+    return requester.length <= 64 && !CONTROL_OR_FORMAT.test(requester) ? requester : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveSecretScope(options: { scope?: string }): { scope?: string } | undefined {
@@ -236,6 +301,9 @@ async function ensureSecretsNode(
           { hint: scopedSecretLoginHint(ctx.profile) },
         );
       }
+      // The refresh replaces the refused session; it targets the node discovery picks.
+      const { completeDeferredLocalDiscovery } = await import("../lib/host.js");
+      await completeDeferredLocalDiscovery(ctx);
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
         () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition }),
@@ -355,20 +423,20 @@ function withOperationWarnings(error: unknown, warnings: readonly CanonicalSecre
 
 /**
  * The canonical read, possibly after a session refresh or an approved
- * escalation. Warnings from every invocation are kept, deduplicated, on the
- * returned envelope or on the error that ends the command.
+ * escalation. Keep the largest multiplicity of each warning across replay
+ * attempts, whether the command succeeds or an approval throws.
  */
 async function invokeCanonicalSecretGet(params: CanonicalSecretGetParams): Promise<CanonicalSecretGetResult> {
-  const warnings = new Map<string, CanonicalSecretGetWarning>();
+  let warnings: CanonicalSecretGetWarning[] = [];
   const collect = (result: CanonicalSecretGetResult): CanonicalSecretGetResult => {
-    for (const warning of result.warnings ?? []) warnings.set(JSON.stringify(warning), warning);
+    warnings = mergeWarnings(warnings, result.warnings ?? []);
     return result;
   };
   try {
     const result = await canonicalSecretGet(params, collect);
-    return warnings.size === 0 ? result : { ...result, warnings: [...warnings.values()] };
+    return warnings.length === 0 ? result : { ...result, warnings };
   } catch (error) {
-    throw withOperationWarnings(error, [...warnings.values()]);
+    throw withOperationWarnings(error, warnings);
   }
 }
 
@@ -391,10 +459,16 @@ async function canonicalSecretGet(
   let ownerNode: TinyCloudNode | undefined;
   if (!auth?.privateKey) {
     const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    if (profile) {
+      const posture = resolveProfilePosture(profile);
       const session = await ProfileManager.getSession(params.ctx.profile);
-      if (!session || isStoredSessionExpired(session)) {
-        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+      if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
+        throw sessionExpiredError(params.ctx.profile, posture);
+      }
+      if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+        if (!session || isStoredSessionExpired(session)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+        }
       }
     }
   }
@@ -479,6 +553,8 @@ export function invokeCommanderSecretGetAdapter(params: {
       verbose: false,
       noCache: false,
       quiet: true,
+      replication: false,
+      replicationDebug: false,
     },
     name: params.input.name,
     ...(params.input.scope === undefined ? {} : { scope: params.input.scope }),
@@ -499,13 +575,20 @@ function throwCanonicalSecretGetError(
         "Permission denied while reading secret",
         ExitCode.PERMISSION_DENIED,
       );
-    case "setup_required":
+    case "setup_required": {
+      // handleError re-validates the projected setup against the builder.
+      const { url, names, scope, owner, action } = result.setup;
+      const message = typeof result.setup.message === "string" ? result.setup.message : `Secret "${name}" is not set.`;
       throw new CLIError(
         "NOT_FOUND",
-        result.setup.message,
+        message,
         ExitCode.NOT_FOUND,
-        { hint: `${result.setup.url}\n${result.setup.message}`, setup: result.setup },
+        {
+          hint: `${String(url)}\n${message}`,
+          setup: { url, names, ...(scope === undefined ? {} : { scope }), owner, action },
+        },
       );
+    }
     case "error":
       if (result.error.code === "SESSION_NOT_FOUND" ||
         (result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated")) {
@@ -518,6 +601,11 @@ function throwCanonicalSecretGetError(
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
+      }
+      if (result.error.code === "KV_NOT_FOUND") {
+        // A local identity, or a secret no link can express: the operation's
+        // message is the value-free put/not-requestable hint.
+        throw new CLIError("NOT_FOUND", `Secret "${name}" not found.`, ExitCode.NOT_FOUND, { hint: result.error.message });
       }
       if (result.error.code === "PERMISSION_HINT_INVALID") {
         throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
@@ -869,6 +957,9 @@ async function readDelegatedSecretValue(params: {
   secretPath: string;
   space?: string;
   name: string;
+  scope?: string;
+  /** D4: computed before the node exists, from the profile and the explicit key. */
+  local: boolean;
 }): Promise<string> {
   if (!delegationCoversPath(params.permissions, params.secretPath, params.space ?? SECRETS_SPACE)) {
     throw new CLIError(
@@ -898,17 +989,35 @@ async function readDelegatedSecretValue(params: {
       envelopeResult.error.code === "KEY_NOT_FOUND" ||
       envelopeResult.error.code === "KV_NOT_FOUND"
     ) {
+      const recovery = missingSecretRecovery({
+        owner: ownerOfSpace(params.space?.startsWith("tinycloud:") ? params.space : params.delegation.spaceId),
+        local: params.local,
+        names: [params.name],
+        ...(params.scope === undefined ? {} : { scope: params.scope }),
+      });
       throw new CLIError(
         "NOT_FOUND",
         `Secret "${params.name}" not found`,
         ExitCode.NOT_FOUND,
+        recovery.kind === "add_secret"
+          ? { hint: `Ask the owner to add it: ${recovery.setup.url}`, setup: recovery.setup }
+          : { hint: recovery.hint },
       );
     }
-    if (envelopeResult.error.code === "PERMISSION_DENIED") {
+    // A delegation the node refuses (403, or a 401 for a capability or an
+    // unauthorized vault read) does not cover the secret: exit 5 with the
+    // validated capability meta.
+    const classified = cliErrorFromService(envelopeResult.error);
+    if (
+      envelopeResult.error.code === "AUTH_UNAUTHORIZED" ||
+      classified.code === "PERMISSION_DENIED" ||
+      classified.code === "AUTH_REQUIRED"
+    ) {
       throw new CLIError(
         "PERMISSION_DENIED",
         `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
         ExitCode.PERMISSION_DENIED,
+        classified.metadata,
       );
     }
     throw new CLIError(
@@ -970,10 +1079,8 @@ function isStoredSessionExpired(session: object): boolean {
   const record = session as Record<string, unknown>;
   const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
   if (direct) return direct.getTime() <= Date.now();
-  if (typeof record.siwe !== "string") return false;
-  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  const expiry = match ? parseDate(match[1].trim()) : null;
-  return expiry !== null && expiry.getTime() <= Date.now();
+  const signedOrSiweExpiry = sessionExpiresAt(record);
+  return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
 }
 
 function parseDate(value: unknown): Date | null {
@@ -1086,7 +1193,7 @@ export function registerSecretsCommand(
           ...(descriptor ? { descriptor } : {}),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1109,7 +1216,7 @@ export function registerSecretsCommand(
           descriptor,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1162,7 +1269,7 @@ export function registerSecretsCommand(
             scopeOptions,
             space: spaceUri,
             label: `Checking secret ${name}...`,
-            operation: () => secrets.get(name, scopeOptions),
+            operation: () => secrets.get(name, { ...scopeOptions, source: "network" }),
           });
 
           if (result.ok) {
@@ -1180,6 +1287,8 @@ export function registerSecretsCommand(
             });
           } else {
             const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
+            const local = notFound &&
+              effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
             secret = {
               name: resolved.name,
               path: resolved.permissionPaths.vault,
@@ -1192,7 +1301,9 @@ export function registerSecretsCommand(
               ok: false,
               detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
               hint: notFound
-                ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>`
+                ? local
+                  ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin`
+                  : `tc secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}`
                 : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`,
             });
           }
@@ -1216,7 +1327,7 @@ export function registerSecretsCommand(
           checks,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1242,7 +1353,7 @@ export function registerSecretsCommand(
           scopeOptions,
           space: spaceUri,
           label: "Listing secrets...",
-          operation: () => secrets.list(scopeOptions),
+          operation: () => secrets.list({ ...scopeOptions, source: "network" }),
         });
 
         if (!result.ok) {
@@ -1258,7 +1369,7 @@ export function registerSecretsCommand(
           ...(spaceUri ? { space: spaceUri } : {}),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1290,6 +1401,9 @@ export function registerSecretsCommand(
           );
           const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
           const delegatedCtx = { ...ctx, host: effectiveHost };
+          // Decide D4 before the node exists: the profile or an explicit key.
+          const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
+          const scope = resolveSecretPath(name, scopeOptions).scope;
           const node = await ensureSecretsNode(delegatedCtx, options);
           const value = await withSpinner(
             `Getting secret ${name}...`,
@@ -1301,6 +1415,8 @@ export function registerSecretsCommand(
               secretPath,
               space: legacySpaceUri ?? SECRETS_SPACE,
               name,
+              ...(scope === undefined ? {} : { scope }),
+              local,
             }),
           );
 
@@ -1363,7 +1479,7 @@ export function registerSecretsCommand(
         }
         outputWarnings(operationWarnings(result.warnings));
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1421,7 +1537,7 @@ export function registerSecretsCommand(
 
         outputJson({ name, written: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1457,7 +1573,7 @@ export function registerSecretsCommand(
 
         outputJson({ name, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -1494,21 +1610,170 @@ export function registerSecretsCommand(
           actions: result.delegation.actions,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
-  // tc secrets manage
+  // tc secrets request <names...>
   secrets
-    .command("manage")
-    .description("Open the TinyCloud Secrets Manager in your browser")
-    .action(async () => {
+    .command("request <name...>")
+    .description("Print a Secret Manager link asking the owner to add secrets (offline)")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--app <id>", "Derive the scope from an app id (instead of --scope)")
+    .option("--owner <did>", "Owner did:pkh when the profile does not record one")
+    .option("--requester <label>", "Who is asking, shown to the owner (default: user@host)")
+    .option("--open", "Also open the link in a browser")
+    .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY); a local key cannot request")
+    .action(async (names: string[], options, cmd) => {
       try {
-        const open = (await import("open")).default;
-        await open("https://secrets.tinycloud.xyz");
-        outputJson({ opened: "https://secrets.tinycloud.xyz" });
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const scope = requestedSecretScope(options);
+        const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+        if (effectiveLocal(profile, options)) {
+          throw new CLIError(
+            "LOCAL_OWNER_PROFILE",
+            `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with tc secrets put NAME --stdin instead of requesting them.`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
+        let link: SecretRequestLink;
+        try {
+          const requestedOwner = options.owner === undefined ? undefined : canonicalSecretRequestOwner(options.owner);
+          const resolution = resolveSecretsOwner({
+            local: false,
+            posture: resolveProfilePosture(profile ?? {}),
+            ...(profile?.ownerDid === undefined ? {} : { ownerDid: profile.ownerDid.split("#")[0] }),
+            ...(profile?.did === undefined ? {} : { principalDid: profile.did.split("#")[0] }),
+            ...(profile?.spaceId === undefined ? {} : { space: profile.spaceId }),
+          }, requestedOwner);
+          if (!resolution.ok) {
+            throw new CLIError(
+              resolution.code,
+              resolution.message,
+              resolution.code === "OWNER_MISMATCH" ? ExitCode.USAGE_ERROR : ExitCode.AUTH_REQUIRED,
+            );
+          }
+          const requester = options.requester ?? defaultRequester();
+          link = buildSecretRequestUrl({
+            owner: resolution.owner,
+            names,
+            ...(scope === undefined ? {} : { scope }),
+            ...(requester === undefined ? {} : { requester }),
+          });
+        } catch (error) {
+          throw secretRequestUsageError(error);
+        }
+        outputJson({ url: link.url, names: link.names, ...(link.scope === undefined ? {} : { scope: link.scope }), owner: link.owner });
+        if (options.open && !(await tryOpenBrowser(link.url))) warnBrowserNotOpened();
       } catch (error) {
-        handleError(error);
+        return handleError(error);
+      }
+    });
+
+  // tc secrets manage [names...]
+  secrets
+    .command("manage [name...]")
+    .description("Open the TinyCloud Secrets Manager, optionally at the named secrets")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--app <id>", "Derive the scope from an app id (instead of --scope)")
+    .option("--no-open", "Print the URL without opening a browser")
+    .action(async (names: string[], options) => {
+      try {
+        const scope = requestedSecretScope(options);
+        let url: string;
+        try {
+          url = buildSecretManagerUrl({ names, ...(scope === undefined ? {} : { scope }) });
+        } catch (error) {
+          throw secretRequestUsageError(error);
+        }
+        const opened = options.open === false ? false : await tryOpenBrowser(url);
+        outputJson({ url, opened });
+        if (options.open !== false && !opened) warnBrowserNotOpened();
+      } catch (error) {
+        return handleError(error);
+      }
+    });
+
+  // tc secrets wait <name...>: the parent holds no TinyCloud state and
+  // resolves no owner; each attempt is a `secrets probe` child (plan §2.4).
+  secrets
+    .command("wait <name...>")
+    .description("Wait until named secrets exist. Never signs in: needs a stored session, not TC_PRIVATE_KEY")
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--app <id>", "Derive the scope from an app id (instead of --scope)")
+    .option("--owner <did>", "Expected owner did:pkh, checked against the profile's live identity")
+    .option("--timeout <duration>", "0 (one attempt), Ns or Nm; at most 9m", DEFAULT_WAIT_TIMEOUT)
+    .action(async (names: string[], options, cmd) => {
+      const controller = new AbortController();
+      const cancel = (): void => controller.abort();
+      process.once("SIGINT", cancel);
+      process.once("SIGTERM", cancel);
+      try {
+        const timeoutMs = parseWaitTimeout(options.timeout);
+        const scope = requestedSecretScope(options);
+        let validNames: string[];
+        let owner: string | undefined;
+        try {
+          validNames = validSecretNames(names);
+          if (scope !== undefined && !isValidSecretRequestScope(scope)) {
+            throw new CLIError("INVALID_SECRET_SCOPE", `Invalid secret scope ${JSON.stringify(scope)}.`, ExitCode.USAGE_ERROR);
+          }
+          owner = options.owner === undefined ? undefined : canonicalSecretRequestOwner(options.owner);
+        } catch (error) {
+          throw secretRequestUsageError(error);
+        }
+        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+        const probe: ProbeRequest = {
+          profile: ctx.profile,
+          host: ctx.host,
+          names: validNames,
+          ...(scope === undefined ? {} : { scope }),
+          ...(owner === undefined ? {} : { owner }),
+        };
+        const result = await runSecretsWait(
+          { profile: ctx.profile, timeoutMs, consentHint: scopedSecretLoginHint(ctx.profile) },
+          {
+            now: Date.now,
+            sleep: abortableSleep,
+            runProbe: (signal) => runProbeChild(probe, { signal }),
+            signal: controller.signal,
+          },
+        );
+        outputJson(result.stdout);
+        outputWarnings(operationWarnings(result.warnings));
+        process.exitCode = result.exitCode;
+      } catch (error) {
+        return handleError(error);
+      } finally {
+        process.off("SIGINT", cancel);
+        process.off("SIGTERM", cancel);
+      }
+    });
+
+  // Internal: one `tinycloud.secrets.status` attempt for `secrets wait`. It
+  // prints the canonical envelope as one JSON line and writes no profile state.
+  secrets
+    .command("probe <name...>", { hidden: true })
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--owner <did>", "Requested owner did:pkh")
+    .action(async (names: string[], options, cmd) => {
+      try {
+        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+        const privateKey = process.env.TC_PRIVATE_KEY;
+        const result = await invokeOperation("tinycloud.secrets.status", 1, {
+          profile: ctx.profile,
+          host: ctx.host,
+          allowOwnerProfile: true,
+          ...(privateKey ? { privateKey } : {}),
+        }, {
+          names,
+          ...(options.scope === undefined ? {} : { scope: options.scope }),
+          ...(options.owner === undefined ? {} : { owner: options.owner }),
+        });
+        process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
+      } catch (error) {
+        return handleError(error);
       }
     });
 }

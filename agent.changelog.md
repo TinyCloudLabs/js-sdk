@@ -3,6 +3,15 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-11
+
+- TC-834: `tc secrets request` / `wait` / `manage`. CLI error JSON may carry `error.setup`,
+  `error.recovery` and `error.progress`; each is allowlisted and validated in
+  `packages/cli/src/output/errors.ts` (`safeCliRecovery` dispatches on `action`). Add new CLI fields
+  there, never by passing metadata through. New CLI test files must be listed in
+  `.github/workflows/operations-mcp.yml`. Docs call the CLI as `"$TC_BIN"` (absolute path) because
+  a bare `tc` can be iproute2's `/usr/sbin/tc`.
+
 ## 2026-10-05
 
 - Added `packages/replica` (`@tinycloud/replica`, TC-18) and `tc replica`. It must never import

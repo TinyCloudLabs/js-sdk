@@ -83,7 +83,7 @@ export function registerStatusCommand(program: Command): void {
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const config = await ProfileManager.getConfig();
         const names = (await ProfileManager.listProfiles()).sort((a, b) =>
           a.localeCompare(b),
@@ -119,7 +119,7 @@ export function registerStatusCommand(program: Command): void {
 
         process.stdout.write(formatStatus(summary));
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

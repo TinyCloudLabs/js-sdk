@@ -11,7 +11,7 @@ export function registerContextCommand(program: Command): void {
     .option("--space <name|uri>", "Resolve this space in the selected profile")
     .action(async (options, cmd: Command) => {
       try {
-        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals(), { storedSession: "unused" });
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
         const spaceId = await resolveSpaceUri(options.space, ctx.profile) ??
@@ -35,7 +35,7 @@ export function registerContextCommand(program: Command): void {
           access: "not-tested",
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

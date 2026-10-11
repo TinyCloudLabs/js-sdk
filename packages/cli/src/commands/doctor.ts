@@ -134,7 +134,7 @@ export function registerDoctorCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

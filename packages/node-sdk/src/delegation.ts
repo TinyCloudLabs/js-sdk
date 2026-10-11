@@ -194,6 +194,8 @@ export const RUNTIME_DELEGATION_REJECTIONS = [
   "resources_mismatch",
   "unsupported",
   "activation_rejected",
+  "activation_unavailable",
+  "activation_unauthenticated",
 ] as const;
 
 export type RuntimeDelegationRejection = typeof RUNTIME_DELEGATION_REJECTIONS[number];
@@ -206,6 +208,27 @@ export class RuntimeDelegationRejectedError extends Error {
     this.name = "RuntimeDelegationRejectedError";
     this.reason = reason;
   }
+}
+
+/**
+ * Classify an activation failure. Transport failures and transient host
+ * statuses (408, 429, 5xx) are `activation_unavailable`; a plain 401 is
+ * `activation_unauthenticated`; everything else stays `activation_rejected`.
+ */
+function activationRejectionReason(error: unknown): RuntimeDelegationRejection {
+  if (typeof error !== "object" || error === null) return "activation_rejected";
+  if ("code" in error && error.code === "ACTIVATION_TRANSPORT_FAILED") {
+    return "activation_unavailable";
+  }
+  const cause = "cause" in error ? error.cause : undefined;
+  const status =
+    typeof cause === "object" && cause !== null && "status" in cause
+      ? cause.status
+      : undefined;
+  if (typeof status !== "number") return "activation_rejected";
+  if (status === 408 || status === 429 || status >= 500) return "activation_unavailable";
+  if (status === 401) return "activation_unauthenticated";
+  return "activation_rejected";
 }
 
 function reject(reason: RuntimeDelegationRejection, message: string): never {
@@ -248,7 +271,7 @@ function didPrincipalsMatch(left: string, right: string): boolean {
   }
 }
 
-function compactUcanPayload(authorization: string): Record<string, unknown> {
+export function compactUcanPayload(authorization: string): Record<string, unknown> {
   const compact = authorizationWithoutBearer(authorization);
   const parts = compact.split(".");
   if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
@@ -269,6 +292,25 @@ function compactUcanPayload(authorization: string): Record<string, unknown> {
       "Validated runtime delegation authorization has an invalid compact UCAN payload.",
     );
   }
+}
+
+/**
+ * The expiry a compact UCAN authorization signs: its payload's `exp`. Reads
+ * the bytes the issuer's signature covers without verifying that signature,
+ * which the node does. `undefined` when `authorization` is not a compact UCAN
+ * or its payload has no finite numeric `exp`; then no local expiry decision
+ * can be made (activation refuses such a UCAN).
+ */
+export function signedCompactUcanExpiry(authorization: string): Date | undefined {
+  let payload: Record<string, unknown>;
+  try {
+    payload = compactUcanPayload(authorization);
+  } catch {
+    return undefined;
+  }
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return undefined;
+  const expiry = new Date(payload.exp * 1000);
+  return Number.isNaN(expiry.getTime()) ? undefined : expiry;
 }
 
 function canonicalPermissionEntries(
@@ -723,7 +765,10 @@ export async function activateValidatedRuntimeDelegation(
       await node.useRuntimeDelegation(installedCandidate);
     }
   } catch (error) {
-    reject("activation_rejected", error instanceof Error ? error.message : String(error));
+    reject(
+      activationRejectionReason(error),
+      error instanceof Error ? error.message : String(error),
+    );
   }
   const installed = node
     .getRuntimePermissionDelegations()

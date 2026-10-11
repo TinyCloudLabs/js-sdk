@@ -1,0 +1,80 @@
+name: Node SDK replication e2e
+
+on:
+  pull_request:
+    paths:
+      - "packages/node-sdk/**"
+      - "packages/sdk-services/src/kv/**"
+      - "packages/sdk-core/src/**"
+      - "packages/replica/**"
+      - "packages/sdk-rs/**"
+      - ".github/workflows/node-replication-e2e.yml"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:d7f511f
+
+jobs:
+  node-replication-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build node-sdk replication dependencies
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/replica build
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract the pinned TinyCloud node
+        run: |
+          docker pull "$TINYCLOUD_NODE_IMAGE"
+          container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
+          docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
+          docker rm "$container"
+          chmod +x "$RUNNER_TEMP/tinycloud"
+
+      - name: Run node-sdk replication e2e
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test --max-concurrency=1 packages/node-sdk/src/replication/replication.e2e.test.ts

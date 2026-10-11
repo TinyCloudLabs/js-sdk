@@ -14,6 +14,7 @@ import {
   SECRET_NAME_RE,
   type ResolvedSecretPath,
   type SecretScopeOptions,
+  type SecretPutOptions,
 } from "./paths";
 
 function invalidSecretInput(message: string): Result<never, ServiceError> {
@@ -67,7 +68,12 @@ export class SecretsService implements ISecretsService {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
-    const result = await this.vault.get<SecretPayload>(secretPath.vaultKey);
+    const result =
+      options?.source === undefined
+        ? await this.vault.get<SecretPayload>(secretPath.vaultKey)
+        : await this.vault.get<SecretPayload>(secretPath.vaultKey, {
+            source: options.source,
+          });
     if (!result.ok) {
       return result;
     }
@@ -77,17 +83,20 @@ export class SecretsService implements ISecretsService {
   async put(
     name: string,
     value: string,
-    options?: SecretScopeOptions,
+    options?: SecretPutOptions,
   ): Promise<Result<void, SecretsError>> {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
     const now = new Date().toISOString();
-    return this.vault.put(secretPath.vaultKey, {
+    const payload = {
       value,
       createdAt: now,
       updatedAt: now,
-    } satisfies SecretPayload);
+    } satisfies SecretPayload;
+    return options?.ifAbsent === true
+      ? this.vault.put(secretPath.vaultKey, payload, { ifNoneMatch: "*" })
+      : this.vault.put(secretPath.vaultKey, payload);
   }
 
   async delete(
@@ -116,6 +125,7 @@ export class SecretsService implements ISecretsService {
     const result = await this.vault.list({
       prefix,
       removePrefix: true,
+      ...(options?.source === undefined ? {} : { source: options.source }),
     });
     if (!result.ok) {
       return result;
@@ -138,6 +148,7 @@ export class SecretsService implements ISecretsService {
         prefix: "secrets/",
         removePrefix: true,
         limit: 1000,
+        source: "network",
         ...(cursor === undefined ? {} : { cursor }),
       });
       if (!result.ok) {

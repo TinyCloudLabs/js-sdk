@@ -69,7 +69,7 @@ export function registerProfileCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -113,7 +113,7 @@ export function registerProfileCommand(program: Command): void {
 
         outputJson({ profile: name, did, host, posture, operatorType, created: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -123,7 +123,7 @@ export function registerProfileCommand(program: Command): void {
     .action(async (name: string | undefined, _options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const profileName = name ?? ctx.profile;
 
         const p = await ProfileManager.getProfile(profileName);
@@ -157,7 +157,7 @@ export function registerProfileCommand(program: Command): void {
           process.stdout.write(formatField("Created", p.createdAt) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -175,7 +175,7 @@ export function registerProfileCommand(program: Command): void {
 
         outputJson({ defaultProfile: name, switched: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -201,7 +201,7 @@ Examples:
         const ctx = await ProfileManager.resolveContext({
           ...globalOpts,
           profile: options.profile ?? globalOpts.profile,
-        });
+        }, { storedSession: "unused" });
         const profileName = ctx.profile;
 
         if (!options.unset && (name === undefined || name === "")) {
@@ -224,7 +224,7 @@ Examples:
 
         outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -249,7 +249,7 @@ Examples:
         await ProfileManager.deleteProfile(name);
         outputJson({ profile: name, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

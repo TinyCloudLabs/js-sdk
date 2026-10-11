@@ -1,5 +1,5 @@
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-services";
+import { authorizationFailure } from "../kv-failure.js";
 import { z } from "zod";
 
 import type {
@@ -901,20 +901,6 @@ function projectKvMetadata(headers: {
 function caughtKvFailure(error: unknown, action: string): OperationExecutionOutcome<never> {
   if (error instanceof OperationInvocationError) return { status: "error", error: error.operationError };
   return authorizationFailure(error, action) ?? nodeFailure(action);
-}
-
-export function authorizationFailure(error: unknown, action: string): OperationExecutionOutcome<never> | undefined {
-  const verdict = authorizationVerdictOf(error);
-  if (verdict === "unauthenticated") {
-    if (validatedCapabilityOf(error) !== undefined) {
-      return { status: "error", error: operationError("PERMISSION_DENIED", `Permission is denied to ${action}.`) };
-    }
-    return { status: "error", error: operationError("AUTH_REQUIRED", `Authentication is required to ${action}.`) };
-  }
-  if (verdict === "forbidden") {
-    return { status: "error", error: operationError("PERMISSION_DENIED", `Permission is denied to ${action}.`) };
-  }
-  return undefined;
 }
 
 function accountRegistryOutput<T>(output: T): OperationExecutionOutcome<T> {

@@ -5,6 +5,9 @@ import {
   isPermissionRequestArtifact,
   type PermissionRequestArtifact,
 } from "@tinycloud/operations/artifacts";
+import type { OperationWarning } from "@tinycloud/operations/delegation-binding";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
@@ -210,6 +213,43 @@ export async function appendAdditionalDelegation(
 ): Promise<void> {
   await appendAdditionalDelegations(profile, [entry]);
 }
+/**
+ * Stores an imported delegation, restoring the previous store if its signed
+ * expiry passes while the atomic write is in progress.
+ */
+export async function appendAdditionalDelegationIfUnexpired(
+  profile: string,
+  entry: StoredAdditionalDelegation,
+  expiresAt: Date | undefined,
+): Promise<boolean> {
+  let accepted = true;
+  await withProfileLock(profile, async () => {
+    const before = await loadAdditionalDelegations(profile);
+    await appendAdditionalDelegation(profile, entry);
+    if (expiresAt !== undefined && expiresAt.getTime() <= Date.now()) {
+      await writeSharedRecords(profile, "additional-delegations", before);
+      accepted = false;
+    }
+  });
+  return accepted;
+}
+
+/** Remove every exact-CID row atomically, without rewriting a missing grant. */
+export async function removeStoredDelegations(profile: string, cid: string): Promise<number> {
+  return updateProfileStore<unknown, number>(profile, "additional-delegations", (records) => {
+    const remaining = records.filter((entry) => {
+      if (entry === null || typeof entry !== "object" || !("delegation" in entry)) return true;
+      const delegation = entry.delegation;
+      return delegation === null || typeof delegation !== "object" || !("cid" in delegation) ||
+        delegation.cid !== cid;
+    });
+    const removed = records.length - remaining.length;
+    if (removed === 0) {
+      throw new CLIError("GRANT_NOT_FOUND", `No stored grant with CID ${cid} exists for this profile.`, ExitCode.NOT_FOUND);
+    }
+    return { records: remaining, result: removed };
+  });
+}
 
 export async function loadPermissionRequestArtifacts(
   profile: string,
@@ -279,76 +319,24 @@ export async function getLastPermissionRequestArtifact(
 }
 
 /**
- * Reinstalls a profile's stored delegations on a fresh node. Compact-UCAN and
- * signed-login records follow the operations runtime's binding rule
- * (validated activation, and a request binding the signed capabilities fit
- * inside); `migrate` is true only when `node` holds the profile's own session,
- * so the one-time binding migration may run. Unbound signed-login records an
- * earlier release stored without a `siweProof` are installed as before; any
- * other record installs nothing.
+ * Replay a profile's stored grants through the same verified operations path
+ * as canonical calls. The caller supplies only the profile's restored session.
  */
 export async function replayAdditionalDelegations(
   node: TinyCloudNode,
   profile: string,
   options: { host: string; ownerSpace?: string; migrate: boolean },
-): Promise<void> {
+): Promise<readonly OperationWarning[]> {
   // Loaded on use, as in appendAdditionalDelegation.
-  const {
-    operationSpaceResolver,
-    prepareStoredDelegationReplay,
-    replayStoredDelegation,
-    storedDelegationKind,
-  } = await import("@tinycloud/operations/delegation-binding");
-  const activator = node as unknown as RuntimeDelegationActivator;
-  const migrated = await prepareStoredDelegationReplay(profile, activator, {
+  const { operationSpaceResolver, replayProfileDelegations } = await import(
+    "@tinycloud/operations/delegation-binding"
+  );
+  const { warnings } = await replayProfileDelegations(profile, node as unknown as RuntimeDelegationActivator, {
     host: options.host,
     migrate: options.migrate,
+    resolveSpace: operationSpaceResolver(node, options.ownerSpace),
   });
-  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
-  // Stored elements are untrusted: classify each before reading any field.
-  const entries: readonly unknown[] = await loadAdditionalDelegations(profile);
-  for (const stored of entries) {
-    const kind = storedDelegationKind(stored);
-    if (kind === "compact" || kind === "signed-login") {
-      const replay = await replayStoredDelegation(activator, stored, {
-        host: options.host,
-        migrated,
-        resolveSpace,
-      });
-      if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}\n`);
-      }
-      continue;
-    }
-    if (kind === "refused") {
-      if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write("[replay] skipping a malformed stored record or one bound to a request it cannot be held to\n");
-      }
-      continue;
-    }
-    // `other`: an object record with a delegation and a single string header.
-    const entry = stored as StoredAdditionalDelegation;
-    // Skip expired delegations rather than letting useRuntimeDelegation throw.
-    const expiry = entry.delegation.expiry instanceof Date
-      ? entry.delegation.expiry
-      : new Date(entry.delegation.expiry as unknown as string);
-    if (expiry.getTime() <= Date.now()) continue;
-    try {
-      // Only the one header `storedDelegationKind` read reaches the node.
-      await node.useRuntimeDelegation({
-        ...entry.delegation,
-        delegationHeader: { Authorization: entry.delegation.delegationHeader.Authorization },
-        expiry,
-      });
-    } catch (err) {
-      // A stored delegation can be invalid for several benign reasons (host
-      // unreachable, key rotated). Don't fail the whole CLI invocation —
-      // the user can re-run `tc auth request` to refresh the grant.
-      if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${(err as Error).message}\n`);
-      }
-    }
-  }
+  return warnings;
 }
 
 /**
@@ -521,6 +509,7 @@ export async function loadManifestPermissions(
           space: String(manifest.space ?? "applications"),
           path: resolvedPath,
           actions,
+          ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
         };
       });
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
@@ -572,23 +561,35 @@ async function secretPermissionsFromAppManifest(
 }
 
 /**
- * The owner's default secrets network. The owner is the profile's recorded
- * owner (or a local owner key's own did:pkh), else `--owner`. A key-only
- * profile's `did` is its session did:key, which owns no secrets network.
+ * The owner's default secrets network, for the owner `resolveSecretsOwner`
+ * picks: a local key's own account, the recorded owner, a delegate session's
+ * space owner, a pkh principal, then `--owner`. A key-only profile's `did` is
+ * its session did:key, which owns no secrets network.
  */
 async function defaultSecretsNetworkId(profileName: string, requestedOwner: string | undefined): Promise<string> {
   const profile = await ProfileManager.getProfile(profileName);
-  const ownDid = profile.did?.split("#")[0];
-  const recorded = profile.ownerDid ?? (ownDid?.startsWith("did:pkh:") ? ownDid : undefined);
-  const owner = (recorded ?? requestedOwner)?.split("#")[0];
-  if (!owner) {
-    throw new CLIError(
-      "OWNER_DID_UNKNOWN",
-      `Cannot determine the secrets owner for profile "${profileName}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
-      ExitCode.AUTH_REQUIRED,
-    );
+  const requested = requestedOwner === undefined ? undefined : canonicalOwnerDid(requestedOwner.split("#")[0]!);
+  const resolution = resolveSecretsOwner({
+    local: isLocalOwnerProfile(profile),
+    posture: resolveProfilePosture(profile),
+    ...(profile.ownerDid === undefined ? {} : { ownerDid: profile.ownerDid.split("#")[0] }),
+    ...(profile.did === undefined ? {} : { principalDid: profile.did.split("#")[0] }),
+    ...(profile.spaceId === undefined ? {} : { space: profile.spaceId }),
+  }, requested);
+  if (!resolution.ok) {
+    throw resolution.code === "OWNER_MISMATCH"
+      ? new CLIError(
+        "OWNER_MISMATCH",
+        `--owner does not match the secrets owner of profile "${profileName}". ${resolution.message}`,
+        ExitCode.USAGE_ERROR,
+      )
+      : new CLIError(
+        "OWNER_DID_UNKNOWN",
+        `Cannot determine the secrets owner for profile "${profileName}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
+        ExitCode.AUTH_REQUIRED,
+      );
   }
-  return `urn:tinycloud:encryption:${canonicalOwnerDid(owner, "Secrets owner")}:default`;
+  return `urn:tinycloud:encryption:${resolution.owner}:default`;
 }
 
 export function diffPermissions(

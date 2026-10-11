@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "3.1.0-beta.14",
+  "version": "3.2.0-beta.3",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -26,6 +26,16 @@
       "import": "./dist/kv/index.js",
       "require": "./dist/kv/index.cjs"
     },
+    "./kv/replication": {
+      "import": {
+        "types": "./dist/kv/replication/index.d.ts",
+        "default": "./dist/kv/replication/index.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/index.d.cts",
+        "default": "./dist/kv/replication/index.cjs"
+      }
+    },
     "./sql": {
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js",
@@ -42,6 +52,13 @@
       "require": "./dist/internal/decrypt-transport-response-error.cjs"
     }
   },
+  "typesVersions": {
+    "*": {
+      "kv/replication": [
+        "dist/kv/replication/index.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist"
   ],
@@ -51,12 +68,12 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@tinycloud/bootstrap": "2.8.0-beta.1",
+    "@tinycloud/bootstrap": "2.8.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@tinycloud/node-sdk-wasm": "1.7.7-beta.0",
+    "@tinycloud/node-sdk-wasm": "1.7.7",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },

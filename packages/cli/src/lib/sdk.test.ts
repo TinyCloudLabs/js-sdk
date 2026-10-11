@@ -45,6 +45,7 @@ const nodeCalls: { privateKey?: string; signedIn: boolean }[] = [];
 // Record restoreSession args (specifically the jwk handed to the WASM signer)
 // so tests can assert the public-only-session-jwk fallback to key.json works.
 const restoreCalls: Array<{ jwk: unknown }> = [];
+const replayCalls: Array<{ profile: string; migrate: boolean }> = [];
 
 mock.module("@tinycloud/node-sdk", () => ({
   TinyCloudNode: class {
@@ -60,20 +61,24 @@ mock.module("@tinycloud/node-sdk", () => ({
       restoreCalls.push({ jwk: args.jwk });
     }
   },
+  sqliteReplicaStorage() {
+    throw new Error("replication storage is not used in these non-replication SDK tests");
+  },
+  signedCompactUcanExpiry: () => undefined,
 }));
 
-// sdk.js -> permissions.js -> sdk-core/manifest.js pulls in the published
-// @tinycloud/sdk-services dist, whose build is currently broken on import.
-// Stub the one symbol the resolver needs (replayAdditionalDelegations) so the
-// gate under test imports cleanly without that chain. Other CLI test files
-// already mock ../lib/permissions.js the same way.
+// This file exercises the local SDK session path, not additional-delegation
+// replay; keep that separate dependency outside the test boundary.
 mock.module("./permissions.js", () => ({
-  replayAdditionalDelegations: async () => {},
+  replayAdditionalDelegations: async (_node: unknown, name: string, options: { migrate: boolean }) => {
+    replayCalls.push({ profile: name, migrate: options.migrate });
+    return [];
+  },
 }));
 
-const { bootstrapDelegatedSession, ensureAuthenticated, jwkHasPrivateParameter, selectSignerJwk } = await import("./sdk.js");
+const { bootstrapDelegatedSession, ensureAuthenticated, jwkHasPrivateParameter, selectSignerJwk, restoreProfileSessionNode } = await import("./sdk.js");
 
-const ctx = { profile: "tc-sdk-test-headless", host: "https://node.tinycloud.xyz", verbose: false, noCache: false, quiet: false };
+const ctx = { profile: "tc-sdk-test-headless", host: "https://node.tinycloud.xyz", verbose: false, noCache: false, quiet: false, replication: false, replicationDebug: false };
 const HEX_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 
 beforeEach(() => {
@@ -82,6 +87,7 @@ beforeEach(() => {
   key = null;
   nodeCalls.length = 0;
   restoreCalls.length = 0;
+  replayCalls.length = 0;
   savedSessions.length = 0;
   savedProfiles.length = 0;
   delete process.env.TC_PRIVATE_KEY;
@@ -183,6 +189,46 @@ describe("ensureAuthenticated headless private-key identity", () => {
     // The provided key, not the profile's stored key, builds the node.
     expect(nodeCalls.some((c) => c.privateKey === HEX_KEY)).toBe(true);
     expect(nodeCalls.some((c) => c.privateKey === "0xother")).toBe(false);
+  });
+});
+
+describe("stored grant replay session gate", () => {
+  const fullKey = { kty: "OKP", crv: "Ed25519", x: "public", d: "private" };
+  const storedSession = {
+    delegationHeader: { Authorization: "Bearer signed" },
+    delegationCid: "bafy-session",
+    spaceId: "tinycloud:space",
+    verificationMethod: "did:key:zSession",
+    jwk: fullKey,
+  };
+
+  test("restored own session replays, but explicit private key does not", async () => {
+    profile = { authMethod: "openkey", spaceId: "tinycloud:space", did: "did:key:zSession" };
+    session = storedSession;
+    key = fullKey;
+    await ensureAuthenticated(ctx);
+    expect(replayCalls).toEqual([{ profile: ctx.profile, migrate: true }]);
+    replayCalls.length = 0;
+    await ensureAuthenticated(ctx, { privateKey: HEX_KEY });
+    expect(replayCalls).toEqual([]);
+  });
+
+  test("a local fresh sign-in without a persisted session does not replay", async () => {
+    profile = { authMethod: "local", privateKey: HEX_KEY, spaceId: "tinycloud:space" };
+    key = fullKey;
+    await ensureAuthenticated(ctx);
+    expect(replayCalls).toEqual([]);
+  });
+
+  test("session inspection restores without replay or network sign-in", async () => {
+    profile = { authMethod: "openkey", spaceId: "tinycloud:space", did: "did:key:zSession" };
+    session = storedSession;
+    key = fullKey;
+    const result = await restoreProfileSessionNode(ctx);
+    expect(result).toHaveProperty("node");
+    expect(restoreCalls).toHaveLength(1);
+    expect(replayCalls).toEqual([]);
+    expect(nodeCalls[0]?.signedIn).toBe(false);
   });
 });
 

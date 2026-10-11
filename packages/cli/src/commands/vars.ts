@@ -65,7 +65,7 @@ export function registerVarsCommand(program: Command): void {
           count: keyList.length,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -123,7 +123,7 @@ export function registerVarsCommand(program: Command): void {
 
         outputJson({ name, value });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -174,7 +174,7 @@ export function registerVarsCommand(program: Command): void {
 
         outputJson({ name, written: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -199,7 +199,7 @@ export function registerVarsCommand(program: Command): void {
 
         outputJson({ name, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

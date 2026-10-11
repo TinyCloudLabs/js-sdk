@@ -371,7 +371,7 @@ export function registerShareCommand(program: Command): void {
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
         if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(notification === undefined ? {} : { notification }) });
         else publishHuman(result);
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) { return handleError(shareCliError(error)); }
     });
 
   share.command("inspect [url]")
@@ -386,7 +386,7 @@ export function registerShareCommand(program: Command): void {
         if (json) writeJson(result);
         else inspectHuman(result);
       } catch (error) {
-        handleError(shareCliError(error));
+        return handleError(shareCliError(error));
       }
     });
 
@@ -435,7 +435,7 @@ export function registerShareCommand(program: Command): void {
         const output = await writeShareOutput(options.output ?? ".", result.metadata.display.filename ?? "share.md", result.bytes, options.force === true);
         if (json) receiveJson(result, output);
         else receiveHuman(output);
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) { return handleError(shareCliError(error)); }
     });
 
   share.command("list")
@@ -448,7 +448,7 @@ export function registerShareCommand(program: Command): void {
         const result = await listShares(shareServices.records);
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, shares: result });
         else process.stdout.write(result.map((item) => `${item.shareId}\t${item.target}\t${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) { return handleError(shareCliError(error)); }
     });
 
   share.command("show <id>")
@@ -462,7 +462,7 @@ export function registerShareCommand(program: Command): void {
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
         const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : undefined });
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, share: result }); else writeJson(result);
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) { return handleError(shareCliError(error)); }
     });
 
   share.command("notify <id>")
@@ -490,7 +490,7 @@ export function registerShareCommand(program: Command): void {
         if (json) writeJson(result); else process.stdout.write(`${result.state}\n`);
         if (result.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         if (result.state === "partial-failure") process.exitCode = 9;
-      } catch (error) { handleError(shareCliError(error, "notify")); }
+      } catch (error) { return handleError(shareCliError(error, "notify")); }
     });
 
   share.command("revoke <id>")
@@ -508,6 +508,6 @@ export function registerShareCommand(program: Command): void {
           throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
         }
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, result }); else process.stdout.write(`${result.state}\n`);
-      } catch (error) { handleError(shareCliError(error)); }
+      } catch (error) { return handleError(shareCliError(error)); }
     });
 }

@@ -15,7 +15,7 @@ export function registerEnableCommand(program: Command): void {
     .action(async (options, command) => {
       try {
         const globalOptions = command.optsWithGlobals();
-        const context = await ProfileManager.resolveContext(globalOptions);
+        const context = await ProfileManager.resolveContext(globalOptions, { storedSession: "unused" });
         const { profile, result } = await loginWithDeviceAuthorization({
           profileName: context.profile,
           nodeOrigin: context.host,
@@ -40,7 +40,7 @@ export function registerEnableCommand(program: Command): void {
           ? `Share enabled for profile ${context.profile}.`
           : `Share enabled for profile ${context.profile} with ${result.declined.length} capability group(s) declined; publishing may fail.`);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

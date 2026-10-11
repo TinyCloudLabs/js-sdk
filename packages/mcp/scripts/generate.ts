@@ -2,6 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { bindingSurfaces, TOOL_BINDINGS } from "../src/tools.js";
+
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = resolve(scriptDirectory, "..");
 const operationsCatalogPath = resolve(packageDirectory, "../operations/generated/operations.json");
@@ -31,23 +33,12 @@ interface CoverageEntry {
   readonly remainingLegacyInputs?: readonly string[];
 }
 
-const TOOL_NAMES: Record<string, string> = {
-  "tinycloud.status.get": "tinycloud_status",
-  "tinycloud.auth.status": "tinycloud_auth_status",
-  "tinycloud.auth.capabilities": "tinycloud_auth_capabilities",
-  "tinycloud.auth.request": "tinycloud_auth_request",
-  "tinycloud.auth.import": "tinycloud_auth_import",
-  "tinycloud.account.spaces.list": "tinycloud_account_spaces_list",
-  "tinycloud.account.applications.list": "tinycloud_account_applications_list",
-  "tinycloud.kv.list": "tinycloud_kv_list",
-  "tinycloud.kv.get": "tinycloud_kv_get",
-  "tinycloud.kv.head": "tinycloud_kv_head",
-  "tinycloud.kv.put": "tinycloud_kv_put",
-  "tinycloud.kv.delete": "tinycloud_kv_delete",
-  "tinycloud.sql.schema.inspect": "tinycloud_sql_schema_inspect",
-  "tinycloud.sql.query": "tinycloud_sql_query",
-  "tinycloud.sql.execute": "tinycloud_sql_execute",
-  "tinycloud.secrets.get": "tinycloud_secrets_get",
+// Tool names and surfaces come from the code-owned binding table.
+const bindingsByOperation = new Map(TOOL_BINDINGS.map((binding) => [binding.operationId, binding]));
+const toolName = (operationId: string): string => bindingsByOperation.get(operationId)?.name ?? operationId;
+const toolSurfaces = (operationId: string): readonly string[] => {
+  const binding = bindingsByOperation.get(operationId);
+  return binding === undefined ? [] : bindingSurfaces(binding);
 };
 
 const catalog = JSON.parse(await readFile(operationsCatalogPath, "utf8")) as OperationsCatalog;
@@ -58,7 +49,8 @@ const operations = [...catalog.operations].sort((left, right) =>
 const facts = {
   schemaVersion: 1,
   tools: operations.map((operation) => ({
-    name: TOOL_NAMES[operation.id] ?? operation.id,
+    name: toolName(operation.id),
+    surfaces: toolSurfaces(operation.id),
     operationId: operation.id,
     operationVersion: operation.version,
     effects: operation.effects,
@@ -72,7 +64,7 @@ const generatedBlock = [
   "The following facts are generated from `@tinycloud/operations/operations.json`:",
   "",
   ...operations.map((operation) =>
-    `- \`${TOOL_NAMES[operation.id] ?? operation.id}\` -> \`${operation.id}@${operation.version}\`; effects: ${operation.effects.join(", ")}; postures: ${operation.postures.join(", ")}; sensitive output: ${operation.sensitivity.output ? "yes" : "no"}.`,
+    `- \`${toolName(operation.id)}\` -> \`${operation.id}@${operation.version}\`; surfaces: ${toolSurfaces(operation.id).join(", ") || "none"}; effects: ${operation.effects.join(", ")}; postures: ${operation.postures.join(", ")}; sensitive output: ${operation.sensitivity.output ? "yes" : "no"}.`,
   ),
   "<!-- END GENERATED TINYCloud operation facts -->",
 ].join("\n");
