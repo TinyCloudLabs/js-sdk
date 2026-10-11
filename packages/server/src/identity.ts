@@ -85,8 +85,8 @@ export async function createServerIdentity(
 // Message heuristics, for untyped errors only.
 //
 // 1. Double-quoted strings and standalone single-quoted names are dropped
-//    (escape-aware). Apostrophes inside words are not quote delimiters, so
-//    they cannot hide a later diagnostic status.
+//    (escape-aware). Apostrophes next to Unicode letters, numbers, combining
+//    marks, or underscores are word characters, not quote delimiters.
 // 2. The first number in 400-599 in one of the SDK's diagnostic positions is
 //    the status:
 //      - `: NNN` followed by whitespace or the end — KV `…key "k": 403 - text`,
@@ -97,7 +97,7 @@ export async function createServerIdentity(
 //    Only a 401 refreshes, so a real 502 or 403 is never overridden by a `401`
 //    later in its body.
 // 3. With no status, session wording on the unstripped message decides.
-const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"|(?<!\w)'(?:[^'\\]|\\.|'(?=\w))*'(?!\w)/g;
+const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"|(?<![\p{L}\p{N}\p{M}_])'(?:[^'\\]|\\.|'(?=[\p{L}\p{N}\p{M}_]))*'(?![\p{L}\p{N}\p{M}_])/gu;
 const DIAGNOSTIC_STATUS_PATTERN =
   /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 const SESSION_ERROR_PATTERN =
