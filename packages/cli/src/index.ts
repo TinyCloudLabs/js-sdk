@@ -1,3 +1,4 @@
+import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
@@ -12,6 +13,7 @@ import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./outp
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
+import { loadCourierEntry } from "./lib/courier-loader.js";
 
 const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
@@ -90,33 +92,30 @@ configureShareCommandServices({
 });
 
 const argv = process.argv.slice(2);
-const globalOptionsWithValues = new Set(["--profile", "-p", "--host", "-H"]);
+// Mirrors Commander's parsing of tc's global options: clustered shorts (-vp p, -vpp),
+// attached values (-Hurl, --host=url), separate values and `--`.
+const globalLongOptionsWithValues: Record<string, true> = { "--profile": true, "--host": true };
+const globalShortOptionsWithValues: Record<string, true> = { p: true, H: true };
 function firstCommandToken(values: readonly string[]): string | undefined {
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index]!;
     if (value === "--") return values[index + 1];
-    if (globalOptionsWithValues.has(value)) { index += 1; continue; }
-    if (value.startsWith("--profile=") || value.startsWith("--host=")) continue;
-    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json" ||
-        value === "--replication" || value === "--no-replication" || value === "--replication-debug") continue;
-    if (value.startsWith("-")) continue;
+    if (value.startsWith("--")) {
+      if (globalLongOptionsWithValues[value]) index += 1;
+      continue;
+    }
+    if (value.length > 1 && value.startsWith("-")) {
+      for (let char = 1; char < value.length; char += 1) {
+        if (!globalShortOptionsWithValues[value[char]!]) continue;
+        if (char === value.length - 1) index += 1; // value is the next argument
+        break; // otherwise the rest of this argument is the value
+      }
+      continue;
+    }
     return value;
   }
   return undefined;
 }
-const isShareInvocation = firstCommandToken(argv) === "share";
-if (isShareInvocation) {
-  // Keep the agent-critical surface independent from the legacy command
-  // graph. The latter imports optional Node/WASM authentication packages;
-  // inspecting or receiving a public Share link must not load them.
-  registerShareCommand(program);
-} else {
-  type LegacyEntry = typeof import("./legacy-entry.js");
-  const loadLegacy = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<LegacyEntry>;
-  const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
-  registerTinyCloudCommands(program);
-}
-
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}\n`);
 
 program.addHelpText("afterAll", () => {
@@ -137,18 +136,41 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 `;
 });
 
-try {
-  await program.parseAsync(process.argv);
-  if (await closeReplication()) {
-    process.exitCode = 0;
-    const stdoutFlushed = Promise.withResolvers<void>();
-    process.stdout.write("", () => stdoutFlushed.resolve());
-    await stdoutFlushed.promise;
-    const stderrFlushed = Promise.withResolvers<void>();
-    process.stderr.write("", () => stderrFlushed.resolve());
-    await stderrFlushed.promise;
-    process.exit();
+const commandToken = firstCommandToken(argv);
+if (argv[0] === "courier") {
+  // Courier owns its argv (including --host and --json) and its own profile,
+  // so Commander, the banner and the tc profile guard never see it.
+  const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  if (code !== 0) process.exit(code);
+} else if (commandToken === "courier") {
+  process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}\n`);
+  process.exit(2);
+} else {
+  if (commandToken === "share") {
+    // Keep the agent-critical surface independent from the legacy command
+    // graph. The latter imports optional Node/WASM authentication packages;
+    // inspecting or receiving a public Share link must not load them.
+    registerShareCommand(program);
+  } else {
+    type LegacyEntry = typeof import("./legacy-entry.js");
+    const loadLegacy = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<LegacyEntry>;
+    const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
+    registerTinyCloudCommands(program);
   }
-} catch (error) {
-  await handleError(error);
+
+  try {
+    await program.parseAsync(process.argv);
+    if (await closeReplication()) {
+      process.exitCode = 0;
+      const stdoutFlushed = Promise.withResolvers<void>();
+      process.stdout.write("", () => stdoutFlushed.resolve());
+      await stdoutFlushed.promise;
+      const stderrFlushed = Promise.withResolvers<void>();
+      process.stderr.write("", () => stderrFlushed.resolve());
+      await stderrFlushed.promise;
+      process.exit();
+    }
+  } catch (error) {
+    await handleError(error);
+  }
 }

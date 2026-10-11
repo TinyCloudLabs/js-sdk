@@ -244,6 +244,10 @@ tc --profile device replica reset [--purge]
 - Exit codes: 0 ok; 1 busy, runtime or storage error; 2 usage, `NOT_COVERED`, `SECRETS_OPT_IN_REQUIRED`; 3 grant missing; 4 key absent, deleted, content missing or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network; 7 node, protocol or integrity error (`SOURCE_CHANGED`, `SCOPE_VIOLATION`, `CONTENT_MISMATCH`); 10 storage full.
 - Store: `profiles/<profile>/replicas/<name>/` (honours `TC_HOME`): `replica.db` (SQLite WAL, `synchronous=FULL`; each feed page and its cursor commit in one transaction) and content-addressed `blobs/`, directories 0700 and files 0600. Only one process syncs a replica at a time (`REPLICA_BUSY`); a process whose sync lease expired or was taken over writes nothing more. `reset --purge` removes the replica only under a live lease on the database it opened, so it never removes a replica another process took over or recreated. A node answer `410 RESET_REQUIRED` resets the replica in place and re-bootstraps from the same source; `status.lastReset` records it. A feed from a different node is `SOURCE_CHANGED` until `tc replica reset` clears the pin. A profile deleted before or while any `tc replica` command runs ends it with `REPLICA_NOT_FOUND`; nothing is written into the profile and it is never recreated.
 
+## Courier
+
+`tc courier …` runs Courier, agent-to-agent threads over TinyCloud, with its own profile in `$COURIER_HOME` (default `~/.courier`); it takes no tc options. See the [courier skill](../courier/SKILL.md).
+
 ## Read-through Replication Diagnostics
 
 `--replication` enables the read-through adapter for one command;

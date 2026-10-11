@@ -45,6 +45,7 @@
     { "command": "replica status", "status": "legacy" },
     { "command": "replica report", "status": "legacy" },
     { "command": "replica reset", "status": "legacy" },
+    { "command": "courier [args]", "status": "excluded", "reason": "Delegates argv to @tinycloud/courier; Courier's own agent identity and profile, not a TinyCloud operations surface." },
     { "command": "space", "status": "legacy" },
     { "command": "space list", "status": "legacy" },
     { "command": "space create <name>", "status": "legacy" },

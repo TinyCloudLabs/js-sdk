@@ -26,7 +26,8 @@
     "check:generated": "bun scripts/generate-reference.ts --check",
     "check:coverage": "bun scripts/check-coverage.ts",
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
-    "check:skill-pack": "node scripts/check-skill-pack.mjs"
+    "check:skill-pack": "node scripts/check-skill-pack.mjs",
+    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier"
   },
   "dependencies": {
     "@tinycloud/share-sdk": "1.1.0",
@@ -42,6 +43,7 @@
     "siwe": "^3.0.0"
   },
   "devDependencies": {
+    "@tinycloud/courier": "0.0.0",
     "@tinycloud/replica": "0.1.1-beta.1",
     "@types/node": "^20",
     "tsup": "^8.0.0",

@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/legacy-entry.ts"],
+  entry: ["src/index.ts", "src/legacy-entry.ts", "src/courier-entry.ts"],
   format: ["esm"],
   target: "node20",
   dts: true,
@@ -13,5 +13,6 @@ export default defineConfig({
   external: ["siwe"],
   // The replica engine and store ship inside the CLI; SQLite itself is the
   // runtime's built-in module, loaded on demand by `tc replica`.
-  noExternal: ["@tinycloud/share-sdk", "@tinycloud/share-envelope", "@tinycloud/replica"],
+  // Courier ships inside the CLI as `tc courier`, in its own lazy entry.
+  noExternal: ["@tinycloud/share-sdk", "@tinycloud/share-envelope", "@tinycloud/replica", "@tinycloud/courier"],
 });
