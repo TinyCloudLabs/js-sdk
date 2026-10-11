@@ -1,4 +1,4 @@
-import { assertFolderPrefix, kvPrefixCovers } from "@tinycloud/replica";
+import { assertFolderPrefix as assertPureFolderPrefix, kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 
 /** Constructor-time validation; the space-dependent secrets check runs at sign-in and open. */
@@ -14,7 +14,7 @@ export function assertValidReplicationConfig(
   }
   for (const prefix of replication.prefixes) {
     try {
-      assertFolderPrefix(prefix);
+      assertPureFolderPrefix(prefix);
     } catch (error) {
       throw new TypeError(error instanceof Error ? error.message : String(error));
     }

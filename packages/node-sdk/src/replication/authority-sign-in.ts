@@ -5,8 +5,8 @@ import {
   type ReplicationOptions,
 } from "@tinycloud/sdk-core";
 import { requiresSecretsOptIn } from "@tinycloud/sdk-services";
+import { assertFolderPrefix } from "@tinycloud/sdk-services/kv/replication/prefix";
 
-import { assertFolderPrefix } from "@tinycloud/replica";
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";

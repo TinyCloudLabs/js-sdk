@@ -1,15 +1,12 @@
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import type { AuthorityState, AuthorityWindow, GrantRecord, LocalReadPolicy } from "./types.js";
+import { assertFolderPrefix as assertPureFolderPrefix, kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
 
 /** Replication prefixes are the whole space (`/`) or a slash-terminated folder. */
 export function assertFolderPrefix(prefix: unknown): asserts prefix is string {
-  const validFolder = typeof prefix === "string" &&
-    prefix.length > 0 &&
-    prefix !== "/" &&
-    !prefix.startsWith("/") &&
-    !prefix.includes("//") &&
-    prefix.endsWith("/");
-  if (prefix !== "/" && !validFolder) {
+  try {
+    assertPureFolderPrefix(prefix);
+  } catch {
     const folderHint = typeof prefix === "string"
       ? prefix.replace(/^\/+/, "").replace(/\/+$/, "")
       : "";
@@ -24,8 +21,7 @@ export function assertFolderPrefix(prefix: unknown): asserts prefix is string {
   }
 }
 
-
-export { kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication";
+export { kvPrefixCovers };
 /** Capability containment: exact grants cover exact keys; slash grants cover descendants. */
 export function authorityPathCovers(grantPath: string, requestedPath: string): boolean {
   if (grantPath === "/") return true;

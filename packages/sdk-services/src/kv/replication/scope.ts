@@ -1,7 +1,4 @@
-/** Folder containment: `/` contains the whole space; other prefixes are folders. */
-export function kvPrefixCovers(prefix: string, key: string): boolean {
-  return prefix === "/" || key.startsWith(prefix);
-}
+export { kvPrefixCovers } from "./prefix";
 
 /** LIST returns its exact path plus descendants below its slash-terminated path. */
 export function listRangeCovers(path: string, key: string): boolean {
