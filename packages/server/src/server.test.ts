@@ -315,6 +315,12 @@ describe("@tinycloud/server sharing session refresh", () => {
     ["André's request failed: 403 - 'session expired'", false],
     ["André's request failed: 401 - 'request refused'", true],
     ["José's request failed: 502 - 'session expired'", false],
+    ["𠀀's request failed: 403 - 'x'", false],
+    ["𝟏's request failed: 401 - 'x'", true],
+    ["Failed to put key 'HTTP 401'𠀀: 403 - Forbidden", true],
+    ["Failed to put key 'HTTP 401'𝟏: 403 - Forbidden", true],
+    ["😀'HTTP 401': 403 - Forbidden", false],
+    ['Failed to put key "bad\\\n "HTTP 401": 403 - Forbidden', false],
     ["Failed to read the node's info: HTTP 401 - didn't accept", true],
     ["Couldn't reach node: HTTP 401 - the server's gateway refused", true],
     ["it's HTTP 401 isn't it", true],
@@ -340,16 +346,34 @@ describe("@tinycloud/server sharing session refresh", () => {
     expect(await refreshed(new Error(`${"x".repeat(2048)} HTTP 401 - Forbidden`))).toBe(true);
   });
 
-  test("linear quoted-name scanner matches the prior pattern on 20,000 seeded strings", () => {
-    const alphabet = ["'", '"', "\\", "a", "é", "1", " ", ":", "_", "東", "\u0301"];
+  test("linear quoted-name scanner matches the prior pattern on 50,000 seeded strings", () => {
+    const alphabet = [
+      "'", '"', "\\", "a", "é", "1", " ", ":", "_", "東", "\u0301",
+      "\n", "\r", "\u2028", "\u2029", "𠀀", "𝟏", "😀",
+    ];
+    // Bun's /u lookbehind sees a low surrogate before a quote where Node sees
+    // the whole astral code point. Compare the literal regex only elsewhere.
+    const astralBesideQuote = /(?:[\uD800-\uDBFF][\uDC00-\uDFFF]['"]|['"][\uD800-\uDBFF][\uDC00-\uDFFF])/;
     let state = 0xc0ffee;
     const next = () => (state = (Math.imul(state, 1664525) + 1013904223) | 0) >>> 0;
-    for (let sample = 0; sample < 20_000; sample += 1) {
+    for (let sample = 0; sample < 50_000; sample += 1) {
       const length = next() % 25;
       let input = "";
       for (let i = 0; i < length; i += 1) input += alphabet[next() % alphabet.length]!;
+      if (astralBesideQuote.test(input)) continue;
       expect(stripQuotedNames(input)).toBe(input.replace(REFERENCE_PATTERN, '""'));
     }
+  });
+
+  test("astral quote boundaries follow code-point semantics", () => {
+    expect(stripQuotedNames("𠀀's request failed: 403 - 'x'")).toBe('𠀀\'s request failed: 403 - ""');
+    expect(stripQuotedNames("Failed to put key 'HTTP 401'𝟏: 403 - Forbidden"))
+      .toBe("Failed to put key 'HTTP 401'𝟏: 403 - Forbidden");
+  });
+
+  test("an escaped newline blocks one quote but allows a later quoted name", () => {
+    const message = 'Failed to put key "bad\\\n "HTTP 401": 403 - Forbidden';
+    expect(stripQuotedNames(message)).toBe(message.replace(REFERENCE_PATTERN, '""'));
   });
 
   test.each([
@@ -361,6 +385,14 @@ describe("@tinycloud/server sharing session refresh", () => {
     ["paren apostrophes", "('a'a"],
   ] as const)("quote scanning stays under 500 ms on 64 KiB of %s", (_name, unit) => {
     const message = unit.repeat(Math.ceil(64 * 1024 / unit.length)).slice(0, 64 * 1024);
+    const start = performance.now();
+    isTinyCloudSessionError(new Error(message));
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
+  test("quote scanning stays under 500 ms on 64 KiB apostrophes ending in an escaped newline", () => {
+    const prefixLength = 64 * 1024 - 2;
+    const message = " 'a".repeat(Math.ceil(prefixLength / 3)).slice(0, prefixLength) + "\\\n";
     const start = performance.now();
     isTinyCloudSessionError(new Error(message));
     expect(performance.now() - start).toBeLessThan(500);

@@ -105,27 +105,50 @@ export function stripQuotedNames(message: string): string {
   let literalStart = 0;
   let noDoubleClose = false;
   let noSingleClose = false;
+  let blockedUntilDouble = -1;
+  let blockedUntilSingle = -1;
   for (let i = 0; i < message.length; i += 1) {
     const quote = message[i];
     const double = quote === '"';
     if (!double && quote !== "'") continue;
-    if (double ? noDoubleClose : noSingleClose) continue;
-    if (!double && i > 0 && NAME_CHARACTER_PATTERN.test(message[i - 1]!)) continue;
+    if (double ? noDoubleClose || i < blockedUntilDouble : noSingleClose || i < blockedUntilSingle) continue;
+    if (!double && i > 0) {
+      const previousCodeUnit = message.charCodeAt(i - 1);
+      const previous = previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff &&
+        i > 1 && message.charCodeAt(i - 2) >= 0xd800 && message.charCodeAt(i - 2) <= 0xdbff
+        ? message.slice(i - 2, i)
+        : message[i - 1]!;
+      if (NAME_CHARACTER_PATTERN.test(previous)) continue;
+    }
 
     let end = i + 1;
+    let blockedByLineBreak = false;
     while (end < message.length) {
       if (message[end] === "\\") {
+        const next = message[end + 1];
+        if (next === "\n" || next === "\r" || next === "\u2028" || next === "\u2029") {
+          blockedByLineBreak = true;
+          break;
+        }
         end += 2;
       } else if (message[end] === quote &&
-        (double || end + 1 === message.length || !NAME_CHARACTER_PATTERN.test(message[end + 1]!))) {
+        (double || end + 1 === message.length ||
+          !NAME_CHARACTER_PATTERN.test(String.fromCodePoint(message.codePointAt(end + 1)!)))) {
         break;
       } else {
         end += 1;
       }
     }
+    if (blockedByLineBreak) {
+      // `\\.` cannot consume a line terminator without /s. Earlier starts
+      // hit this slash too; starts after it may still close.
+      if (double) blockedUntilDouble = end;
+      else blockedUntilSingle = end;
+      continue;
+    }
     if (end >= message.length) {
-      // Later openings of this type see the same suffix and escape pairing,
-      // so none can close either.
+      // Escape pairing in the remaining suffix is unchanged for later starts,
+      // so none of this quote type can close after a full scan to the end.
       if (double) noDoubleClose = true;
       else noSingleClose = true;
       if (noDoubleClose && noSingleClose) break;
