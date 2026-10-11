@@ -178,6 +178,12 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
   test("covers the 12 Phase 1 CLI acceptance steps", async () => {
     // 1. The local-key sign-in recap must request get+sync for the configured prefix.
+    const bareLogin = await tc(["auth", "login", "--method", "local", "--replication-prefix", "notes"], { profile: "bare-login" });
+    expect(bareLogin.code).toBe(2);
+    expect(bareLogin.stderr).toContain("notes/");
+    const bareReplica = await tc(["replica", "sync", "--prefix", "notes"], { profile: "bare-replica" });
+    expect(bareReplica.code).toBe(2);
+    expect(bareReplica.stderr).toContain("notes/");
     await ok(["init", "--name", "owner", "--key-only"]);
     const login = await ok<{ spaceId: string }>(["auth", "login", "--method", "local", "--replication-prefix", "notes/", "--replication-prefix", "variables/"]);
     space = login.spaceId;
@@ -515,10 +521,10 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       app_id: "tc858-caveated-scope",
       space: "default",
       permissions: [
-        { service: "tinycloud.kv", path: "notes", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+        { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
       ],
     }));
-    const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes"], { profile: "caveated-scope" });
+    const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes/"], { profile: "caveated-scope" });
     expect(caveatedLogin.code).toBe(2);
     expect(caveatedLogin.stderr).toContain("REPLICATION_PREFIX_CAVEATED");
     expect((JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "caveated-scope", "profile.json"), "utf8")) as { replication?: unknown }).replication).toBeUndefined();

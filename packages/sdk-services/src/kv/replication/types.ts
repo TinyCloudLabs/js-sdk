@@ -336,7 +336,7 @@ export interface ReplicationControl {
 
 export interface ReplicationOptions {
   enabled: boolean;
-  /** Non-empty primary-space prefixes; none empty or overlapping. Prefer no trailing slash. */
+  /** Non-empty list of primary-space prefixes; each is a folder path ending in `/` or root `""`. */
   prefixes: string[];
   /** Required for prefixes/spaces where requiresSecretsOptIn returns true. */
   allowSecrets?: boolean;

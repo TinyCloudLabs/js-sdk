@@ -178,7 +178,7 @@ function harness(options: {
     fetch: async () => new Response("not used"),
   });
   context.setSession(session);
-  const runtime = (prefixes = options.prefixes ?? ["notes"]) => new ReplicationRuntime({
+  const runtime = (prefixes = options.prefixes ?? ["notes/"]) => new ReplicationRuntime({
     enabled: true,
     prefixes,
     storage,
@@ -211,7 +211,7 @@ describe("node replication integration", () => {
       setTimeout(fn, ms) { interval = fn; scheduledDelay = ms; return () => { if (interval === fn) interval = undefined; }; },
     };
     const env = harness({
-      prefixes: ["notes"],
+      prefixes: ["notes/"],
       mode: "background",
       scheduler: clock,
       initialGrant: () => ({ cid: "bafy-installed", parentCid: "bafy-parent", expiresAt: expiringAt, state: "active", unconstrained: true }),
@@ -220,9 +220,9 @@ describe("node replication integration", () => {
     const runtime = env.runtime();
     runtime.bind({ context: new ServiceContext({ invoke: async () => ({} as never), hosts: [identity.host], fetch: async () => new Response() }), session, address, chainId: 1, authority: env.authority, primaryKV: [] });
     const status = await runtime.control.status();
-    expect(status.map((entry) => entry.prefix)).toEqual(["notes"]);
+    expect(status.map((entry) => entry.prefix)).toEqual(["notes/"]);
     await runtime.control.sync();
-    expect(env.syncs).toContain("notes");
+    expect(env.syncs).toContain("notes/");
     const beforeInterval = env.syncs.length;
     expect(scheduledDelay).toBeGreaterThan(0);
     const intervalSync = env.nextSync();
@@ -234,18 +234,18 @@ describe("node replication integration", () => {
     expect(env.syncs.length).toBeGreaterThan(beforeInterval);
     const purging = runtime.control.purge();
     expect(interval).toBeUndefined();
-    expect(await purging).toEqual({ purged: ["notes"], failed: [] });
-    expect(env.purges).toEqual(["notes"]);
+    expect(await purging).toEqual({ purged: ["notes/"], failed: [] });
+    expect(env.purges).toEqual(["notes/"]);
     await runtime.control.close();
   });
 
   test("partial authority opens only covered prefixes and preserves pending state on re-sign-in", async () => {
     const env = harness({
-      prefixes: ["notes", "photos"],
-      sessionGrant: (prefix) => prefix === "notes"
+      prefixes: ["notes/", "photos/"],
+      sessionGrant: (prefix) => prefix === "notes/"
         ? { ucan: "session-grant", device: { did: "did:key:zSession", jwk: {} } }
         : { refused: "NOT_COVERED" },
-      plan: (prefix) => prefix === "notes"
+      plan: (prefix) => prefix === "notes/"
         ? { path: "session", parentCid: "bafy-parent", expiresAt: expiringAt }
         : { refused: "NOT_COVERED" },
     });
@@ -267,11 +267,11 @@ describe("node replication integration", () => {
       });
     });
     const status = await runtime.control.status();
-    expect(status.map((entry) => entry.prefix)).toEqual(["notes", "photos"]);
+    expect(status.map((entry) => entry.prefix)).toEqual(["notes/", "photos/"]);
     await runtime.control.sync().catch(() => undefined);
-    expect(env.events.some((event) => event.type === "replication.state" && event.replica === "notes" && event.state === "grant_installed")).toBe(true);
-    expect(env.events.some((event) => event.type === "replication.state" && event.replica === "photos" && event.state === "grant_missing")).toBe(true);
-    expect(env.opened).toContain("notes");
+    expect(env.events.some((event) => event.type === "replication.state" && event.replica === "notes/" && event.state === "grant_installed")).toBe(true);
+    expect(env.events.some((event) => event.type === "replication.state" && event.replica === "photos/" && event.state === "grant_missing")).toBe(true);
+    expect(env.opened).toContain("notes/");
     runtime.bind({
       context: new ServiceContext({ invoke: async () => ({} as never), hosts: [identity.host], fetch: async () => new Response() }),
       session: { ...session, delegationCid: "bafy-replacement" },
@@ -298,7 +298,7 @@ describe("node replication integration", () => {
     runtime.bind({ context: new ServiceContext({ invoke: async () => ({} as never), hosts: [identity.host], fetch: async () => new Response() }), session, address, chainId: 1, authority: env.authority, primaryKV: [] });
     const status = await runtime.control.status();
     await runtime.control.sync();
-    expect(env.events.some((event) => event.type === "replication.state" && event.replica === "notes" && event.state === "grant_installed")).toBe(true);
+    expect(env.events.some((event) => event.type === "replication.state" && event.replica === "notes/" && event.state === "grant_installed")).toBe(true);
     expect(env.counts().mintCalls).toBe(1);
     await runtime.control.close();
   });
@@ -665,8 +665,8 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await rm(replicaDir, { recursive: true, force: true });
     }
   }, 120_000);
-  test("bare selector installs its complete grant and serves exact and descendant keys locally", async () => {
-    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-bare-selector-"));
+  test("folder replica serves descendants locally and falls back for its ancestor LIST", async () => {
+    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-folder-prefix-"));
     const events: ReplicationEvent[] = [];
     const node = new TinyCloudNode({
       host,
@@ -678,7 +678,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       enablePublicSpace: false,
       replication: {
         enabled: true,
-        prefixes: ["notes"],
+        prefixes: ["notes/"],
         storage: createSqliteReplicaStorage({ dir: replicaDir }),
         mode: "foreground",
         onEvent: (event) => events.push(event),
@@ -686,26 +686,29 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     });
     try {
       await node.signIn();
-      const exactWrite = await node.kv.put("notes", "exact");
-      expect(exactWrite.ok, JSON.stringify(exactWrite.ok ? undefined : exactWrite.error)).toBe(true);
-      expect((await node.kv.put("notes/a", "descendant")).ok).toBe(true);
+      const write = await node.kv.put("notes/a", "descendant");
+      expect(write.ok, JSON.stringify(write.ok ? undefined : write.error)).toBe(true);
       await node.replication!.sync();
       expect(await node.replication!.status()).toMatchObject([
-        { prefix: "notes", state: "ready", coverage: "complete", grant: { unconstrained: true } },
+        { prefix: "notes/", state: "ready", coverage: "complete", grant: { unconstrained: true } },
       ]);
 
-      const serviceContext = (node as unknown as { _serviceContext: ServiceContext })._serviceContext;
-      (serviceContext as unknown as { _fetch: typeof fetch })._fetch = async () => {
+      const ancestorList = await node.kv.withPrefix("notes").list();
+      expect(ancestorList.ok).toBe(true);
+      expect(ancestorList.ok && ancestorList.data.keys).toContain("a");
+      expect(events.some((event) => event.type === "replication.read" && event.key === "notes" && event.source === "network")).toBe(true);
+
+      const service = node as unknown as { _serviceContext: ServiceContext };
+      const serviceContext = service._serviceContext;
+      const fetchContext = serviceContext as unknown as { _fetch: typeof fetch };
+      fetchContext._fetch = async () => {
         throw Object.assign(new Error("network unavailable"), { code: "NETWORK_ERROR" });
       };
-      expect((await node.kv.get("notes")).data?.data).toBe("exact");
       expect((await node.kv.get("notes/a")).data?.data).toBe("descendant");
-      for (const key of ["notes", "notes/a"]) {
-        expect(events.some((event) =>
-          event.type === "replication.read" && event.key === key &&
-          event.source === "replica" && event.reason === "hit"
-        )).toBe(true);
-      }
+      expect(events.some((event) =>
+        event.type === "replication.read" && event.key === "notes/a" &&
+        event.source === "replica" && event.reason === "hit"
+      )).toBe(true);
     } finally {
       await node.replication?.close();
       await rm(replicaDir, { recursive: true, force: true });

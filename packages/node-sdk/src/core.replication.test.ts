@@ -22,7 +22,7 @@ test("/core enables replication when browser-safe controller loaders are registe
   let runtimeLoads = 0;
   class InjectedRuntime {
     readonly control = {
-      status: async () => [{ prefix: "notes" }],
+      status: async () => [{ prefix: "notes/" }],
       sync: async () => {},
       purge: async () => ({ purged: [], failed: [] }),
       clearPending: async () => 0,
@@ -46,10 +46,9 @@ test("/core enables replication when browser-safe controller loaders are registe
     }),
   } as never;
   const node = new TinyCloudNode({
-    wasmBindings,
-    replication: { enabled: true, prefixes: ["notes"], storage },
+    replication: { enabled: true, prefixes: ["notes/"], storage },
   } satisfies TinyCloudNodeConfig);
 
-  expect(await node.replication?.status()).toEqual([{ prefix: "notes" }]);
+  expect(await node.replication?.status()).toEqual([{ prefix: "notes/" }]);
   expect(runtimeLoads).toBe(1);
 });

@@ -1,8 +1,6 @@
-/** Published replica selector semantics: exact key plus descendants by segment. */
+/** Folder containment: the root contains all paths; other prefixes end in `/`. */
 export function kvPrefixCovers(prefix: string, key: string): boolean {
-  if (prefix === "") return true;
-  if (prefix.endsWith("/")) return key.startsWith(prefix);
-  return key === prefix || key.startsWith(`${prefix}/`);
+  return prefix === "" || key.startsWith(prefix);
 }
 
 /** LIST returns its exact path plus descendants below its slash-terminated path. */

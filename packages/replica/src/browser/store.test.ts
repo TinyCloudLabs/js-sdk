@@ -436,6 +436,22 @@ describe("client lifecycle", () => {
       expect(spawned).toBe(0);
     }
   });
+  test("open() rejects bare prefixes before spawning a worker", async () => {
+    let spawned = 0;
+    const promise = openReplica({
+      host: "http://127.0.0.1:1",
+      space: SPACE,
+      prefix: "notes",
+      principal: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      worker: () => {
+        spawned += 1;
+        return stubWorker().worker;
+      },
+    });
+    const error = await rejectsWith(promise, ReplicaErrorCode.INVALID_ARGUMENT);
+    expect(error.message).toContain("notes/");
+    expect(spawned).toBe(0);
+  });
 
   test("openReplica() terminates the worker when open() fails", async () => {
     // A failed open must not leak a live Worker the caller cannot reach:

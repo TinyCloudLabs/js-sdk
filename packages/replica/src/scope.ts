@@ -1,27 +1,23 @@
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import type { AuthorityState, AuthorityWindow, GrantRecord, LocalReadPolicy } from "./types.js";
 
-/**
- * Published replica selector semantics: whole path segments, byte-exact.
- * Bare `notes` selects `notes` and descendants but not `notesX`; `notes/`
- * selects descendants only.
- */
-export function kvPrefixCovers(prefix: string, key: string): boolean {
-  if (prefix === "") return true;
-  if (prefix.endsWith("/")) return key.startsWith(prefix);
-  return key === prefix || key.startsWith(`${prefix}/`);
+/** Replication prefixes name folders: the root or a trailing-slash path. */
+export function assertFolderPrefix(prefix: unknown): asserts prefix is string {
+  if (typeof prefix !== "string" || (prefix !== "" && !prefix.endsWith("/"))) {
+    const suggestion = typeof prefix === "string" ? `${prefix}/` : "a folder path ending in /";
+    throw new ReplicaError(
+      ReplicaErrorCode.INVALID_ARGUMENT,
+      `Replication prefix ${JSON.stringify(prefix)} must name a folder; use ${JSON.stringify(suggestion)}. Run \`tc replica reset --replica <name> --purge\` and recreate it with the folder prefix.`,
+    );
+  }
 }
 
-/** Capability containment: a bare grant is exact; `/` grants descendants. */
+export { kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication";
+/** Capability containment: exact grants cover exact keys; slash grants cover descendants. */
 export function authorityPathCovers(grantPath: string, requestedPath: string): boolean {
   if (grantPath === "" || grantPath === "/") return true;
   if (grantPath.endsWith("/")) return requestedPath.startsWith(grantPath);
   return requestedPath === grantPath;
-}
-/** Whether a selector contains both the LIST key and its descendants. */
-export function selectorCoversListRange(selector: string, path: string): boolean {
-  const descendants = path.endsWith("/") ? path : `${path}/`;
-  return kvPrefixCovers(selector, path) && kvPrefixCovers(selector, descendants);
 }
 
 /**

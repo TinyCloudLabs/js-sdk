@@ -3,7 +3,7 @@ export type { ReadMeta, ReplicaListEntry, ReplicaListResult, ReplicaOptions, Rep
 export { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
 export { assertGrantInstallable, grantCovers, parseUcanGrant, syncGrantSpaces, ucanCid } from "./grant.js";
 export type { ParsedUcanGrant } from "./grant.js";
-export { assertReadable, effectiveAuthority, hashFromEtag, kvPrefixCovers, requiresSecretsOptIn } from "./scope.js";
+export { assertFolderPrefix, assertReadable, effectiveAuthority, hashFromEtag, kvPrefixCovers, requiresSecretsOptIn } from "./scope.js";
 export type { EffectiveAuthority } from "./scope.js";
 export { kvSyncTransport, replicaErrorFromService } from "./transport.js";
 export type { KVSyncClient } from "./transport.js";

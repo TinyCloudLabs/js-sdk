@@ -12,7 +12,7 @@ describe("CLI replication configuration", () => {
   test("enables verification when TC_REPLICATION_VERIFY=1", () => {
     process.env.TC_REPLICATION_VERIFY = "1";
 
-    const config = createCliReplicationConfig("replication-config-test", { prefixes: ["test"] }, { debug: false, quiet: true }, true);
+    const config = createCliReplicationConfig("replication-config-test", { prefixes: ["test/"] }, { debug: false, quiet: true }, true);
 
     expect(config?.verify).toBe(true);
   });

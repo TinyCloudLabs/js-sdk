@@ -6,13 +6,10 @@ const meta = { asOf: new Date(1_000_000).toISOString(), coverage: "complete" as 
 const handle = { async list({ prefix, after, limit }: { prefix: string; after?: string; limit?: number }) { const keys = allKeys.filter((key) => key.startsWith(prefix) && (after === undefined || utf8Compare(key, after) > 0)).sort(utf8Compare); return { keys: limit === undefined ? keys : keys.slice(0, limit), meta }; } };
 
 describe("local list parity", () => {
-  test("replica selectors preserve published segment-aware behavior", () => {
-    expect(listPathCovered(["notes"], "notes")).toBe("notes");
-    expect(listPathCovered(["notes"], "notes/")).toBe("notes");
-    expect(listPathCovered(["notes"], "notes/a")).toBe("notes");
-    expect(listPathCovered(["notes"], "notesX")).toBeUndefined();
-    expect(listPathCovered(["notes/"], "notes")).toBeUndefined();
+  test("folder prefixes cover list paths by containment", () => {
+    expect(listPathCovered(["notes/"], "notes/")).toBe("notes/");
     expect(listPathCovered(["notes/"], "notes/a")).toBe("notes/");
+    expect(listPathCovered(["notes/"], "notesX")).toBeUndefined();
     expect(listPathCovered([""], "anything/deep")).toBe("");
   });
 

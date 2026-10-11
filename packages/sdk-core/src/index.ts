@@ -1025,7 +1025,6 @@ export {
   type SubsetCheckResult,
   type WasmRecapEntry,
 } from "./capabilities";
-export { grantPathsForSelector } from "./replication/selector";
 
 // Default lifetimes for delegation flows. See `expiry.ts` for the
 // "pick a tier, not a number" rationale.

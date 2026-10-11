@@ -16,6 +16,7 @@ import {
 } from "@tinycloud/operations/state";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
 import {
+  assertFolderPrefix,
   Replica,
   ReplicaError,
   ReplicaErrorCode,
@@ -487,6 +488,13 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
+        if (options.prefix !== undefined) {
+          try {
+            assertFolderPrefix(options.prefix);
+          } catch (error) {
+            throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+          }
+        }
         const globals = cmd.optsWithGlobals() as { host?: string };
         const config = await ProfileManager.getProfile(profile);
         const deviceDid = config.sessionDid ?? config.did;
@@ -524,7 +532,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           }
         } else {
           const prefix: string | undefined = options.prefix;
-          if (prefix === undefined || prefix === "") {
+          if (prefix === undefined) {
             throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
           }
           const space = resolveSpace(options.space, prefix, grants);

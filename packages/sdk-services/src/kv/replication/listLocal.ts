@@ -53,7 +53,5 @@ async function awaitExact(handle: { list(o: { prefix: string; after?: string; li
 }
 
 export function listPathCovered(prefixes: readonly string[], path: string): string | undefined {
-  const descendant = path.endsWith("/") ? path : `${path}/`;
-  const covering = prefixes.filter((prefix) => kvPrefixCovers(prefix, path) && kvPrefixCovers(prefix, descendant));
-  return covering.length === 1 ? covering[0] : undefined;
+  return prefixes.find((prefix) => prefix === "" || path.startsWith(prefix));
 }

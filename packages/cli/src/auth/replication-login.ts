@@ -1,5 +1,5 @@
-import { grantPathsForSelector, isCapabilitySubset, type PermissionEntry } from "@tinycloud/sdk-core";
-import { requiresSecretsOptIn } from "@tinycloud/replica";
+import { isCapabilitySubset, type PermissionEntry } from "@tinycloud/sdk-core";
+import { assertFolderPrefix, requiresSecretsOptIn } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ownerLoginPermissions } from "./owner-key.js";
@@ -22,6 +22,11 @@ export function addReplicationLoginEntries(
 ): PermissionEntry[] {
   const result = [...request];
   for (const prefix of options.prefixes) {
+    try {
+      assertFolderPrefix(prefix);
+    } catch (error) {
+      throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+    }
     if (requiresSecretsOptIn(primarySpace, prefix) && options.allowSecrets !== true) {
       throw new CLIError("SECRETS_OPT_IN_REQUIRED", `Replication prefix ${JSON.stringify(prefix)} in ${primarySpace} requires --replication-allow-secrets.`, ExitCode.USAGE_ERROR);
     }
@@ -31,7 +36,6 @@ export function addReplicationLoginEntries(
       path: prefix,
       actions: ["tinycloud.kv/get"],
     };
-    const required = grantPathsForSelector(prefix).map((path) => ({ ...requested, path }));
     const matching = request.filter((entry) =>
       sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid),
     );
@@ -39,7 +43,7 @@ export function addReplicationLoginEntries(
       const { caveats: _caveats, ...grant } = entry;
       return { ...grant, space: primarySpace };
     });
-    if (!isCapabilitySubset(required, authority).subset) {
+    if (!isCapabilitySubset([requested], authority).subset) {
       const caveatedAtRequestedPath = matching.filter((entry) => !unconstrained(entry.caveats)).map((entry) => {
         const { caveats: _caveats, ...grant } = entry;
         return { ...grant, space: primarySpace };
@@ -53,16 +57,14 @@ export function addReplicationLoginEntries(
       const { caveats: _caveats, ...grant } = entry;
       return { ...grant, space: primarySpace };
     });
-    if (!isCapabilitySubset(required, unrestricted).subset) {
+    if (!isCapabilitySubset([requested], unrestricted).subset) {
       throw new CLIError("REPLICATION_PREFIX_CAVEATED", `Replication prefix ${JSON.stringify(prefix)} is covered only by caveated get authority.`, ExitCode.USAGE_ERROR);
     }
     const service = "tinycloud.kv";
     const actions = [`${service}/get`, `${service}/sync`];
-    for (const path of grantPathsForSelector(prefix)) {
-      const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === path &&
-        actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
-      if (!existing) result.push({ service, space: primarySpace, path, actions });
-    }
+    const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === prefix &&
+      actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
+    if (!existing) result.push({ service, space: primarySpace, path: prefix, actions });
   }
   return result;
 }

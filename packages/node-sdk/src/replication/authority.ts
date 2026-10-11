@@ -14,7 +14,6 @@
  */
 
 import {
-  grantPathsForSelector,
   actionContains,
   KV,
   canonicalizeRecapCaveats,
@@ -39,14 +38,14 @@ const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";
 
-/** The delegation the replication grant delegates: get + sync on one prefix of the session space. */
+/** The delegation the replication grant delegates: get + sync on one folder prefix. */
 function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] {
-  return grantPathsForSelector(prefix).map((path) => ({
+  return [{
     service: KV_SERVICE,
     space: spaceId,
-    path,
+    path: prefix,
     actions: [KV_GET, KV_SYNC],
-  }));
+  }];
 }
 
 
@@ -82,9 +81,8 @@ function kvPathInResource(resource: string, space: string): string | undefined {
 }
 
 /**
- * Whether the signed `att` grants `ability` over the selected namespace, with
- * each grant unrestricted (no caveats). A bare selector requires both its
- * exact key and its slash descendants; a trailing-slash selector is one range.
+ * Whether the signed `att` grants `ability` over the folder prefix, with
+ * unrestricted authority unless explicitly asked to ignore caveats.
  */
 export function ucanAttCovers(
   att: Record<string, Record<string, unknown>>,
@@ -93,22 +91,19 @@ export function ucanAttCovers(
   ability: string,
   options?: { ignoreCaveats?: boolean },
 ): boolean {
-  const requiredPaths = prefix.endsWith("/") ? [prefix] : [prefix, `${prefix}/`];
-  return requiredPaths.every((requestedPath) => {
-    for (const [resource, abilities] of Object.entries(att)) {
-      const path = kvPathInResource(resource, space);
-      if (path === undefined) continue;
-      for (const [granted, caveats] of Object.entries(abilities)) {
-        if (!actionContains(granted, ability)) continue;
-        if (!isCapabilitySubset(
-          [{ service: KV_SERVICE, space, path: requestedPath, actions: [ability] }],
-          [{ service: KV_SERVICE, space, path, actions: [granted] }],
-        ).subset) continue;
-        if (options?.ignoreCaveats === true || caveatBranchesUnconstrained(caveats)) return true;
-      }
+  for (const [resource, abilities] of Object.entries(att)) {
+    const path = kvPathInResource(resource, space);
+    if (path === undefined) continue;
+    for (const [granted, caveats] of Object.entries(abilities)) {
+      if (!actionContains(granted, ability)) continue;
+      if (!isCapabilitySubset(
+        [{ service: KV_SERVICE, space, path: prefix, actions: [ability] }],
+        [{ service: KV_SERVICE, space, path, actions: [granted] }],
+      ).subset) continue;
+      if (options?.ignoreCaveats === true || caveatBranchesUnconstrained(caveats)) return true;
     }
-    return false;
-  });
+  }
+  return false;
 }
 
 /** `unconstrained` for `ReplicaGrantInfo` (§2.1): get AND sync on the prefix carry no caveats. */
