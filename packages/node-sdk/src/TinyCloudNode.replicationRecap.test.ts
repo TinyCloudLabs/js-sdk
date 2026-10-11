@@ -11,6 +11,7 @@ import type { ComposedManifestRequest, WasmRecapEntry } from "@tinycloud/sdk-cor
 
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
+import "./replication/node-loader";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 
@@ -64,6 +65,28 @@ afterEach(() => {
 });
 
 describe("signed recap probes (review: real WASM)", () => {
+  test("owner recap merges one root sync ability into its existing KV root resource", async () => {
+    const wasm = new NodeWasmBindings();
+    const node = new TinyCloudNode({
+      wasmBindings: wasm,
+      signer: new PrivateKeySigner(PRIVATE_KEY),
+      tinycloudHosts: ["https://tinycloud.test"],
+      sessionStorage: new MemorySessionStorage(),
+      replication: {
+        enabled: true,
+        storage: {} as never,
+        prefixes: ["notes/", "photos/"],
+      },
+    });
+    const recap = await signedRecap(node, wasm);
+    const root = kvEntriesAt(recap, "");
+    expect(root).toHaveLength(1);
+    expect(root[0]!.actions).toEqual(
+      expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
+    );
+    expect(kvEntriesAt(recap, "notes/")).toEqual([]);
+    expect(kvEntriesAt(recap, "photos/")).toEqual([]);
+  });
   test("secrets-primary: allowSecrets + prefix notes signs NO notes get/sync", async () => {
     // The effective secrets-primary request is `get` on `vault/secrets/`
     // only. Under the bug, coverage was measured against defaultActions'

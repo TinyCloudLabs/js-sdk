@@ -142,9 +142,9 @@ describe("hasUnrestrictedGetCoverage (§4.1 gate)", () => {
 describe("augmentSignInEntriesWithReplication (§4.1)", () => {
   const replication = { prefixes: ["notes/", "other/"] };
 
-  test("folder prefixes emit one get+sync entry each", () => {
+  test("narrow get coverage keeps one least-privilege entry per configured prefix", () => {
     const out = augmentSignInEntriesWithReplication({
-      entries: [kvEntry({ path: "" })],
+      entries: [kvEntry({ path: "notes/" }), kvEntry({ path: "other/" })],
       primarySpaceId: SPACE,
       replication,
     });
@@ -152,11 +152,22 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
       { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
       { service: "tinycloud.kv", space: SPACE, path: "other/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
+  });
+
+  test("whole-space owner get coverage adds sync once at the root", () => {
+    const out = augmentSignInEntriesWithReplication({
+      entries: [kvEntry({ path: "" })],
+      primarySpaceId: SPACE,
+      replication,
+    });
+    expect(out).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
     expect(augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
       replication: { prefixes: ["notes/", "/"], allowSecrets: true },
-    }).map((entry) => entry.path)).toEqual(["notes/", ""]);
+    }).map((entry) => entry.path)).toEqual([""]);
   });
 
 
@@ -181,7 +192,7 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
       primarySpaceId: SPACE,
       replication: { prefixes: ["vault/keys/"], allowSecrets: true },
     });
-    expect(opted.map((entry) => entry.path)).toEqual(["vault/keys/"]);
+    expect(opted.map((entry) => entry.path)).toEqual([""]);
   });
 
   test("undefined replication config yields no entries", () => {

@@ -534,7 +534,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
 
     const entries = node.replicationSignInEntries();
     expect(entries).toEqual([
-      { service: "tinycloud.kv", space: SPACE_ID, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE_ID, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
     // Parity (§4.6): the abilities handed to prepareSession carry the same
     // sync entry the restore check will require.
@@ -542,7 +542,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       string,
       { kv?: Record<string, string[]> }
     >;
-    expect(spaceAbilities[SPACE_ID]?.kv?.["notes/"]).toEqual(
+    expect(spaceAbilities[SPACE_ID]?.kv?.[""]).toEqual(
       expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
     );
   });
@@ -619,7 +619,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     (gated.auth as NodeUserAuthorization).setRestoredTinyCloudSession(fakeSession());
     // defaultActions grants an unrestricted root get; only the opt-in gate stands.
     const entries = gated.replicationSignInEntries();
-    expect(entries.map((entry) => entry.path).sort()).toEqual(["vault/keys/"]);
+    expect(entries.map((entry) => entry.path).sort()).toEqual([""]);
     expect(entries.every((entry) => entry.space === SPACE_ID)).toBe(true);
     expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
   });
@@ -641,7 +641,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       );
       const entries = node.replicationSignInEntries();
       expect(entries).toEqual([
-        { service: "tinycloud.kv", space: accountSpaceId, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+        { service: "tinycloud.kv", space: accountSpaceId, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
       ]);
       expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
     }

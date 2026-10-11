@@ -30,6 +30,7 @@ export function augmentSignInEntriesWithReplication(input: {
   const out: PermissionEntry[] = [];
   const replication = input.replication;
   if (replication === undefined) return out;
+  const eligiblePaths: string[] = [];
   for (const prefix of replication.prefixes) {
     assertFolderPrefix(prefix);
     const path = prefix === "/" ? "" : prefix;
@@ -42,6 +43,21 @@ export function augmentSignInEntriesWithReplication(input: {
     if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, path)) {
       continue;
     }
+    eligiblePaths.push(path);
+  }
+  if (
+    eligiblePaths.length === replication.prefixes.length &&
+    eligiblePaths.length > 0 &&
+    hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, "")
+  ) {
+    return [{
+      service: KV_SERVICE,
+      space: input.primarySpaceId,
+      path: "",
+      actions: [KV_GET, KV_SYNC],
+    }];
+  }
+  for (const path of eligiblePaths) {
     out.push({
       service: KV_SERVICE,
       space: input.primarySpaceId,
