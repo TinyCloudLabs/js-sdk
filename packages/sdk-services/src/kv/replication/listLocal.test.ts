@@ -17,7 +17,7 @@ describe("local list parity", () => {
     expect(listPathCovered(["/"], "notes")).toBe("/");
     expect(listPathCovered(["/"], "")).toBe("/");
     const page = await localList(handle, "space", "", undefined, undefined, () => {});
-    expect(page.keys).toEqual(allKeys);
+    expect(page.keys).toEqual([...allKeys].sort(utf8Compare));
   });
   test("exact key and children advance strictly through tcr1 pages", async () => {
     const validateMeta = (value: typeof meta) => { if (value.coverage !== "complete" || value.authority !== "valid") throw new Error("ineligible local read"); };
