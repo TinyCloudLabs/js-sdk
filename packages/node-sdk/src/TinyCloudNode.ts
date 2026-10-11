@@ -2564,9 +2564,18 @@ export class TinyCloudNode {
         await this.withAccountRegistryRetry(async () => {
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.currentTinyCloudSession() !== session) return;
-          await registry.account.index.ensure();
+          let indexFailure: unknown;
+          try {
+            const index = await registry.account.index.ensure();
+            if (!index.ok) indexFailure = index.error;
+          } catch (error) {
+            indexFailure = error;
+          }
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.currentTinyCloudSession() !== session) return;
+          if (indexFailure !== undefined) {
+            console.warn("TinyCloud account index initialization failed; continuing registry sync", indexFailure);
+          }
 
           await this.writeManifestRegistryRecords(registry.account, controller.signal);
           if (controller.signal.aborted) throw controller.signal.reason;
