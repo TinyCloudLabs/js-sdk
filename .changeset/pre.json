@@ -30,6 +30,10 @@
   "changesets": [
     "tc-672-stored-grant-replay",
     "tc-673-auth-grants",
-    "tc-674-imported-session-expiry"
+    "tc-674-imported-session-expiry",
+    "tc-834-cli-secrets-request",
+    "tc-834-mcp-secrets-status",
+    "tc-834-operations-secret-request",
+    "tc-834-sdk-secret-put-if-absent"
   ]
 }
