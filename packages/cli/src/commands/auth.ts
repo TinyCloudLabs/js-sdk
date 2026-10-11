@@ -87,6 +87,7 @@ import { normalizePkhIdentifier } from "../lib/space.js";
 import {
   appendLocalGrantArtifact,
   appendAdditionalDelegation,
+  appendAdditionalDelegationIfUnexpired,
   appendAdditionalDelegations,
   appendPermissionRequestArtifact,
   createPermissionRequestArtifact,
@@ -670,11 +671,18 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           permissions = record.permissions;
           activated = true;
         } else {
-          // Cross-user imports still persist for wallet-mode use (TC-656).
-          await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
+          const record = storedAdditionalDelegation(
             imported.delegation,
             imported.permissions,
-          ));
+          );
+          if (!targetsSessionKey && kind === "compact") {
+            const signedExpiry = signedCompactUcanExpiry(imported.delegation.delegationHeader.Authorization);
+            if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record, signedExpiry)) {
+              throw delegationExpiredError();
+            }
+          } else {
+            await appendAdditionalDelegation(ctx.profile, record);
+          }
         }
         await appendGrantHistory(ctx.profile, {
           addedCaps: permissions,

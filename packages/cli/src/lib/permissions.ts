@@ -211,6 +211,26 @@ export async function appendAdditionalDelegation(
 ): Promise<void> {
   await appendAdditionalDelegations(profile, [entry]);
 }
+/**
+ * Stores an imported delegation, restoring the previous store if its signed
+ * expiry passes while the atomic write is in progress.
+ */
+export async function appendAdditionalDelegationIfUnexpired(
+  profile: string,
+  entry: StoredAdditionalDelegation,
+  expiresAt: Date | undefined,
+): Promise<boolean> {
+  let accepted = true;
+  await withProfileLock(profile, async () => {
+    const before = await loadAdditionalDelegations(profile);
+    await appendAdditionalDelegation(profile, entry);
+    if (expiresAt !== undefined && expiresAt.getTime() <= Date.now()) {
+      await writeSharedRecords(profile, "additional-delegations", before);
+      accepted = false;
+    }
+  });
+  return accepted;
+}
 
 /** Remove every exact-CID row atomically, without rewriting a missing grant. */
 export async function removeStoredDelegations(profile: string, cid: string): Promise<number> {

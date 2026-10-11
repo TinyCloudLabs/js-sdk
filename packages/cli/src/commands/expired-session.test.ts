@@ -128,6 +128,7 @@ async function run(home: string, argv: readonly string[]): Promise<{ exitCode: n
 
 
 const fixedClockPath = join(import.meta.dir, "../../test-support/fixed-clock.mjs");
+const advanceClockPath = join(import.meta.dir, "../../test-support/advance-clock-on-delegation-write.mjs");
 
 async function seedImportedProfile(
   home: string,
@@ -193,15 +194,22 @@ async function runBuiltCli(
   home: string,
   argv: readonly string[],
   nowMs?: number,
+  advanceAtDelegationWriteToMs?: number,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; error?: Record<string, unknown> }> {
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
   if (nowMs !== undefined) env.TC_TEST_NOW_MS = String(nowMs);
   else delete env.TC_TEST_NOW_MS;
+  if (advanceAtDelegationWriteToMs !== undefined) {
+    env.TC_TEST_ADVANCE_TO_MS = String(advanceAtDelegationWriteToMs);
+  } else {
+    delete env.TC_TEST_ADVANCE_TO_MS;
+  }
+  const clockPath = advanceAtDelegationWriteToMs === undefined ? fixedClockPath : advanceClockPath;
   const child = Bun.spawn([
     process.env.NODE_BINARY ?? "node",
-    ...(nowMs === undefined ? [] : ["--import", pathToFileURL(fixedClockPath).href]),
+    ...(nowMs === undefined ? [] : ["--import", pathToFileURL(clockPath).href]),
     cliEntry,
     ...argv,
   ], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -402,6 +410,37 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
       expect(await withTinyCloudStateRoot(home, () => readGrantHistory("expired"))).toEqual([]);
       expect(await withTinyCloudStateRoot(home, () => readFile(profileConfigPath("expired"), "utf8"))).toBe(profileBefore);
       expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("expired"), "utf8"))).toBe(sessionBefore);
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+  test("rolls back a cross-user grant when expiry passes during the built CLI write", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-cross-user-expiry-write-race-"));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    try {
+      await seedProfile(home, "owner-openkey", "live");
+      const profile = await withTinyCloudStateRoot(home, async () =>
+        JSON.parse(await readFile(profileConfigPath("expired"), "utf8")) as { did: string });
+      const imported = await mintCompactDelegation({
+        audience: profile.did,
+        expSecs: expiry,
+        host: node.url.origin,
+      });
+      const artifactPath = join(home, "cross-user-expiring.json");
+      await writeFile(artifactPath, JSON.stringify(imported.delegation));
+      requests.length = 0;
+      const result = await runBuiltCli(
+        home,
+        ["--profile", "expired", "--json", "auth", "import", artifactPath],
+        expiry * 1000 - 1,
+        expiry * 1000,
+      );
+      expect(result).toMatchObject({ exitCode: 1, error: { code: "DELEGATION_EXPIRED" } });
+      const { readAdditionalDelegations } = await import("@tinycloud/operations/state");
+      const { readGrantHistory } = await import("../lib/permissions.js");
+      expect(await withTinyCloudStateRoot(home, () => readAdditionalDelegations("expired"))).toEqual([]);
+      expect(await withTinyCloudStateRoot(home, () => readGrantHistory("expired"))).toEqual([]);
       expect(requests).toEqual([]);
     } finally {
       await rm(home, { recursive: true, force: true });
