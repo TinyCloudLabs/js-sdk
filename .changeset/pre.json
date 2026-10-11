@@ -25,7 +25,8 @@
     "@tinycloud/web-sdk": "3.1.0",
     "@tinycloud/mcp-sdk-contract": "0.0.0",
     "@tinycloud/operations-mcp-conformance": "0.0.0",
-    "@tinycloud/sdk-services-test": "17.0.0"
+    "@tinycloud/sdk-services-test": "17.0.0",
+    "@tinycloud/courier": "0.0.0"
   },
   "changesets": [
     "republish-replica-beta",
@@ -46,6 +47,7 @@
     "tc-858-revoked-report",
     "tc-858-sdk-services",
     "tc-858-web-sdk-vendor",
+    "tc-860-courier",
     "tc858-replication-write-settlement"
   ]
 }

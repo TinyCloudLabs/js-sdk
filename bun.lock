@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.2.0-beta.4",
+      "version": "1.2.0-beta.5",
       "bin": {
         "tc": "./bin/tc",
       },
@@ -223,7 +223,7 @@
     },
     "packages/courier": {
       "name": "@tinycloud/courier",
-      "version": "0.0.0",
+      "version": "0.1.0-beta.0",
       "bin": {
         "courier": "./dist/cli.js",
       },
