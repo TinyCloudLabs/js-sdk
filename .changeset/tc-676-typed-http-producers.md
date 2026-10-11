@@ -2,9 +2,12 @@
 "@tinycloud/sdk-core": patch
 "@tinycloud/sdk-services": patch
 "@tinycloud/node-sdk": patch
+"@tinycloud/cli": patch
 "@tinycloud/server": patch
 ---
 
-Preserve typed HTTP authorization verdicts through location, manifest, version, hooks, and account-registry failures. Classify hook timeouts from HTTP status instead of response text, retain message fallback only for genuinely untyped retry errors, and ignore single-quoted names while parsing untyped session errors. Hook HTTP error messages containing `timeout` now keep the server's diagnostic text rather than being replaced by `Request timed out.`; 408 and 504 responses report `TIMEOUT` even when their bodies do not mention timeout.
+Location registry and target `/info` failures, single-source location resolution failures, manifest fetches, node version checks, and CLI delegation-code fetches now carry typed HTTP status. A 401 or 403 from these producers is an authorization verdict: the CLI exits with `AUTH_REQUIRED` or `PERMISSION_DENIED` instead of `ERROR`, `withSessionRefresh` signs in again on 401, and account-registry sync stops rather than retrying a single-source location 403. Location resolutions with multiple independent failures remain unclassified.
 
-Account-index initialization failure remains best-effort in account-registry sync: it is warned once, not retried, and cannot block canonical registry writes. A location-resolution aggregate with exactly one failed source now preserves that error as its cause; aggregates with multiple independent failures remain unclassified.
+Hook timeouts are classified from HTTP status rather than response text: 408 and 504 report `TIMEOUT`, while hook HTTP error messages containing `timeout` retain the server's diagnostic text. Account-registry retry uses the message fallback only for genuinely untyped errors. The untyped session-error fallback ignores standalone single-quoted names, not apostrophes inside words.
+
+An account-index initialization failure, whether a failed result or a thrown error, no longer blocks or retries account-registry sync; it is warned at most once per sync with only its HTTP status and error code, and the canonical registry writes and space sync continue.

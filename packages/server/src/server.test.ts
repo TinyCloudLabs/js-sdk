@@ -257,6 +257,7 @@ describe("@tinycloud/server sharing session refresh", () => {
     'Failed to put key "report\\"HTTP 401\\"x": {s} - Forbidden',
     "Failed to put key 'report HTTP 401': {s} - Forbidden",
     "Failed to put key 'report \\'HTTP 401': {s} - Forbidden",
+    "Failed to put key 'it's HTTP 401': {s} - Forbidden",
   ];
   const MESSAGE_TABLE: Array<[message: string, refreshes: boolean]> = [
     ...STATUS_FORMATS.flatMap((format): Array<[string, boolean]> => [
@@ -273,6 +274,11 @@ describe("@tinycloud/server sharing session refresh", () => {
     ["403 records processed; session expired", true],
     ["200 rows fetched; session expired", true],
     ['request failed {"error":"session expired"}', true],
+    ["Owner's request failed: 403 - user's session expired", false],
+    ["Owner's request failed: 401 - user's request was refused", true],
+    ["Failed to read the node's info: HTTP 401 - didn't accept", true],
+    ["Couldn't reach node: HTTP 401 - the server's gateway refused", true],
+    ["it's HTTP 401 isn't it", true],
     // Neither a diagnostic status nor session wording, or a status that wins.
     ["Owner delegation import failed: 403 Unauthorized Action", false],
     ["failed to list webhooks: 502 Unauthorized Action", false],

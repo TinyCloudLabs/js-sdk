@@ -1101,6 +1101,34 @@ type BootstrapDecision =
   | { action: "skip" }
   | { action: "run"; mode: "fresh" | "repair" };
 
+/** Index failures are diagnostic only: never hand a transport error to logging. */
+function accountIndexWarningDiagnostic(error: unknown): { status?: number; code?: string } {
+  const diagnostic: { status?: number; code?: string } = {};
+  let current = error;
+  for (let depth = 0; depth < 8 && current !== null && typeof current === "object"; depth += 1) {
+    const record = current as Record<string, unknown>;
+    if (diagnostic.status === undefined) {
+      if (typeof record.status === "number" && Number.isFinite(record.status)) {
+        diagnostic.status = record.status;
+      } else if (typeof record.statusCode === "number" && Number.isFinite(record.statusCode)) {
+        diagnostic.status = record.statusCode;
+      } else {
+        const meta = record.meta;
+        if (meta !== null && typeof meta === "object") {
+          const status = (meta as Record<string, unknown>).status;
+          if (typeof status === "number" && Number.isFinite(status)) diagnostic.status = status;
+        }
+      }
+    }
+    if (diagnostic.code === undefined && typeof record.code === "string" &&
+      /^[A-Z][A-Z0-9_]*$/.test(record.code)) {
+      diagnostic.code = record.code;
+    }
+    if (diagnostic.status !== undefined && diagnostic.code !== undefined) break;
+    current = record.cause;
+  }
+  return diagnostic;
+}
 
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
@@ -2560,6 +2588,7 @@ export class TinyCloudNode {
         jwk: current.jwk,
       });
       const registry = this.createAccountRegistryServices(context, controller.signal);
+      let indexWarningLogged = false;
       try {
         await this.withAccountRegistryRetry(async () => {
           if (controller.signal.aborted) throw controller.signal.reason;
@@ -2573,8 +2602,12 @@ export class TinyCloudNode {
           }
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.currentTinyCloudSession() !== session) return;
-          if (indexFailure !== undefined) {
-            console.warn("TinyCloud account index initialization failed; continuing registry sync", indexFailure);
+          if (indexFailure !== undefined && !indexWarningLogged) {
+            indexWarningLogged = true;
+            console.warn(
+              "TinyCloud account index initialization failed; continuing registry sync",
+              accountIndexWarningDiagnostic(indexFailure),
+            );
           }
 
           await this.writeManifestRegistryRecords(registry.account, controller.signal);

@@ -17,7 +17,9 @@
  * `syncAccessible()`.
  */
 
-import { describe, expect, mock, test, type Mock } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
+import { inspect } from "node:util";
+import { SQLMigrations } from "@tinycloud/sdk-services";
 
 import {
   AccountService,
@@ -612,6 +614,11 @@ describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
 });
 
 describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
+  let restoreMigrationApply: (() => void) | undefined;
+  afterEach(() => {
+    restoreMigrationApply?.();
+    restoreMigrationApply = undefined;
+  });
   test("Unauthorized Action error runs the task exactly once (no retry)", async () => {
     const { node } = makeNode();
     const task = mock(async () => {
@@ -720,20 +727,56 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     ],
   };
 
-  test.each([
-    { failure: "403", response: new Response("Forbidden", { status: 403 }) },
-    { failure: "transient", response: undefined },
-  ])("SQL index $failure failure cannot block canonical registry records", async ({ failure, response }) => {
+  type IndexFailure = "403" | "transient" | "throwing-ensure" | "marked-transport" | "registry-500";
+  const INDEX_MARKER = "MARKER-index-warning-canary";
+
+  function markedTransportError(): Error {
+    return Object.assign(new Error(`SQL transport failure ${INDEX_MARKER}`), {
+      config: { headers: { Authorization: INDEX_MARKER } },
+    });
+  }
+
+  function indexWarnings(warnings: Mock<(...args: unknown[]) => void>): unknown[][] {
+    return warnings.mock.calls.filter((args) => String(args[0]).includes("account index"));
+  }
+
+  async function runRealIndexSync(failure: IndexFailure): Promise<{
+    ensureAttempts: number;
+    writtenKeys: string[];
+    spaceLists: number;
+    registryWrites: number;
+    warnSpy: Mock<(...args: unknown[]) => void>;
+  }> {
     const { node } = makeNode({ hasSiwe: false });
     const internals = node as unknown as RegistrySyncInternals;
     internals.auth.capabilityRequest = composeManifestRequest([MANIFEST]);
-    // Use the production service graph and account service. Only the invoke/fetch
-    // transport is fake; SQL migrations, KV registration, retry and scheduling run.
+    // Only the transport and, for the rejecting-ensure case, the SQL migration
+    // service boundary are stubbed. Scheduling, retry, account and KV stay real.
     Reflect.deleteProperty(node, "createAccountRegistryServices");
     let ensureAttempts = 0;
+    let nextSqlIsEnsure = true;
+    let registryWrites = 0;
+    let spaceLists = 0;
     let activations = 0;
     const writtenKeys: string[] = [];
-    let spaceLists = 0;
+
+    if (failure === "throwing-ensure") {
+      const originalApply = SQLMigrations.prototype.apply;
+      let first = true;
+      const migrationSpy = spyOn(SQLMigrations.prototype, "apply").mockImplementation(function (
+        this: SQLMigrations, options,
+      ) {
+        if (first) {
+          first = false;
+          ensureAttempts += 1;
+          nextSqlIsEnsure = false;
+          throw markedTransportError();
+        }
+        return originalApply.call(this, options);
+      });
+      restoreMigrationApply = () => migrationSpy.mockRestore();
+    }
+
     const context = new ServiceContext({
       hosts: ["https://tinycloud.test"],
       invoke: (_session, service, path, action) => ({
@@ -744,14 +787,20 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       fetch: async (_url, init) => {
         const headers = init?.headers as Record<string, string>;
         if (headers["x-test-service"] === "sql") {
-          // Registration can retry the index SQL pre-read independently; only
-          // migration calls before the first account-space activation are ensure().
-          if (activations === 0) ensureAttempts += 1;
-          if (response) return response.clone();
-          throw new Error("transient SQL transport failure");
+          if (nextSqlIsEnsure) {
+            ensureAttempts += 1;
+            nextSqlIsEnsure = false;
+          }
+          if (failure === "403") return new Response("Forbidden", { status: 403 });
+          throw failure === "marked-transport" ? markedTransportError() : new Error("transient SQL transport failure");
         }
         if (headers["x-test-service"] === "kv") {
           if (headers["x-test-action"] === "tinycloud.kv/put") {
+            registryWrites += 1;
+            if (failure === "registry-500") {
+              nextSqlIsEnsure = true;
+              return new Response("registry transient", { status: 500 });
+            }
             writtenKeys.push(headers["x-test-path"]!);
           }
           return new Response(null, { status: 200 });
@@ -786,17 +835,58 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       globalThis.fetch = originalFetch;
       console.warn = originalWarn;
     }
+    expect(activations).toBeGreaterThan(0);
+    return { ensureAttempts, writtenKeys, spaceLists, registryWrites, warnSpy };
+  }
+
+  test.each(["403", "transient"] as const)(
+    "SQL index %s failure cannot block canonical registry records",
+    async (failure) => {
+      const { writtenKeys, ensureAttempts, spaceLists, registryWrites, warnSpy } = await runRealIndexSync(failure);
+      expect({ writtenKeys, ensureAttempts, spaceLists, registryWrites }).toEqual({
+        writtenKeys: ["applications/com.example.registry"],
+        ensureAttempts: 1,
+        spaceLists: 1,
+        registryWrites: 1,
+      });
+      expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
+      expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+      const warnings = indexWarnings(warnSpy);
+      expect(warnings).toHaveLength(1);
+      expect(authorizationVerdictOf(warnings[0]?.[1])).toBe(failure === "403" ? "forbidden" : undefined);
+    },
+  );
+
+  test("a rejected SQL migration ensure is best-effort and does not reveal its error", async () => {
+    const { writtenKeys, ensureAttempts, spaceLists, warnSpy } = await runRealIndexSync("throwing-ensure");
     expect({ writtenKeys, ensureAttempts, spaceLists }).toEqual({
-      writtenKeys: ["applications/com.example.registry"],
-      ensureAttempts: 1,
-      spaceLists: 1,
+      writtenKeys: ["applications/com.example.registry"], ensureAttempts: 1, spaceLists: 1,
     });
-    expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
-    expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
-    const indexWarnings = warnSpy.mock.calls.filter((args) => String(args[0]).includes("account index"));
-    expect(indexWarnings).toHaveLength(1);
-    expect(authorizationVerdictOf(indexWarnings[0]?.[1])).toBe(failure === "403" ? "forbidden" : undefined);
+    const warnings = indexWarnings(warnSpy);
+    expect(warnings).toHaveLength(1);
+    expect(warnSpy.mock.calls.flatMap((args) => args.map((arg) => inspect(arg, { depth: Infinity, showHidden: true })))
+      .some((text) => text.includes(INDEX_MARKER))).toBe(false);
+  });
+
+  test("an index failure warns once across retries of a failed canonical write", async () => {
+    const { ensureAttempts, registryWrites, writtenKeys, spaceLists, warnSpy } = await runRealIndexSync("registry-500");
+    expect({ ensureAttempts, registryWrites, writtenKeys, spaceLists }).toEqual({
+      ensureAttempts: 3, registryWrites: 3, writtenKeys: [], spaceLists: 0,
+    });
+    expect(indexWarnings(warnSpy)).toHaveLength(1);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
   }, 10_000);
+
+  test("a transport exception's hidden properties never enter the index warning", async () => {
+    const { writtenKeys, ensureAttempts, spaceLists, warnSpy } = await runRealIndexSync("marked-transport");
+    expect({ writtenKeys, ensureAttempts, spaceLists }).toEqual({
+      writtenKeys: ["applications/com.example.registry"], ensureAttempts: 1, spaceLists: 1,
+    });
+    const warnings = indexWarnings(warnSpy);
+    expect(warnings).toHaveLength(1);
+    expect(warnSpy.mock.calls.flatMap((args) => args.map((arg) => inspect(arg, { depth: Infinity, showHidden: true })))
+      .some((text) => text.includes(INDEX_MARKER))).toBe(false);
+  });
 
   /** The private registry-sync surface these tests drive (test seam). */
   type RegistrySyncInternals = {

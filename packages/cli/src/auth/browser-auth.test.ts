@@ -8,7 +8,7 @@ import {
   startAuthFlow,
   validateDelegationCallbackPayload,
 } from "./browser-auth.js";
-import { CLIError } from "../output/errors.js";
+import { CLIError, wrapError } from "../output/errors.js";
 
 /** Run the paste flow with `chunks` as stdin. */
 async function pasteWithStdin(chunks: string[], options: { did?: string; jwk?: object; openkeyApiHost?: string } = {}) {
@@ -156,6 +156,32 @@ describe("paste login", () => {
         .rejects.toThrow(/different CLI key/);
       await expect(pasteWithStdin(["sf23-22cs\n"], { ...options, jwk: { ...delegation.jwk, x: "wrong-key" } }))
         .rejects.toThrow(/different CLI key/);
+    } finally {
+      server.close();
+    }
+  });
+
+  test.each([
+    [401, "AUTH_REQUIRED", 3],
+    [403, "PERMISSION_DENIED", 5],
+  ] as const)("delegation-code HTTP %i maps to %s from typed status", async (status, code, exitCode) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(status);
+      response.end("unrelated response text");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing test server address");
+      const failure: unknown = await pasteWithStdin(["sf23-22cs\n"], {
+        jwk: { kty: "OKP", crv: "Ed25519", x: "public-key" },
+        openkeyApiHost: `http://127.0.0.1:${address.port}`,
+      }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        status,
+        message: `Could not retrieve delegation code (HTTP ${status}).`,
+      });
+      expect(wrapError(failure)).toMatchObject({ code, exitCode });
     } finally {
       server.close();
     }

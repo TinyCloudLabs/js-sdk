@@ -195,9 +195,9 @@ async function delegationFromInput(input: string, did: string, options: AuthFlow
       redirect: "error",
     });
     if (!response.ok) {
-      throw new Error(response.status === 404
+      throw Object.assign(new Error(response.status === 404
         ? "Delegation code not found or expired. Use the full code shown in OpenKey instead."
-        : `Could not retrieve delegation code (HTTP ${response.status}).`);
+        : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json() as { delegation?: unknown };
     parsed = result.delegation;
