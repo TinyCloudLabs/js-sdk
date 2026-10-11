@@ -47,7 +47,7 @@ export function registerSpaceCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -64,7 +64,7 @@ export function registerSpaceCommand(program: Command): void {
         const spaceId = await node.hostOwnedSpace(name);
         outputJson({ spaceId, name, hosted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -123,7 +123,7 @@ it directly with \`tc space host <name>\` (no request needed).
 
         await emitHostRequestArtifact(artifact, options.emit);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -149,7 +149,7 @@ it directly with \`tc space host <name>\` (no request needed).
           host: ctx.host,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -165,7 +165,7 @@ it directly with \`tc space host <name>\` (no request needed).
 
         outputJson({ profile: ctx.profile, spaceName: name, switched: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

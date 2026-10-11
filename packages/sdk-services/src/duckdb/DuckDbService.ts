@@ -137,7 +137,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "query");
+          return await this.handleErrorResponse(response, "query");
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -172,7 +172,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "queryArrow");
+          return await this.handleErrorResponse(response, "queryArrow");
         }
 
         const buffer = await response.arrayBuffer();
@@ -215,7 +215,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "execute");
+          return await this.handleErrorResponse(response, "execute");
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -256,7 +256,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "batch");
+          return await this.handleErrorResponse(response, "batch");
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -298,7 +298,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "executeStatement");
+          return await this.handleErrorResponse(response, "executeStatement");
         }
 
         const data = (await response.json()) as
@@ -337,7 +337,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "describe");
+          return await this.handleErrorResponse(response, "describe");
         }
 
         const data = (await response.json()) as SchemaInfo;
@@ -369,7 +369,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "export");
+          return await this.handleErrorResponse(response, "export");
         }
 
         const blob = await response.blob();
@@ -413,7 +413,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         });
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "import");
+          return await this.handleErrorResponse(response, "import");
         }
 
         return ok(undefined);

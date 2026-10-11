@@ -309,6 +309,7 @@ test("owner-openkey revokes a verified stored CACAO through the CID-bound owner 
     const { restoreProfileSessionNode } = await import("../lib/sdk.js");
     const restored = await restoreProfileSessionNode({
       profile: fixture.ownerProfile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+      replication: false, replicationDebug: false,
     });
     if (!("node" in restored)) throw new Error(`owner session unavailable: ${restored.unavailable}`);
     const row = await cliGrantRecord(restored.node, grant, request, fixture.hermetic.host);
@@ -596,6 +597,7 @@ test.each(runtimes)("public %s local-owner-key uses its real raw-CID authority b
   const { restoreProfileSessionNode } = await import("../lib/sdk.js");
   const restored = await restoreProfileSessionNode({
     profile: fixture.profile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+    replication: false, replicationDebug: false,
   });
   if (!("node" in restored)) throw new Error(`delegate session unavailable: ${restored.unavailable}`);
   await restored.node.useRuntimeDelegation(delegation);
@@ -665,6 +667,7 @@ test.each(runtimes)("public %s --revoke discovers the verified local node instea
   const { restoreProfileSessionNode } = await import("../lib/sdk.js");
   const restored = await restoreProfileSessionNode({
     profile: fixture.profile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+    replication: false, replicationDebug: false,
   });
   if (!("node" in restored)) throw new Error(`delegate session unavailable: ${restored.unavailable}`);
   await restored.node.useRuntimeDelegation(grant);
@@ -689,6 +692,7 @@ test.each(runtimes)("public %s reports node revocation when local removal times 
   const { restoreProfileSessionNode } = await import("../lib/sdk.js");
   const restored = await restoreProfileSessionNode({
     profile: fixture.profile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+    replication: false, replicationDebug: false,
   });
   if (!("node" in restored)) throw new Error(`delegate session unavailable: ${restored.unavailable}`);
   await restored.node.useRuntimeDelegation(grant);
@@ -732,6 +736,7 @@ test("a concurrent local remover after real node revocation returns success with
   const { removeStoredDelegations } = await import("../lib/permissions.js");
   const restored = await restoreProfileSessionNode({
     profile: fixture.profile, host: fixture.hermetic.host, verbose: false, noCache: false, quiet: true,
+    replication: false, replicationDebug: false,
   });
   if (!("node" in restored)) throw new Error(`delegate session unavailable: ${restored.unavailable}`);
   await restored.node.useRuntimeDelegation(grant);

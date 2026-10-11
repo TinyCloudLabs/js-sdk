@@ -91,3 +91,30 @@ describe("ProfileManager.deleteProfile", () => {
     expect(await readdir(PROFILES_DIR)).toEqual([]);
   });
 });
+describe("ProfileManager.resolveContext replication flags", () => {
+  test("resolves invocation flags over the environment and keeps defaults off", async () => {
+    const previous = process.env.TC_REPLICATION;
+    const previousDebug = process.env.TC_REPLICATION_DEBUG;
+    try {
+      delete process.env.TC_REPLICATION;
+      delete process.env.TC_REPLICATION_DEBUG;
+      expect((await ProfileManager.resolveContext({ host: "https://node.tinycloud.test" })).replication).toBe(false);
+      process.env.TC_REPLICATION = "1";
+      expect((await ProfileManager.resolveContext({ host: "https://node.tinycloud.test" })).replication).toBe(true);
+      expect((await ProfileManager.resolveContext({ noReplication: true, host: "https://node.tinycloud.test" })).replication).toBe(false);
+      expect((await ProfileManager.resolveContext({ replication: false, host: "https://node.tinycloud.test" })).replication).toBe(false);
+      process.env.TC_REPLICATION = "false";
+      expect((await ProfileManager.resolveContext({ replication: true, host: "https://node.tinycloud.test" })).replication).toBe(true);
+      process.env.TC_REPLICATION_DEBUG = "1";
+      expect((await ProfileManager.resolveContext({ host: "https://node.tinycloud.test" })).replicationDebug).toBe(true);
+      process.env.TC_REPLICATION = "invalid";
+      await expect(ProfileManager.resolveContext({ host: "https://node.tinycloud.test" }))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2 });
+    } finally {
+      if (previous === undefined) delete process.env.TC_REPLICATION;
+      else process.env.TC_REPLICATION = previous;
+      if (previousDebug === undefined) delete process.env.TC_REPLICATION_DEBUG;
+      else process.env.TC_REPLICATION_DEBUG = previousDebug;
+    }
+  });
+});

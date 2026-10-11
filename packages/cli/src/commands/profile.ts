@@ -69,7 +69,7 @@ export function registerProfileCommand(program: Command): void {
           }
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -113,7 +113,7 @@ export function registerProfileCommand(program: Command): void {
 
         outputJson({ profile: name, did, host, posture, operatorType, created: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -157,7 +157,7 @@ export function registerProfileCommand(program: Command): void {
           process.stdout.write(formatField("Created", p.createdAt) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -175,7 +175,7 @@ export function registerProfileCommand(program: Command): void {
 
         outputJson({ defaultProfile: name, switched: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -224,7 +224,7 @@ Examples:
 
         outputJson({ profile: profileName, defaultSpace: defaultSpace ?? null, updated: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -249,7 +249,7 @@ Examples:
         await ProfileManager.deleteProfile(name);
         outputJson({ profile: name, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

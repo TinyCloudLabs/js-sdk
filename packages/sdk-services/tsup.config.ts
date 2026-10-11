@@ -7,6 +7,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "kv/index": "src/kv/index.ts",
+    "kv/replication/index": "src/kv/replication/index.ts",
     "sql/index": "src/sql/index.ts",
     "encryption/index": "src/encryption/index.ts",
     "internal/decrypt-transport-response-error":

@@ -64,7 +64,7 @@ async function buildManifest(): Promise<void> {
 
   const manifest = createCoordinationOsVendorManifest(
     await readFile(bundlePath),
-    packageMetadata,
+    { name: packageMetadata.name, version: CONTRACT_VERSION },
   );
   const manifestPath = resolve(
     packageRoot,

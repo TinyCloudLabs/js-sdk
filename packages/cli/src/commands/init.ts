@@ -93,7 +93,7 @@ export function registerInitCommand(program: Command): void {
           authenticated: true,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

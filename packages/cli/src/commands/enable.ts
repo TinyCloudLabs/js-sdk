@@ -40,7 +40,7 @@ export function registerEnableCommand(program: Command): void {
           ? `Share enabled for profile ${context.profile}.`
           : `Share enabled for profile ${context.profile} with ${result.declined.length} capability group(s) declined; publishing may fail.`);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

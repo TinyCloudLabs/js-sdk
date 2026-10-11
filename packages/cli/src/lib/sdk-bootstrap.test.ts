@@ -22,6 +22,11 @@ mock.module("@tinycloud/node-sdk", () => ({
       if (restoreFailure) throw restoreFailure;
     }
   },
+  // sdk.ts's replication-config dependency resolves this export even when
+  // replication is disabled in these bootstrap tests.
+  sqliteReplicaStorage: () => {
+    throw new Error("sqliteReplicaStorage should not be used by bootstrap tests");
+  },
   signedCompactUcanExpiry: () => mockedSignedExpiry,
 }));
 mock.module("./permissions.js", () => ({
@@ -37,7 +42,7 @@ const { bootstrapDelegatedSession } = await import("./sdk.js");
 const PROFILE = "delegate";
 const SESSION_DID = "did:key:zDelegate";
 const KEY = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-const ctx = { profile: PROFILE, host: "https://node.tinycloud.test", verbose: false, noCache: false, quiet: false };
+const ctx = { profile: PROFILE, host: "https://node.tinycloud.test", verbose: false, noCache: false, quiet: false, replication: false, replicationDebug: false };
 const delegation = {
   delegationHeader: { Authorization: "Bearer delegated" },
   cid: "bafy-bootstrap",

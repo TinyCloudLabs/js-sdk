@@ -2,7 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { blake3 } from "@noble/hashes/blake3";
 
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
-import { kvPrefixCovers } from "./scope.js";
+import { authorityPathCovers } from "./scope.js";
 import type { GrantRecord } from "./types.js";
 
 /** A compact UCAN grant whose Ed25519 signature checked out against its issuer. */
@@ -183,11 +183,11 @@ function kvPathIn(resource: string, space: string): string | undefined {
   return undefined;
 }
 
-/** True when the signed attenuation grants `ability` on a KV path covering `prefix`. */
+/** True when the signed attenuation grants `ability` on an authority path. */
 export function grantCovers(grant: Pick<ParsedUcanGrant, "att">, space: string, prefix: string, ability: string): boolean {
   for (const [resource, abilities] of Object.entries(grant.att)) {
     const path = kvPathIn(resource, space);
-    if (path === undefined || !kvPrefixCovers(path, prefix)) continue;
+    if (path === undefined || !authorityPathCovers(path, prefix)) continue;
     // `tinycloud.kv/sync` is never implied by a wildcard (TC-732).
     if (ability in abilities) return true;
     if (ability !== "tinycloud.kv/sync" && ability !== "tinycloud.kv/retain" && "tinycloud.kv/*" in abilities) return true;
@@ -221,8 +221,9 @@ export function assertGrantInstallable(
       `The grant was issued to ${grant.audience}, not this device (${input.deviceDid}).`,
     );
   }
+  const requiredPaths = input.prefix.endsWith("/") ? [input.prefix] : [input.prefix, `${input.prefix}/`];
   for (const ability of ["tinycloud.kv/sync", "tinycloud.kv/get"]) {
-    if (!grantCovers(grant, input.space, input.prefix, ability)) {
+    if (!requiredPaths.every((path) => grantCovers(grant, input.space, path, ability))) {
       throw new ReplicaError(
         ReplicaErrorCode.GRANT_NOT_COVERING,
         `The grant does not carry ${ability} on ${input.space}/kv/${input.prefix}.`,

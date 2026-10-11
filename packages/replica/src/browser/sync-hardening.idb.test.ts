@@ -55,6 +55,33 @@ async function blobCount(replicaId: string): Promise<number> {
   }
 }
 
+describe("published selector compatibility (indexeddb)", () => {
+  test("bare selector survives reopen and reset/resync under broad authority", async () => {
+    const replicaId = nextId();
+    const node = new FakeNode("notes");
+    node.put("notes/a", "alpha");
+    const store = await newIdbStore(replicaId, { prefix: "notes" });
+    await store.installGrant(deviceGrant({ prefix: "" }));
+    await new Replica({ store, transport: node }).sync();
+    await store.close();
+
+    node.online = false;
+    const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "reopened" });
+    const offline = new Replica({ store: reopened });
+    expect(await offline.get("notes/a")).toMatchObject({ status: "present" });
+    expect((await offline.list()).entries.map((entry) => entry.key)).toEqual(["notes/a"]);
+    await reopened.close();
+
+    node.online = true;
+    const resetStore = await IndexedDbReplicaStore.open(replicaId, { holder: "reset" });
+    const resetReplica = new Replica({ store: resetStore, transport: node });
+    await resetReplica.reset("selector-regression");
+    await expect(resetReplica.sync()).resolves.toMatchObject({ coverage: "complete" });
+    expect((await resetReplica.get("notes/a")).status).toBe("present");
+    await resetStore.close();
+  });
+});
+
 describe("content reused within one page (indexeddb)", () => {
   test("delete a, then put b with the same bytes", async () => {
     const node = new FakeNode();

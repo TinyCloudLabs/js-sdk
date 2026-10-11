@@ -208,6 +208,48 @@ export type {
   KVResponseHeaders,
   KVActionType,
 } from "./kv";
+export type {
+  AuthorityRefusal,
+  KVListPage,
+  KVReadThrough,
+  KVReplicaHandle,
+  KVReplicaSpec,
+  KVReplicaStorage,
+  KVReplicationController,
+  KVReplicationDeps,
+  LocalGetResult,
+  LocalListResult,
+  LocalReadMeta,
+  LocalReplicaStatus,
+  LocalSyncResult,
+  PendingWriteRecord,
+  PendingWriteState,
+  PendingWriteStore,
+  PinnedKey,
+  PurgeTarget,
+  ReplicaAuthorityState,
+  ReplicaCoverage,
+  ReplicaDevice,
+  ReplicaGrantInfo,
+  ReplicaState,
+  ReplicaStatusEntry,
+  ReplicationAuthority,
+  ReplicationControl,
+  ReplicationEvent,
+  ReplicationIdentity,
+  ReplicationOptions,
+  ReplicationPurgeReport,
+  ReplicationReason,
+  ReplicationScheduler,
+  ResolvedReplicationOptions,
+} from "./kv/replication";
+export {
+  CLEAR_PENDING_WARNING,
+  canonicalReplicationIdentity,
+  kvPrefixCovers,
+  replicationIdentityKey,
+  requiresSecretsOptIn,
+} from "./kv/replication";
 
 // SQL service
 export { SQLService, DatabaseHandle, SQLMigrations, SQLAction } from "./sql";

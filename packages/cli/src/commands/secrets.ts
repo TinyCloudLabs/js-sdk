@@ -77,6 +77,7 @@ export type CanonicalSecretGetResult = Awaited<ReturnType<typeof invokeOperation
 
 interface SecretScopeOptions {
   scope?: string;
+  source?: "network";
 }
 
 interface DelegationCandidate {
@@ -552,6 +553,8 @@ export function invokeCommanderSecretGetAdapter(params: {
       verbose: false,
       noCache: false,
       quiet: true,
+      replication: false,
+      replicationDebug: false,
     },
     name: params.input.name,
     ...(params.input.scope === undefined ? {} : { scope: params.input.scope }),
@@ -1266,7 +1269,7 @@ export function registerSecretsCommand(
             scopeOptions,
             space: spaceUri,
             label: `Checking secret ${name}...`,
-            operation: () => secrets.get(name, scopeOptions),
+            operation: () => secrets.get(name, { ...scopeOptions, source: "network" }),
           });
 
           if (result.ok) {
@@ -1350,7 +1353,7 @@ export function registerSecretsCommand(
           scopeOptions,
           space: spaceUri,
           label: "Listing secrets...",
-          operation: () => secrets.list(scopeOptions),
+          operation: () => secrets.list({ ...scopeOptions, source: "network" }),
         });
 
         if (!result.ok) {

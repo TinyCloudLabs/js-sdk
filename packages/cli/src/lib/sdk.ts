@@ -8,6 +8,9 @@ import { sessionExpiredError } from "../auth/session-expired.js";
 import { recordWarnings } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
+import { createCliReplicationConfig } from "./replication-config.js";
+import { registerReplication } from "./replication-registry.js";
+export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
 /**
  * Returns true when a JWK carries the private-key parameter required by the
  * WASM signer. The CLI is OKP/EC-only (Ed25519, secp256k1) where `d` is the
@@ -201,10 +204,21 @@ export async function createSDKInstance(
   if (profile?.authMethod === "local" && effectivePrivateKey) {
     // Local key auth: prefer the persisted TinyCloud session so the CLI
     // keeps the same session key DID across request/grant/import flows.
+    const replication = createCliReplicationConfig(
+      ctx.profile,
+      profile?.replication,
+      { debug: ctx.replicationDebug, quiet: ctx.quiet },
+      ctx.replication,
+    );
+    if (ctx.replication && !replication) {
+      process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
+    }
     const node = new TinyCloudNode({
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      ...(replication ? { replication } : {}),
     });
+    if (node.replication) registerReplication(ctx.profile, node.replication);
 
     const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
     if (restoredOwnSession) {
@@ -225,10 +239,21 @@ export async function createSDKInstance(
   }
 
   // OpenKey / delegation-based auth
+  const replication = createCliReplicationConfig(
+    ctx.profile,
+    profile?.replication,
+    { debug: ctx.replicationDebug, quiet: ctx.quiet },
+    ctx.replication,
+  );
+  if (ctx.replication && !replication) {
+    process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
+  }
   const node = new TinyCloudNode({
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...(replication ? { replication } : {}),
   });
+  if (node.replication) registerReplication(ctx.profile, node.replication);
 
   if (options?.privateKey) {
     await node.signIn();

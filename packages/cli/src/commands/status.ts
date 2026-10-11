@@ -119,7 +119,7 @@ export function registerStatusCommand(program: Command): void {
 
         process.stdout.write(formatStatus(summary));
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

@@ -8,8 +8,33 @@ const SAFE_NUMBER_FIELDS = new Set([
   "startedAt",
   "status",
   "timestamp",
+  "latencyMs",
+  "stalenessMs",
+  "count",
+  "changes",
+  "deleted",
+  "fetched",
+  "pages",
+  "lagMs",
+  "pendingCleared",
 ]);
 const SAFE_BOOLEAN_FIELDS = new Set(["authenticated", "ok", "persisted"]);
+const SAFE_REPLICATION_FIELDS: Record<string, readonly string[]> = {
+  source: ["replica", "network", "none"],
+  reason: ["hit", "absent", "deleted", "content_missing", "coverage_incomplete", "not_covered", "pending_write", "grant_missing", "grant_expired", "grant_revoked", "grant_not_yet_valid", "stale", "replica_error", "runtime_unsupported", "replica_unavailable", "unsupported_option", "network_cursor", "cursor_restart", "aborted", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED"],
+  op: ["get", "list", "put", "delete", "batchPut"],
+  trigger: ["start", "interval", "stale_read", "manual"],
+  outcome: ["found", "not_found", "error", "committed", "failed", "ambiguous", "ok", "busy", "aborted"],
+  class: ["offline", "authority", "storage", "node"],
+  state: ["opened", "grant_installed", "grant_missing", "runtime_unsupported", "unavailable", "revoked", "recreated", "purged", "purge_failed", "pending_store_error", "pinned", "pending_cleared", "closed", "idle", "ready"],
+  kind: ["value", "missing_local", "extra_local", "keys", "order"],
+  coverage: ["empty", "bootstrapping", "complete"],
+  authority: ["valid", "expired", "revoked", "not-yet-valid"],
+  code: ["NETWORK_ERROR", "TIMEOUT", "ABORTED", "REPLICA_BUSY", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED", "INTEGRITY_ERROR", "STORAGE_ERROR", "REPLICA_CLOSED", "RUNTIME_UNSUPPORTED", "GRANT_EXPIRED", "GRANT_REVOKED", "GRANT_NOT_YET_VALID", "GRANT_MISSING", "GRANT_INVALID", "SOURCE_CHANGED", "PROTOCOL_ERROR", "SCOPE_VIOLATION", "NODE_ERROR", "CONTENT_MISMATCH", "STORAGE_FULL"],
+  pendingState: ["in_flight", "committed", "ambiguous"],
+  strategy: ["session", "minted", "installed"],
+  verify: ["match", "diverged", "error", "aborted"],
+};
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -66,6 +91,13 @@ export function projectDiagnosticData(value: unknown): unknown {
       const boolean = read(value, key);
       if (typeof boolean === "boolean") projected[key] = boolean;
     }
+    for (const [key, allowed] of Object.entries(SAFE_REPLICATION_FIELDS)) {
+      const candidate = read(value, key);
+      if (typeof candidate === "string" && allowed.includes(candidate)) {
+        projected[key] = candidate;
+      }
+    }
+
 
     // URLs, like every other string-bearing value, are never projected. Even
     // an origin can encode user-controlled data in a hostname.

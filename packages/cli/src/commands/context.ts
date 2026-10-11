@@ -35,7 +35,7 @@ export function registerContextCommand(program: Command): void {
           access: "not-tested",
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

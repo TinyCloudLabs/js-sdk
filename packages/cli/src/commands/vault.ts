@@ -67,7 +67,7 @@ export function registerVaultCommand(program: Command): void {
 
         outputJson({ unlocked: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -114,7 +114,7 @@ export function registerVaultCommand(program: Command): void {
 
         outputJson({ key, written: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -134,7 +134,7 @@ export function registerVaultCommand(program: Command): void {
 
         await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
 
-        const result = await withSpinner(`Getting ${key}...`, () => node.vault.get(key)) as any;
+        const result = await withSpinner(`Getting ${key}...`, () => node.vault.get(key, { source: "network" })) as any;
 
         if (!result.ok) {
           if (result.error.code === "NOT_FOUND") {
@@ -163,7 +163,7 @@ export function registerVaultCommand(program: Command): void {
           data: data instanceof Uint8Array ? Buffer.from(data).toString("base64") : data,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -189,7 +189,7 @@ export function registerVaultCommand(program: Command): void {
 
         outputJson({ key, deleted: true });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -208,7 +208,7 @@ export function registerVaultCommand(program: Command): void {
 
         await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
 
-        const listOptions = options.prefix ? { prefix: options.prefix } : undefined;
+        const listOptions = options.prefix ? { prefix: options.prefix, source: "network" as const } : { source: "network" as const };
         const result = await withSpinner("Listing vault keys...", () => node.vault.list(listOptions)) as any;
 
         if (!result.ok) {
@@ -224,7 +224,7 @@ export function registerVaultCommand(program: Command): void {
           prefix: options.prefix ?? null,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -258,7 +258,7 @@ export function registerVaultCommand(program: Command): void {
           metadata: result.data.headers ?? result.data,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

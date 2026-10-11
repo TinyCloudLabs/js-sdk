@@ -81,6 +81,9 @@ _tc() {
     '(-v --verbose)'{-v,--verbose}'[Enable verbose output]' \\
     '--no-cache[Disable caching]' \\
     '(-q --quiet)'{-q,--quiet}'[Suppress non-essential output]' \\
+    '--replication[Enable read-through replication]' \\
+    '--no-replication[Disable replication]' \\
+    '--replication-debug[Write replication diagnostics to stderr]' \\
     '1:command:->cmd' \\
     '*::arg:->args'
 
@@ -141,5 +144,8 @@ complete -c tc -l host -s H -d "TinyCloud node URL"
 complete -c tc -l verbose -s v -d "Enable verbose output"
 complete -c tc -l no-cache -d "Disable caching"
 complete -c tc -l quiet -s q -d "Suppress non-essential output"
+complete -c tc -l replication -d "Enable read-through replication"
+complete -c tc -l no-replication -d "Disable replication"
+complete -c tc -l replication-debug -d "Write replication diagnostics to stderr"
 `;
 }

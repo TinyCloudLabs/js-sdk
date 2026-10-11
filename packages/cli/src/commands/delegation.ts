@@ -61,7 +61,7 @@ export function registerDelegationCommand(
           expiry: expiry.toISOString(),
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -104,7 +104,7 @@ export function registerDelegationCommand(
           count: delegations.length,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -124,7 +124,7 @@ export function registerDelegationCommand(
 
         outputJson(result.data);
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -143,7 +143,7 @@ export function registerDelegationCommand(
           openKeyAcquisition: configuration.openKeyAcquisition,
         }));
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

@@ -7,6 +7,8 @@ const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 export interface SecretScopeOptions {
   /** Optional logical scope. Omit for the global secret namespace. */
   scope?: string;
+  /** Bypass replication for existence-sensitive reads. */
+  source?: "network";
 }
 
 /** Canonical secret scope grammar shared with the TC-832 `/request` link. */

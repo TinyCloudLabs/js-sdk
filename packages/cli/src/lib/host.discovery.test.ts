@@ -66,6 +66,8 @@ async function configuredProfile(): Promise<void> {
     verbose: false,
     noCache: false,
     quiet: false,
+    replication: false,
+    replicationDebug: false,
     localDiscovery: { deferredFrom: "https://fallback.example.test" },
   };
   await completeDeferredLocalDiscovery(ctx);
@@ -83,6 +85,8 @@ test("deferred discovery completes while the context still uses its fallback", a
     verbose: false,
     noCache: false,
     quiet: false,
+    replication: false,
+    replicationDebug: false,
     localDiscovery: { deferredFrom: "https://fallback.example.test" },
   };
   await completeDeferredLocalDiscovery(ctx);

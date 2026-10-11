@@ -143,7 +143,7 @@ the manifest against the active profile's address/chain so you know which
           process.stdout.write(formatTable(["service", "path", "actions"], rows) + "\n");
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

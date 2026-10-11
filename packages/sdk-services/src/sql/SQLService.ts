@@ -176,7 +176,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "query", dbName, [action]);
+          return await this.handleErrorResponse(response, "query", dbName, [action]);
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -226,7 +226,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          return await this.handleErrorResponse(response, "execute", dbName, requestedActions);
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -260,7 +260,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          return await this.handleErrorResponse(response, "batch", dbName, requestedActions);
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -304,7 +304,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
+          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
         }
 
         const data = (await response.json()) as
@@ -343,7 +343,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
+          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
         }
 
         // FetchResponse doesn't expose blob(), so access it from the

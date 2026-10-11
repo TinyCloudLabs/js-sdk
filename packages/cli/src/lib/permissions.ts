@@ -509,6 +509,7 @@ export async function loadManifestPermissions(
           space: String(manifest.space ?? "applications"),
           path: resolvedPath,
           actions,
+          ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
         };
       });
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
