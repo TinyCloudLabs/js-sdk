@@ -27,13 +27,14 @@ export function addReplicationLoginEntries(
     } catch (error) {
       throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
     }
+    const path = prefix === "/" ? "" : prefix;
     if (requiresSecretsOptIn(primarySpace, prefix) && options.allowSecrets !== true) {
       throw new CLIError("SECRETS_OPT_IN_REQUIRED", `Replication prefix ${JSON.stringify(prefix)} in ${primarySpace} requires --replication-allow-secrets.`, ExitCode.USAGE_ERROR);
     }
     const requested: PermissionEntry = {
       service: "tinycloud.kv",
       space: primarySpace,
-      path: prefix,
+      path,
       actions: ["tinycloud.kv/get"],
     };
     const matching = request.filter((entry) =>
@@ -62,9 +63,9 @@ export function addReplicationLoginEntries(
     }
     const service = "tinycloud.kv";
     const actions = [`${service}/get`, `${service}/sync`];
-    const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === prefix &&
+    const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === path &&
       actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
-    if (!existing) result.push({ service, space: primarySpace, path: prefix, actions });
+    if (!existing) result.push({ service, space: primarySpace, path, actions });
   }
   return result;
 }

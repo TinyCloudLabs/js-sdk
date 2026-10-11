@@ -155,8 +155,8 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
     expect(augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
-      replication: { prefixes: ["notes/", "/"] },
-    }).map((entry) => entry.path)).toEqual(["notes/", "/"]);
+      replication: { prefixes: ["notes/", "/"], allowSecrets: true },
+    }).map((entry) => entry.path)).toEqual(["notes/", ""]);
   });
 
 
@@ -411,6 +411,16 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     expect(entries).toEqual([
       { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
+    const rootPlanDelegation = mock(() => ({
+      path: "runtime" as const,
+      parentCid: "bafyRoot",
+      expiresAt: 1_700_000_000_000,
+    }));
+    const rootAuthority = createReplicationAuthority(makeHost({ planDelegation: rootPlanDelegation }));
+    expect(rootAuthority.plan("/")).toEqual({ path: "runtime", parentCid: "bafyRoot", expiresAt: 1_700_000_000_000 });
+    expect(rootPlanDelegation.mock.calls[0]![0]).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
 
     const refused = createReplicationAuthority(
       makeHost({ planDelegation: () => ({ refused: "CAVEATED_AUTHORITY" as const }) }),
@@ -429,6 +439,10 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     expect(mintDelegation.mock.calls[0]![0]).toBe(DEVICE_DID);
     expect(mintDelegation.mock.calls[0]![1]).toEqual([
       { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
+    await authority.mint(DEVICE_DID, "/", new AbortController().signal);
+    expect(mintDelegation.mock.calls[1]![1]).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
 
     const refused = createReplicationAuthority(

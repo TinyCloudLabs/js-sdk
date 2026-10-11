@@ -43,7 +43,7 @@ function replicationEntries(spaceId: string, prefix: string): PermissionEntry[] 
   return [{
     service: KV_SERVICE,
     space: spaceId,
-    path: prefix,
+    path: prefix === "/" ? "" : prefix,
     actions: [KV_GET, KV_SYNC],
   }];
 }

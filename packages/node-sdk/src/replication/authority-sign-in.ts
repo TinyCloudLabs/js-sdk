@@ -32,19 +32,20 @@ export function augmentSignInEntriesWithReplication(input: {
   if (replication === undefined) return out;
   for (const prefix of replication.prefixes) {
     assertFolderPrefix(prefix);
+    const path = prefix === "/" ? "" : prefix;
     if (
       requiresSecretsOptIn(input.primarySpaceId, prefix) &&
       replication.allowSecrets !== true
     ) {
       continue;
     }
-    if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, prefix)) {
+    if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, path)) {
       continue;
     }
     out.push({
       service: KV_SERVICE,
       space: input.primarySpaceId,
-      path: prefix,
+      path,
       actions: [KV_GET, KV_SYNC],
     });
   }
