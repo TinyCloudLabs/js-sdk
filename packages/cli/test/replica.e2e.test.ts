@@ -181,6 +181,26 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     expect(first.status.counts).toEqual({ keys: 3, contentMissing: 0, tombstones: 0 });
     expect(first.status.source).toMatchObject({ host, space, prefix: "notes/" });
 
+    // Saved read-through settings are validated before a KV read starts.
+    const deviceProfilePath = join(home, ".tinycloud", "profiles", "device", "profile.json");
+    const originalDeviceProfile = await readFile(deviceProfilePath);
+    const deviceProfile = JSON.parse(originalDeviceProfile.toString()) as {
+      replication?: { prefixes: string[]; allowSecrets?: boolean };
+    };
+    deviceProfile.replication = { prefixes: ["notes/"] };
+    await writeFile(deviceProfilePath, JSON.stringify(deviceProfile));
+    try {
+      deviceProfile.replication = { prefixes: ["notes"] };
+      await writeFile(deviceProfilePath, JSON.stringify(deviceProfile));
+      const invalidSavedPrefix = await tc(["--replication", "kv", "get", "notes/a.txt"], { profile: "device" });
+      expect(invalidSavedPrefix.code).toBe(2);
+      expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
+      expect(invalidSavedPrefix.stderr).toContain("saved replication prefix");
+      expect(invalidSavedPrefix.stderr).toContain("purging a replica alone");
+    } finally {
+      await writeFile(deviceProfilePath, originalDeviceProfile);
+    }
+
     // 3. Stop the node; a new CLI process reads blake3-identical bytes with the network disabled.
     await stopNode();
     for (const [key, bytes] of Object.entries(fixtures)) {

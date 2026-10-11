@@ -33,7 +33,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
   let dataDir: string;
   let host: string;
   let port: number;
-  let node: ChildProcess | undefined;
+  let nodeFeatures: string[] = [];
   let space: string;
   const nodeSecret = randomBytes(48).toString("base64url");
   const initial = {
@@ -167,7 +167,8 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     host = `http://127.0.0.1:${port}`;
     await startNode();
     const info = await (await fetch(`${host}/info`)).json() as { features?: string[] };
-    expect(info.features).toContain("kv-sync-v1");
+    nodeFeatures = info.features ?? [];
+    expect(nodeFeatures).toContain("kv-sync-v1");
   }, 60_000);
 
   afterAll(async () => {
@@ -578,4 +579,52 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(space).toMatch(/^tinycloud:/);
   }, 300_000);
+  test("whole-space replication follows /info support and saved prefixes fail as usage errors", async () => {
+    await ok(["init", "--name", "root-prefix", "--key-only"], "root-prefix");
+    await ok([
+      "auth", "login", "--method", "local", "--replication-prefix", "/", "--replication-allow-secrets",
+    ], "root-prefix");
+    const seeded = await tc(["kv", "put", "notes/a.txt", "root-value"], { profile: "root-prefix" });
+    expect(seeded.code).toBe(0);
+
+    const profilePath = join(home, ".tinycloud", "profiles", "root-prefix", "profile.json");
+    const saved = JSON.parse(await readFile(profilePath, "utf8")) as { replication?: { prefixes: string[]; allowSecrets?: boolean } };
+    await writeFile(profilePath, JSON.stringify({ ...saved, replication: { prefixes: ["notes"] } }, null, 2));
+    const invalidSavedPrefix = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "root-prefix", replication: "on" });
+    expect(invalidSavedPrefix.code).toBe(2);
+    expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
+    expect(invalidSavedPrefix.stderr).toContain("purging a replica alone does not change this profile setting");
+    await writeFile(profilePath, JSON.stringify(saved, null, 2));
+
+    const firstRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "root-prefix", replication: "on" });
+    expect(firstRead.code).toBe(0);
+    expect(firstRead.stdout.toString()).toBe("root-value");
+    const report = await ok<{
+      replicas: Array<{ prefix: string; state: string; errorCode?: string; coverage?: string; counts?: { keys: number } }>;
+    }>(["replica", "report", "--json"], "root-prefix", { replication: "on" });
+    const rootStatus = report.replicas.find((entry) => entry.prefix === "/");
+    expect(rootStatus).toBeDefined();
+    if (nodeFeatures.includes("kv-sync-root")) {
+      expect(rootStatus).toMatchObject({ state: "ready", coverage: "complete" });
+      expect(rootStatus!.counts?.keys).toBeGreaterThan(0);
+      const offlineGet = await tc(["kv", "get", "notes/a.txt", "--raw"], {
+        profile: "root-prefix", preload: NO_NETWORK, replication: "on",
+      });
+      expect(offlineGet.code).toBe(0);
+      expect(offlineGet.stdout.toString()).toBe("root-value");
+      expect(offlineGet.stderr).toContain("replica hit");
+      const offlineList = await tc(["kv", "list", "--prefix", "notes"], {
+        profile: "root-prefix", preload: NO_NETWORK, replication: "on",
+      });
+      expect(offlineList.code).toBe(0);
+      expect(offlineList.stdout.toString()).toContain("notes/a.txt");
+      const offlineRootList = await tc(["kv", "list"], {
+        profile: "root-prefix", preload: NO_NETWORK, replication: "on",
+      });
+      expect(offlineRootList.code).toBe(0);
+      expect(offlineRootList.stdout.toString()).toContain("notes/a.txt");
+    } else {
+      expect(rootStatus).toMatchObject({ state: "unavailable", errorCode: "REPLICATION_ROOT_UNSUPPORTED" });
+    }
+  }, 120_000);
 });

@@ -60,6 +60,22 @@ describe("replication login folder prefixes", () => {
       expect((error as Error).message).toContain("notes/");
     }
   });
+  test("accepts the whole-space prefix and emits exactly one get+sync entry", () => {
+    const result = buildReplicationLoginRequest(undefined, { prefixes: ["/"], allowSecrets: true })!;
+    expect(result.filter((entry) => entry.actions.includes("tinycloud.kv/sync"))).toEqual([
+      { service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
+  });
+
+  test("rejects empty, leading-slash, and empty-segment prefixes", () => {
+    for (const prefix of ["", "/notes/", "notes//"]) {
+      expect(codeOf(() => buildReplicationLoginRequest(undefined, { prefixes: [prefix] }))).toBe("INVALID_REPLICATION_PREFIX");
+    }
+  });
+
+  test("the whole-space prefix requires explicit secret opt-in", () => {
+    expect(codeOf(() => buildReplicationLoginRequest(undefined, { prefixes: ["/"] }))).toBe("SECRETS_OPT_IN_REQUIRED");
+  });
 
   test("an exact-key get cannot cover a folder; the request remains unchanged", () => {
     const request = [get("notes")];

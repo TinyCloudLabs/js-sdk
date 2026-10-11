@@ -13,6 +13,12 @@ describe("local list parity", () => {
     expect(listPathCovered([""], "anything/deep")).toBe("");
   });
 
+  test("the root replica covers every LIST path and lists every key locally", async () => {
+    expect(listPathCovered(["/"], "notes")).toBe("/");
+    expect(listPathCovered(["/"], "")).toBe("/");
+    const page = await localList(handle, "space", "", undefined, undefined, () => {});
+    expect(page.keys).toEqual(allKeys);
+  });
   test("exact key and children advance strictly through tcr1 pages", async () => {
     const validateMeta = (value: typeof meta) => { if (value.coverage !== "complete" || value.authority !== "valid") throw new Error("ineligible local read"); };
     const first = await localList(handle, "space", "notes", 1, undefined, validateMeta);

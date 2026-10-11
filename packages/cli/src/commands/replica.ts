@@ -68,6 +68,7 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
   [ReplicaErrorCode.NODE_ERROR]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.PROTOCOL_ERROR]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.RESET_REQUIRED]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.SOURCE_CHANGED]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.SCOPE_VIOLATION]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.CONTENT_MISMATCH]: ExitCode.NODE_ERROR,
@@ -484,7 +485,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)")
     .option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires")
     .option("--limit <n>", "Feed page size (1-1000)", (value) => Number.parseInt(value, 10))
-    .option("--allow-secrets", "Opt in to copying ciphertext under a secrets prefix; replica grants do not include decrypt")
+    .option("--allow-secrets", "Opt in to copying ciphertext from a secrets space, vault prefix, or whole space")
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);

@@ -318,6 +318,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _address?: string;
   private _chainId?: number;
   private _nodeFeatures: string[] = [];
+  private _nodeFeaturesKnown = false;
   /**
    * `nodeId` from the `GET /info` performed during sign-in/restore, tagged with
    * the host it came from. Callers that need the node DID (encryption-network
@@ -478,8 +479,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     sessionManager: ISessionManager,
     session: TinyCloudSession | undefined,
     hosts?: string[],
+    nodeFeatures?: string[],
   ): void {
     this.sessionManager = sessionManager;
+    this._nodeFeatures = nodeFeatures === undefined ? [] : [...nodeFeatures];
+    this._nodeFeaturesKnown = nodeFeatures !== undefined;
+    this._nodeInfoIdentity = undefined;
     // Restore is a complete session replacement, not an additive update. In
     // particular, a second restore may target a different host and must not
     // retain skip decisions from the previous activation.
@@ -566,6 +571,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get nodeFeatures(): string[] {
     return this._nodeFeatures;
+  }
+  get nodeFeaturesKnown(): boolean {
+    return this._nodeFeaturesKnown;
+  }
+
+  async refreshNodeInfo(): Promise<void> {
+    const infoHost = this.primaryTinyCloudHost;
+    const nodeInfo = await checkNodeInfo(infoHost, this.wasm.protocolVersion());
+    this._nodeFeatures = nodeInfo.features;
+    this._nodeFeaturesKnown = true;
+    this._nodeInfoIdentity = nodeInfo.nodeId
+      ? { host: infoHost, nodeId: nodeInfo.nodeId }
+      : undefined;
   }
 
   /**
@@ -1425,18 +1443,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._address = address;
     this._chainId = chainId;
 
-    // Verify SDK-node protocol compatibility and discover supported features
-    const infoHost = this.primaryTinyCloudHost;
-    const nodeInfo = await checkNodeInfo(
-      infoHost,
-      this.wasm.protocolVersion(),
-    );
-    this._nodeFeatures = nodeInfo.features;
-    // `/info` already told us the node DID. Keep it so encryption-network
-    // admin invocations do not re-fetch `/info` just to learn it.
-    this._nodeInfoIdentity = nodeInfo.nodeId
-      ? { host: infoHost, nodeId: nodeInfo.nodeId }
-      : undefined;
+    // Verify SDK-node protocol compatibility and discover supported features.
+    await this.refreshNodeInfo();
 
     // Call extension hooks
     for (const ext of this.extensions) {
@@ -1681,18 +1689,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._address = address;
     this._chainId = chainId;
 
-    // Verify SDK-node protocol compatibility and discover supported features
-    const infoHost = this.primaryTinyCloudHost;
-    const nodeInfo = await checkNodeInfo(
-      infoHost,
-      this.wasm.protocolVersion(),
-    );
-    this._nodeFeatures = nodeInfo.features;
-    // `/info` already told us the node DID. Keep it so encryption-network
-    // admin invocations do not re-fetch `/info` just to learn it.
-    this._nodeInfoIdentity = nodeInfo.nodeId
-      ? { host: infoHost, nodeId: nodeInfo.nodeId }
-      : undefined;
+    // Verify SDK-node protocol compatibility and discover supported features.
+    await this.refreshNodeInfo();
 
     // Call extension hooks
     for (const ext of this.extensions) {

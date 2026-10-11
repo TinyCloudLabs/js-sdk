@@ -46,6 +46,7 @@ test("/core enables replication when browser-safe controller loaders are registe
     }),
   } as never;
   const node = new TinyCloudNode({
+    wasmBindings,
     replication: { enabled: true, prefixes: ["notes/"], storage },
   } satisfies TinyCloudNodeConfig);
 

@@ -27,7 +27,7 @@ export function assertValidReplicationConfig(
         );
       }
     }
-    if (prefix.split("/", 1)[0] === "vault" && replication.allowSecrets !== true) {
+    if ((prefix === "/" || prefix.split("/", 1)[0] === "vault") && replication.allowSecrets !== true) {
       throw new TypeError(
         `replication prefix ${JSON.stringify(prefix)} overlaps the vault namespace; pass allowSecrets to opt in`,
       );

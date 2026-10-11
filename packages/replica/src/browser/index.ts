@@ -47,7 +47,7 @@ export type BrowserReplicaOpenOptions = {
   host: string;
   /** The space id (native form) the replica covers. */
   space: string;
-  /** The KV prefix, e.g. `notes/`. */
+  /** The KV prefix: `/` for the whole space, or a folder such as `notes/`. */
   prefix: string;
   /** A display name; defaults to the prefix. */
   name?: string;

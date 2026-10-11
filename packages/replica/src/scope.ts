@@ -1,21 +1,34 @@
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import type { AuthorityState, AuthorityWindow, GrantRecord, LocalReadPolicy } from "./types.js";
 
-/** Replication prefixes name folders: the root or a trailing-slash path. */
+/** Replication prefixes are the whole space (`/`) or a slash-terminated folder. */
 export function assertFolderPrefix(prefix: unknown): asserts prefix is string {
-  if (typeof prefix !== "string" || (prefix !== "" && !prefix.endsWith("/"))) {
-    const suggestion = typeof prefix === "string" ? `${prefix}/` : "a folder path ending in /";
+  const validFolder = typeof prefix === "string" &&
+    prefix.length > 0 &&
+    prefix !== "/" &&
+    !prefix.startsWith("/") &&
+    !prefix.includes("//") &&
+    prefix.endsWith("/");
+  if (prefix !== "/" && !validFolder) {
+    const folderHint = typeof prefix === "string"
+      ? prefix.replace(/^\/+/, "").replace(/\/+$/, "")
+      : "";
+    const suggestion = prefix === "" ? 'use "/" for the whole space' :
+      folderHint.length > 0 && !folderHint.includes("//")
+        ? `use ${JSON.stringify(`${folderHint}/`)}`
+        : 'use "/" for the whole space or a folder path such as "notes/"';
     throw new ReplicaError(
       ReplicaErrorCode.INVALID_ARGUMENT,
-      `Replication prefix ${JSON.stringify(prefix)} must name a folder; use ${JSON.stringify(suggestion)}. Run \`tc replica reset --replica <name> --purge\` and recreate it with the folder prefix.`,
+      `Replication prefix ${JSON.stringify(prefix)} must be "/" or a non-empty folder path ending in / without empty segments; ${suggestion}. Run \`tc replica reset --replica <name> --purge\` and recreate it with the folder prefix.`,
     );
   }
 }
 
+
 export { kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication";
 /** Capability containment: exact grants cover exact keys; slash grants cover descendants. */
 export function authorityPathCovers(grantPath: string, requestedPath: string): boolean {
-  if (grantPath === "" || grantPath === "/") return true;
+  if (grantPath === "/") return true;
   if (grantPath.endsWith("/")) return requestedPath.startsWith(grantPath);
   return requestedPath === grantPath;
 }
@@ -26,6 +39,7 @@ export function authorityPathCovers(grantPath: string, requestedPath: string): b
  * disk and needs an explicit opt-in (TC-733).
  */
 export function requiresSecretsOptIn(space: string, prefix: string): boolean {
+  if (prefix === "/") return true;
   if (space === "secrets" || space.endsWith(":secrets")) return true;
   const firstSegment = prefix.split("/", 1)[0];
   return firstSegment === "vault";

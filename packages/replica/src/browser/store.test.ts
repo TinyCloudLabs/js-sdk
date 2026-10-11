@@ -475,3 +475,32 @@ describe("client lifecycle", () => {
     }
   });
 });
+
+describe("persisted folder-prefix validation", () => {
+  test("init rejects invalid prefixes and reopening rejects invalid persisted state", async () => {
+    const replicaId = nextId();
+    const store = await IndexedDbReplicaStore.open(replicaId, { holder: `holder-${replicaId}` });
+    for (const prefix of ["", "notes", "/notes/", "notes//"]) {
+      await rejectsWith(store.init(config({ replicaId, prefix })), ReplicaErrorCode.INVALID_ARGUMENT);
+    }
+    await store.init(config({ replicaId, prefix: "/" }));
+    await store.close();
+
+    const db = await requestAsPromise(fakeIndexedDB.open(replicaDatabaseName(replicaId)));
+    const tx = db.transaction("meta", "readwrite");
+    const done = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
+    const state = await requestAsPromise<{ config: { prefix: string } }>(tx.objectStore("meta").get("state"));
+    state.config.prefix = "notes";
+    tx.objectStore("meta").put(state, "state");
+    await done;
+    db.close();
+
+    const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "holder-reopen" });
+    await rejectsWith(reopened.open(), ReplicaErrorCode.INVALID_ARGUMENT);
+    await reopened.close();
+  });
+});

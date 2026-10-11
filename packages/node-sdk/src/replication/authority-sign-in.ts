@@ -6,6 +6,7 @@ import {
 } from "@tinycloud/sdk-core";
 import { requiresSecretsOptIn } from "@tinycloud/sdk-services";
 
+import { assertFolderPrefix } from "@tinycloud/replica";
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";
@@ -30,6 +31,7 @@ export function augmentSignInEntriesWithReplication(input: {
   const replication = input.replication;
   if (replication === undefined) return out;
   for (const prefix of replication.prefixes) {
+    assertFolderPrefix(prefix);
     if (
       requiresSecretsOptIn(input.primarySpaceId, prefix) &&
       replication.allowSecrets !== true

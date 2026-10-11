@@ -1546,6 +1546,7 @@ export class KVService extends BaseService implements IKVService {
         ));
       }
 
+      const requestPrefix = options.prefix === "/" ? "" : options.prefix;
       const headers: Record<string, string> = {};
       if (options.limit !== undefined) headers["x-tinycloud-limit"] = String(options.limit);
       if (options.cursor !== undefined) headers["x-tinycloud-cursor"] = options.cursor;
@@ -1556,7 +1557,7 @@ export class KVService extends BaseService implements IKVService {
       const request = this.createRequestSignal(options.signal, options.timeout);
       try {
         const response = await this.invokeOperation(
-          options.prefix,
+          requestPrefix,
           KVAction.SYNC,
           undefined,
           request.signal,
@@ -1576,7 +1577,7 @@ export class KVService extends BaseService implements IKVService {
         } catch {
           body = undefined;
         }
-        const page = this.normalizeChangesResponse(body);
+        const page = this.normalizeChangesResponse(body, options.prefix);
         if (!page) {
           return err(serviceError(
             ErrorCodes.NETWORK_ERROR,
@@ -1664,7 +1665,7 @@ export class KVService extends BaseService implements IKVService {
     ));
   }
 
-  private normalizeChangesResponse(data: unknown): KVChangesResponse | undefined {
+  private normalizeChangesResponse(data: unknown, requestedPrefix: string): KVChangesResponse | undefined {
     if (!isJsonObject(data)) return undefined;
     const { changes, more, cursor, source, authority } = data;
     if (
@@ -1716,7 +1717,11 @@ export class KVService extends BaseService implements IKVService {
       changes: parsed,
       more,
       cursor,
-      source: { nodeDid: source.nodeDid, space: source.space, prefix: source.prefix },
+      source: {
+        nodeDid: source.nodeDid,
+        space: source.space,
+        prefix: requestedPrefix === "/" && source.prefix === "" ? "/" : source.prefix,
+      },
       authority: { notBefore, expiresAt, retainUntil },
     };
   }

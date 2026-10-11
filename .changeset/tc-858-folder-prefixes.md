@@ -5,6 +5,4 @@
 "@tinycloud/sdk-services": patch
 ---
 
-Replication prefixes now name folders (`notes/`) or the root (`""`). Bare replica prefixes are now rejected; use `notes/`.
-
-CLI and node-sdk validate folder prefixes and use sdk-core capability containment as the only grant coverage rule. sdk-services now serves local LIST only when the folder prefix contains its requested path.
+Replication prefixes are folders such as `notes/`, or `/` for the whole space (requires a node advertising `kv-sync-root`). Bare paths and `""` are rejected.

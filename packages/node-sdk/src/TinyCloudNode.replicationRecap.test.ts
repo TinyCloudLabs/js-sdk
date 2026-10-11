@@ -77,12 +77,13 @@ describe("signed recap probes (review: real WASM)", () => {
       prefix: "secrets",
       replication: {
         enabled: true,
+        storage: {} as never,
         prefixes: ["notes/"],
         allowSecrets: true,
       },
     });
     const recap = await signedRecap(node, wasm);
-    const notes = kvEntriesAt(recap, "notes");
+    const notes = kvEntriesAt(recap, "notes/");
     expect(notes).toEqual([]);
     expect(
       recap.every((entry) => !entry.actions.includes("tinycloud.kv/sync")),
@@ -121,7 +122,7 @@ describe("signed recap probes (review: real WASM)", () => {
       },
     });
     const recap = await signedRecap(uncovered, wasm);
-    expect(kvEntriesAt(recap, "notes/private")).toEqual([]);
+    expect(kvEntriesAt(recap, "notes/private/")).toEqual([]);
 
     // Positive control: a trailing-slash `get(notes/)` covers
     // `notes/private/` under sdk-core containment, and the flag signs it.

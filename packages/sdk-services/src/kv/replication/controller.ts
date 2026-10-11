@@ -38,7 +38,6 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   let previous = deps.previous;
   let pinnedStateReported = false;
   const inProcessProof = new Set<string>();
-  const emit = (event: ReplicationEventInput) => emitEvent(deps.emit, scheduler, event);
   const configuredPrefix = (path: string) => options.prefixes.find((prefix) => kvPrefixCovers(prefix, path));
   function recordRevocation(prefix: string, error: unknown): void {
     if (errorCode(error) !== "GRANT_REVOKED") return;
@@ -47,6 +46,17 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     state.reason = "grant_revoked";
     state.lastError = "GRANT_REVOKED";
     replicas.set(prefix, state);
+  }
+  function unsupportedRoot(prefix: string): Error {
+    const state = replicas.get(prefix) ?? {};
+    const firstRefusal = state.lastError !== "REPLICATION_ROOT_UNSUPPORTED";
+    state.reason = "replica_unavailable";
+    state.lastError = "REPLICATION_ROOT_UNSUPPORTED";
+    replicas.set(prefix, state);
+    if (firstRefusal) {
+      emit({ type: "replication.state", space: session.space, replica: prefix, state: "unavailable", code: "REPLICATION_ROOT_UNSUPPORTED" });
+    }
+    return Object.assign(new Error("This node doesn't support whole-space sync yet."), { code: "REPLICATION_ROOT_UNSUPPORTED" });
   }
 
 
@@ -77,6 +87,9 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       let device: ReplicaDevice | undefined;
       if (delegated) { device = delegated.device; state!.strategy = "session"; }
       const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
+      if (prefix === "/" && deps.nodeFeatures !== undefined && !deps.nodeFeatures.includes("kv-sync-root")) {
+        throw unsupportedRoot(prefix);
+      }
       const handle = await storage.open(spec);
       state!.handle = handle;
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "opened" });
@@ -118,7 +131,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       state.lastError = code;
       state.failures = (state.failures ?? 0) + 1;
       if (code === "RUNTIME_UNSUPPORTED") state.unsupported = true;
-      else if (code !== "REPLICA_CLOSED") state.retryAt = scheduler.now() + Math.min(300_000, 5_000 * 2 ** Math.min(state.failures - 1, 6));
+      else if (code !== "REPLICA_CLOSED" && code !== "REPLICATION_ROOT_UNSUPPORTED") state.retryAt = scheduler.now() + Math.min(300_000, 5_000 * 2 ** Math.min(state.failures - 1, 6));
       state.handle?.close().catch(() => undefined);
       state.handle = undefined;
       throw error;
@@ -135,6 +148,9 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   }
 
   async function syncPrefix(prefix: string, trigger: "start" | "interval" | "stale_read" | "manual", signal?: AbortSignal, context?: SyncContext): Promise<LocalSyncResult> {
+    if (prefix === "/" && deps.nodeFeatures !== undefined && !deps.nodeFeatures.includes("kv-sync-root")) {
+      throw unsupportedRoot(prefix);
+    }
     const handle = await open(prefix);
     const state = replicas.get(prefix)!;
     if (state.sync) return state.sync;
@@ -428,7 +444,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         observeNetworkRequested({ op: "get", space: r.space, path: r.path, reason: "NETWORK_REQUESTED", outcome, latencyMs: scheduler.now() - started });
       }
     }
-    if (!prefix) { const value = await r.network(); readEvent("get", r.path, null, "network", "not_covered", value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started); return value; }
+    if (prefix === undefined) { const value = await r.network(); readEvent("get", r.path, null, "network", "not_covered", value.ok ? "found" : value.error.code === ErrorCodes.KV_NOT_FOUND ? "not_found" : "error", started); return value; }
     try { await raceSignal(reportExistingPins(), r.signal); } catch { if (r.signal.aborted) return abortedResult(r.signal); }
     let handle: KVReplicaHandle;
     try { handle = await raceSignal(open(prefix), r.signal); }
@@ -521,7 +537,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const prefix = listPathCovered(options.prefixes, r.listPath);
     const restart = () => { readEvent("list", r.listPath, prefix ?? null, "none", "cursor_restart", "error", started); return cursorRestart(); };
     if (cursor && decoded && (decoded.space !== r.space || decoded.path !== r.listPath)) return restart();
-    if (!prefix || !r.listPath || r.options?.raw) { if (cursor && decoded) return restart(); const result = await r.network(); readEvent("list", r.listPath, prefix ?? null, "network", prefix ? "unsupported_option" : "not_covered", result.ok ? "found" : "error", started); return result; }
+    if (prefix === undefined || r.options?.raw) { if (cursor && decoded) return restart(); const result = await r.network(); readEvent("list", r.listPath, prefix ?? null, "network", prefix !== undefined ? "unsupported_option" : "not_covered", result.ok ? "found" : "error", started); return result; }
     let handle: KVReplicaHandle;
     try { handle = await raceSignal(open(prefix), r.signal); }
     catch (error) {
@@ -587,7 +603,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   async function write<T>(r: { op: "put" | "delete" | "batchPut"; space: string; entries: ReadonlyArray<{ path: string; body?: Blob | string }>; signal: AbortSignal; network: () => Promise<Result<T>> }): Promise<Result<T>> {
     const covered = r.entries.flatMap((entry) => {
       const prefix = configuredPrefix(entry.path);
-      return prefix ? [{ key: entry.path, op: r.op === "delete" ? "delete" as const : "put" as const }] : [];
+      return prefix !== undefined ? [{ key: entry.path, op: r.op === "delete" ? "delete" as const : "put" as const }] : [];
     });
     if (covered.length === 0) return r.network();
     await reportExistingPins();
@@ -672,7 +688,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         prefix,
         state,
         ...(opened?.reason ? { reason: opened.reason } : inspected.errorCode ? { reason: "replica_unavailable" as const } : {}),
-        ...(inspected.errorCode ? { errorCode: inspected.errorCode } : {}),
+        ...(inspected.errorCode ?? opened?.lastError ? { errorCode: inspected.errorCode ?? opened?.lastError } : {}),
         ...(local ?? {}),
         ...(revoked ? { authority: { state: "revoked" as const, expiresAt: local?.authority.expiresAt ?? null } } : {}),
         pending: {
@@ -688,7 +704,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   }
 
   async function sync(o?: { prefix?: string; signal?: AbortSignal }): Promise<void> {
-    const prefixes = o?.prefix ? options.prefixes.filter((p) => p === o.prefix) : options.prefixes;
+    const prefixes = o?.prefix !== undefined ? options.prefixes.filter((p) => p === o.prefix) : options.prefixes;
     await Promise.all(prefixes.map((prefix) => syncPrefix(prefix, "manual", o?.signal).then(() => undefined)));
   }
 

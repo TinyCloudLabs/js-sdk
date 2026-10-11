@@ -39,6 +39,7 @@ describe("requiresSecretsOptIn parity with @tinycloud/replica", () => {
     ["tinycloud:pkh:eip155:1:0xabc:notsecrets", "vault/a"],
     ["default", "secrets"],
     ["mysecrets", "vault/"],
+    ["default", "/"],
   ];
 
   for (const [space, prefix] of cases) {

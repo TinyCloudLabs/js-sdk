@@ -74,12 +74,15 @@ function caveatBranchesUnconstrained(value: unknown): boolean {
 
 /** The KV path a signed UCAN resource names in `space`, like replica's `kvPathIn`. */
 function kvPathInResource(resource: string, space: string): string | undefined {
+  for (const root of [`${space}/kv`, `tinycloud://${space}/kv`]) {
+    if (resource === root || resource === `${root}/`) return "/";
+  }
   for (const base of [`${space}/kv/`, `tinycloud://${space}/kv/`]) {
     if (resource.startsWith(base)) return resource.slice(base.length);
   }
   return undefined;
-}
 
+}
 /**
  * Whether the signed `att` grants `ability` over the folder prefix, with
  * unrestricted authority unless explicitly asked to ignore caveats.
@@ -171,7 +174,7 @@ export function replicationScopeFromSignedSession(input: {
     bareDid(grant.audience) !== bareDid(input.verificationMethod)
   ) return undefined;
   for (const resource of Object.keys(grant.att)) {
-    const space = resource.match(/^(?:tinycloud:\/\/)?(.+?)\/kv\//)?.[1];
+    const space = resource.match(/^(?:tinycloud:\/\/)?(.+?)\/kv(?:\/|$)/)?.[1];
     if (space !== input.persistedSpace) continue;
     const owner = parseSpaceUri(space);
     if (owner?.owner && owner.address && owner.chainId) return { space, principal: owner.owner };

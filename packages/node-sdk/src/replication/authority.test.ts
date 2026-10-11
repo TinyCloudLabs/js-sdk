@@ -48,15 +48,23 @@ describe("assertValidReplicationConfig (§3.1)", () => {
     ).toThrow(TypeError);
   });
 
-  test("empty arrays and bare prefixes are invalid; root is a valid folder prefix", () => {
+  test("empty, bare, malformed, and leading-slash prefixes are invalid; root and folders pass", () => {
     expect(() =>
       assertValidReplicationConfig({ enabled: true, storage, prefixes: [] }),
     ).toThrow(TypeError);
+    for (const prefix of ["", "notes", "notes//", "/notes/"]) {
+      expect(() =>
+        assertValidReplicationConfig({ enabled: true, storage, prefixes: [prefix] }),
+      ).toThrow(TypeError);
+    }
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes"] }),
-    ).toThrow(/notes\//);
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["/"] }),
+    ).toThrow(/allowSecrets/);
     expect(() =>
-      assertValidReplicationConfig({ enabled: true, storage, prefixes: [""] }),
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["/"], allowSecrets: true }),
+    ).not.toThrow();
+    expect(() =>
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/"] }),
     ).not.toThrow();
   });
 
@@ -147,8 +155,8 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
     expect(augmentSignInEntriesWithReplication({
       entries: [kvEntry({ path: "" })],
       primarySpaceId: SPACE,
-      replication: { prefixes: ["notes/", ""] },
-    }).map((entry) => entry.path)).toEqual(["notes/", ""]);
+      replication: { prefixes: ["notes/", "/"] },
+    }).map((entry) => entry.path)).toEqual(["notes/", "/"]);
   });
 
 
@@ -190,6 +198,16 @@ describe("ucanAttCovers / ucanAttUnconstrainedFor (§4.2)", () => {
     const att = { [resource]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} } };
     expect(ucanAttUnconstrainedFor(att, SPACE, "notes/")).toBe(true);
     expect(ucanAttUnconstrainedFor({ [`tinycloud://${SPACE}/kv/unrelated/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} } }, SPACE, "notes/")).toBe(false);
+  });
+  test("canonical root KV resources cover `/` and folders, not unrelated resource boundaries", () => {
+    const abilities = { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} };
+    const bareRoot = { [`${SPACE}/kv`]: abilities };
+    const slashRoot = { [`tinycloud://${SPACE}/kv/`]: abilities };
+    expect(ucanAttUnconstrainedFor(bareRoot, SPACE, "/")).toBe(true);
+    expect(ucanAttUnconstrainedFor(slashRoot, SPACE, "/")).toBe(true);
+    expect(ucanAttCovers(bareRoot, SPACE, "notes/", "tinycloud.kv/get")).toBe(true);
+    expect(ucanAttCovers({ [`${SPACE}/kv-extra`]: abilities }, SPACE, "/", "tinycloud.kv/get")).toBe(false);
+    expect(ucanAttCovers({ [`tinycloud://${SPACE}-other/kv`]: abilities }, SPACE, "/", "tinycloud.kv/get")).toBe(false);
   });
   test("an exact-key get cannot cover a folder; a slash grant covers descendants", () => {
     const exact = { [`tinycloud://${SPACE}/kv/notes`]: { "tinycloud.kv/get": {} } };

@@ -33,6 +33,8 @@ export const ReplicaErrorCode = {
   GRANT_NOT_COVERING: "GRANT_NOT_COVERING",
   GRANT_NOT_YET_VALID: "GRANT_NOT_YET_VALID",
   GRANT_EXPIRED: "GRANT_EXPIRED",
+  /** The configured node does not advertise whole-space KV sync support. */
+  REPLICATION_ROOT_UNSUPPORTED: "REPLICATION_ROOT_UNSUPPORTED",
   GRANT_REVOKED: "GRANT_REVOKED",
   /** The node refused the invocation for a reason other than revocation. */
   GRANT_UNAUTHORIZED: "GRANT_UNAUTHORIZED",
