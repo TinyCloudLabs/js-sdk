@@ -398,6 +398,13 @@ mock.module("../lib/permissions.js", () => ({
   ) => {
     importRecorded.appendedDelegations.push(entry);
   },
+  appendAdditionalDelegationIfUnexpired: async (
+    _profile: string,
+    entry: { delegation: { cid: string }; permissions: unknown[] },
+  ) => {
+    importRecorded.appendedDelegations.push(entry);
+    return true;
+  },
   appendAdditionalDelegations: async (
     _profile: string,
     entries: Array<{ delegation: { cid: string }; permissions: unknown[] }>,

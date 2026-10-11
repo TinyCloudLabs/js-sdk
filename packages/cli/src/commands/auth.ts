@@ -659,11 +659,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             const reason = typeof candidate === "string" &&
               (STORED_GRANT_SKIP_REASONS as readonly string[]).includes(candidate)
               ? candidate : "invalid";
-            const refusal = new CLIError(
-              "DELEGATION_REJECTED",
-              `Imported delegation was rejected (${reason}). No grant was stored.`,
-              ExitCode.ERROR,
-            );
+            const refusal = isActivationExpiry(error)
+              ? delegationExpiredError()
+              : new CLIError(
+                "DELEGATION_REJECTED",
+                `Imported delegation was rejected (${reason}). No grant was stored.`,
+                ExitCode.ERROR,
+              );
             if (bootstrap) await bootstrap.abandon(refusal);
             throw refusal;
           }
