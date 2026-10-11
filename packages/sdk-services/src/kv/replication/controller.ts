@@ -598,10 +598,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     let result: Result<T>;
     try { result = await r.network(); }
     catch (error) {
-      result = err(serviceError(ErrorCodes.NETWORK_ERROR, "KV write request failed after dispatch status became unknown", "kv", {
-        cause: error instanceof Error ? error : undefined,
-        meta: { requestMayHaveDispatched: true },
-      }));
+      const wrapped = wrapError("kv", error);
+      result = err({
+        ...wrapped,
+        meta: { ...wrapped.meta, requestMayHaveDispatched: true },
+      });
     }
     const outcome = classifyWriteOutcome(r.op, result, { conditional: r.conditional === true });
     let settleError: unknown;
