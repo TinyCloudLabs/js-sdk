@@ -202,11 +202,18 @@ export function kvSyncTransport(
   kv: KVSyncClient,
   options: { host?: string; fetch?: typeof globalThis.fetch } = {},
 ): ReplicaTransport {
+  const host = options.host ?? (kv as KVSyncClient & { host?: unknown }).host;
   const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   return {
     async syncPage({ prefix, cursor, limit, retentionGrant, signal }) {
-      if (prefix === "/" && options.host !== undefined) {
-        const features = await featuresForHost(options.host, fetchFn);
+      if (prefix === "/") {
+        if (typeof host !== "string" || host.length === 0) {
+          throw new ReplicaError(
+            ReplicaErrorCode.INVALID_ARGUMENT,
+            "Root sync requires a node host to check kv-sync-root; pass { host } to kvSyncTransport when the KV service does not expose its host.",
+          );
+        }
+        const features = await featuresForHost(host, fetchFn);
         if (features !== undefined && !features.includes("kv-sync-root")) {
           throw new ReplicaError(
             ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED,

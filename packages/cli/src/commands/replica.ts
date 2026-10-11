@@ -298,7 +298,7 @@ async function grantTransports(input: { host: string; space: string; deviceDid: 
       jwk: input.jwk,
     });
     const client: KVSyncClient = kv;
-    return kvSyncTransport(client, { host: input.host });
+    return kvSyncTransport(client);
   };
 }
 
