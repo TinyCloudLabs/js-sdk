@@ -87,6 +87,9 @@ export async function cmdInit(args: ParsedArgs) {
   const expiry = args.get('expiry') ?? AGENT_GRANT_EXPIRY;
   const expiryMs = durationMs(expiry);
   if (!expiryMs || expiryMs > AGENT_GRANT_MAX_MS) fail('usage', `--expiry must be a duration such as 7d, at most ${AGENT_GRANT_EXPIRY}.`);
+  if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
+    fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
+  }
   const grantFile = args.has('grant-file')
     ? requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`)
     : undefined;
@@ -96,9 +99,6 @@ export async function cmdInit(args: ParsedArgs) {
     ? undefined
     : grantFile === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(grantFile, 'utf8');
   if (args.has('resume')) {
-    if (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key')) {
-      fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
-    }
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);

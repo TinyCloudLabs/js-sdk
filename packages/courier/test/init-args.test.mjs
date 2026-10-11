@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -47,3 +47,30 @@ for (const { argv, exit, stderr } of [
     assert.deepEqual(snapshot(home), before);
   });
 }
+
+test('init --resume rejects --grant-file - before reading open stdin and preserves profile bytes', { timeout: 15_000 }, async () => {
+  const home = fixture();
+  const before = snapshot(home);
+  const startedAt = Date.now();
+  const result = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, 'init', '--resume', '--grant-file', '-'], {
+      env: { ...process.env, COURIER_HOME: home },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    child.on('close', (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+  assert.equal(result.code, 2, result.stderr);
+  assert.equal(result.signal, null);
+  assert.ok(Date.now() - startedAt < 10_000);
+  assert.match(result.stderr, /--resume` cannot be combined with --request, --grant-file, --paste or --rotate-key/);
+  assert.equal(result.stdout, '');
+  assert.deepEqual(snapshot(home), before);
+});
