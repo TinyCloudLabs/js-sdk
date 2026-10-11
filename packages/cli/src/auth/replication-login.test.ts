@@ -26,11 +26,26 @@ describe("replication login folder prefixes", () => {
     ]);
   });
 
-  test("root authority covers a folder and default login adds a single folder grant", () => {
+  test("unscoped login preserves KV, SQL, and capability defaults for owner-qualified spaces", () => {
     const result = buildReplicationLoginRequest(undefined, { prefixes: ["notes/"] })!;
-    expect(result).toContainEqual({ service: "tinycloud.kv", space: "default", path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] });
-    expect(result.filter((entry) => entry.actions.includes("tinycloud.kv/sync"))).toHaveLength(1);
     expect(result).toContainEqual({ service: "tinycloud.sql", space: "default", path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"] });
+    expect(result).toContainEqual({ service: "tinycloud.capabilities", space: "default", path: "", actions: ["tinycloud.capabilities/read"] });
+    expect(result).toContainEqual({ service: "tinycloud.kv", space: "default", path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] });
+    const qualified = buildReplicationLoginRequest(undefined, { prefixes: ["notes/"], ownerDid: owner })!;
+    expect(qualified.find((entry) => entry.actions.includes("tinycloud.kv/sync"))?.space)
+      .toBe("tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default");
+  });
+
+  test("one unrestricted get covers despite other caveats; empty caveat sets are unrestricted", () => {
+    const mixed = addReplicationLoginEntries([
+      get("", "default", [{ tenant: "alpha" }]),
+      get("notes/"),
+    ], "default", { prefixes: ["notes/private/"] });
+    expect(mixed.at(-1)?.path).toBe("notes/private/");
+    for (const caveats of [[], [{}]]) {
+      expect(addReplicationLoginEntries([get("", "default", caveats)], "default", { prefixes: ["notes/"] }).at(-1)?.actions)
+        .toContain("tinycloud.kv/sync");
+    }
   });
 
   test("rejects bare prefixes as usage errors and preserves the request", () => {
