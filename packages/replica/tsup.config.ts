@@ -45,7 +45,7 @@ export default defineConfig([
     format: ["esm"],
     platform: "browser",
     target: "es2022",
-    dts: false,
+    dts: true,
     clean: false,
     sourcemap: true,
     splitting: false,

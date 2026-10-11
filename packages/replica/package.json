@@ -24,6 +24,7 @@
       "import": "./dist/browser.js"
     },
     "./worker": {
+      "types": "./dist/replica.worker.d.ts",
       "import": "./dist/replica.worker.js"
     },
     "./package.json": "./package.json"

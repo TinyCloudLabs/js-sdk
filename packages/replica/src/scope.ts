@@ -21,7 +21,10 @@ export function assertFolderPrefix(prefix: unknown): asserts prefix is string {
   }
 }
 
-export { kvPrefixCovers } from "@tinycloud/sdk-services/kv/replication/prefix";
+/** Prefix coverage shared with the KV replication feed. */
+export function kvPrefixCovers(prefix: string, key: string): boolean {
+  return prefix === "/" || key.startsWith(prefix);
+}
 /** Capability containment: exact grants cover exact keys; slash grants cover descendants. */
 export function authorityPathCovers(grantPath: string, requestedPath: string): boolean {
   if (grantPath === "/") return true;
