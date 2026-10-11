@@ -9,14 +9,19 @@ import type {
   InvocationTarget,
   OperationContext,
   OperationDefinition,
+  OperationResult,
   OperationRuntimeRequirement,
   RuntimeOperationContext,
 } from "./contract.js";
+import type { OperationError } from "./errors.js";
 import { createSafeOperationDiagnostic } from "./redaction.js";
 import * as artifacts from "./artifacts.js";
 import { invokeOperation } from "./invoke.js";
 import * as registry from "./registry.js";
 import * as runtime from "./runtime.js";
+import { migrationRecovery, signInRecovery } from "./recovery.js";
+import { secretsGetOperationDefinition } from "./operations/secrets-get.js";
+import { secretsStatusOperationDefinition } from "./operations/secrets-status.js";
 import { profileConfigPath, writeJsonAtomic } from "./state.js";
 
 type TestInput = {
@@ -791,7 +796,15 @@ test("returns the four canonical operation outcomes", async () => {
     createDefinition({
       execute: async () => ({
         status: "setup_required",
-        setup: { kind: "secret_manager", url: "https://secrets.tinycloud.xyz" },
+        setup: {
+          kind: "secret_manager",
+          action: "add_secret",
+          url: "https://secrets.tinycloud.xyz/request?owner=did%3Apkh%3Aeip155%3A1%3A0x1111111111111111111111111111111111111111&name=API_KEY&v=1",
+          names: ["API_KEY"],
+          owner: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+          secret: { name: "API_KEY", space: "secrets" },
+          message: "Ask the owner to add this secret in Secret Manager, then retry the operation.",
+        },
       }),
     }),
     createDefinition({
@@ -1004,6 +1017,284 @@ test("package root exports only registry-keyed invocation", async () => {
   expect(Object.keys(packageRoot)).toEqual(["invokeOperation"]);
 });
 
+const STATUS_OWNER = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
+
+/** One kv-probing node for the real status definition: every probe returns `probe()`. */
+function statusNode(probe: () => unknown = () => ({ ok: true, data: "ciphertext" })) {
+  return { kvForSpace: () => ({ get: async () => probe() }) };
+}
+
+function restoredSummary(posture: "delegate-session" | "owner-openkey" | "local-owner-key", profile = "agent") {
+  return {
+    profile,
+    host: "https://node.example",
+    posture,
+    operatorType: posture === "delegate-session" ? "agent" as const : "human" as const,
+    sessionDid: "did:key:session",
+    ...(posture === "delegate-session" ? { principalDid: "did:key:session", ownerDid: STATUS_OWNER } : { principalDid: STATUS_OWNER }),
+  };
+}
+
+function useStatusDefinition(): void {
+  definitions = [secretsStatusOperationDefinition as unknown as OperationDefinition<TestInput, TestOutput>];
+}
+
+test("S2-T8(a) the registered status operation dispatches restored, never authenticated", async () => {
+  useStatusDefinition();
+  const requirements: OperationRuntimeRequirement[] = [];
+  resolver = async (_target, requirement) => {
+    requirements.push(requirement);
+    return { ok: true, context: { summary: restoredSummary("delegate-session"), runtime: { node: statusNode(), granted: [] } } };
+  };
+  const result = await invokeOperation("tinycloud.secrets.status", 1, {}, { names: ["A"] });
+  expect(result).toMatchObject({ status: "ok", output: { status: "ready" } });
+  expect(requirements).toEqual(["inspection", "restored"]);
+  expect(requirements).not.toContain("authenticated");
+
+  const fixtureRequirements: OperationRuntimeRequirement[] = [];
+  definitions = [createDefinition({ runtime: "restored" })];
+  resolver = async (_target, requirement) => {
+    fixtureRequirements.push(requirement);
+    return { ok: true, context: { summary: restoredSummary("delegate-session"), runtime: { node: {}, granted: [] } } };
+  };
+  expect(await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" })).toMatchObject({ status: "ok" });
+  expect(fixtureRequirements).toEqual(["inspection", "restored"]);
+});
+
+test("S2-T8(b) a restored owner-profile operation needs the explicit owner opt-in before runtime resolution", async () => {
+  for (const posture of ["owner-openkey", "local-owner-key"] as const) {
+    const requirements: OperationRuntimeRequirement[] = [];
+    let executed = false;
+    definitions = [createDefinition({
+      runtime: "restored",
+      postures: [posture],
+      execute: async () => {
+        executed = true;
+        return { status: "ok", output: { value: "ok" } };
+      },
+    })];
+    resolver = async (_target, requirement) => {
+      requirements.push(requirement);
+      return { ok: true, context: { summary: restoredSummary(posture, "owner"), runtime: { node: {}, granted: [] } } };
+    };
+
+    expect(await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" })).toMatchObject({
+      status: "error",
+      error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" },
+    });
+    expect(requirements).toEqual(["inspection"]);
+    expect(executed).toBe(false);
+
+    expect(await invokeOperation("tinycloud.test.get", 1, { allowOwnerProfile: true }, { name: "valid" }))
+      .toMatchObject({ status: "ok", output: { value: "ok" } });
+    expect(requirements).toEqual(["inspection", "inspection", "restored"]);
+    expect(executed).toBe(true);
+  }
+});
+
+test("S2-T8(c) a restored resolution that changes posture from inspection fails closed before execute", async () => {
+  for (const [postures, code] of [
+    [["delegate-session", "local-owner-key"], "PROFILE_OWNER_OPT_IN_REQUIRED"],
+    [["delegate-session"], "PROFILE_POSTURE_NOT_ALLOWED"],
+  ] as const) {
+    let executed = false;
+    definitions = [createDefinition({
+      runtime: "restored",
+      postures,
+      execute: async () => {
+        executed = true;
+        return { status: "ok", output: { value: "ok" } };
+      },
+    })];
+    resolver = async (_target, requirement) => ({
+      ok: true,
+      context: {
+        summary: restoredSummary(requirement === "inspection" ? "delegate-session" : "local-owner-key", "race"),
+        runtime: { node: {}, granted: [] },
+      },
+    });
+    expect(await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" })).toMatchObject({
+      status: "error",
+      error: { code },
+    });
+    expect(executed).toBe(false);
+  }
+});
+
+test("S2-T5 a definition deadline returns a retryable NODE_UNREACHABLE while the stalled runtime is abandoned", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  let rejectStalled: (error: Error) => void = () => {};
+  try {
+    definitions = [createDefinition({ deadlineMs: 200 })];
+    resolver = (_target, requirement) => requirement === "inspection"
+      ? Promise.resolve({ ok: true, context: { summary: restoredSummary("delegate-session"), runtime: { node: {}, granted: [] } } })
+      : new Promise((_resolve, reject) => { rejectStalled = reject; });
+    const started = performance.now();
+    const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+    const elapsed = performance.now() - started;
+    expect(result).toMatchObject({
+      status: "error",
+      operation: { operationId: "tinycloud.test.get", operationVersion: 1 },
+      error: { code: "NODE_UNREACHABLE", retryable: true, message: "The operation did not finish within 0.2 s." },
+    });
+    expect(elapsed).toBeGreaterThanOrEqual(190);
+    expect(elapsed).toBeLessThan(300);
+
+    // The abandoned work finally fails: nothing reports an unhandled rejection.
+    rejectStalled(new Error("stalled replay failed"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(unhandled).toEqual([]);
+
+    // Without a deadline the same slow runtime is awaited as before.
+    definitions = [createDefinition()];
+    resolver = (_target, requirement) => new Promise((resolve) => setTimeout(() => resolve({
+      ok: true,
+      context: { summary: restoredSummary("delegate-session"), runtime: { node: {}, granted: [] } },
+    }), requirement === "inspection" ? 0 : 300));
+    expect(await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" })).toMatchObject({
+      status: "ok",
+      output: { value: "ok" },
+    });
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("S2-T10(a) a plain 401 status probe keeps the delegate sign-in recovery on the final envelope", async () => {
+  useStatusDefinition();
+  resolver = async () => ({
+    ok: true,
+    context: {
+      summary: restoredSummary("delegate-session"),
+      runtime: { node: statusNode(() => ({ ok: false, error: { code: "AUTH_UNAUTHORIZED", service: "kv", meta: { status: 401 } } })), granted: [] },
+    },
+  });
+  const result = await invokeOperation("tinycloud.secrets.status", 1, { profile: "agent" }, { names: ["A"] });
+  expect(result).toMatchObject({ status: "error", error: { code: "AUTH_REQUIRED" } });
+  expect(errorOf(result).details).toEqual({
+    recovery: {
+      action: "sign_in",
+      command: "tc --profile agent auth login --method openkey --paste --manifest <manifest.json>",
+    },
+  });
+});
+
+test("S2-T10(b) owner reasons survive on INPUT_INVALID next to the existing issues policy", async () => {
+  useStatusDefinition();
+  resolver = async () => ({
+    ok: true,
+    context: { summary: restoredSummary("delegate-session"), runtime: { node: statusNode(), granted: [] } },
+  });
+  const mismatch = await invokeOperation("tinycloud.secrets.status", 1, {}, {
+    names: ["A"],
+    owner: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+  });
+  expect(errorOf(mismatch)).toMatchObject({ code: "INPUT_INVALID" });
+  expect(errorOf(mismatch).details).toEqual({ reason: "OWNER_MISMATCH" });
+
+  resolver = async () => ({
+    ok: true,
+    context: {
+      summary: { profile: "agent", host: "https://node.example", posture: "delegate-session", sessionDid: "did:key:session", principalDid: "did:key:session" },
+      runtime: { node: statusNode(), granted: [] },
+    },
+  });
+  const unknown = await invokeOperation("tinycloud.secrets.status", 1, {}, { names: ["A"] });
+  expect(errorOf(unknown).details).toEqual({ reason: "OWNER_DID_UNKNOWN" });
+
+  definitions = [createDefinition({
+    execute: async () => ({
+      status: "error",
+      error: { code: "INPUT_INVALID", message: "Invalid.", retryable: false, details: { issues: [{ code: "custom", message: "leak" }], reason: "OWNER_MISMATCH" } },
+    }),
+  })];
+  const both = await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" });
+  expect(errorOf(both).details).toEqual({ issues: [{ code: "custom" }], reason: "OWNER_MISMATCH" });
+});
+
+test("S2-T10(c) runtime-preparation errors pass the same allowlist", async () => {
+  useStatusDefinition();
+  const cases = [
+    {
+      error: { code: "SESSION_NOT_FOUND", message: "No session.", retryable: false, details: { recovery: signInRecovery("agent", "delegate-session"), path: "/home/x" } },
+      details: { recovery: { action: "sign_in", command: "tc --profile agent auth login --method openkey --paste --manifest <manifest.json>" } },
+    },
+    {
+      error: { code: "PROFILE_MIGRATION_REQUIRED", message: "Migrate.", retryable: false, details: { recovery: migrationRecovery("agent"), records: 3 } },
+      details: { recovery: { action: "complete_migration", command: "tc --profile agent auth caps", operationId: "tinycloud.auth.capabilities" } },
+    },
+    {
+      error: { code: "AUTH_REQUIRED", message: "Never signs in.", retryable: false, details: { reason: "explicit_key", key: "0xsecret" } },
+      details: { reason: "explicit_key" },
+    },
+  ] as const;
+  for (const { error, details } of cases) {
+    resolver = async (_target, requirement) => requirement === "inspection"
+      ? { ok: true, context: { summary: restoredSummary("delegate-session"), runtime: { node: {}, granted: [] } } }
+      : { ok: false, context: restoredSummary("delegate-session"), error } as never;
+    const result = await invokeOperation("tinycloud.secrets.status", 1, { profile: "agent" }, { names: ["A"] });
+    expect(result).toMatchObject({ status: "error", error: { code: error.code } });
+    expect(errorOf(result).details).toEqual(details);
+  }
+});
+
+test("S2-T10(d) secrets.get not found for a local owner keeps its value-free KV_NOT_FOUND details", async () => {
+  definitions = [secretsGetOperationDefinition as unknown as OperationDefinition<TestInput, TestOutput>];
+  const space = "tinycloud:pkh:eip155:1:0xd559ccd9eb87c530a9a349262669386de93cf412:secrets";
+  const node = {
+    getEncryptionNetworkIdForSpace: () => "urn:tinycloud:encryption:did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:default",
+    readSecret: async () => ({ status: "not_found" }),
+  };
+  const summary = restoredSummary("local-owner-key", "owner");
+  const granted = await secretsGetOperationDefinition.authority(
+    { summary, runtime: { node, granted: [] } },
+    { name: "API_KEY", space },
+  );
+  resolver = async () => ({ ok: true, context: { summary, runtime: { node, granted: [...granted], localOwner: true } } });
+  const result = await invokeOperation("tinycloud.secrets.get", 1, { allowOwnerProfile: true }, { name: "API_KEY", space });
+  expect(result).toMatchObject({ status: "error", error: { code: "KV_NOT_FOUND" } });
+  expect(errorOf(result).details).toEqual({
+    names: ["API_KEY"],
+    owner: STATUS_OWNER,
+    recoveryKind: "put_locally",
+  });
+});
+
+test("S2-T10(e) unknown keys, bad enums, forged commands and unsafe profile names are stripped", async () => {
+  const valid = signInRecovery("agent", "owner-openkey");
+  const envelope = async (code: string, details: Record<string, unknown>) => {
+    definitions = [createDefinition({
+      execute: async () => ({ status: "error", error: { code, message: "Refused.", retryable: false, details } as never }),
+    })];
+    return { error: errorOf(await invokeOperation("tinycloud.test.get", 1, {}, { name: "valid" })) };
+  };
+
+  expect((await envelope("AUTH_REQUIRED", { recovery: valid, extra: "x", token: "secret" })).error.details).toEqual({ recovery: valid });
+  expect((await envelope("INPUT_INVALID", { reason: "SOMETHING_ELSE" })).error).not.toHaveProperty("details");
+  for (const recovery of [
+    { ...valid, extra: "x" },
+    { action: "complete_migration", command: "tc --profile agent auth caps", operationId: "tinycloud.auth.capabilities" },
+    { action: "sign_in", command: "tc --profile x; rm -rf ~ auth login --method local" },
+    { action: "sign_in", command: "tc --profile agent auth login --method magic" },
+  ]) {
+    expect((await envelope("AUTH_REQUIRED", { recovery })).error).not.toHaveProperty("details");
+  }
+  for (const recovery of [
+    { action: "complete_migration", command: "tc --profile x; rm -rf ~ auth caps", operationId: "tinycloud.auth.capabilities" },
+    { action: "complete_migration", command: "tc --profile agent auth caps", operationId: "tinycloud.other" },
+    { action: "complete_migration", command: "tc --profile agent auth caps", operationId: "tinycloud.auth.capabilities", tool: "tinycloud_auth_capabilities" },
+  ]) {
+    expect((await envelope("PROFILE_MIGRATION_REQUIRED", { recovery })).error).not.toHaveProperty("details");
+  }
+
+  const unsafe = signInRecovery("my profile", "local-owner-key");
+  expect(unsafe).toEqual({ action: "sign_in" });
+  expect((await envelope("SESSION_NOT_FOUND", { recovery: unsafe })).error.details).toEqual({ recovery: { action: "sign_in" } });
+  expect(migrationRecovery("my profile")).toEqual({ action: "complete_migration", operationId: "tinycloud.auth.capabilities" });
+});
+
 function createDefinition(
   overrides: Partial<OperationDefinition<TestInput, TestOutput>> = {},
 ): OperationDefinition<TestInput, TestOutput> {
@@ -1044,3 +1335,9 @@ const testCapability = {
   path: "vault/secrets/API_KEY",
   actions: ["tinycloud.kv/get"],
 };
+
+/** The error of an error envelope; any other envelope fails the test. */
+function errorOf(result: OperationResult<unknown>): OperationError {
+  if (result.status !== "error") throw new Error(`expected an error envelope, got ${result.status}`);
+  return result.error;
+}

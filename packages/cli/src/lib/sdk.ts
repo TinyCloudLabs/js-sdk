@@ -1,10 +1,12 @@
-import { TinyCloudNode, type PortableDelegation } from "@tinycloud/node-sdk";
+import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
-import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
+import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
+import { recordWarnings } from "../output/warnings.js";
+import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
@@ -59,6 +61,13 @@ function signerJwkForProfile(
   );
 }
 
+/** Whether the compact UCAN behind `delegation` signs an expiry that has passed by this machine's clock. */
+function signedLifetimePassed(delegation: PortableDelegation): boolean {
+  const authorization = delegation.delegationHeader?.Authorization;
+  const expiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
+  return expiry !== undefined && expiry.getTime() <= Date.now();
+}
+
 /**
  * Restore the stored session. node-sdk refuses expired or otherwise unusable
  * persisted authority (`AUTH_EXPIRED`) while verifying it locally, before any
@@ -77,6 +86,87 @@ async function restoreProfileSession(
       throw sessionExpiredError(profileName, profile === null ? undefined : resolveProfilePosture(profile));
     }
     throw error;
+  }
+}
+
+function persistedSessionData(
+  profileName: string,
+  profile: ProfileConfig,
+  session: Record<string, unknown>,
+  key: object | null,
+): Parameters<TinyCloudNode["restoreSession"]>[0] {
+  return {
+    delegationHeader: session.delegationHeader as { Authorization: string },
+    delegationCid: session.delegationCid as string,
+    spaceId: session.spaceId as string,
+    jwk: signerJwkForProfile(profileName, session.jwk, key),
+    verificationMethod: (session.verificationMethod as string) ?? profile.sessionDid ?? profile.did,
+    address: session.address as string | undefined,
+    chainId: session.chainId as number | undefined,
+    siwe: session.siwe as string | undefined,
+    signature: session.signature as string | undefined,
+  };
+}
+
+/**
+ * Inspect a profile's own persisted session without signing in, replaying a
+ * stored grant or contacting the node. Used for local grant inspection only.
+ */
+export async function restoreProfileSessionNode(
+  ctx: CLIContext,
+): Promise<{ node: TinyCloudNode } | { unavailable: "session_missing" | "session_expired" | "session_invalid" }> {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
+  if (!session) return { unavailable: "session_missing" };
+  if (typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" ||
+    session.delegationHeader === null || typeof session.delegationHeader !== "object" ||
+    !("Authorization" in session.delegationHeader) ||
+    typeof session.delegationHeader.Authorization !== "string") {
+    return { unavailable: "session_invalid" };
+  }
+  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now()) {
+    return { unavailable: "session_expired" };
+  }
+  const key = await ProfileManager.getKey(ctx.profile);
+  try {
+    const node = new TinyCloudNode({
+      host: ctx.host,
+      ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
+    });
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    return { node };
+  } catch (error) {
+    if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
+      return { unavailable: "session_expired" };
+    }
+    return { unavailable: "session_invalid" };
+  }
+}
+
+/**
+ * Whether the profile's stored session, when `createSDKInstance` would restore
+ * it, passes the same local verification, run here in a throwaway node: no
+ * request is sent and nothing is written. `true` when there is none to restore.
+ */
+export async function storedSessionVerifiesLocally(profileName: string): Promise<boolean> {
+  const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  if (profile === null) return true;
+  const local = profile.authMethod === "local" && typeof profile.privateKey === "string";
+  try {
+    const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+    if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" ||
+      session.delegationHeader === null || typeof session.delegationHeader !== "object" ||
+      !("Authorization" in session.delegationHeader) ||
+      typeof session.delegationHeader.Authorization !== "string") return true;
+    const key = await ProfileManager.getKey(profileName);
+    const node = new TinyCloudNode({
+      host: profile.host ?? DEFAULT_HOST,
+      ...(local ? { privateKey: profile.privateKey } : {}),
+    });
+    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -130,31 +220,21 @@ export async function createSDKInstance(
     });
     if (node.replication) registerReplication(ctx.profile, node.replication);
 
-    let restoredOwnSession = false;
-    if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-      await restoreProfileSession(node, ctx.profile, profile, {
-        delegationHeader: session.delegationHeader as { Authorization: string },
-        delegationCid: session.delegationCid as string,
-        spaceId: session.spaceId as string,
-        jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
-        verificationMethod: (session.verificationMethod as string) ?? profile?.sessionDid ?? profile?.did,
-        address: session.address as string | undefined,
-        chainId: session.chainId as number | undefined,
-        siwe: session.siwe as string | undefined,
-        signature: session.signature as string | undefined,
-      });
-      restoredOwnSession = true;
+    const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
+    if (restoredOwnSession) {
+      await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key));
     } else {
       await node.signIn();
     }
-    // Only the profile's own restored session may migrate its records: a
-    // fresh sign-in uses a session key they do not address, and an explicit
-    // key is another identity.
-    await replayAdditionalDelegations(node, ctx.profile, {
-      host: ctx.host,
-      ownerSpace: profile.spaceId,
-      migrate: restoredOwnSession && options?.privateKey === undefined,
-    });
+    // The restored persisted session may replay even when an explicit local
+    // key is supplied; only ordinary invocations run binding migration.
+    if (restoredOwnSession) {
+      recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
+        host: ctx.host,
+        ownerSpace: profile.spaceId,
+        migrate: options?.privateKey === undefined,
+      }));
+    }
     return node;
   }
 
@@ -175,32 +255,16 @@ export async function createSDKInstance(
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);
 
-  // Only the profile's own restored session may run its binding migration.
-  let restoredOwnSession = false;
   if (options?.privateKey) {
-    // Sign in with private key (existing behavior)
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    // Restore session from stored delegation data (browser auth flow)
-    await restoreProfileSession(node, ctx.profile, profile, {
-      delegationHeader: session.delegationHeader as { Authorization: string },
-      delegationCid: session.delegationCid as string,
-      spaceId: session.spaceId as string,
-      jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
-      verificationMethod: (session.verificationMethod as string) ?? profile?.did,
-      address: session.address as string | undefined,
-      chainId: session.chainId as number | undefined,
-      siwe: session.siwe as string | undefined,
-      signature: session.signature as string | undefined,
-    });
-    restoredOwnSession = true;
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile!, session, key));
+    recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
+      host: ctx.host,
+      ownerSpace: profile?.spaceId,
+      migrate: true,
+    }));
   }
-
-  await replayAdditionalDelegations(node, ctx.profile, {
-    host: ctx.host,
-    ownerSpace: profile?.spaceId,
-    migrate: restoredOwnSession,
-  });
   return node;
 }
 
@@ -261,7 +325,6 @@ export async function bootstrapDelegatedSession(
         ExitCode.PERMISSION_DENIED,
       );
     }
-
     if (await ProfileManager.getSession(ctx.profile) !== null) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
@@ -269,6 +332,9 @@ export async function bootstrapDelegatedSession(
         ExitCode.ERROR,
       );
     }
+    // A delegation whose signed lifetime has passed would only become a
+    // session every command refuses: report the delegation, write nothing.
+    if (signedLifetimePassed(delegation)) throw delegationExpiredError();
 
     const jwk = signerJwkForProfile(ctx.profile, undefined, await ProfileManager.getKey(ctx.profile));
     const session = {
@@ -289,6 +355,12 @@ export async function bootstrapDelegatedSession(
   });
 
   const abandon = async (cause: unknown): Promise<never> => {
+    // The delegation expired after the check above and a restore of it was
+    // refused (this bootstrap's, or the request-bound import's runtime):
+    // report the delegation, as that check would have. Rollback is unchanged.
+    const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation)
+      ? delegationExpiredError()
+      : cause;
     const note = await ProfileManager.withLock(ctx.profile, async () => {
       const profile = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
         if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
@@ -306,7 +378,7 @@ export async function bootstrapDelegatedSession(
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) =>
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`);
-    throw annotate(cause, note);
+    throw annotate(reported, note);
   };
 
   let node: TinyCloudNode;

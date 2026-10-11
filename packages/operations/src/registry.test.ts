@@ -4,6 +4,7 @@ import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import { explorationOperationDefinitions } from "./operations/exploration.js";
 import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
+import { secretsStatusOperationDefinitions } from "./operations/secrets-status.js";
 import { sqlOperationDefinitions } from "./operations/sql.js";
 import { statusOperationDefinitions } from "./operations/status.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
@@ -22,6 +23,7 @@ const expectedOperationIds = [
   "tinycloud.kv.list",
   "tinycloud.kv.put",
   "tinycloud.secrets.get",
+  "tinycloud.secrets.status",
   "tinycloud.sql.execute",
   "tinycloud.sql.query",
   "tinycloud.sql.schema.inspect",
@@ -40,7 +42,8 @@ test("registry contains exactly the reviewed v1 operations", () => {
     ...explorationOperationDefinitions,
     ...sqlOperationDefinitions,
     ...secretsGetOperationDefinitions,
-  ]).toHaveLength(16);
+    ...secretsStatusOperationDefinitions,
+  ]).toHaveLength(17);
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {

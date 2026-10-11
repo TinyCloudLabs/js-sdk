@@ -37,6 +37,10 @@ export const ExitCode = {
   PERMISSION_DENIED: 5,
   NETWORK_ERROR: 6,
   NODE_ERROR: 7,
+  /** `tc secrets wait` only: the deadline passed while a secret was still missing. */
+  PENDING: 8,
   /** A write was refused because the owner's TinyCloud storage is full. */
   STORAGE_FULL: 10,
+  /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
+  CANCELLED: 130,
 } as const;

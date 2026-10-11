@@ -3,12 +3,13 @@
 <!-- BEGIN GENERATED TINYCloud operations coverage -->
 This release has **Commander coverage tracked, not complete parity**:
 
-- 1 migrated registration(s).
+- 2 migrated registration(s).
 - 1 partially migrated registration(s).
-- 123 legacy registration(s) remain Commander-owned.
+- 127 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
+- `secrets probe <name>` → `tinycloud.secrets.status@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
 ## Calling the CLI
@@ -84,7 +85,23 @@ tc delegation revoke <cid>
 
 Actions are auto-prefixed with `tinycloud.` if not already.
 
-`tc auth import` stores delegations in the profile's `additional-delegations.json`; a compact-UCAN delegation addressed to the profile's session key is stored with an `authorityRequest` binding. Later commands install such a delegation only when its signed capabilities fit inside that binding. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) describes how each import route binds a delegation, the one-time migration of records from earlier releases, and how to recover a record that installs nothing.
+`tc auth import` stores delegations in `additional-delegations.json`. Every replay path installs only a grant with a locally verified proof and a binding containing its signed authority; unbound and proof-less grants never install, including while migration is deferred. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) covers migration and recovery.
+
+### Stored grants
+
+```bash
+tc --profile PROFILE auth grants list --json
+tc --profile PROFILE auth grants remove <cid>
+tc --profile PROFILE auth grants remove <cid> --revoke --yes
+```
+
+`list` is local and does not contact the node. Its JSON contains `profile`, `session` (`cid` recomputed from stored header and `expiresAt`, or `null`), `localVerification` (`available`, `session_missing`, `session_expired`, `session_invalid`), and `grants`. Each indexed grant row contains `cid` (CID-shaped or `null`), `expiry`, `expired`, `local` (`verified`, `refused`, `not_checked`, `for_another_key`), `reason` (fixed skip code or `null`), `node: "not_checked"`, `bound`, `proof` (`siwe`, `compact`, `missing`, or `null`), `source`, `scope`, and `scopeSource` (`signed` or `stored`). `for_another_key` means the stored audience names another key; its scope is unverified stored metadata and it cannot install in this session. Local verification checks signed scope and binding, not the node's delegation chain or revocation status. Human output shows `CID | LOCAL | EXPIRES | SOURCE | BOUND | SCOPE` and the session CID.
+
+`for_another_key` is decided from a verified signed compact audience, CID, and matching transport DID, not an unsigned `delegateDID` alone. Tampered records retain their refusal reason, and proofless records retain `proof_missing`.
+
+Local `remove` deletes every row matching that exact CID, and is available to delegates. `--revoke` alone is owner-only: it uses normal verified local-node discovery unless a host is explicit, revokes on the node, and removes the rows only after success. If the local removal then fails, `GRANT_REVOKED_LOCAL_REMOVE_FAILED` directs a local-only retry without `--revoke`. OpenKey cannot sign raw `urn:cid` authority on the deployed version; owner OpenKey revocation uses a verified CID-bound owner-space fallback, or immediately fails `RAW_RECAP_RESOURCE_UNSUPPORTED`. Local removal does not revoke the delegation; delegated sessions cannot use `--revoke` because this SDK cannot issue a delegatee self-revocation.
+
+A concurrent local removal after revocation reports `removed: 0` as success. Other local cleanup failures include `error.meta.causeCode` (for example `PROFILE_LOCK_TIMEOUT`).
 
 ## Spaces
 
@@ -126,12 +143,59 @@ tc secrets network init
 tc secrets network show
 tc secrets network grant did:pkh:eip155:1:0xRecipient...
 
-tc secrets put ANTHROPIC_API_KEY "sk-..."
+printf '%s' "$ANTHROPIC_API_KEY" | tc secrets put ANTHROPIC_API_KEY --stdin   # keeps the value out of argv and shell history
 tc secrets get ANTHROPIC_API_KEY
 tc secrets get ANTHROPIC_API_KEY -o key.txt   # atomic owner-only (0600) replacement
 tc secrets list
 tc secrets delete ANTHROPIC_API_KEY
 ```
+
+A missing secret makes `tc secrets get` exit 4 (`NOT_FOUND`). For an identity that is not local, `error.setup` carries the owner's request link; a local identity (or a name/scope no link can express) gets only a hint naming `tc secrets put NAME --stdin`. `tc secrets doctor NAME` hints `tc secrets request NAME` for a missing secret, or `tc secrets put NAME --stdin` for a local identity. `tc secrets get --delegation` follows the same rule, and a delegated read the node refuses (403, a capability 401, `AUTH_UNAUTHORIZED`) exits 5.
+
+### Asking the owner for a secret: `request`, `wait`, `manage`
+
+`/usr/sbin/tc` (iproute2 traffic control) can shadow TinyCloud's `tc` on `PATH`, so scripts call the CLI by absolute path:
+
+```bash
+TC_BIN="$(npm prefix --global)/bin/tc"
+"$TC_BIN" --profile agent secrets request OPENAI_API_KEY --requester "agent@host" --json
+# {"url":"https://secrets.tinycloud.xyz/request?owner=…&name=OPENAI_API_KEY&requester=…&v=1","names":["OPENAI_API_KEY"],"owner":"did:pkh:eip155:1:0x…"}
+# send the url to the owner once, then:
+"$TC_BIN" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json
+"$TC_BIN" --profile agent secrets get OPENAI_API_KEY --raw
+"$TC_BIN" secrets manage OPENAI_API_KEY --no-open --json   # {"url":"…","opened":false}: the replace/manage page
+```
+
+- **`secrets request <NAME...> [--scope S | --app ID] [--owner DID] [--requester LABEL] [--open]`** prints `{url, names, scope?, owner}` and exits 0. It is offline: no session, no node request. 1–10 names (`^[A-Z][A-Z0-9_]*$`, ≤ 64, duplicates dropped). `--app ID` derives the scope from an app id (`xyz.tinycloud.feed` → `xyz-tinycloud-feed`); `--app` with `--scope` exits 2. `--requester` defaults to `user@host`. `--open` also opens the link; a failure to open only adds a `BROWSER_OPEN_FAILED` warning on stderr. Errors: 2 for `INVALID_SECRET_NAME`, `TOO_MANY_SECRET_NAMES`, `INVALID_SECRET_SCOPE`, `INVALID_REQUESTER`, `INVALID_OWNER`, `OWNER_MISMATCH`, `LOCAL_OWNER_PROFILE`; 3 for `OWNER_DID_UNKNOWN` (pass `--owner`).
+- **`secrets wait <NAME...> [--scope S | --app ID] [--owner DID] [--timeout D]`** polls until every name is readable. `D` is `0`, `Ns` or `Nm`, default `5m`, at most `9m`; `--timeout 0` makes exactly one check (≤ 21 s). The whole wait is bounded by timeout + 21 s. Each check runs in a child process that is killed if it overruns.
+- **`secrets manage [NAME...] [--scope S | --app ID] [--no-open]`** prints `{url, opened}` for the Secret Manager page, opening a browser unless `--no-open`.
+
+**`wait` never signs in: it needs a stored session and doesn't accept `TC_PRIVATE_KEY`** (an explicit key exits 3). It never writes profile state, never saves a consent request, never prints a value and never prompts. After a CLI upgrade, run one normal command per profile first (for example `tc --profile agent auth caps`); otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` once, with that command in `error.recovery.command`.
+
+| `wait` exit | Meaning |
+|---|---|
+| 0 | stdout `{status:"ready", names, scope?}` |
+| 8 | `PENDING`: stdout `{status:"pending", pending, present, url}` (or `hint` instead of `url` for a local identity). Rerun `wait` without re-sending the link |
+| 5 | `PERMISSION_DENIED`: `error.recovery` `{action:"request_access", names, owner, scope?}` names the denied names; `error.setup` covers names still pending |
+| 3 | `AUTH_REQUIRED`: no stored session, an expired one, a 401, or `TC_PRIVATE_KEY` set. `error.recovery.command` is the persistent login to run once |
+| 2 | usage, `OWNER_MISMATCH` |
+| 6 | `NETWORK_ERROR` after repeated node failures; `error.progress` `{present, pending}` from the last successful check |
+| 1 | `PROFILE_MIGRATION_REQUIRED` (run `error.recovery.command`, `tc --profile P auth caps`, once, then retry) or `PROBE_FAILED` |
+| 130 | `CANCELLED` (SIGINT/SIGTERM); `error.progress` when a check had succeeded |
+
+**Which identity gets a link (posture table):**
+
+| Identity | `request` | missing secret on `get` / `wait` |
+|---|---|---|
+| `owner-openkey` (recorded owner) | link for the recorded owner | `error.setup` / `url` |
+| `delegate-session` | link for the owner of its space (or `--owner`) | `error.setup` / `url` |
+| key-only `did:key` with no recorded owner | `OWNER_DID_UNKNOWN` (3) unless `--owner` | `wait`: needs a session (3) |
+| `local-owner-key`, a profile holding a `privateKey`, `--private-key`, `TC_PRIVATE_KEY` | `LOCAL_OWNER_PROFILE` (2) | hint `tc secrets put NAME --stdin`, no link |
+
+**Error JSON fields** (stderr, JSON mode; only these keys ever appear in `error`: `code`, `message`, `hint`, `recovery`, `setup`, `progress`, `meta`, `warnings`):
+- `error.setup` `{url, names, scope?, owner, action:"add_secret"}`: the canonical request link, on `NOT_FOUND` and on `wait`'s `PERMISSION_DENIED` for pending names.
+- `error.recovery`: `{action:"sign_in", command?}` (a persistent login), `{action:"complete_migration", command?, operationId:"tinycloud.auth.capabilities"}`, or `{action:"request_access", names, owner, scope?}`. `command` is omitted for profile names that are not shell-safe; sign in to that profile, or run `auth caps` for it, yourself.
+- `error.progress` `{present, pending}`: on `NETWORK_ERROR` and `CANCELLED` from `wait`, only after at least one successful check.
 
 ### Scoped secret reads for agents
 
@@ -148,7 +212,7 @@ tc --profile agent secrets get OPENAI_API_KEY --raw
 
 `secrets: { NAME: true }` requests, in the owner's `secrets` space, `kv/get` on `vault/secrets/NAME` and `capabilities/read` on `""`, plus the raw network entry `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`. The owner DID comes from the profile's recorded owner, else `--owner`, and its address is EIP-55 checksummed in the URN; with neither the login fails with `OWNER_DID_UNKNOWN`. The JSON result lists approved `permissions` and `declined` entries. A decrypt signed inside the owner's space by an older OpenKey deployment is not a raw grant: scoped login reports it in `declined` and omits it from saved permissions. Browser `auth request --grant` or secret-read escalation refuses that old nested proof before activating or storing a grant (`OPENKEY_GRANT_BROADENED`); a renewed approval must sign the raw network grant.
 
-When neither stdin nor stderr is a terminal, `secrets get|list|put|delete` on an OpenKey profile that lacks the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. Missing or expired sessions instead fail with `AUTH_REQUIRED` (exit 3) before a canonical read invokes the node or starts an unscoped browser refresh. On any profile kind, a stored signed session that has expired or no longer verifies fails with `AUTH_REQUIRED` (exit 3) and a sign-in hint before any node request, never as a retryable `NODE_ERROR`; operations and MCP report a non-retryable `AUTH_REQUIRED`. Any service result coded `AUTH_REQUIRED` or `PERMISSION_DENIED` without an HTTP status now exits 3 or 5 instead of 1 in commands using `cliErrorFromService` (account, delegation, duckdb, kv, secrets list/put/delete, space, sql, vars and vault); for example, `tc secrets list` without a grant returns the NodeSecretsService's status-less `PERMISSION_DENIED` with exit 5. `tc secrets get` and `tc auth import` additionally supply the profile kind's sign-in hint for `AUTH_REQUIRED`. A delegate session bootstrapped by `tc auth import` stores no SIWE or expiry, so its expiry is found only when the node refuses it. At a terminal, the owner approves a missing grant in OpenKey: the request adds `tinycloud.capabilities/read` on the space root and keeps raw decrypt in the `encryption` pseudo-space, and a decrypt-only request is placed in the secrets space. The grant is stored with its signed SIWE proof and bound to exactly its signed capabilities, and `secrets get` (like every operation, including MCP) re-verifies it against the session key and owner, and holds it to that binding, in the same process or a new one; a stored grant that fails (such as one from an earlier release, stored without a proof) is skipped and reported as a `STORED_GRANT_SKIPPED` warning with a fixed reason code and its CID when that CID is the CID of the stored bytes: inside the JSON error's `warnings` (including a failed `-o` write), as one `{"warnings": [...]}` stderr line after a successful read's output, or as one human-readable stderr line. `--json` selects the JSON forms even with stdout on a terminal, and suppresses progress spinners. Expired grants are dropped silently. Operations and MCP results carry the same `warnings` array. A JSON error can carry both `meta` (validated authorization fields) and `warnings`. A canonical `secrets get` that still lacks authority fails with `PERMISSION_DENIED` (exit 5). Redirected stdout alone does not disable an owner's browser approval; its URL appears on stderr and terminal stdin accepts a code. `secrets get -o` validates the destination and existing directory before any read or decrypt, then syncs a fresh 0600 inode and atomically replaces an existing regular file. Directory sync is best-effort after replacement and cannot turn a completed write into a reported failure. It refuses symlinks, directories, devices and absent parent directories (`INVALID_ARGUMENT`); an unreplaceable filesystem target fails with a sanitized error naming the destination, without a non-atomic fallback. A node that refuses decrypt (HTTP 401/403) is reported as missing authority on the invoked network, not as an undecryptable secret.
+When neither stdin nor stderr is a terminal, `secrets get|list|put|delete` on an OpenKey profile that lacks the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. Missing or expired sessions instead fail with `AUTH_REQUIRED` (exit 3) before a canonical read invokes the node or starts an unscoped browser refresh. On any profile kind, a stored session that has expired (a signed session, or one `tc auth import` created from a compact UCAN) or no longer verifies fails with `AUTH_REQUIRED` (exit 3) and a sign-in hint before any node request, never as a retryable `NODE_ERROR`; operations and MCP report a non-retryable `AUTH_REQUIRED`. Any service result coded `AUTH_REQUIRED` or `PERMISSION_DENIED` without an HTTP status now exits 3 or 5 instead of 1 in commands using `cliErrorFromService` (account, delegation, DuckDB, encryption, KV, secrets, SQL, and vars); this preserves operation auth codes as typed errors.
 
 ## Local Replicas
 
@@ -315,9 +379,9 @@ On either recovery path, an orphaned `.recover-*` claim can hold a replacement o
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
 - **Owner DID**: `did:pkh:eip155:{chainId}:{address}` — after auth
 
-Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?, meta?}}`. `meta` contains a typed HTTP `status` and, only when validated as a TinyCloud capability (and against the KV request when available), a `resource` and `requiredAction`. Inspect the structured code, not only the exit status.
+Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?, recovery?, setup?, progress?, meta?, warnings?}}` (`recovery`, `setup` and `progress` are described under [Secrets](#asking-the-owner-for-a-secret-request-wait-manage)). `meta` contains a typed HTTP `status` and, only when validated as a TinyCloud capability (and against the KV request when available), a `resource` and `requiredAction`. Inspect the structured code, not only the exit status.
 
-General storage/auth exit codes: 0 success, 1 operation error, 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error, 10 storage full. `tc share` uses its own: 1 profile lock timeout or sender-history retry (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`), 3 upload authority required, 4 unavailable, expired or upload failed, 5 permission denied (`PERMISSION_DENIED`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success, 10 storage full.
+General storage/auth exit codes: 0 success, 1 operation error (including `PROFILE_MIGRATION_REQUIRED` and `PROBE_FAILED`), 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error, 8 pending (`tc secrets wait` only), 10 storage full, 130 interrupted (`CANCELLED`). `tc share` uses its own: 1 profile lock timeout or sender-history retry (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`), 3 upload authority required, 4 unavailable, expired or upload failed, 5 permission denied (`PERMISSION_DENIED`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success, 10 storage full.
 
 For `tc kv get|put|head|list|delete`, `tc space list|host`, `tc sql`, `tc vault`, `tc vars`, `tc duckdb`, `tc secrets list|put|delete`, `tc delegation`, and `tc account`, service-result errors use typed authorization: a plain HTTP 401 is `AUTH_REQUIRED` (exit 3); a 403 is `PERMISSION_DENIED` (exit 5). A 401 with a validated missing capability, or `AUTH_UNAUTHORIZED` without an HTTP status, is `PERMISSION_DENIED` (exit 5); a validated capability also produces a `tc auth request --cap` hint. This changes the former exit 1 for status-less `AUTH_UNAUTHORIZED` in the listed commands. Other HTTP failures retain their service-specific codes. `tc share` has separate exit mappings below.
 

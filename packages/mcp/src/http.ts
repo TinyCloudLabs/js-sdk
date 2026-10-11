@@ -58,6 +58,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       },
     );
     registerTinyCloudTools(server, {
+      surface: "hosted",
       profile: "agent",
       explicitProfile: true,
       allowOwnerProfile: false,

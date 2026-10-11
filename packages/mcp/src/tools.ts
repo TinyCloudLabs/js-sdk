@@ -24,11 +24,17 @@ export const TOOL_NAMES = [
   "tinycloud_sql_query",
   "tinycloud_sql_execute",
   "tinycloud_secrets_get",
+  "tinycloud_secrets_status",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
 
+/** MCP server surfaces: local stdio and the hosted OAuth HTTP server. */
+export type McpSurface = "local" | "hosted";
+
 export interface McpStartupSelection {
+  /** Which server registers the tools; bindings not on this surface are skipped. */
+  readonly surface: McpSurface;
   readonly profile: string;
   readonly explicitProfile: boolean;
   readonly allowOwnerProfile: boolean;
@@ -46,7 +52,7 @@ export interface McpInvocationTarget {
 
 /** Project one startup selection into the only owner-sensitive target shape. */
 export function invocationTargetForMcp(
-  selection: McpStartupSelection,
+  selection: Omit<McpStartupSelection, "surface">,
 ): McpInvocationTarget {
   return {
     profile: selection.profile,
@@ -81,7 +87,7 @@ const generatedCatalog = packageRequire(
   "@tinycloud/operations/operations.json",
 ) as OperationsCatalog;
 
-interface ToolBinding {
+export interface ToolBinding {
   readonly name: ToolName;
   readonly operationId: string;
   readonly operationVersion: number;
@@ -89,9 +95,18 @@ interface ToolBinding {
   readonly idempotentHint: boolean;
   readonly destructiveHint: boolean;
   readonly openWorldHint: boolean;
+  /** Surfaces that register this tool; omitted means every surface. */
+  readonly surfaces?: readonly McpSurface[];
 }
 
-const TOOL_BINDINGS: readonly ToolBinding[] = [
+const ALL_SURFACES: readonly McpSurface[] = ["local", "hosted"];
+
+/** The surfaces a binding is registered on. */
+export function bindingSurfaces(binding: ToolBinding): readonly McpSurface[] {
+  return binding.surfaces ?? ALL_SURFACES;
+}
+
+export const TOOL_BINDINGS: readonly ToolBinding[] = [
   {
     name: "tinycloud_status",
     operationId: "tinycloud.status.get",
@@ -236,6 +251,18 @@ const TOOL_BINDINGS: readonly ToolBinding[] = [
     destructiveHint: false,
     openWorldHint: true,
   },
+  {
+    name: "tinycloud_secrets_status",
+    operationId: "tinycloud.secrets.status",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+    // Hosted has no persistent reauthorization path for a revoked session
+    // yet (TC-896), so status is local/stdio only.
+    surfaces: ["local"],
+  },
 ] as const;
 
 export function createJsonSchemaValidator(): AjvJsonSchemaValidator {
@@ -257,6 +284,7 @@ export function registerTinyCloudTools(
   );
 
   for (const binding of TOOL_BINDINGS) {
+    if (!bindingSurfaces(binding).includes(selection.surface)) continue;
     const operation = definitions.get(`${binding.operationId}@${binding.operationVersion}`);
     if (operation === undefined) {
       throw new Error(`Generated operations catalog is missing ${binding.operationId}@${binding.operationVersion}.`);
@@ -296,7 +324,7 @@ export function registerTinyCloudTools(
         const projected = selection.transformOperationResult === undefined
           ? result
           : await selection.transformOperationResult(result);
-        return toMcpToolResult(projected);
+        return toMcpToolResult(projected, TOOL_BINDINGS);
       },
     );
   }

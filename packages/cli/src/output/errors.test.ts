@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { CLIError, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
+import { buildSecretRequestUrl, secretSetupFor } from "@tinycloud/operations/secret-request";
 
 afterEach(() => {
   delete process.env.TC_PROFILE;
@@ -385,4 +386,121 @@ describe("storage full", () => {
     expect(wrapError({ code: "STORAGE_QUOTA_EXCEEDED", meta: { account: { usedBytes: 2_048, limitBytes: 1_073_741_824, plan: "\u001b[31mpaid" } } }).metadata?.hint)
       .toBe(`2 KiB used of 1 GiB. Reading still works.\n${manage}`);
   });
+});
+
+// Spawned through the real handleError (S3-T2, S3-T3, S3-T3b): exact stderr
+// envelope and exit status.
+const HARNESS = new URL("../test-support/secrets-json-error.ts", import.meta.url).pathname;
+const OWNER = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
+const ERROR_KEYS = ["code", "message", "hint", "recovery", "setup", "progress", "meta", "warnings"];
+// Each case spawns the harness (≈0.5 s on CI); several run per test.
+const SPAWN_TEST_TIMEOUT_MS = 30_000;
+
+function spawnHandleError(spec: { code: string; message: string; exitCode: number; metadata?: Record<string, unknown> }) {
+  const result = spawnSync(process.execPath, [HARNESS, JSON.stringify(spec)], { encoding: "utf8" });
+  const error = (JSON.parse(result.stderr) as { error: Record<string, unknown> }).error;
+  for (const key of Object.keys(error)) expect(ERROR_KEYS).toContain(key);
+  return { status: result.status, error };
+}
+
+describe("error.setup, error.recovery and error.progress", () => {
+  const setup = secretSetupFor(buildSecretRequestUrl({ owner: OWNER, names: ["A"] }));
+  const scopedSetup = secretSetupFor(buildSecretRequestUrl({ owner: OWNER, names: ["A"], scope: "food-drinks" }));
+
+  test("NOT_FOUND emits the exact setup; malformed setups are dropped", () => {
+    expect(spawnHandleError({ code: "NOT_FOUND", message: "missing", exitCode: 4, metadata: { setup } })).toEqual({
+      status: 4,
+      error: { code: "NOT_FOUND", message: "missing", setup },
+    });
+    expect(spawnHandleError({ code: "NOT_FOUND", message: "missing", exitCode: 4, metadata: { setup: scopedSetup } }).error.setup)
+      .toEqual(scopedSetup);
+    for (const bad of [
+      { ...setup, kind: "secret_manager" },
+      { ...setup, url: `${setup.url}&requester=x` },
+      { ...setup, url: "https://evil.example/request?owner=x" },
+      { ...setup, names: ["a"] },
+      { ...setup, action: "open" },
+      { ...setup, owner: OWNER.toLowerCase() },
+      { url: setup.url, names: setup.names, owner: setup.owner },
+      "https://secrets.tinycloud.xyz",
+    ]) {
+      const { status, error } = spawnHandleError({ code: "NOT_FOUND", message: "missing", exitCode: 4, metadata: { setup: bad } });
+      expect(status).toBe(4);
+      expect(error).toEqual({ code: "NOT_FOUND", message: "missing" });
+    }
+    // Only NOT_FOUND and PERMISSION_DENIED carry a setup.
+    expect(spawnHandleError({ code: "ERROR", message: "x", exitCode: 1, metadata: { setup } }).error).not.toHaveProperty("setup");
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  test("progress appears only on NETWORK_ERROR / CANCELLED with exact disjoint name lists", () => {
+    const progress = { present: ["A"], pending: ["B"] };
+    expect(spawnHandleError({ code: "NETWORK_ERROR", message: "down", exitCode: 6, metadata: { progress } }).error.progress)
+      .toEqual(progress);
+    const cancelled = spawnHandleError({ code: "CANCELLED", message: "Interrupted.", exitCode: 130, metadata: { progress } });
+    expect(cancelled).toEqual({ status: 130, error: { code: "CANCELLED", message: "Interrupted.", progress } });
+    // No successful attempt → no progress.
+    expect(spawnHandleError({ code: "CANCELLED", message: "Interrupted.", exitCode: 130 })).toEqual({
+      status: 130,
+      error: { code: "CANCELLED", message: "Interrupted." },
+    });
+    expect(spawnHandleError({ code: "PERMISSION_DENIED", message: "no", exitCode: 5, metadata: { progress } }).error)
+      .not.toHaveProperty("progress");
+    for (const bad of [
+      { present: ["A"], pending: ["A"] },
+      { present: ["a"], pending: [] },
+      { present: [], pending: ["B"], extra: 1 },
+      { present: [] },
+      { present: "A", pending: [] },
+    ]) {
+      expect(spawnHandleError({ code: "NETWORK_ERROR", message: "down", exitCode: 6, metadata: { progress: bad } }).error)
+        .not.toHaveProperty("progress");
+    }
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  test("sign_in and complete_migration recoveries serialize unchanged; forged ones are dropped", () => {
+    const signIn = { action: "sign_in", command: "tc --profile agent auth login --method openkey --paste --manifest <manifest.json>" };
+    const migration = { action: "complete_migration", command: "tc --profile agent auth caps", operationId: "tinycloud.auth.capabilities" };
+    expect(spawnHandleError({ code: "AUTH_REQUIRED", message: "sign in", exitCode: 3, metadata: { recovery: signIn } })).toMatchObject({
+      status: 3,
+      error: { code: "AUTH_REQUIRED", recovery: signIn },
+    });
+    expect(spawnHandleError({ code: "PROFILE_MIGRATION_REQUIRED", message: "upgrade", exitCode: 1, metadata: { recovery: migration } }))
+      .toEqual({ status: 1, error: { code: "PROFILE_MIGRATION_REQUIRED", message: "upgrade", recovery: migration } });
+    expect(spawnHandleError({ code: "AUTH_REQUIRED", message: "x", exitCode: 3, metadata: { recovery: { action: "sign_in" } } }).error.recovery)
+      .toEqual({ action: "sign_in" });
+    for (const bad of [
+      { ...signIn, extra: "x" },
+      { action: "sign_in", command: "tc --profile x; rm -rf ~ auth caps" },
+      { ...migration, operationId: "tinycloud.other" },
+      { ...migration, tool: "tinycloud_auth_capabilities" },
+      { action: "reboot" },
+    ]) {
+      expect(spawnHandleError({ code: "AUTH_REQUIRED", message: "x", exitCode: 3, metadata: { recovery: bad } }).error)
+        .not.toHaveProperty("recovery");
+    }
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  test("request_access keeps only denied names, a canonical owner and a valid scope (S3-T3b stripping)", () => {
+    const recovery = { action: "request_access", names: ["B"], owner: OWNER };
+    const base = { code: "PERMISSION_DENIED", message: "denied", exitCode: 5 };
+    const exact = spawnHandleError({ ...base, metadata: { recovery, deniedNames: ["B"], setup } });
+    expect(exact).toEqual({ status: 5, error: { code: "PERMISSION_DENIED", message: "denied", recovery, setup } });
+    expect(spawnHandleError({ ...base, metadata: { recovery: { ...recovery, scope: "food-drinks" }, deniedNames: ["B"] } }).error.recovery)
+      .toEqual({ ...recovery, scope: "food-drinks" });
+
+    const flipped = OWNER.replace("0xd559", "0xD559");
+    for (const metadata of [
+      { recovery: { ...recovery, extra: "x" }, deniedNames: ["B"] },
+      { recovery: { ...recovery, names: ["C"] }, deniedNames: ["B"] },
+      { recovery: { ...recovery, names: ["b"] }, deniedNames: ["b"] },
+      { recovery: { ...recovery, owner: flipped }, deniedNames: ["B"] },
+      { recovery: { ...recovery, scope: "scoped" }, deniedNames: ["B"] },
+      { recovery },
+    ]) {
+      expect(spawnHandleError({ ...base, metadata })).toEqual({
+        status: 5,
+        error: { code: "PERMISSION_DENIED", message: "denied" },
+      });
+    }
+  }, SPAWN_TEST_TIMEOUT_MS);
 });

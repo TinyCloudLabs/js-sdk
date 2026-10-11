@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
@@ -259,6 +259,34 @@ test("import rejects malformed, host, audience, expiry, session-rotation, and CI
     fixture.hermetic.stop();
   }
 });
+test("request-bound import rejects signed expiry during node activation", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const previousTime = Date.now();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const signedExpiry = new Date(delegation.expiry).getTime();
+    setSystemTime(signedExpiry);
+    const result = await importDefinition().execute(
+      runtime,
+      importArtifact(requestId, {
+        ...delegation,
+        expiry: new Date(signedExpiry + 60 * 60 * 1000),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "DELEGATION_EXPIRED" },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+  } finally {
+    setSystemTime(previousTime);
+    fixture.hermetic.stop();
+  }
+});
+
 
 test("imports a real signed hostless delegation idempotently and a fresh runtime replays only its signed authority", async () => {
   const fixture = await createAuthRuntimeFixture();

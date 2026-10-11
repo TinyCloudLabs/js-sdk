@@ -341,6 +341,10 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  appSecretScope,
+  SECRET_SCOPE_RE,
+  MAX_SECRET_SCOPE_LENGTH,
+  TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
@@ -353,6 +357,7 @@ export type {
   ParsedSecretCatalogKey,
   ResolvedSecretPath,
   SecretScopeOptions,
+  SecretPutOptions,
 } from "./secrets";
 
 // Encryption service (network-scoped one-of-one decrypt)

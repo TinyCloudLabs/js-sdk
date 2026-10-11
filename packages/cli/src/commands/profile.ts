@@ -123,7 +123,7 @@ export function registerProfileCommand(program: Command): void {
     .action(async (name: string | undefined, _options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const profileName = name ?? ctx.profile;
 
         const p = await ProfileManager.getProfile(profileName);
@@ -201,7 +201,7 @@ Examples:
         const ctx = await ProfileManager.resolveContext({
           ...globalOpts,
           profile: options.profile ?? globalOpts.profile,
-        });
+        }, { storedSession: "unused" });
         const profileName = ctx.profile;
 
         if (!options.unset && (name === undefined || name === "")) {

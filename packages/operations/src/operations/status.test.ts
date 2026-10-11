@@ -247,8 +247,8 @@ test("counts only stored delegations the replay rule accepts", async () => {
     return result.output.liveAdditionalDelegationCount;
   };
 
-  // Before the profile's migration, an unbound compact record still replays.
-  expect(await count()).toBe(2);
+  // Unbound compact records never count, even while migration is deferred.
+  expect(await count()).toBe(1);
   await writeJsonAtomic(bindingMigrationPath("delegate"), { formatVersion: 1, bound: [], unbound: [] });
   expect(await count()).toBe(1);
 });

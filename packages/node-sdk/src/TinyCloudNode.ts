@@ -1,3 +1,4 @@
+import { signedCompactUcanExpiry } from "./delegation";
 /**
  * TinyCloudNode - High-level API for Node.js users.
  *
@@ -3012,6 +3013,8 @@ export class TinyCloudNode {
    * This is used by the CLI to restore a session that was created via the
    * browser-based delegation flow (OpenKey `/delegate` page). Instead of
    * signing in with a private key, it injects the delegation data directly.
+   * A session without persisted SIWE proof is also refused locally once its
+   * compact UCAN's signed expiry has passed, before host resolution.
    *
    * @param sessionData - The stored delegation data from the browser flow
    */
@@ -3126,6 +3129,17 @@ export class TinyCloudNode {
     const hasPersistedProof = proofValues.every((value) => value !== undefined);
     if (!hasPersistedProof && (proofValues.some((value) => value !== undefined) || sessionData.expiresAt !== undefined)) {
       throw new InvalidRestoredSessionError("Persisted session authority metadata is incomplete.");
+    }
+    if (!hasPersistedProof) {
+      // A SIWE-less session (a delegate session `tc auth import` bootstrapped)
+      // lasts as long as the compact UCAN it restores. Refuse it once
+      // that has passed, as an expired SIWE is refused below, before any host
+      // lookup. Other bytes are left to the node, as before.
+      const authorization = sessionData.delegationHeader?.Authorization;
+      const signedExpiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
+      if (signedExpiry !== undefined && signedExpiry.getTime() <= Date.now()) {
+        throw new InvalidRestoredSessionError("Persisted session delegation has expired.");
+      }
     }
 
     let restoredAddress: string | undefined;
@@ -5503,10 +5517,18 @@ export class TinyCloudNode {
     }
 
     const targetHost = delegation.host ?? this.config.host!;
-    const activateResult = await activateSessionWithHost(
-      targetHost,
-      delegation.delegationHeader,
-    );
+    let activateResult: SpaceHostResult;
+    try {
+      activateResult = await activateSessionWithHost(
+        targetHost,
+        delegation.delegationHeader,
+      );
+    } catch (cause) {
+      throw Object.assign(
+        new Error("The TinyCloud host could not be reached to activate the delegation."),
+        { code: "ACTIVATION_TRANSPORT_FAILED", cause },
+      );
+    }
     if (!activateResult.success) {
       if (
         this.operationsFromDelegation(delegation).some((operation) =>

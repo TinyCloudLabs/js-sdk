@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
-import { BINDING_NOTES, bindingMigrationPath } from "./delegation-binding.js";
+import { BINDING_NOTES, bindingMigrationPath, inspectStoredDelegation } from "./delegation-binding.js";
 import { invokeOperation } from "./invoke.js";
 import { createInvocationRuntime } from "./runtime.js";
 import {
@@ -160,6 +161,165 @@ test("skipped-grant warnings publish fixed codes, never a node response or a sto
   }
 });
 
+test("refuses a compact grant with a corrupted signature and a matching recomputed CID", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    const parts = grant.delegationHeader.Authorization.split(".");
+    const signature = parts[2]!;
+    parts[2] = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+    const authorization = parts.join(".");
+    const tampered = {
+      ...grant,
+      cid: new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization),
+      delegationHeader: { Authorization: authorization },
+    };
+    await persistRuntimeDelegations(fixture, [tampered]);
+    const runtime = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(runtime)).toEqual([]);
+    expect(activations).not.toHaveBeenCalled();
+    expect(runtime.runtime.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "proof_invalid", grantCid: tampered.cid },
+    ]);
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
+test("only a verified signed foreign audience is silently excluded from replay", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const sessionGrant = await fixture.hermetic.mintDelegation();
+    const foreignGrant = await fixture.hermetic.mintDelegationForAudience(fixture.hermetic.unrelatedAudience);
+    const computeCid = (authorization: string) =>
+      new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization);
+    const flipped = (authorization: string) => {
+      const parts = authorization.split(".");
+      parts[2] = `${parts[2]![0] === "A" ? "B" : "A"}${parts[2]!.slice(1)}`;
+      return parts.join(".");
+    };
+    const changedSignature = flipped(sessionGrant.delegationHeader.Authorization);
+    const foreignSignature = flipped(foreignGrant.delegationHeader.Authorization);
+    const cases = [
+      { label: "A1 edited transport audience", grant: { ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience }, reason: "audience_mismatch" },
+      { label: "A2 malformed transport audience", grant: { ...sessionGrant, delegateDID: "not-a-did" }, reason: "audience_mismatch" },
+      { label: "A3 flipped signature and recomputed CID", grant: {
+        ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience,
+        cid: computeCid(changedSignature), delegationHeader: { Authorization: changedSignature },
+      }, reason: "proof_invalid" },
+      { label: "A4 garbage authorization", grant: {
+        ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience,
+        delegationHeader: { Authorization: "garbage" },
+      }, reason: "proof_missing" },
+      { label: "A5 CID mismatch", grant: {
+        ...sessionGrant, delegateDID: fixture.hermetic.unrelatedAudience, cid: foreignGrant.cid,
+      }, reason: "cid_mismatch" },
+      { label: "A6 signed foreign audience", grant: foreignGrant, reason: null },
+      { label: "A7 corrupted foreign signature", grant: {
+        ...foreignGrant, cid: computeCid(foreignSignature), delegationHeader: { Authorization: foreignSignature },
+      }, reason: "proof_invalid" },
+      { label: "A8 signed foreign audience with session transport DID", grant: {
+        ...foreignGrant, delegateDID: fixture.sessionDid,
+      }, reason: "audience_mismatch" },
+    ] as const;
+    for (const { label, grant, reason } of cases) {
+      await persistRuntimeDelegations(fixture, [grant]);
+      const runtime = await authenticatedRuntime(fixture.profile);
+      expect(installedCids(runtime), label).toEqual([]);
+      expect(runtime.runtime.warnings, label).toEqual(reason === null ? undefined : [{
+        code: "STORED_GRANT_SKIPPED", reason,
+        ...(reason === "cid_mismatch" || reason === "proof_missing" ? {} : { grantCid: grant.cid }),
+      }]);
+    }
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a double Bearer prefix is refused without blocking a valid covering grant or its read", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [{
+      ...grant, delegationHeader: { Authorization: `Bearer Bearer ${grant.delegationHeader.Authorization}` },
+    }, grant]);
+    const runtime = await authenticatedRuntime(fixture.profile);
+    expect(runtime.runtime.warnings).toEqual([{ code: "STORED_GRANT_SKIPPED", reason: "cid_mismatch" }]);
+    expect(installedCids(runtime)).toEqual([grant.cid]);
+    const node = runtime.runtime.node as RuntimeNode;
+    const installed = node.getRuntimePermissionDelegations()[0]!;
+    expect(installed.delegationHeader.Authorization).toBe(grant.delegationHeader.Authorization);
+    await fixture.hermetic.readAndDecrypt(node, validatedDelegation(installed, runtime.runtime.granted));
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("accepts a bound Bearer-prefixed compact grant and migrates an unbound one", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    const authorization = `Bearer ${grant.delegationHeader.Authorization}`;
+    const bearer = {
+      ...grant,
+      cid: new TinyCloudNode({ host: fixture.hermetic.host }).computeDelegationCid(authorization),
+      delegationHeader: { Authorization: authorization },
+    };
+    await persistRuntimeDelegations(fixture, [bearer]);
+    const first = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(first)).toEqual([bearer.cid]);
+    expect(first.runtime.warnings).toBeUndefined();
+    const firstNode = first.runtime.node as RuntimeNode;
+    const firstInstalled = firstNode.getRuntimePermissionDelegations()[0]!;
+    expect(firstInstalled.delegationHeader.Authorization).toBe(grant.delegationHeader.Authorization);
+    await fixture.hermetic.readAndDecrypt(firstNode, validatedDelegation(
+      firstInstalled, first.runtime.granted,
+    ));
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation: bearer, permissions: [] }]);
+    await rm(bindingMigrationPath(fixture.profile), { force: true });
+    const second = await authenticatedRuntime(fixture.profile);
+    expect(installedCids(second)).toEqual([bearer.cid]);
+    expect(second.runtime.warnings).toBeUndefined();
+    const secondNode = second.runtime.node as RuntimeNode;
+    const secondInstalled = secondNode.getRuntimePermissionDelegations()[0]!;
+    await fixture.hermetic.readAndDecrypt(secondNode, validatedDelegation(
+      secondInstalled, second.runtime.granted,
+    ));
+    expect(await readJson(bindingMigrationPath(fixture.profile))).toMatchObject({ bound: [bearer.cid] });
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("local inspection verifies signed bytes and binding without installing a delegation", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
+  try {
+    const grant = await fixture.hermetic.mintDelegation();
+    await persistRuntimeDelegations(fixture, [grant]);
+    const context = await authenticatedRuntime(fixture.profile);
+    const [entry] = await readAdditionalDelegations(fixture.profile);
+    activations.mockClear();
+    const inspected = await inspectStoredDelegation(entry, {
+      node: context.runtime.node as TinyCloudNode,
+      host: fixture.hermetic.host,
+      resolveSpace: (space) => space,
+    });
+    expect(inspected).toMatchObject({
+      local: "verified",
+      cid: grant.cid,
+      effectivePermissions: canonicalizeCapabilities(fixture.hermetic.permissions),
+    });
+    expect(activations).not.toHaveBeenCalled();
+    expect(await inspectStoredDelegation(entry)).toEqual({ local: "not_checked", because: "no_session" });
+  } finally {
+    activations.mockRestore();
+    fixture.hermetic.stop();
+  }
+});
+
 test("replay refuses a compact record broader than its stored binding before activating it", async () => {
   const fixture = await createAuthRuntimeFixture();
   const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
@@ -245,7 +405,6 @@ test("migration binds an existing unbound compact record to its own signed autho
 
 test("a record a locked writer publishes while migration waits for the lock is bound by the next runtime", async () => {
   const fixture = await createAuthRuntimeFixture();
-  const original = TinyCloudNode.prototype.useRuntimeDelegation;
   const activations = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation");
   try {
     const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
@@ -253,8 +412,8 @@ test("a record a locked writer publishes while migration waits for the lock is b
     const second = await fixture.hermetic.mintDelegation();
     await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{ delegation: first, permissions: [] }]);
 
-    // A writer holds the profile lock from before the runtime starts and
-    // publishes `second`, unbound, while the runtime replays `first`.
+    // A writer holds the profile lock throughout the first runtime, then
+    // publishes `second` for the next invocation's migration.
     let locked!: () => void;
     let release!: () => void;
     const holding = new Promise<void>((resolve) => { locked = resolve; });
@@ -271,16 +430,20 @@ test("a record a locked writer publishes while migration waits for the lock is b
       );
     });
     await holding;
-    activations.mockImplementation(async function (this: TinyCloudNode, delegation) {
+    // The lock remains held until the migration attempt defers.
+    let during!: RuntimeOperationContext;
+    try {
+      during = await authenticatedRuntime(fixture.profile);
+    } finally {
       release();
       await writer;
-      return original.call(this, delegation);
-    });
-
-    const during = await authenticatedRuntime(fixture.profile);
-    expect(installedCids(during)).toEqual([first.cid]);
+    }
+    expect(installedCids(during)).toEqual([]);
+    expect(during.runtime.warnings).toEqual([
+      { code: "STORED_GRANT_SKIPPED", reason: "unbound", grantCid: first.cid },
+    ]);
+    expect(activations).not.toHaveBeenCalled();
     activations.mockRestore();
-
     const after = await authenticatedRuntime(fixture.profile);
     expect(installedCids(after).sort()).toEqual([first.cid, second.cid].sort());
     expect((await readAdditionalDelegations<Record<string, unknown>>(fixture.profile)).map(
@@ -434,6 +597,8 @@ test("a local sign-in without the profile's stored session never runs the migrat
 
     const runtime = await createInvocationRuntime({ profile: fixture.ownerProfile });
     if (!runtime.ok) throw new Error(`expected a runtime: ${runtime.error.code}`);
+    expect(installedCids(runtime.context)).not.toContain(delegation.cid);
+    expect(runtime.context.runtime.warnings).toBeUndefined();
     expect(await readJson(bindingMigrationPath(fixture.ownerProfile))).toBeNull();
     expect(await readAdditionalDelegations(fixture.ownerProfile)).toEqual([JSON.parse(JSON.stringify({
       delegation,
@@ -536,6 +701,42 @@ test("rejects a delegate profile with local owner material before sign-in or run
   }
 });
 
+async function persistImportedSession(profile: string, expSecs: number): Promise<string> {
+  const wasm = new NodeWasmBindings();
+  const manager = wasm.createSessionManager();
+  const sessionDid = manager.getDID("default");
+  const module = await import(new URL("../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href) as {
+    mintCompactDelegation(options: { audience: string; expSecs: number }): Promise<{
+      delegation: { delegationHeader: { Authorization: string }; cid: string };
+      ownerDid: string;
+      spaceId: string;
+    }>;
+  };
+  const imported = await module.mintCompactDelegation({ audience: sessionDid.split("#", 1)[0]!, expSecs });
+  await writeJsonAtomic(profileConfigPath(profile), {
+    name: profile,
+    host: "https://node.example",
+    chainId: 1,
+    spaceName: "secrets",
+    did: sessionDid,
+    sessionDid,
+    ownerDid: imported.ownerDid,
+    spaceId: imported.spaceId,
+    posture: "delegate-session",
+    operatorType: "agent",
+    authMethod: "openkey",
+    createdAt: new Date().toISOString(),
+  });
+  await writeJsonAtomic(join(profilePath(profile), "key.json"), JSON.parse(manager.jwk("default")!));
+  await writeJsonAtomic(sessionPath(profile), {
+    delegationHeader: imported.delegation.delegationHeader,
+    delegationCid: imported.delegation.cid,
+    spaceId: imported.spaceId,
+    jwk: JSON.parse(manager.jwk("default")!),
+    verificationMethod: sessionDid,
+  });
+  return sessionDid.split("#", 1)[0]!;
+}
 test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED before any node request", async () => {
   await persistExpiredSignedSession("expired-agent");
   const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
@@ -557,6 +758,46 @@ test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED 
 
     const read = await invokeOperation("tinycloud.secrets.get", 1, { profile: "expired-agent" }, { name: "KEY" });
     expect(read).toMatchObject({ status: "error", error: expired });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+// TC-674 regression: fails before the fix
+test("an expired imported session returns AUTH_REQUIRED through runtime and operation without a fetch", async () => {
+  await persistImportedSession("expired-import", Math.floor(Date.now() / 1000) - 60);
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
+    throw new Error("an expired imported session must not reach the node");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  const expired = {
+    code: "AUTH_REQUIRED",
+    message: "The stored session has expired or is no longer valid. Sign in again.",
+    retryable: false,
+  };
+  try {
+    const runtime = await createInvocationRuntime({ profile: "expired-import" });
+    expect(runtime).toMatchObject({ ok: false, error: expired });
+    const read = await invokeOperation("tinycloud.secrets.get", 1, { profile: "expired-import" }, { name: "KEY" });
+    expect(read).toMatchObject({ status: "error", error: expired });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+// TC-674 control: passes before and after
+test("an unexpired imported session restores as its delegate without a fetch", async () => {
+  const sessionDid = await persistImportedSession("live-import", Math.floor(Date.now() / 1000) + 3600);
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
+    throw new Error("restore must not fetch");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  try {
+    const runtime = await createInvocationRuntime({ profile: "live-import" });
+    expect(runtime).toMatchObject({
+      ok: true,
+      context: { summary: { sessionDid } },
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   } finally {
     fetchSpy.mockRestore();

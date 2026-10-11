@@ -1,18 +1,29 @@
+import { signInRecovery } from "@tinycloud/operations/recovery";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 
 /** Marks errors from {@link sessionExpiredError}; never output. */
 const SESSION_EXPIRED_REASON = "session_expired";
 
-/** How a profile of this posture gets a new session. */
+/**
+ * How a profile of this posture gets a new session: the persistent login from
+ * operations' recovery table. A profile name that is unsafe in a command gets
+ * the instruction without a command.
+ */
 export function signInAgainHint(profileName: string, posture: string | undefined): string {
-  if (posture === "local-owner-key") {
-    return `Sign in again with: tc --profile ${profileName} auth login --method local`;
+  const delegate = posture === "delegate-session";
+  const { command } = signInRecovery(
+    profileName,
+    delegate ? "delegate-session" : posture === "local-owner-key" ? "local-owner-key" : "owner-openkey",
+  );
+  if (command === undefined) {
+    return delegate
+      ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with tc auth login --method openkey --paste --manifest <manifest.json>.`
+      : `Sign in again to profile ${JSON.stringify(profileName)} with tc auth login.`;
   }
-  if (posture === "delegate-session") {
-    return `Have the owner approve a new scoped login: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
-  }
-  return `Sign in again with: tc --profile ${profileName} auth login --method openkey`;
+  return delegate
+    ? `Have the owner approve a new scoped login: ${command}. Pass the owner's code on stdin, newline-terminated.`
+    : `Sign in again with: ${command}`;
 }
 
 /**
