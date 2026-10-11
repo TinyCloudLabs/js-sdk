@@ -331,6 +331,10 @@ export {
   SecretsService,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
+  appSecretScope,
+  SECRET_SCOPE_RE,
+  MAX_SECRET_SCOPE_LENGTH,
+  TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
@@ -356,6 +360,7 @@ export type {
   ResolvedSecretPath,
   ParsedSecretCatalogKey,
   SecretScopeOptions,
+  SecretPutOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export encryption service values and helpers

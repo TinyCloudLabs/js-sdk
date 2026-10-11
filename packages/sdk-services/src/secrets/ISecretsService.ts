@@ -1,7 +1,7 @@
 import type { IDataVaultService } from "../vault/IDataVaultService";
 import type { VaultError } from "../vault/types";
 import type { Result, ServiceError } from "../types";
-import type { SecretScopeOptions } from "./paths";
+import type { SecretPutOptions, SecretScopeOptions } from "./paths";
 
 export interface SecretPayload {
   value: string;
@@ -30,7 +30,7 @@ export interface ISecretsService {
   put(
     name: string,
     value: string,
-    options?: SecretScopeOptions,
+    options?: SecretPutOptions,
   ): Promise<Result<void, SecretsError>>;
   delete(
     name: string,

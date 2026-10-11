@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { DataVaultService, type VaultCrypto } from "./DataVaultService";
+import { authorizationVerdictOf, validatedCapabilityOf } from "../errors";
 import {
   CURRENT_VAULT_VERSION,
   VaultVersionConfig,
@@ -319,4 +320,111 @@ describe("DataVaultService network envelopes", () => {
     expect([...store.keys()].some((key) => key.startsWith("grants/"))).toBe(false);
   });
 
+});
+
+describe("DataVaultService write errors (TC-834)", () => {
+  const resource = `${spaceId}/kv/vault/secrets/API_KEY`;
+
+  function rejectPut(
+    kv: ReturnType<typeof createNetworkVault>["kv"],
+    error: { code: string; message: string; meta?: Record<string, unknown> },
+  ) {
+    kv.put.mockImplementation(async () => ({
+      ok: false as const,
+      error: { service: "kv", ...error },
+    }) as any);
+  }
+
+  test("ifNoneMatch forwards to KV and a 412 becomes ALREADY_EXISTS with the typed KV cause", async () => {
+    const { vault, kv } = createNetworkVault();
+    rejectPut(kv, {
+      code: "KV_PRECONDITION_FAILED",
+      message: "KV precondition failed for key",
+      meta: { status: 412, statusText: "Precondition Failed" },
+    });
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" }, { ifNoneMatch: "*" });
+
+    expect(kv.put).toHaveBeenCalledWith("vault/secrets/API_KEY", expect.any(String), { ifNoneMatch: "*" });
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error.code).toBe("ALREADY_EXISTS");
+    expect(put.error).toMatchObject({ service: "vault", key: "secrets/API_KEY", meta: { status: 412 } });
+    if (put.error.code !== "ALREADY_EXISTS") return;
+    expect(put.error.cause.code).toBe("KV_PRECONDITION_FAILED");
+    expect(put.error.cause.service).toBe("kv");
+  });
+
+  test("a put without ifNoneMatch sends no precondition", async () => {
+    const { vault, kv } = createNetworkVault();
+    const put = await vault.put("secrets/API_KEY", { value: "secret" });
+    expect(put.ok).toBe(true);
+    expect(kv.put.mock.calls[0]).toHaveLength(2);
+  });
+
+  test("a capability 401 stays AUTH_UNAUTHORIZED and keeps the grantable capability", async () => {
+    const { vault, kv } = createNetworkVault();
+    rejectPut(kv, {
+      code: "AUTH_UNAUTHORIZED",
+      message: "Failed to put: 401 - Unauthorized",
+      meta: { status: 401, resource, requiredAction: "tinycloud.kv/put" },
+    });
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" });
+
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error).toMatchObject({ code: "AUTH_UNAUTHORIZED", service: "vault", meta: { status: 401 } });
+    if (put.error.code !== "AUTH_UNAUTHORIZED") return;
+    expect(put.error.cause.code).toBe("AUTH_UNAUTHORIZED");
+    expect(validatedCapabilityOf(put.error)).toEqual({ resource, requiredAction: "tinycloud.kv/put" });
+  });
+
+  test("a 403 is classified as forbidden", async () => {
+    const { vault, kv } = createNetworkVault();
+    rejectPut(kv, {
+      code: "AUTH_UNAUTHORIZED",
+      message: "Failed to put: 403 - Forbidden",
+      meta: { status: 403 },
+    });
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" });
+
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error.code).toBe("AUTH_UNAUTHORIZED");
+    expect(authorizationVerdictOf(put.error)).toBe("forbidden");
+  });
+
+  test("a 500 stays STORAGE_ERROR with meta and a chained cause", async () => {
+    const { vault, kv } = createNetworkVault();
+    rejectPut(kv, {
+      code: "KV_WRITE_FAILED",
+      message: "Failed to put key: 500 - boom",
+      meta: { status: 500, statusText: "Internal Server Error" },
+    });
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" });
+
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error).toMatchObject({ code: "STORAGE_ERROR", meta: { status: 500 } });
+    if (put.error.code !== "STORAGE_ERROR") return;
+    expect(put.error.cause.cause).toMatchObject({ code: "KV_WRITE_FAILED", service: "kv" });
+  });
+
+  test("a legacy vault refuses ifNoneMatch before any KV call", async () => {
+    const calls: string[] = [];
+    const vault = createVault(calls);
+    const kvPut = mock(async () => ({ ok: true as const, data: undefined }));
+    (vault as any).vaultConfig.tc.kv = { put: kvPut, get: kvPut };
+    expect((await vault.unlock(createSigner(calls))).ok).toBe(true);
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" }, { ifNoneMatch: "*" });
+
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error.code).toBe("STORAGE_ERROR");
+    expect(kvPut).not.toHaveBeenCalled();
+  });
 });

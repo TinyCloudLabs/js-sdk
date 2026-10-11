@@ -8,7 +8,7 @@ import type {
   DecryptCapabilityProof,
   IEncryptionService,
 } from "../encryption";
-import type { PermissionHint } from "../types";
+import type { PermissionHint, ServiceError } from "../types";
 
 export interface VaultNetworkEncryptionConfig {
   /** Default encryption network used for inline vault envelopes. */
@@ -43,6 +43,11 @@ export interface VaultPutOptions {
   contentType?: string;
   /** Custom serializer (default: JSON.stringify for objects) */
   serialize?: (value: unknown) => Uint8Array;
+  /**
+   * `"*"` writes only when no value exists at the key. An existing value
+   * fails with `ALREADY_EXISTS`; it is never overwritten.
+   */
+  ifNoneMatch?: "*";
 }
 
 /**
@@ -129,7 +134,22 @@ export type VaultErrorInput =
   | { code: "GRANT_NOT_FOUND"; grantor: string; key: string; message?: string }
   | { code: "VAULT_LOCKED"; message?: string }
   | { code: "PUBLIC_KEY_NOT_FOUND"; did: string; message?: string }
-  | { code: "STORAGE_ERROR"; cause: Error; message?: string }
+  | { code: "STORAGE_ERROR"; cause: Error; message?: string; meta?: Record<string, unknown> }
+  | {
+      code: "ALREADY_EXISTS";
+      key: string;
+      message?: string;
+      meta?: Record<string, unknown>;
+      /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
+  | {
+      code: "AUTH_UNAUTHORIZED";
+      message: string;
+      meta?: Record<string, unknown>;
+      /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
   | {
       code: "STORAGE_QUOTA_EXCEEDED" | "STORAGE_LIMIT_REACHED";
       message: string;

@@ -1,4 +1,6 @@
-import { describe, expect, jest, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import type {
   FetchRequestInit,
   FetchResponse,
@@ -1851,5 +1853,92 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
       if (result.ok) return;
       expect(result.error.code).toBe(ErrorCodes.ABORTED);
     });
+  });
+});
+
+describe("KVService stalled response bodies over loopback HTTP (TC-834)", () => {
+  // A real node:http server: headers arrive, the body starts, and it never
+  // ends. A real fetch must still honour the request timeout and the caller's
+  // abort while the 404 body is classified, and the socket must close.
+  let server: Server;
+  let baseUrl: string;
+  let status = 404;
+  const open = new Set<Socket>();
+  const closed: Array<Promise<void>> = [];
+  const responses = new Set<ServerResponse>();
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const socket = req.socket;
+      if (!open.has(socket)) {
+        open.add(socket);
+        closed.push(new Promise((resolve) => socket.once("close", () => {
+          open.delete(socket);
+          resolve();
+        })));
+      }
+      responses.add(res);
+      res.writeHead(status, { "content-type": "text/plain" });
+      res.write(status === 404 ? "Key not" : "partial");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    for (const res of responses) res.destroy();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  function loopbackService(): KVService {
+    const context: IServiceContext = {
+      ...createContext(fetch as unknown as IServiceContext["fetch"]),
+      hosts: [baseUrl],
+    };
+    const service = new KVService({});
+    service.initialize(context);
+    return service;
+  }
+
+  async function expectSocketClosed(): Promise<void> {
+    const pending = closed.splice(0);
+    expect(pending.length).toBeGreaterThan(0);
+    await Promise.race([
+      Promise.all(pending),
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error("socket stayed open")), 1000)),
+    ]);
+    expect(open.size).toBe(0);
+  }
+
+  for (const op of ["get", "head", "delete"] as const) {
+    test(`${op}: an unfinished 404 body ends with TIMEOUT`, async () => {
+      status = 404;
+      const started = Date.now();
+      const result = await loopbackService()[op]("k", { timeout: 50 });
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.TIMEOUT } });
+      await expectSocketClosed();
+    });
+
+    test(`${op}: an unfinished 404 body ends with ABORTED when the caller aborts`, async () => {
+      status = 404;
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 80);
+      const started = Date.now();
+      const result = await loopbackService()[op]("k", { signal: controller.signal });
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.ABORTED } });
+      await expectSocketClosed();
+    });
+  }
+
+  test("control: an unfinished 200 body ends with TIMEOUT", async () => {
+    status = 200;
+    const started = Date.now();
+    const result = await loopbackService().get("k", { timeout: 50 });
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.TIMEOUT } });
+    await expectSocketClosed();
   });
 });

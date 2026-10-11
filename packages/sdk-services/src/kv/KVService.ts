@@ -893,7 +893,7 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 404) {
-            return this.classifyNotFound(response, key);
+            return await this.classifyNotFound(response, key);
           }
 
           const errorText = await response.text();
@@ -1643,7 +1643,7 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 404) {
-            return this.classifyNotFound(response, key);
+            return await this.classifyNotFound(response, key);
           }
 
           const errorText = await response.text();
@@ -1720,7 +1720,7 @@ export class KVService extends BaseService implements IKVService {
           }
 
           if (response.status === 404) {
-            return this.classifyNotFound(response, key);
+            return await this.classifyNotFound(response, key);
           }
 
           const errorText = await response.text();
@@ -1807,7 +1807,7 @@ export class KVService extends BaseService implements IKVService {
         });
 
         if (!response.ok) {
-          return this.createSignedReadUrlError(response, key, path);
+          return await this.createSignedReadUrlError(response, key, path);
         }
 
         const signedUrl = this.normalizeSignedReadUrlResponse(

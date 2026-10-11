@@ -290,4 +290,24 @@ describe("WebSecretsService", () => {
     });
     expect(base.delete).not.toHaveBeenCalled();
   });
+
+  it("forwards { scope, ifAbsent } to the base service unchanged", async () => {
+    const base = makeBaseSecrets();
+    const secrets = new WebSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      requestPermissions: async () => ({ approved: true }),
+    });
+
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret", {
+      scope: "com-listen-app",
+      ifAbsent: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret", {
+      scope: "com-listen-app",
+      ifAbsent: true,
+    });
+  });
 });
