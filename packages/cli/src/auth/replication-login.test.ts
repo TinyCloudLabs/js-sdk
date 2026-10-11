@@ -26,6 +26,32 @@ describe("replication login folder prefixes", () => {
     ]);
   });
 
+  test("owner OpenKey with whole-space get adds sync once to the root entry", () => {
+    const request: PermissionEntry[] = [
+      { service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.sql", space: "default", path: "", actions: ["tinycloud.sql/read"] },
+    ];
+    const owner = addReplicationLoginEntries(request, "default", {
+      prefixes: ["one/", "two/", "sixteen/"],
+      ownerOpenKey: true,
+    });
+    expect(owner).toEqual([
+      { service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/sync"] },
+      request[1],
+    ]);
+    expect(owner.filter((entry) => entry.actions.includes("tinycloud.kv/sync"))).toHaveLength(1);
+
+    const delegated = addReplicationLoginEntries(request, "default", { prefixes: ["one/", "two/"] });
+    expect(delegated.filter((entry) => entry.actions.includes("tinycloud.kv/sync")).map((entry) => entry.path))
+      .toEqual(["one/", "two/"]);
+    const narrow = addReplicationLoginEntries([get("one/")], "default", {
+      prefixes: ["one/", "one/private/"],
+      ownerOpenKey: true,
+    });
+    expect(narrow.filter((entry) => entry.actions.includes("tinycloud.kv/sync")).map((entry) => entry.path))
+      .toEqual(["one/", "one/private/"]);
+  });
+
   test("unscoped login preserves KV, SQL, and capability defaults for owner-qualified spaces", () => {
     const result = buildReplicationLoginRequest(undefined, { prefixes: ["notes/"] })!;
     expect(result).toContainEqual({ service: "tinycloud.sql", space: "default", path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"] });

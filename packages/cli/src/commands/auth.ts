@@ -194,7 +194,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         };
         const loginPermissions = permissions === undefined
           ? undefined
-          : buildReplicationLoginRequest(permissions, replicationOptions);
+          : buildReplicationLoginRequest(permissions, {
+            ...replicationOptions,
+            ownerOpenKey: options.device !== true && resolveProfilePosture(profileConfig ?? {}) === "owner-openkey",
+          });
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
         // discovered local node stay one-off.
@@ -1963,6 +1966,7 @@ export async function refreshOpenKeySession(
   const baseRequest = options.permissions ?? rememberedPermissions;
   const requested = buildReplicationLoginRequest(baseRequest, {
     ...replication,
+    ownerOpenKey: resolveProfilePosture(profile) === "owner-openkey",
     ...(expectedOwner === undefined ? {} : { ownerDid: expectedOwner }),
   });
   if (requested !== undefined) validateLoginPermissions(requested);

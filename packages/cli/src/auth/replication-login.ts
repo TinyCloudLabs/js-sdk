@@ -7,7 +7,7 @@ import { ownerSpaceId, sameLoginSpace } from "./scoped-login.js";
 export interface ReplicationLoginOptions {
   prefixes: readonly string[];
   allowSecrets?: boolean;
-  ownerDid?: string;
+  ownerOpenKey?: boolean;
 }
 
 function unconstrained(caveats: PermissionEntry["caveats"]): boolean {
@@ -21,6 +21,15 @@ export function addReplicationLoginEntries(
   options: ReplicationLoginOptions,
 ): PermissionEntry[] {
   const result = [...request];
+  const rootGet = options.ownerOpenKey === true
+    ? result.find((entry) =>
+      entry.service === "tinycloud.kv" &&
+      entry.path === "" &&
+      entry.actions.includes("tinycloud.kv/get") &&
+      unconstrained(entry.caveats) &&
+      sameLoginSpace(entry.space ?? "", primarySpace, options.ownerDid),
+    )
+    : undefined;
   for (const prefix of options.prefixes) {
     try {
       assertFolderPrefix(prefix);
@@ -61,11 +70,16 @@ export function addReplicationLoginEntries(
     if (!isCapabilitySubset([requested], unrestricted).subset) {
       throw new CLIError("REPLICATION_PREFIX_CAVEATED", `Replication prefix ${JSON.stringify(prefix)} is covered only by caveated get authority.`, ExitCode.USAGE_ERROR);
     }
+    if (rootGet !== undefined) continue;
     const service = "tinycloud.kv";
     const actions = [`${service}/get`, `${service}/sync`];
     const existing = result.find((entry) => entry.service === service && entry.space === primarySpace && entry.path === path &&
       actions.every((action) => entry.actions.includes(action)) && unconstrained(entry.caveats));
     if (!existing) result.push({ service, space: primarySpace, path, actions });
+  }
+  if (rootGet !== undefined && !rootGet.actions.includes("tinycloud.kv/sync")) {
+    const index = result.indexOf(rootGet);
+    result[index] = { ...rootGet, actions: [...rootGet.actions, "tinycloud.kv/sync"] };
   }
   return result;
 }
