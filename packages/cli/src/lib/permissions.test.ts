@@ -3,6 +3,7 @@ import type { LocalGrantArtifact } from "./permissions.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import * as realSdkServices from "@tinycloud/sdk-services";
 
 const OWNER_DID = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const OWNER_ADDRESS = "0xd559ccd9eb87c530a9a349262669386de93cf412";
@@ -34,6 +35,8 @@ mock.module("../output/errors.js", () => ({
   setActiveProfileName: () => {},
 }));
 
+// permissions.ts reaches the real sdk-services through @tinycloud/operations
+// (owner resolution); only the secret-path helpers are replaced here.
 mock.module("@tinycloud/sdk-services", () => {
   const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
   const canonicalizeSecretScope = (scope: string | undefined): string | undefined => {
@@ -50,6 +53,7 @@ mock.module("@tinycloud/sdk-services", () => {
     return canonical;
   };
   return {
+    ...realSdkServices,
     SECRET_NAME_RE,
     resolveSecretPath: (name: string, options: { scope?: string } = {}) => {
       const scope = canonicalizeSecretScope(options.scope);

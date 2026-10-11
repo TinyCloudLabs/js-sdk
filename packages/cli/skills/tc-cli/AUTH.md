@@ -93,6 +93,25 @@ tc --profile agent-secrets secrets get OPENAI_API_KEY --raw
 - A stored session that has expired, or no longer verifies for the profile's key, fails every command that needs it with `AUTH_REQUIRED` (exit 3) before any node request, whatever the profile kind; secrets commands on an owner OpenKey profile whose session has passed its expiry refresh it in the browser at a terminal instead. A delegate session created by `tc auth import` has no SIWE; its lifetime is the `exp` its compact-UCAN delegation signs, read from the stored authorization bytes, so it is refused the same way, including sessions imported by earlier releases. Expiry is judged by this machine's clock. `context` reports that expiry, and an expired imported session does not block the scoped paste login the hint names. A session imported from a CACAO (wallet-signed) delegation is still refused only by the node. The hint names a new scoped paste login for a delegate profile, `auth login --method local` for a local owner key, and `auth login --method openkey` for an OpenKey owner; Share commands keep their `auth login --device --manifest builtin:share-publishing` guidance. It is never reported as a retryable node error. Operations and MCP report it as `AUTH_REQUIRED` (`retryable: false`), the code they also use for a node's 401.
 - `secrets get -o FILE` validates the destination and its existing directory before fetching or decrypting secret bytes. It refuses symlinks, directories and devices, syncs a new owner-only (0600) file, then atomically replaces the destination. Directory sync is attempted after replacement where supported; its failure does not report a failed write when the destination was already replaced. A destination that cannot be replaced fails with a sanitized filesystem error naming the destination; there is no unsafe fallback.
 
+### Asking the owner to add a missing secret
+
+When the secret does not exist yet, the agent sends the owner one message with a request link, redeems the consent short code if the owner approved a scoped login, then waits. Call the CLI by absolute path: a bare `tc` on `PATH` can be iproute2's `/usr/sbin/tc` (traffic control), not TinyCloud.
+
+```bash
+TC_BIN="$(npm prefix --global)/bin/tc"
+"$TC_BIN" --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
+# One message to the owner: the url (plus the scoped-login approval URL above if the profile has no grant yet).
+# If the owner sends back a consent short code, redeem it first:
+printf '%s\n' "$CODE" | "${LOGIN[@]}"
+"$TC_BIN" --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
+"$TC_BIN" --profile agent-secrets secrets get OPENAI_API_KEY --raw
+```
+
+- `wait` never signs in: it needs a stored session and doesn't accept `TC_PRIVATE_KEY` (exit 3). Exit 3 carries `error.recovery.command`, the persistent login to run once.
+- After a CLI upgrade, run one normal command per profile first (for example `"$TC_BIN" --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
+- Exit 8 means the owner has not added it yet: rerun `wait` without sending the link again. Exit 5 means the grant does not cover a name: `error.recovery.names` lists them. [REFERENCE.md](REFERENCE.md#asking-the-owner-for-a-secret-request-wait-manage) has the full exit table.
+- A local identity (local-owner profile, a profile with a stored `privateKey`, `--private-key`, `TC_PRIVATE_KEY`) owns its secrets and gets `LOCAL_OWNER_PROFILE` from `request`: store them with `secrets put NAME --stdin`.
+
 ## More spaces after login
 
 Login covers one space. Request further spaces on the logged-in profile:

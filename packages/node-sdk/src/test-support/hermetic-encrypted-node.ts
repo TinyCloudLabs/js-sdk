@@ -37,6 +37,7 @@ const PLAINTEXT = "hermetic encrypted delegation proof";
 
 type CompactPayload = {
   iss?: string;
+  aud?: string;
   att?: Record<string, Record<string, unknown>>;
   prf?: string[];
 };
@@ -177,6 +178,13 @@ class LoopbackEncryptedNode {
     credentialsSpaceId: string;
     session?: { audience: string; authorization: string; proofCid: string };
   };
+  // Fault injection for `tc secrets wait` tests (TC-834).
+  private delegateFailureStatus: number | null = null;
+  private readonly deniedKvReadPaths = new Set<string>();
+  private stallMatch: ((invocation: HermeticInvocationRecord) => boolean) | null = null;
+  private readonly stalledResponses = new WeakSet<Response>();
+  /** Compact grants activated through `/delegate`; they authorize their audience's invocations. */
+  private readonly activatedGrants: CompactPayload[] = [];
 
   constructor() {
     this.server = createServer(async (incoming, outgoing) => {
@@ -201,6 +209,12 @@ class LoopbackEncryptedNode {
           },
         );
         const response = await this.handle(request);
+        if (this.stalledResponses.has(response)) {
+          // A 404 whose body never finishes: headers and a first chunk only.
+          outgoing.writeHead(404, { "content-type": "text/plain", "content-length": "64" });
+          outgoing.write("not");
+          return;
+        }
         outgoing.statusCode = response.status;
         // The native-bearer browser smoke loads Share from a distinct local
         // origin. Keep this fixture deliberately narrow: it only permits the
@@ -282,6 +296,44 @@ class LoopbackEncryptedNode {
   /** Emulate the node's refusal of raw-CID authority without a parent delegation. */
   rejectRootRawCidActivations(refuse: boolean): void {
     this.refuseRootRawCidAuthority = refuse;
+  }
+
+  /**
+   * Answer every `/delegate` with `status` (`null` restores normal activation).
+   * Grants activated so far are forgotten, as by a node that never registered
+   * them, so the next activation decides whether a stored grant authorizes.
+   */
+  failDelegate(status: number | null): void {
+    this.delegateFailureStatus = status;
+    this.activatedGrants.length = 0;
+  }
+
+  /** Refuse (403) `kv/get` invocations on exactly these KV paths. */
+  denyKvReads(paths: readonly string[]): void {
+    this.deniedKvReadPaths.clear();
+    for (const path of paths) this.deniedKvReadPaths.add(path);
+  }
+
+  /** Stall matching `/invoke` requests: a 404 status whose body never ends (`null` disables). */
+  stallInvocations(match: ((invocation: HermeticInvocationRecord) => boolean) | null): void {
+    this.stallMatch = match;
+  }
+
+  /**
+   * Whether the invocation claims `action` on `resource` and an activated
+   * compact grant to the invoker covers it (exactly or as a path prefix), as
+   * a node resolves a session key's authority from the grants delegated to it.
+   */
+  private authorizedByActivatedGrant(payload: CompactPayload, resource: string, action: string): boolean {
+    const invoker = payload.iss?.split("#", 1)[0];
+    if (invoker === undefined || payload.att?.[resource]?.[action] === undefined) return false;
+    return this.activatedGrants.some((grant) =>
+      grant.aud?.split("#", 1)[0] === invoker &&
+      Object.entries(grant.att ?? {}).some(([granted, actions]) =>
+        actions[action] !== undefined &&
+        (granted === resource || resource.startsWith(granted.endsWith("/") ? granted : `${granted}/`))
+      )
+    );
   }
 
   stop(): void {
@@ -525,6 +577,9 @@ class LoopbackEncryptedNode {
     }
     if (url.pathname === "/delegate" && request.method === "POST") {
       this.observed.delegationAttempts += 1;
+      if (this.delegateFailureStatus !== null) {
+        return new Response("delegate failure injected by loopback", { status: this.delegateFailureStatus });
+      }
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       // Wallet-mode runtime grant activation uses a signed CACAO header;
@@ -546,6 +601,7 @@ class LoopbackEncryptedNode {
       this.observed.delegations += 1;
       this.activations.add(cid);
       this.delegationCids.add(cid);
+      if (payload.iss) this.activatedGrants.push(payload);
       return this.json({ activated: [cid], skipped: [] });
     }
 
@@ -587,11 +643,24 @@ class LoopbackEncryptedNode {
       const authorization = request.headers.get("authorization");
       if (!authorization) return new Response("missing authorization", { status: 401 });
       const payload = verifiedCompactPayload(authorization);
+      const invoked: HermeticInvocationRecord[] = [];
       for (const [resource, actions] of Object.entries(payload.att ?? {})) {
         const [space = "", service = "", ...path] = resource.split("/");
         for (const action of Object.keys(actions)) {
-          this.invocationLog.push({ service, action, space, path: path.join("/") });
+          invoked.push({ service, action, space, path: path.join("/") });
         }
+      }
+      this.invocationLog.push(...invoked);
+      const stallMatch = this.stallMatch;
+      if (stallMatch !== null && invoked.some((invocation) => stallMatch(invocation))) {
+        const stalled = new Response(null, { status: 404 });
+        this.stalledResponses.add(stalled);
+        return stalled;
+      }
+      if (invoked.some((invocation) =>
+        invocation.action === "tinycloud.kv/get" && this.deniedKvReadPaths.has(invocation.path)
+      )) {
+        return new Response("kv/get refused by loopback", { status: 403 });
       }
       if (payload.prf?.some((cid) => this.revokedDelegationCids.has(cid))) {
         this.observed.revokedInvocations += 1;
@@ -657,7 +726,8 @@ class LoopbackEncryptedNode {
           if (boundary < 0) return false;
           const space = resource.slice(0, boundary).toLowerCase();
           return this.kvData.has(space) &&
-            hasExactCapability(payload, resource, action, this.delegationCids);
+            (hasExactCapability(payload, resource, action, this.delegationCids) ||
+              this.authorizedByActivatedGrant(payload, resource, action));
         });
       if (capability) {
         const separator = capability.resource.lastIndexOf("/kv/");
@@ -693,7 +763,7 @@ class LoopbackEncryptedNode {
           resource,
           "tinycloud.kv/get",
           this.delegationCids,
-        )
+        ) && !this.authorizedByActivatedGrant(payload, resource, "tinycloud.kv/get")
       ) {
         return new Response("delegated kv/get proof required", { status: 403 });
       }
@@ -934,6 +1004,16 @@ export interface HermeticEncryptedNode {
   /** Every capability of every verified `/invoke` invocation so far, in order. */
   invocations(): readonly HermeticInvocationRecord[];
   rejectRootRawCidActivations(refuse: boolean): void;
+  /** Answer every `/delegate` with this HTTP status (`null`: activate normally); forgets earlier grant activations. */
+  failDelegate(status: number | null): void;
+  /** Refuse (403) `kv/get` on exactly these KV paths (e.g. `vault/secrets/B`); replaces the previous list. */
+  denyKvReads(paths: readonly string[]): void;
+  /** Stall matching `/invoke` requests with a 404 whose body never finishes; `null` disables. */
+  stallInvocations(match: ((invocation: HermeticInvocationRecord) => boolean) | null): void;
+  /** How many `/decrypt` requests the node received. */
+  decryptRequests(): number;
+  /** Whether the canary secret exists (as another client writing it would make it). */
+  setSecretPresent(value: boolean): void;
   provisionKvSpace(spaceId: string): void;
   /** Serve the encrypted secret without minting a delegation, for grants authorized elsewhere. */
   provisionSecret(): void;
@@ -1153,6 +1233,11 @@ export async function createHermeticEncryptedNode(
     requests: () => [...transport.requestLog],
     invocations: () => [...transport.invocationLog],
     rejectRootRawCidActivations: (refuse) => transport.rejectRootRawCidActivations(refuse),
+    failDelegate: (status) => transport.failDelegate(status),
+    denyKvReads: (paths) => transport.denyKvReads(paths),
+    stallInvocations: (match) => transport.stallInvocations(match),
+    decryptRequests: () => transport.requestLog.filter((request) => request.path.endsWith("/decrypt")).length,
+    setSecretPresent: (value) => transport.setSecretPresent(value),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
     provisionSecret: () => transport.configure({
       spaceId,

@@ -62,8 +62,14 @@ tc kv list
 
 # Manage network-encrypted secrets on the default network
 tc secrets network init
-tc secrets put ANTHROPIC_API_KEY "sk-..."
+printf '%s' "$ANTHROPIC_API_KEY" | tc secrets put ANTHROPIC_API_KEY --stdin
 tc secrets get ANTHROPIC_API_KEY
+
+# Ask the owner for a secret an agent needs, then wait for it
+# (call TinyCloud's CLI by absolute path: a bare `tc` can be iproute2's /usr/sbin/tc)
+TC_BIN="$(npm prefix --global)/bin/tc"
+"$TC_BIN" --profile agent secrets request OPENAI_API_KEY --json   # offline; prints the owner's link
+"$TC_BIN" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 pending
 
 # Manage spaces
 tc space list
@@ -105,6 +111,9 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc secrets network show` | Show a secrets decryption network |
 | `tc secrets network init` | Create or fetch the default secrets network |
 | `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tc secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
+| `tc secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
+| `tc secrets manage` | Print or open the Secret Manager page, `{url, opened}` |
 | `tc vars` | Manage environment variables |
 | `tc doctor` | Run diagnostic checks |
 | `tc completion` | Generate shell completions |

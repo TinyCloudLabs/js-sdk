@@ -60,8 +60,12 @@ var init_constants = __esm({
       PERMISSION_DENIED: 5,
       NETWORK_ERROR: 6,
       NODE_ERROR: 7,
+      /** `tc secrets wait` only: the deadline passed while a secret was still missing. */
+      PENDING: 8,
       /** A write was refused because the owner's TinyCloud storage is full. */
-      STORAGE_FULL: 10
+      STORAGE_FULL: 10,
+      /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
+      CANCELLED: 130
     };
   }
 });
@@ -216,7 +220,7 @@ function warningLine(warnings) {
   return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
 }
 function outputError(code3, message, hint, details = {}) {
-  const { meta, warnings = [] } = details;
+  const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("\u2717")} ${theme.label(code3)}: ${message}
@@ -235,6 +239,9 @@ function outputError(code3, message, hint, details = {}) {
       error: { code: code3, message }
     };
     if (hint) payload.error.hint = hint;
+    if (recovery) payload.error.recovery = recovery;
+    if (setup) payload.error.setup = setup;
+    if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
@@ -422,6 +429,13 @@ var init_storage2 = __esm({
 import { readFileSync, readdirSync } from "fs";
 import { join as join2 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { isSafeRecovery } from "@tinycloud/operations/recovery";
+import {
+  buildSecretRequestUrl,
+  isSafeRequestAccessRecovery,
+  isValidSecretName,
+  SECRET_REQUEST_MAX_NAMES
+} from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 function setActiveProfileName(name) {
   activeProfileName = name;
@@ -519,11 +533,63 @@ function handleError(error) {
     meta.resource = capability.resource;
     meta.requiredAction = capability.requiredAction;
   }
+  const deniedNames = cliError.metadata?.deniedNames;
+  const recovery = safeCliRecovery(cliError.metadata?.recovery, {
+    deniedNames: Array.isArray(deniedNames) && deniedNames.every((name) => typeof name === "string") ? deniedNames : []
+  });
+  const setup = cliError.code === "NOT_FOUND" || cliError.code === "PERMISSION_DENIED" ? safeCliSetup(cliError.metadata?.setup) : void 0;
+  const progress = cliError.code === "NETWORK_ERROR" || cliError.code === "CANCELLED" ? safeCliProgress(cliError.metadata?.progress) : void 0;
   outputError(cliError.code, cliError.message, hint, {
+    ...recovery ? { recovery } : {},
+    ...setup ? { setup } : {},
+    ...progress ? { progress } : {},
     ...Object.keys(meta).length ? { meta } : {},
     warnings: mergeWarnings(drainWarnings(), operationWarnings(cliError.metadata?.warnings))
   });
   process.exit(cliError.exitCode);
+}
+function safeCliRecovery(value, context) {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || !("action" in value)) return void 0;
+  const action = value.action;
+  switch (action) {
+    case "sign_in":
+    case "complete_migration":
+      return isSafeRecovery(value, action) ? { ...value } : void 0;
+    case "request_access":
+      return isSafeRequestAccessRecovery(value, context.deniedNames) ? { ...value, names: [...value.names] } : void 0;
+    default:
+      return void 0;
+  }
+}
+function safeCliSetup(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const setup = { ...value };
+  if (!Object.keys(setup).every((key) => SETUP_KEYS[key] === true)) return void 0;
+  const { url, names, scope, owner, action } = setup;
+  if (action !== "add_secret" || typeof url !== "string" || typeof owner !== "string") return void 0;
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) return void 0;
+  if (scope !== void 0 && typeof scope !== "string") return void 0;
+  try {
+    const link3 = buildSecretRequestUrl({ owner, names, ...scope !== void 0 ? { scope } : {} });
+    if (link3.url !== url || link3.owner !== owner || link3.names.length !== names.length) return void 0;
+  } catch {
+    return void 0;
+  }
+  return { url, names: [...names], ...scope !== void 0 ? { scope } : {}, owner, action };
+}
+function safeNameList(value) {
+  if (!Array.isArray(value) || value.length > SECRET_REQUEST_MAX_NAMES) return void 0;
+  if (!value.every((name) => typeof name === "string" && isValidSecretName(name))) return void 0;
+  if (new Set(value).size !== value.length) return void 0;
+  return [...value];
+}
+function safeCliProgress(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  if (!("present" in value) || !("pending" in value) || Object.keys(value).length !== 2) return void 0;
+  const present = safeNameList(value.present);
+  const pending = safeNameList(value.pending);
+  if (!present || !pending || present.some((name) => pending.includes(name))) return void 0;
+  return { present, pending };
 }
 function buildAuthHint(error) {
   const capability = validatedCapabilityOf({ meta: error.metadata });
@@ -586,7 +652,7 @@ function buildNetworkHint() {
   lines.push(`Or override per-command with --host or TC_HOST.`);
   return lines.join("\n");
 }
-var activeProfileName, CLIError;
+var activeProfileName, CLIError, SETUP_KEYS;
 var init_errors = __esm({
   "src/output/errors.ts"() {
     "use strict";
@@ -605,6 +671,7 @@ var init_errors = __esm({
       }
       status;
     };
+    SETUP_KEYS = { url: true, names: true, scope: true, owner: true, action: true };
   }
 });
 
@@ -7470,6 +7537,10 @@ function defaultVaultMessage(input) {
       return input.message ?? `Public key not found for ${input.did}`;
     case "STORAGE_ERROR":
       return input.message ?? input.cause.message;
+    case "ALREADY_EXISTS":
+      return input.message ?? `A value already exists at ${input.key}`;
+    case "AUTH_UNAUTHORIZED":
+      return input.message;
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
@@ -7483,13 +7554,32 @@ function vaultError(input) {
   };
   return { ok: false, error };
 }
+function typedKvCause(error) {
+  return Object.assign(new Error(error.message), {
+    name: "ServiceError",
+    code: error.code,
+    service: error.service,
+    ...error.meta !== void 0 ? { meta: error.meta } : {},
+    ...error.cause !== void 0 ? { cause: error.cause } : {}
+  });
+}
 function kvWriteError(context, error) {
   if (error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED || error.code === ErrorCodes.STORAGE_LIMIT_REACHED) {
     return vaultError({ code: error.code, message: error.message, meta: error.meta });
   }
+  const message = `${context}: ${error.message}`;
+  if (error.code === ErrorCodes.AUTH_UNAUTHORIZED) {
+    return vaultError({
+      code: "AUTH_UNAUTHORIZED",
+      message,
+      ...error.meta !== void 0 ? { meta: error.meta } : {},
+      cause: typedKvCause(error)
+    });
+  }
   return vaultError({
     code: "STORAGE_ERROR",
-    cause: new Error(`${context}: ${error.message}`)
+    cause: new Error(message, { cause: typedKvCause(error) }),
+    ...error.meta !== void 0 ? { meta: error.meta } : {}
   });
 }
 function canonicalizeSecretScope(scope) {
@@ -8229,7 +8319,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, TC832_RESERVED_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -9529,7 +9619,7 @@ var init_dist2 = __esm({
                 );
               }
               if (response.status === 404) {
-                return this.classifyNotFound(response, key);
+                return await this.classifyNotFound(response, key);
               }
               const errorText = await response.text();
               if (response.status === 413) {
@@ -10098,7 +10188,7 @@ var init_dist2 = __esm({
                 );
               }
               if (response.status === 404) {
-                return this.classifyNotFound(response, key);
+                return await this.classifyNotFound(response, key);
               }
               const errorText = await response.text();
               if (response.status === 412) {
@@ -10165,7 +10255,7 @@ var init_dist2 = __esm({
                 );
               }
               if (response.status === 404) {
-                return this.classifyNotFound(response, key);
+                return await this.classifyNotFound(response, key);
               }
               const errorText = await response.text();
               return err(
@@ -10231,7 +10321,7 @@ var init_dist2 = __esm({
               signal: request.signal
             });
             if (!response.ok) {
-              return this.createSignedReadUrlError(response, key, path);
+              return await this.createSignedReadUrlError(response, key, path);
             }
             const signedUrl = this.normalizeSignedReadUrlResponse(
               await response.json()
@@ -12008,11 +12098,18 @@ var init_dist2 = __esm({
               cause: new Error(envelopeResult.error.message)
             });
           }
-          const valuePutResult = await this.tc.kv.put(
-            `vault/${key}`,
-            JSON.stringify(envelopeResult.data)
-          );
+          const valuePath = `vault/${key}`;
+          const valueBody = JSON.stringify(envelopeResult.data);
+          const valuePutResult = options?.ifNoneMatch !== void 0 ? await this.tc.kv.put(valuePath, valueBody, { ifNoneMatch: options.ifNoneMatch }) : await this.tc.kv.put(valuePath, valueBody);
           if (!valuePutResult.ok) {
+            if (options?.ifNoneMatch !== void 0 && valuePutResult.error.code === ErrorCodes.KV_PRECONDITION_FAILED) {
+              return vaultError({
+                code: "ALREADY_EXISTS",
+                key,
+                ...valuePutResult.error.meta !== void 0 ? { meta: valuePutResult.error.meta } : {},
+                cause: typedKvCause(valuePutResult.error)
+              });
+            }
             return kvWriteError("Failed to store encrypted value", valuePutResult.error);
           }
           return { ok: true, data: void 0 };
@@ -12179,6 +12276,14 @@ var init_dist2 = __esm({
         return this.withTelemetry("put", key, async () => {
           if (this.usesNetworkEncryption) {
             return this.putNetworkEncrypted(key, value, options);
+          }
+          if (options?.ifNoneMatch !== void 0) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: new Error(
+                "ifNoneMatch is only supported by network-encrypted vaults"
+              )
+            });
           }
           if (!this._isUnlocked || !this.masterKey) {
             return vaultError({
@@ -12973,6 +13078,11 @@ var init_dist2 = __esm({
     SECRET_PREFIX = "secrets/";
     SCOPED_SECRET_PREFIX = "secrets/scoped/";
     RESERVED_SECRET_SCOPES = /* @__PURE__ */ new Set(["default", "global"]);
+    TC832_RESERVED_SCOPES = Object.freeze([
+      "default",
+      "global",
+      "scoped"
+    ]);
     HEX = "0123456789abcdef";
     DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1";
     ENVELOPE_VERSION = 1;
@@ -13904,6 +14014,8 @@ import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact
 } from "@tinycloud/operations/artifacts";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
@@ -14190,17 +14302,26 @@ async function secretPermissionsFromAppManifest(manifest, profile, requestedOwne
 }
 async function defaultSecretsNetworkId(profileName2, requestedOwner) {
   const profile = await ProfileManager.getProfile(profileName2);
-  const ownDid = profile.did?.split("#")[0];
-  const recorded = profile.ownerDid ?? (ownDid?.startsWith("did:pkh:") ? ownDid : void 0);
-  const owner = (recorded ?? requestedOwner)?.split("#")[0];
-  if (!owner) {
-    throw new CLIError(
+  const requested = requestedOwner === void 0 ? void 0 : canonicalOwnerDid(requestedOwner.split("#")[0]);
+  const resolution = resolveSecretsOwner({
+    local: isLocalOwnerProfile(profile),
+    posture: resolveProfilePosture(profile),
+    ...profile.ownerDid === void 0 ? {} : { ownerDid: profile.ownerDid.split("#")[0] },
+    ...profile.did === void 0 ? {} : { principalDid: profile.did.split("#")[0] },
+    ...profile.spaceId === void 0 ? {} : { space: profile.spaceId }
+  }, requested);
+  if (!resolution.ok) {
+    throw resolution.code === "OWNER_MISMATCH" ? new CLIError(
+      "OWNER_MISMATCH",
+      `--owner does not match the secrets owner of profile "${profileName2}". ${resolution.message}`,
+      ExitCode.USAGE_ERROR
+    ) : new CLIError(
       "OWNER_DID_UNKNOWN",
       `Cannot determine the secrets owner for profile "${profileName2}". Pass --owner did:pkh:eip155:CHAIN:ADDRESS with --manifest.`,
       ExitCode.AUTH_REQUIRED
     );
   }
-  return `urn:tinycloud:encryption:${canonicalOwnerDid(owner, "Secrets owner")}:default`;
+  return `urn:tinycloud:encryption:${resolution.owner}:default`;
 }
 function permissionsFromDelegation(delegation) {
   if (delegation.resources?.length) {
@@ -14335,14 +14456,17 @@ var init_permissions = __esm({
 });
 
 // src/auth/session-expired.ts
+import { signInRecovery } from "@tinycloud/operations/recovery";
 function signInAgainHint(profileName2, posture) {
-  if (posture === "local-owner-key") {
-    return `Sign in again with: tc --profile ${profileName2} auth login --method local`;
+  const delegate = posture === "delegate-session";
+  const { command } = signInRecovery(
+    profileName2,
+    delegate ? "delegate-session" : posture === "local-owner-key" ? "local-owner-key" : "owner-openkey"
+  );
+  if (command === void 0) {
+    return delegate ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName2)} with tc auth login --method openkey --paste --manifest <manifest.json>.` : `Sign in again to profile ${JSON.stringify(profileName2)} with tc auth login.`;
   }
-  if (posture === "delegate-session") {
-    return `Have the owner approve a new scoped login: tc --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
-  }
-  return `Sign in again with: tc --profile ${profileName2} auth login --method openkey`;
+  return delegate ? `Have the owner approve a new scoped login: ${command}. Pass the owner's code on stdin, newline-terminated.` : `Sign in again with: ${command}`;
 }
 function sessionExpiredError(profileName2, posture) {
   return new CLIError(
@@ -19439,8 +19563,8 @@ async function callbackFlow(did, options = {}) {
       }
       if (openBrowser) {
         try {
-          const open7 = (await import("open")).default;
-          await open7(authUrl);
+          const open8 = (await import("open")).default;
+          await open8(authUrl);
         } catch {
           settle({ error: new Error("Failed to open browser") });
           return;
@@ -19593,8 +19717,8 @@ async function localKeySignIn(options) {
 // src/auth/scoped-login.ts
 init_errors();
 init_constants();
-init_types();
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
+import { isLocalOwnerProfile as isLocalOwnerProfile2 } from "@tinycloud/operations/profile";
 
 // src/lib/duration.ts
 function parseDuration(input) {
@@ -19652,11 +19776,8 @@ function openKeyExpiryParam(expiry) {
   }
   return `${seconds}s`;
 }
-function isLocalOwnerProfile(profile) {
-  return resolveProfilePosture(profile) === "local-owner-key" || profile.authMethod === "local" || typeof profile.privateKey === "string";
-}
 function pinnedOwner(profile) {
-  return profile && !isLocalOwnerProfile(profile) ? profile.ownerDid : void 0;
+  return profile && !isLocalOwnerProfile2(profile) ? profile.ownerDid : void 0;
 }
 var TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
 function withoutTrustFields(session) {
@@ -19907,9 +20028,10 @@ init_constants();
 init_profiles();
 init_errors();
 init_space();
+import { isLocalOwnerProfile as isLocalOwnerProfile3 } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
 function assertNotLocalOwner(profileName2, profile, flow) {
-  if (profile === null || !isLocalOwnerProfile(profile)) return;
+  if (profile === null || !isLocalOwnerProfile3(profile)) return;
   throw new CLIError(
     "LOCAL_OWNER_PROFILE",
     `Profile "${profileName2}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
@@ -24160,8 +24282,21 @@ init_warnings();
 init_constants();
 import { readFile as readFile9 } from "fs/promises";
 import { join as join9 } from "path";
-import { homedir } from "os";
+import { homedir, hostname, userInfo } from "os";
+import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
+import { isLocalOwnerProfile as isLocalOwnerProfile4 } from "@tinycloud/operations/profile";
+import {
+  buildSecretManagerUrl,
+  buildSecretRequestUrl as buildSecretRequestUrl2,
+  canonicalSecretRequestOwner,
+  isValidSecretRequestScope,
+  missingSecretRecovery,
+  ownerOfSpace,
+  resolveSecretsOwner as resolveSecretsOwner2,
+  SecretRequestInputError,
+  validSecretNames
+} from "@tinycloud/operations/secret-request";
 import {
   SECRET_DECRYPT_CAPABILITY,
   secretCapabilityAction
@@ -24170,6 +24305,402 @@ import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/c
 init_sdk();
 init_session_expired();
 init_space();
+
+// src/lib/browser.ts
+init_formatter();
+init_theme();
+import open5 from "open";
+var LAUNCH_CHECK_MS = 1e3;
+async function tryOpenBrowser(url) {
+  let launcher;
+  try {
+    launcher = await open5(url);
+  } catch {
+    return false;
+  }
+  return new Promise((resolve5) => {
+    const timer = setTimeout(() => resolve5(true), LAUNCH_CHECK_MS);
+    launcher.once("error", () => {
+      clearTimeout(timer);
+      resolve5(false);
+    });
+    launcher.once("exit", (code3) => {
+      clearTimeout(timer);
+      resolve5(code3 === 0);
+    });
+  });
+}
+function warnBrowserNotOpened() {
+  process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: [{ code: "BROWSER_OPEN_FAILED", reason: "open_failed" }] })}
+` : `${theme.warn("!")} Could not open a browser. Open the URL above yourself.
+`);
+}
+
+// src/lib/probe-child.ts
+import { spawn as nodeSpawn } from "child_process";
+var ATTEMPT_BUDGET_MS = 2e4;
+var KILL_GRACE_MS = 500;
+var MAX_PROBE_LINE_BYTES = 64 * 1024;
+var MAX_STDERR_BYTES = 64 * 1024;
+var STATUS_OPERATION_ID = "tinycloud.secrets.status";
+var ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+function probeCommandArgs(request) {
+  return [
+    "--json",
+    "--profile",
+    request.profile,
+    "--host",
+    request.host,
+    "secrets",
+    "probe",
+    ...request.names,
+    ...request.scope === void 0 ? [] : ["--scope", request.scope],
+    ...request.owner === void 0 ? [] : ["--owner", request.owner]
+  ];
+}
+function probeChildArgv(request) {
+  const script = process.argv[1];
+  if (script === void 0) throw new Error("Cannot locate the tc entry point for the probe child.");
+  return [...process.execArgv, script, ...probeCommandArgs(request)];
+}
+function runProbeChild(request, options = {}) {
+  const command = options.command ?? process.execPath;
+  const args = options.argv ?? probeChildArgv(request);
+  const budgetMs = options.budgetMs ?? ATTEMPT_BUDGET_MS;
+  const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
+  const spawn2 = options.spawn ?? nodeSpawn;
+  const signal = options.signal;
+  return new Promise((resolve5) => {
+    if (signal?.aborted) {
+      resolve5({ kind: "cancelled" });
+      return;
+    }
+    const child = spawn2(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    let outcome;
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let exited = false;
+    let stopping = false;
+    let graceTimer;
+    const stop = () => {
+      if (exited || stopping) return;
+      stopping = true;
+      child.kill("SIGTERM");
+      graceTimer = setTimeout(() => {
+        if (!exited) child.kill("SIGKILL");
+      }, killGraceMs);
+    };
+    const settle = (value) => {
+      if (outcome !== void 0) return;
+      outcome = value;
+      stop();
+    };
+    const onAbort = () => settle({ kind: "cancelled" });
+    const budgetTimer = setTimeout(() => settle({ kind: "timeout" }), budgetMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = () => {
+      if (exited) return;
+      exited = true;
+      clearTimeout(budgetTimer);
+      clearTimeout(graceTimer);
+      signal?.removeEventListener("abort", onAbort);
+      if (outcome === void 0) {
+        const envelope = stdout.length > 0 && stdout.length <= MAX_PROBE_LINE_BYTES ? parseStatusEnvelope(stdout.toString("utf8")) : void 0;
+        outcome = envelope !== void 0 ? { kind: "ok", envelope } : probeFailed(stderr.toString("utf8"));
+      }
+      resolve5(outcome);
+    };
+    if (child.pid !== void 0) options.onSpawn?.(child.pid);
+    child.stdout?.on("data", (chunk) => {
+      if (outcome !== void 0) return;
+      stdout = Buffer.concat([stdout, chunk]);
+      const newline = stdout.indexOf(10);
+      if (newline >= 0 && newline <= MAX_PROBE_LINE_BYTES) {
+        const envelope = parseStatusEnvelope(stdout.subarray(0, newline).toString("utf8"));
+        settle(envelope !== void 0 ? { kind: "ok", envelope } : { kind: "probe_failed" });
+      } else if (newline > MAX_PROBE_LINE_BYTES || newline < 0 && stdout.length > MAX_PROBE_LINE_BYTES) {
+        settle({ kind: "probe_failed" });
+      }
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr = Buffer.concat([stderr, chunk]);
+      if (stderr.length > MAX_STDERR_BYTES) stderr = stderr.subarray(stderr.length - MAX_STDERR_BYTES);
+    });
+    child.on("error", () => {
+      settle({ kind: "probe_failed" });
+      if (child.pid === void 0) finish();
+    });
+    child.on("close", finish);
+  });
+}
+function probeFailed(stderr) {
+  const code3 = childErrorCode(stderr);
+  return code3 === void 0 ? { kind: "probe_failed" } : { kind: "probe_failed", childErrorCode: code3 };
+}
+function childErrorCode(stderr) {
+  const lines = stderr.split("\n");
+  for (let start = lines.length - 1; start >= 0; start -= 1) {
+    if (!lines[start].startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(lines.slice(start).join("\n"));
+      if (typeof parsed !== "object" || parsed === null || !("error" in parsed)) continue;
+      const error = parsed.error;
+      if (typeof error !== "object" || error === null || !("code" in error)) continue;
+      return typeof error.code === "string" && ERROR_CODE_RE.test(error.code) ? error.code : void 0;
+    } catch {
+    }
+  }
+  return void 0;
+}
+function plainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseStatusEnvelope(line) {
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return void 0;
+  }
+  if (!plainObject(parsed)) return void 0;
+  const value = parsed;
+  if (!plainObject(value.operation) || value.operation?.operationId !== STATUS_OPERATION_ID) return void 0;
+  const warnings = Array.isArray(value.warnings) ? { warnings: value.warnings } : {};
+  const operation = { operationId: STATUS_OPERATION_ID };
+  if (value.status === "ok" && plainObject(value.output)) {
+    return { status: "ok", operation, output: value.output, ...warnings };
+  }
+  const error = value.error;
+  if (value.status === "error" && plainObject(error) && typeof error?.code === "string" && typeof error.message === "string") {
+    return {
+      status: "error",
+      operation,
+      error: {
+        code: error.code,
+        message: error.message,
+        ...typeof error.retryable === "boolean" ? { retryable: error.retryable } : {},
+        ...plainObject(error.details) ? { details: error.details } : {}
+      },
+      ...warnings
+    };
+  }
+  return void 0;
+}
+
+// src/lib/secrets-wait.ts
+init_constants();
+init_errors();
+var WAIT_BACKOFF_MS = [3e3, 4500, 6750, 10125];
+var WAIT_STEADY_INTERVAL_MS = 15e3;
+var DEFAULT_WAIT_TIMEOUT = "5m";
+var MAX_WAIT_TIMEOUT_MS = 9 * 6e4;
+var MAX_CONSECUTIVE_FAILURES = 5;
+var TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
+var RETRYABLE_STATUS_ERRORS = { NODE_UNREACHABLE: true, NODE_ERROR: true };
+var EXPLICIT_KEY_HINT = "tc secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with tc --profile <profile> auth login --method local, without TC_PRIVATE_KEY.";
+function abortableSleep(ms2, signal) {
+  return new Promise((resolve5) => {
+    if (signal.aborted) {
+      resolve5();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve5();
+    };
+    const timer = setTimeout(done, ms2);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+function parseWaitTimeout(value) {
+  if (!TIMEOUT_RE.test(value)) {
+    throw new CLIError("INVALID_TIMEOUT", `Invalid --timeout ${JSON.stringify(value)}: use 0, Ns or Nm (for example 90s or 5m).`, ExitCode.USAGE_ERROR);
+  }
+  const amount = value === "0" ? 0 : Number(value.slice(0, -1));
+  const ms2 = value.endsWith("m") ? amount * 6e4 : amount * 1e3;
+  if (ms2 > MAX_WAIT_TIMEOUT_MS) {
+    throw new CLIError("INVALID_TIMEOUT", "--timeout may be at most 9m.", ExitCode.USAGE_ERROR);
+  }
+  return ms2;
+}
+async function runSecretsWait(request, deps) {
+  const deadline = deps.now() + request.timeoutMs;
+  let progress;
+  let lastPending;
+  let lastWarnings;
+  let failures = 0;
+  let step = 0;
+  const cancelled = () => new CLIError(
+    "CANCELLED",
+    "Interrupted: tc secrets wait stopped before the secrets were ready.",
+    ExitCode.CANCELLED,
+    progress === void 0 ? {} : { progress }
+  );
+  const networkError = (message) => new CLIError(
+    "NETWORK_ERROR",
+    message,
+    ExitCode.NETWORK_ERROR,
+    {
+      ...progress === void 0 ? {} : { progress },
+      ...lastWarnings === void 0 ? {} : { warnings: lastWarnings }
+    }
+  );
+  for (; ; ) {
+    if (deps.signal.aborted) throw cancelled();
+    const final = deps.now() >= deadline;
+    const outcome = await deps.runProbe(deps.signal);
+    if (deps.signal.aborted || outcome.kind === "cancelled") throw cancelled();
+    let failed = false;
+    switch (outcome.kind) {
+      case "timeout":
+        failed = true;
+        break;
+      case "probe_failed":
+        throw new CLIError(
+          "PROBE_FAILED",
+          outcome.childErrorCode === void 0 ? "The status probe exited without a result." : `The status probe exited without a result (${outcome.childErrorCode}).`,
+          ExitCode.ERROR
+        );
+      case "ok": {
+        const envelope = outcome.envelope;
+        lastWarnings = envelope.warnings;
+        if (envelope.status === "error") {
+          if (RETRYABLE_STATUS_ERRORS[envelope.error.code] === true && envelope.error.retryable !== false) {
+            failed = true;
+            break;
+          }
+          throw statusError(envelope.error, request.profile, envelope.warnings);
+        }
+        const output2 = statusOutput(envelope.output);
+        if (output2 === void 0) throw new CLIError("PROBE_FAILED", "The status probe returned an unexpected result.", ExitCode.ERROR);
+        if (output2.status === "ready") {
+          return {
+            exitCode: ExitCode.SUCCESS,
+            stdout: { status: "ready", names: [...output2.names], ...output2.scope === void 0 ? {} : { scope: output2.scope } },
+            ...envelope.warnings === void 0 ? {} : { warnings: envelope.warnings }
+          };
+        }
+        if (output2.status === "consent_required") throw consentError(output2, request.consentHint, envelope.warnings);
+        progress = { present: [...output2.present], pending: [...output2.pending] };
+        lastPending = output2;
+        break;
+      }
+    }
+    if (failed) {
+      failures += 1;
+      if (failures >= MAX_CONSECUTIVE_FAILURES) {
+        throw networkError(`The TinyCloud node could not be reached (${failures} attempts in a row).`);
+      }
+    } else {
+      failures = 0;
+    }
+    const end = deps.now();
+    if (final || end >= deadline) {
+      if (failed || lastPending === void 0) {
+        throw networkError("The TinyCloud node could not be reached before the wait's deadline.");
+      }
+      return {
+        exitCode: ExitCode.PENDING,
+        stdout: {
+          status: "pending",
+          pending: [...lastPending.pending],
+          present: [...lastPending.present],
+          ...lastPending.setup !== void 0 ? { url: lastPending.setup.url } : lastPending.hint !== void 0 ? { hint: lastPending.hint } : {}
+        },
+        ...lastWarnings === void 0 ? {} : { warnings: lastWarnings }
+      };
+    }
+    const interval = WAIT_BACKOFF_MS[step] ?? WAIT_STEADY_INTERVAL_MS;
+    step += 1;
+    await deps.sleep(Math.min(interval, deadline - end), deps.signal);
+  }
+}
+function stringList(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : void 0;
+}
+function statusOutput(output2) {
+  const { status, owner, scope, setup, hint } = output2;
+  const names = stringList(output2.names);
+  const present = stringList(output2.present);
+  const pending = stringList(output2.pending);
+  const denied = stringList(output2.denied);
+  if (status !== "ready" && status !== "pending" && status !== "consent_required") return void 0;
+  if (typeof owner !== "string" || !names || !present || !pending || !denied) return void 0;
+  if (scope !== void 0 && typeof scope !== "string") return void 0;
+  if (hint !== void 0 && typeof hint !== "string") return void 0;
+  if (setup !== void 0 && (typeof setup !== "object" || setup === null || !("url" in setup) || typeof setup.url !== "string")) return void 0;
+  return {
+    status,
+    owner,
+    names,
+    present,
+    pending,
+    denied,
+    ...scope === void 0 ? {} : { scope },
+    ...setup === void 0 ? {} : { setup },
+    ...hint === void 0 ? {} : { hint }
+  };
+}
+function consentError(output2, hint, warnings) {
+  const denied = [...output2.denied];
+  return new CLIError(
+    "PERMISSION_DENIED",
+    `This profile may not read ${denied.join(", ")}. The owner must approve access first.`,
+    ExitCode.PERMISSION_DENIED,
+    {
+      hint,
+      recovery: {
+        action: "request_access",
+        names: denied,
+        owner: output2.owner,
+        ...output2.scope === void 0 ? {} : { scope: output2.scope }
+      },
+      deniedNames: denied,
+      ...output2.setup === void 0 ? {} : { setup: output2.setup },
+      ...warnings === void 0 ? {} : { warnings }
+    }
+  );
+}
+function recoveryOf(error, action) {
+  const recovery = error.details?.recovery;
+  if (typeof recovery !== "object" || recovery === null) return void 0;
+  const candidate = recovery;
+  if (candidate.action !== action) return void 0;
+  return candidate.command === void 0 || typeof candidate.command === "string" ? recovery : void 0;
+}
+function statusError(error, profile, warnings) {
+  const extra = warnings === void 0 ? {} : { warnings };
+  if (error.code === "AUTH_REQUIRED" && error.details?.reason === "explicit_key") {
+    return new CLIError("AUTH_REQUIRED", error.message, ExitCode.AUTH_REQUIRED, { hint: EXPLICIT_KEY_HINT, ...extra });
+  }
+  if (error.code === "AUTH_REQUIRED" || error.code === "SESSION_NOT_FOUND") {
+    const recovery = recoveryOf(error, "sign_in");
+    if (recovery !== void 0) {
+      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with tc auth login, then retry.`;
+      return new CLIError("AUTH_REQUIRED", error.message, ExitCode.AUTH_REQUIRED, { hint, recovery, ...extra });
+    }
+  }
+  if (error.code === "PROFILE_MIGRATION_REQUIRED") {
+    const recovery = recoveryOf(error, "complete_migration");
+    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run tc auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
+    return new CLIError("PROFILE_MIGRATION_REQUIRED", error.message, ExitCode.ERROR, {
+      hint,
+      ...recovery === void 0 ? {} : { recovery },
+      ...extra
+    });
+  }
+  if (error.code === "INPUT_INVALID") {
+    const reason = error.details?.reason;
+    if (reason === "OWNER_MISMATCH") return new CLIError("OWNER_MISMATCH", error.message, ExitCode.USAGE_ERROR, extra);
+    if (reason === "OWNER_DID_UNKNOWN") return new CLIError("OWNER_DID_UNKNOWN", error.message, ExitCode.AUTH_REQUIRED, extra);
+    return new CLIError("INPUT_INVALID", error.message, ExitCode.USAGE_ERROR, extra);
+  }
+  const mapped = cliErrorFromService(error);
+  return new CLIError(mapped.code, mapped.message, mapped.exitCode, { ...mapped.metadata, ...extra });
+}
+
+// src/commands/secrets.ts
 init_types();
 var SECRETS_SPACE3 = "secrets";
 var SECRET_KV_ABILITIES = {
@@ -24188,6 +24719,32 @@ async function readStdin3() {
 function authOptions(options) {
   const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
   return privateKey ? { privateKey } : void 0;
+}
+function effectiveLocal(profile, options) {
+  return profile !== null && isLocalOwnerProfile4(profile) || authOptions(options) !== void 0;
+}
+function secretRequestUsageError(error) {
+  return error instanceof SecretRequestInputError ? new CLIError(error.code, error.message, ExitCode.USAGE_ERROR) : error;
+}
+function requestedSecretScope(options) {
+  if (options.scope !== void 0 && options.app !== void 0) {
+    throw new CLIError("USAGE_ERROR", "Pass either --scope or --app, not both.", ExitCode.USAGE_ERROR);
+  }
+  if (options.app === void 0) return canonicalizeSecretScope2(options.scope);
+  try {
+    return appSecretScope(options.app);
+  } catch (error) {
+    throw new CLIError("INVALID_SECRET_SCOPE", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+  }
+}
+var CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
+function defaultRequester() {
+  try {
+    const requester = `${userInfo().username}@${hostname().split(".")[0]}`;
+    return requester.length <= 64 && !CONTROL_OR_FORMAT.test(requester) ? requester : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function resolveSecretScope(options) {
   return options.scope ? { scope: options.scope } : void 0;
@@ -24447,14 +25004,20 @@ function throwCanonicalSecretGetError(result, name) {
         "Permission denied while reading secret",
         ExitCode.PERMISSION_DENIED
       );
-    case "setup_required":
+    case "setup_required": {
+      const { url, names, scope, owner, action } = result.setup;
+      const message = typeof result.setup.message === "string" ? result.setup.message : `Secret "${name}" is not set.`;
       throw new CLIError(
         "NOT_FOUND",
-        result.setup.message,
+        message,
         ExitCode.NOT_FOUND,
-        { hint: `${result.setup.url}
-${result.setup.message}`, setup: result.setup }
+        {
+          hint: `${String(url)}
+${message}`,
+          setup: { url, names, ...scope === void 0 ? {} : { scope }, owner, action }
+        }
       );
+    }
     case "error":
       if (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated") {
         throw new CLIError(
@@ -24466,6 +25029,9 @@ ${result.setup.message}`, setup: result.setup }
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
+      }
+      if (result.error.code === "KV_NOT_FOUND") {
+        throw new CLIError("NOT_FOUND", `Secret "${name}" not found.`, ExitCode.NOT_FOUND, { hint: result.error.message });
       }
       if (result.error.code === "PERMISSION_HINT_INVALID") {
         throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
@@ -24738,17 +25304,26 @@ async function readDelegatedSecretValue(params) {
   });
   if (!envelopeResult.ok) {
     if (envelopeResult.error.code === "NOT_FOUND" || envelopeResult.error.code === "KEY_NOT_FOUND" || envelopeResult.error.code === "KV_NOT_FOUND") {
+      const recovery = missingSecretRecovery({
+        owner: ownerOfSpace(params.space?.startsWith("tinycloud:") ? params.space : params.delegation.spaceId),
+        local: params.local,
+        names: [params.name],
+        ...params.scope === void 0 ? {} : { scope: params.scope }
+      });
       throw new CLIError(
         "NOT_FOUND",
         `Secret "${params.name}" not found`,
-        ExitCode.NOT_FOUND
+        ExitCode.NOT_FOUND,
+        recovery.kind === "add_secret" ? { hint: `Ask the owner to add it: ${recovery.setup.url}`, setup: recovery.setup } : { hint: recovery.hint }
       );
     }
-    if (envelopeResult.error.code === "PERMISSION_DENIED") {
+    const classified = cliErrorFromService(envelopeResult.error);
+    if (envelopeResult.error.code === "AUTH_UNAUTHORIZED" || classified.code === "PERMISSION_DENIED" || classified.code === "AUTH_REQUIRED") {
       throw new CLIError(
         "PERMISSION_DENIED",
         `Delegation "${params.delegationCid}" does not cover secret "${params.secretPath}".`,
-        ExitCode.PERMISSION_DENIED
+        ExitCode.PERMISSION_DENIED,
+        classified.metadata
       );
     }
     throw new CLIError(
@@ -24885,7 +25460,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         ...descriptor ? { descriptor } : {}
       });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   network.command("init [name]").description("Create a secrets encryption network if needed").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
@@ -24903,7 +25478,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         descriptor
       });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   secrets.command("doctor [name]").description("Check secrets setup and optional secret access").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--network <name>", "Encryption network name", "default").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
@@ -24960,6 +25535,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
           });
         } else {
           const notFound = result.error.code === "NOT_FOUND" || result.error.code === "KEY_NOT_FOUND";
+          const local = notFound && effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
           secret = {
             name: resolved.name,
             path: resolved.permissionPaths.vault,
@@ -24971,7 +25547,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
             name: "Secret access",
             ok: false,
             detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
-            hint: notFound ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} <value>` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
+            hint: notFound ? local ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `tc secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
           });
         }
       } else {
@@ -24993,7 +25569,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         checks
       });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
@@ -25024,7 +25600,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         ...spaceUri ? { space: spaceUri } : {}
       });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   secrets.command("get <name>").description("Get a secret value").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--raw", "Output raw value (no JSON wrapping)").option("--value-only", "Output only the secret value (alias for --raw)").option("-o, --output <file>", "Write value to file").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
@@ -25043,6 +25619,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         );
         const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
         const delegatedCtx = { ...ctx, host: effectiveHost };
+        const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
+        const scope = resolveSecretPath2(name, scopeOptions).scope;
         const node = await ensureSecretsNode(delegatedCtx, options);
         const value2 = await withSpinner(
           `Getting secret ${name}...`,
@@ -25053,7 +25631,9 @@ function registerSecretsCommand(program, openKeyAcquisition) {
             permissions: delegated.permissions,
             secretPath,
             space: legacySpaceUri ?? SECRETS_SPACE3,
-            name
+            name,
+            ...scope === void 0 ? {} : { scope },
+            local
           })
         );
         if (options.output) {
@@ -25101,7 +25681,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       }
       outputWarnings(operationWarnings(result.warnings));
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value, options, cmd) => {
@@ -25142,7 +25722,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       }
       outputJson({ name, written: true });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
@@ -25168,7 +25748,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       }
       outputJson({ name, deleted: true });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
   network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
@@ -25199,16 +25779,135 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         actions: result.delegation.actions
       });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
-  secrets.command("manage").description("Open the TinyCloud Secrets Manager in your browser").action(async () => {
+  secrets.command("request <name...>").description("Print a Secret Manager link asking the owner to add secrets (offline)").option("--scope <scope>", "Logical secret scope").option("--app <id>", "Derive the scope from an app id (instead of --scope)").option("--owner <did>", "Owner did:pkh when the profile does not record one").option("--requester <label>", "Who is asking, shown to the owner (default: user@host)").option("--open", "Also open the link in a browser").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY); a local key cannot request").action(async (names, options, cmd) => {
     try {
-      const open7 = (await import("open")).default;
-      await open7("https://secrets.tinycloud.xyz");
-      outputJson({ opened: "https://secrets.tinycloud.xyz" });
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const scope = requestedSecretScope(options);
+      const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+      if (effectiveLocal(profile, options)) {
+        throw new CLIError(
+          "LOCAL_OWNER_PROFILE",
+          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with tc secrets put NAME --stdin instead of requesting them.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
+      let link3;
+      try {
+        const requestedOwner = options.owner === void 0 ? void 0 : canonicalSecretRequestOwner(options.owner);
+        const resolution = resolveSecretsOwner2({
+          local: false,
+          posture: resolveProfilePosture(profile ?? {}),
+          ...profile?.ownerDid === void 0 ? {} : { ownerDid: profile.ownerDid.split("#")[0] },
+          ...profile?.did === void 0 ? {} : { principalDid: profile.did.split("#")[0] },
+          ...profile?.spaceId === void 0 ? {} : { space: profile.spaceId }
+        }, requestedOwner);
+        if (!resolution.ok) {
+          throw new CLIError(
+            resolution.code,
+            resolution.message,
+            resolution.code === "OWNER_MISMATCH" ? ExitCode.USAGE_ERROR : ExitCode.AUTH_REQUIRED
+          );
+        }
+        const requester = options.requester ?? defaultRequester();
+        link3 = buildSecretRequestUrl2({
+          owner: resolution.owner,
+          names,
+          ...scope === void 0 ? {} : { scope },
+          ...requester === void 0 ? {} : { requester }
+        });
+      } catch (error) {
+        throw secretRequestUsageError(error);
+      }
+      outputJson({ url: link3.url, names: link3.names, ...link3.scope === void 0 ? {} : { scope: link3.scope }, owner: link3.owner });
+      if (options.open && !await tryOpenBrowser(link3.url)) warnBrowserNotOpened();
     } catch (error) {
-      handleError(error);
+      return handleError(error);
+    }
+  });
+  secrets.command("manage [name...]").description("Open the TinyCloud Secrets Manager, optionally at the named secrets").option("--scope <scope>", "Logical secret scope").option("--app <id>", "Derive the scope from an app id (instead of --scope)").option("--no-open", "Print the URL without opening a browser").action(async (names, options) => {
+    try {
+      const scope = requestedSecretScope(options);
+      let url;
+      try {
+        url = buildSecretManagerUrl({ names, ...scope === void 0 ? {} : { scope } });
+      } catch (error) {
+        throw secretRequestUsageError(error);
+      }
+      const opened = options.open === false ? false : await tryOpenBrowser(url);
+      outputJson({ url, opened });
+      if (options.open !== false && !opened) warnBrowserNotOpened();
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  secrets.command("wait <name...>").description("Wait until named secrets exist. Never signs in: needs a stored session, not TC_PRIVATE_KEY").option("--scope <scope>", "Logical secret scope").option("--app <id>", "Derive the scope from an app id (instead of --scope)").option("--owner <did>", "Expected owner did:pkh, checked against the profile's live identity").option("--timeout <duration>", "0 (one attempt), Ns or Nm; at most 9m", DEFAULT_WAIT_TIMEOUT).action(async (names, options, cmd) => {
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      const timeoutMs = parseWaitTimeout(options.timeout);
+      const scope = requestedSecretScope(options);
+      let validNames;
+      let owner;
+      try {
+        validNames = validSecretNames(names);
+        if (scope !== void 0 && !isValidSecretRequestScope(scope)) {
+          throw new CLIError("INVALID_SECRET_SCOPE", `Invalid secret scope ${JSON.stringify(scope)}.`, ExitCode.USAGE_ERROR);
+        }
+        owner = options.owner === void 0 ? void 0 : canonicalSecretRequestOwner(options.owner);
+      } catch (error) {
+        throw secretRequestUsageError(error);
+      }
+      const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+      const probe = {
+        profile: ctx.profile,
+        host: ctx.host,
+        names: validNames,
+        ...scope === void 0 ? {} : { scope },
+        ...owner === void 0 ? {} : { owner }
+      };
+      const result = await runSecretsWait(
+        { profile: ctx.profile, timeoutMs, consentHint: scopedSecretLoginHint(ctx.profile) },
+        {
+          now: Date.now,
+          sleep: abortableSleep,
+          runProbe: (signal) => runProbeChild(probe, { signal }),
+          signal: controller.signal
+        }
+      );
+      outputJson(result.stdout);
+      outputWarnings(operationWarnings(result.warnings));
+      process.exitCode = result.exitCode;
+    } catch (error) {
+      return handleError(error);
+    } finally {
+      process.off("SIGINT", cancel);
+      process.off("SIGTERM", cancel);
+    }
+  });
+  secrets.command("probe <name...>", { hidden: true }).option("--scope <scope>", "Logical secret scope").option("--owner <did>", "Requested owner did:pkh").action(async (names, options, cmd) => {
+    try {
+      const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+      const privateKey = process.env.TC_PRIVATE_KEY;
+      const result = await invokeOperation2("tinycloud.secrets.status", 1, {
+        profile: ctx.profile,
+        host: ctx.host,
+        allowOwnerProfile: true,
+        ...privateKey ? { privateKey } : {}
+      }, {
+        names,
+        ...options.scope === void 0 ? {} : { scope: options.scope },
+        ...options.owner === void 0 ? {} : { owner: options.owner }
+      });
+      process.stdout.write(`${JSON.stringify(result)}
+`, () => process.exit(0));
+    } catch (error) {
+      return handleError(error);
     }
   });
 }
@@ -30582,7 +31281,7 @@ async function importAesKey(key32, usage) {
     [usage]
   );
 }
-async function open5(blob, key32) {
+async function open6(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -30920,7 +31619,7 @@ async function resolvePolicyShare(link3, options) {
   options.signal?.throwIfAborted();
   let envelope;
   try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open5(parsed.ciphertext, parsed.key32));
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open6(parsed.ciphertext, parsed.key32));
     const value = JSON.parse(encoded);
     if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
     envelope = shareEnvelopeV3Schema.parse(value);
@@ -33509,7 +34208,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat4, mkdir as mkdir4, mkdtemp, open as open6, readFile as readFile10, realpath as realpath2, stat as stat4, link as link2, rename as rename4, rm as rm5, unlink as unlink3 } from "fs/promises";
+import { lstat as lstat4, mkdir as mkdir4, mkdtemp, open as open7, readFile as readFile10, realpath as realpath2, stat as stat4, link as link2, rename as rename4, rm as rm5, unlink as unlink3 } from "fs/promises";
 import { randomBytes as randomBytes6 } from "crypto";
 import { basename as basename4, join as join10, resolve as resolve3, sep as sep2 } from "path";
 init_errors();
@@ -33585,7 +34284,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve3(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open6(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open7(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
   const outputPath = join10(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -33609,7 +34308,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open6(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open7(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;

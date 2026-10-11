@@ -70,6 +70,12 @@ jobs:
           bun test packages/cli/src/commands/delegation.test.ts
           bun test packages/cli/src/commands/delegation-openkey-revoke.test.ts
           bun test packages/cli/src/commands/raw-decrypt-grant.test.ts
+          bun test packages/cli/src/commands/secrets-put-classification.test.ts
+          bun test packages/cli/src/output/errors.test.ts
+          bun test packages/cli/src/commands/secrets-request.test.ts
+          bun test packages/cli/src/lib/secrets-wait.test.ts
+          bun test packages/cli/src/lib/probe-child.test.ts
+          bun test packages/cli/src/commands/secrets-wait.test.ts
           bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts

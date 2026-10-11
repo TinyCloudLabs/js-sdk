@@ -15,7 +15,11 @@ on:
       - "packages/replica/**"
       - "packages/cli/**"
       - "packages/sdk-services/src/kv/**"
-      - "packages/operations/src/state.ts"
+      - "packages/operations/**"
+      - "packages/sdk-services/src/vault/**"
+      - "packages/sdk-services/src/secrets/**"
+      - "packages/node-sdk/src/delegation.ts"
+      - "packages/node-sdk/src/TinyCloudNode.ts"
       - ".github/workflows/replica-e2e.yml"
   push:
     branches: [master]
@@ -112,6 +116,12 @@ jobs:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts
+
+      - name: tc secrets request/wait against the node (TC-834)
+        if: matrix.database == 'sqlite'
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test packages/cli/test/secrets-wait.e2e.test.ts
 
   browser-e2e:
     name: Replica (Chromium, browser worker + IndexedDB)
