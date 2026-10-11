@@ -262,9 +262,12 @@ test.skipIf(process.getuid?.() === 0).each(cliRuntimes)(
 
 /** Run the CLI with stdout on a pseudo-terminal and stderr on a pipe. */
 async function ptyRun(command: string[], args: string[]): Promise<{ exit: number; stdout: string; stderr: string }> {
+  // CI enables Chalk colors on a PTY even though stderr is piped. Keep the
+  // terminal real, but make its human warning prefix deterministic.
+  const env = { ...cliEnv(), TERM: "xterm", NO_COLOR: "1", FORCE_COLOR: "0" };
   const runner = Bun.spawn([
     "python3", join(import.meta.dir, "../../test-support/pty-run.py"), ...command, ...args,
-  ], { env: cliEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  ], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [report, runnerStderr, runnerExit] = await Promise.all([
     new Response(runner.stdout).text(),
     new Response(runner.stderr).text(),
