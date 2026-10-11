@@ -691,7 +691,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       local ??= inspected.local;
       if (inspected.missing && !opened?.reason && !opened?.authorityRevoked && !opened?.opening && !isClosed) return undefined;
       const revoked = opened?.authorityRevoked === true || local?.authority.state === "revoked";
-      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
+      const rootUnsupported = opened?.lastError === "REPLICATION_ROOT_UNSUPPORTED";
+      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : rootUnsupported ? "unavailable" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
       return {
         prefix,
         state,

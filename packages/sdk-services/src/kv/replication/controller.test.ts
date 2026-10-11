@@ -129,6 +129,26 @@ describe("whole-space replication", () => {
     });
     expect(protectedRootList).toMatchObject({ ok: true, data: { keys: ["network"] } });
   });
+  test("persisted complete cache keeps coverage but root refusal remains unavailable", async () => {
+    const cached = status();
+    const env = setup({
+      prefixes: ["/"],
+      allowSecrets: true,
+      nodeFeatures: [],
+      inspectStatus: async () => cached,
+    });
+
+    expect(await env.controller.status()).toMatchObject([
+      {
+        prefix: "/",
+        state: "unavailable",
+        reason: "replica_unavailable",
+        errorCode: "REPLICATION_ROOT_UNSUPPORTED",
+        coverage: "complete",
+        authority: { state: "valid" },
+      },
+    ]);
+  });
 });
 describe("KVReplication fallback and pending behavior", () => {
   test("session-only refusal ignores an installed grant and serves the network", async () => {
