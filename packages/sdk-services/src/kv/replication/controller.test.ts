@@ -7,7 +7,7 @@ import { createKVReplication } from "./controller";
 import { encodeTcr1 } from "./listLocal";
 import { createMemoryPendingStore } from "./memoryPendingStore";
 import type { KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
-import { RequestTimeoutError } from "../../errors";
+import { RequestTimeoutError, wrapError } from "../../errors";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
@@ -471,6 +471,56 @@ describe("KVReplication inline verification", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.code).toBe("TIMEOUT");
     expect(env.events.some((event) => event.type === "replication.read" && event.verify === "aborted")).toBe(true);
+  });
+});
+
+describe("KVReplication write failure classification", () => {
+  for (const [name, error, code] of [
+    ["timeout", new RequestTimeoutError(25), "TIMEOUT"],
+    ["caller abort", Object.assign(new Error("cancelled"), { name: "AbortError" }), "ABORTED"],
+  ] as const) {
+    test(`covered write preserves ${name} classification and marks dispatch ambiguous`, async () => {
+      const env = setup();
+      const result = await env.controller.write({
+        op: "put",
+        space: identity.space,
+        entries: [{ path: "notes/a", body: "value" }],
+        signal: new AbortController().signal,
+        network: async () => { throw error; },
+      });
+      expect(result).toMatchObject({ ok: false, error: { code, meta: { requestMayHaveDispatched: true } } });
+      const state = await env.pending.read();
+      expect(state.committedEpoch).toBe(0);
+      expect(state.records).toMatchObject([{ state: "ambiguous", code }]);
+    });
+  }
+
+  test("covered and uncovered writes expose the same cancellation code and message", async () => {
+    for (const error of [
+      new RequestTimeoutError(25),
+      Object.assign(new Error("cancelled"), { name: "AbortError" }),
+    ]) {
+      const expected = await setup({ prefixes: [] }).controller.write({
+        op: "put",
+        space: identity.space,
+        entries: [{ path: "notes/a", body: "value" }],
+        signal: new AbortController().signal,
+        network: async () => ({ ok: false, error: wrapError("kv", error) }),
+      });
+      const actual = await setup().controller.write({
+        op: "put",
+        space: identity.space,
+        entries: [{ path: "notes/a", body: "value" }],
+        signal: new AbortController().signal,
+        network: async () => { throw error; },
+      });
+      expect(actual.ok).toBe(false);
+      expect(expected.ok).toBe(false);
+      if (!actual.ok && !expected.ok) {
+        expect(actual.error.code).toBe(expected.error.code);
+        expect(actual.error.message).toBe(expected.error.message);
+      }
+    }
   });
 });
 

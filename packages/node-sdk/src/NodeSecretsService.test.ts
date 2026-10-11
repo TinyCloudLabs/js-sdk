@@ -427,4 +427,23 @@ describe("NodeSecretsService", () => {
     });
     expect(base.put).not.toHaveBeenCalled();
   });
+
+  it("forwards { scope, ifAbsent } to the base service unchanged", async () => {
+    const base = makeBaseSecrets();
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: () => undefined,
+      grantPermissions: mock(async () => {}),
+      canEscalate: () => true,
+    });
+
+    const options = { scope: "com-listen-app", ifAbsent: true };
+    const result = await secrets.put("ANTHROPIC_API_KEY", "secret", options);
+
+    expect(result.ok).toBe(true);
+    expect(base.put).toHaveBeenCalledWith("ANTHROPIC_API_KEY", "secret", {
+      scope: "com-listen-app",
+      ifAbsent: true,
+    });
+  });
 });

@@ -306,12 +306,12 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const ambiguousFile = join(home, "ambiguous.bin");
     await writeFile(ambiguousFile, "v3");
     const ambiguous = await tc(["kv", "put", "notes/a.txt", "--file", ambiguousFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(ambiguous.stderr).toContain("ambiguous NETWORK_ERROR");
+    expect(ambiguous.stderr).toContain("ambiguous TIMEOUT");
     const ambiguousRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(ambiguousRead.stdout.toString()).toBe("v3");
     expect(ambiguousRead.stderr).toContain("network pending_write");
     const reportPinned = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string; code?: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(reportPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/a.txt", state: "ambiguous", code: "NETWORK_ERROR" }));
+    expect(reportPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/a.txt", state: "ambiguous", code: "TIMEOUT" }));
     const clear = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
     expect(clear.code).toBe(0);
     expect(clear.stderr).toContain("Clearing pending writes stops pinning keys");
@@ -319,13 +319,13 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const abaFile = join(home, "aba.bin");
     await writeFile(abaFile, "v0");
     const aba = await tc(["kv", "put", "notes/c", "--file", abaFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(aba.stderr).toContain("ambiguous NETWORK_ERROR");
+    expect(aba.stderr).toContain("ambiguous TIMEOUT");
     const abaRead = await tc(["kv", "get", "notes/c", "--raw"], { profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" } });
     expect(abaRead.stdout.toString()).toBe("v0");
     expect(abaRead.stderr).toContain("network pending_write");
     expect(abaRead.stderr).toContain("pendingCleared:0");
     const abaPinned = await ok<{ replicas: Array<{ pinned: Array<{ key: string; state: string; code?: string }> }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
-    expect(abaPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/c", state: "ambiguous", code: "NETWORK_ERROR" }));
+    expect(abaPinned.replicas.flatMap((replica) => replica.pinned)).toContainEqual(expect.objectContaining({ key: "notes/c", state: "ambiguous", code: "TIMEOUT" }));
     const abaClear = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
     expect(abaClear.code).toBe(0);
 

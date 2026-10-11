@@ -1,5 +1,6 @@
 import ora from "ora";
 import { theme } from "./theme.js";
+import { drainWarnings, mergeWarnings } from "./warnings.js";
 
 export function outputJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
@@ -15,21 +16,36 @@ export interface OperationWarningOutput {
 function warningLine(warnings: readonly OperationWarningOutput[]): string {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; the old grant expires on its own.`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
 }
 
 /**
- * Write a command error to stderr. `meta` (validated authorization fields)
- * and `warnings` (fixed-code diagnostics) appear only in the JSON form; the
- * human form adds one warnings line.
+ * Value-free structured fields an error may carry in its JSON form. Each one
+ * is validated by `handleError` before it reaches here.
+ */
+export interface ErrorOutputDetails {
+  readonly meta?: Record<string, unknown>;
+  readonly warnings?: readonly OperationWarningOutput[];
+  /** `{url, names, scope?, owner, action: "add_secret"}`: the canonical request link for missing names. */
+  readonly setup?: Record<string, unknown>;
+  /** `sign_in`, `complete_migration` or `request_access`, exact shapes. */
+  readonly recovery?: Record<string, unknown>;
+  /** `{present, pending}` of the last successful `wait` attempt. */
+  readonly progress?: { readonly present: readonly string[]; readonly pending: readonly string[] };
+}
+
+/**
+ * Write a command error to stderr. `meta` (validated authorization fields),
+ * `warnings` (fixed-code diagnostics), `setup`, `recovery` and `progress`
+ * appear only in the JSON form; the human form adds one warnings line.
  */
 export function outputError(
   code: string,
   message: string,
   hint?: string,
-  details: { readonly meta?: Record<string, unknown>; readonly warnings?: readonly OperationWarningOutput[] } = {},
+  details: ErrorOutputDetails = {},
 ): void {
-  const { meta, warnings = [] } = details;
+  const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
       `${theme.error("✗")} ${theme.label(code)}: ${message}\n`
@@ -39,13 +55,16 @@ export function outputError(
         process.stderr.write(`  ${theme.hint(line)}\n`);
       }
     }
-    if (warnings.length > 0) process.stderr.write(`  ${theme.warn(warningLine(warnings))}\n`);
+    if (warnings.length > 0) process.stderr.write(`  ${theme.warn("!")} ${warningLine(warnings)}\n`);
   } else {
     const payload: {
       error: {
         code: string;
         message: string;
         hint?: string;
+        recovery?: Record<string, unknown>;
+        setup?: Record<string, unknown>;
+        progress?: ErrorOutputDetails["progress"];
         meta?: Record<string, unknown>;
         warnings?: readonly OperationWarningOutput[];
       };
@@ -53,6 +72,9 @@ export function outputError(
       error: { code, message },
     };
     if (hint) payload.error.hint = hint;
+    if (recovery) payload.error.recovery = recovery;
+    if (setup) payload.error.setup = setup;
+    if (progress) payload.error.progress = progress;
     if (meta) payload.error.meta = meta;
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
@@ -66,10 +88,11 @@ export function outputError(
  * command's output has been written.
  */
 export function outputWarnings(warnings: readonly OperationWarningOutput[]): void {
-  if (warnings.length === 0) return;
+  const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
+  if (combined.length === 0) return;
   process.stderr.write(shouldOutputJson()
-    ? `${JSON.stringify({ warnings })}\n`
-    : `${theme.warn("!")} ${warningLine(warnings)}\n`);
+    ? `${JSON.stringify({ warnings: combined })}\n`
+    : `${theme.warn("!")} ${warningLine(combined)}\n`);
 }
 
 const WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;

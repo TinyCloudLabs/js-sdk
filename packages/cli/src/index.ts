@@ -8,7 +8,7 @@ const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
 import { theme } from "./output/theme.js";
-import { setJsonOutputRequested, shouldOutputJson } from "./output/formatter.js";
+import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
@@ -74,6 +74,10 @@ program.hook("preAction", async (thisCommand) => {
       // Config dir doesn't exist yet — that's fine, commands will handle it
     }
   }
+});
+
+program.hook("postAction", () => {
+  outputWarnings([]);
 });
 
 configureShareCommandServices({

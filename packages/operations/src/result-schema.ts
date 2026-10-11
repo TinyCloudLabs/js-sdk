@@ -42,6 +42,16 @@ const setupSchema: JsonSchema = {
   type: "object",
   properties: {
     kind: { const: "secret_manager" },
+    action: { const: "add_secret" },
+    url: { type: "string", format: "uri" },
+    names: {
+      type: "array",
+      minItems: 1,
+      maxItems: 10,
+      items: { type: "string", minLength: 1 },
+    },
+    scope: { type: "string", minLength: 1 },
+    owner: { type: "string", minLength: 1 },
     secret: {
       type: "object",
       properties: {
@@ -52,10 +62,9 @@ const setupSchema: JsonSchema = {
       required: ["name", "space"],
       additionalProperties: false,
     },
-    url: { type: "string", format: "uri" },
     message: { type: "string", minLength: 1 },
   },
-  required: ["kind", "secret", "url", "message"],
+  required: ["kind", "action", "url", "names", "owner", "secret", "message"],
   additionalProperties: false,
 };
 

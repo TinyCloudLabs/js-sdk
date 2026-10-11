@@ -1,4 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -6,7 +7,7 @@ import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { keyToDID } from "./local-key.js";
-import { canonicalJson, CLOCK_SKEW_MS, isLegacyNestedDecrypt, isLocalOwnerProfile, scopeCovers, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
+import { canonicalJson, CLOCK_SKEW_MS, isLegacyNestedDecrypt, scopeCovers, sessionExpiresAt, SIGNED_RECAP } from "./scoped-login.js";
 
 /** Scoped and device logins never turn a local-owner-key profile into a mixed OpenKey profile. */
 export function assertNotLocalOwner(profileName: string, profile: ProfileConfig | null, flow: string): void {

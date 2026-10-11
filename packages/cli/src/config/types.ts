@@ -108,4 +108,7 @@ export interface CLIContext {
   quiet: boolean;
   replication: boolean;
   replicationDebug: boolean;
+  /** Set when local-node discovery waited for a stored session that did not verify; `host` is then `deferredFrom`. */
+  localDiscovery?: { readonly deferredFrom: string };
 }
+

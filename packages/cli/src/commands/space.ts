@@ -84,7 +84,7 @@ it directly with \`tc space host <name>\` (no request needed).
     .action(async (name: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         const profile = await ProfileManager.getProfile(ctx.profile);
 
         // Pure local emit — no node contact, mirroring `tc auth request --emit`.
@@ -159,7 +159,7 @@ it directly with \`tc space host <name>\` (no request needed).
     .action(async (name: string, _options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         await ProfileManager.updateProfile(ctx.profile, (profile) => ({ ...profile, spaceName: name }));
 

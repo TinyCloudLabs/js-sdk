@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,9 +13,12 @@ process.env.NODE_ENV = "test";
 
 // Restoring the session into a node is not under test.
 let restoreFailure: Error | null = null;
+let mockedSignedExpiry: Date | undefined;
+let onRestore: (() => void) | undefined;
 mock.module("@tinycloud/node-sdk", () => ({
   TinyCloudNode: class {
     async restoreSession() {
+      onRestore?.();
       if (restoreFailure) throw restoreFailure;
     }
   },
@@ -24,9 +27,10 @@ mock.module("@tinycloud/node-sdk", () => ({
   sqliteReplicaStorage: () => {
     throw new Error("sqliteReplicaStorage should not be used by bootstrap tests");
   },
+  signedCompactUcanExpiry: () => mockedSignedExpiry,
 }));
 mock.module("./permissions.js", () => ({
-  replayAdditionalDelegations: async () => {},
+  replayAdditionalDelegations: async () => [],
 }));
 
 // Imported after TC_HOME and the module mocks above are in place.
@@ -94,6 +98,8 @@ async function holdLock(write: () => Promise<void>): Promise<{ finish: () => Pro
 
 beforeEach(async () => {
   restoreFailure = null;
+  mockedSignedExpiry = undefined;
+  onRestore = undefined;
   await rm(join(home, ".tinycloud"), { recursive: true, force: true });
   await ProfileManager.setProfile(PROFILE, fresh);
   await ProfileManager.setKey(PROFILE, KEY);
@@ -105,6 +111,61 @@ afterAll(async () => {
 });
 
 describe("bootstrapDelegatedSession under the profile lock", () => {
+  // TC-674 regression: fails before the fix
+  test("rolls back and reports delegation expiry when bootstrap restore crosses the signed expiry", async () => {
+    const originalNow = Date.now();
+    const expiry = Math.floor(originalNow / 1000) + 3600;
+    setSystemTime(expiry * 1000 - 1000);
+    mockedSignedExpiry = new Date(expiry * 1000);
+    const failure = Object.assign(new Error("AUTH_EXPIRED"), { code: "AUTH_EXPIRED" });
+    restoreFailure = failure;
+    onRestore = () => setSystemTime(expiry * 1000);
+    try {
+      await expect(bootstrapDelegatedSession(ctx, delegation)).rejects.toMatchObject({
+        code: "DELEGATION_EXPIRED",
+        exitCode: 1,
+      });
+      expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+      expect(await ProfileManager.getProfile(PROFILE)).toEqual(fresh);
+    } finally {
+      setSystemTime(originalNow);
+    }
+  });
+
+  // TC-674 regression: fails before the fix
+  test("abandon converts expiry after bootstrap and rolls the provisional session back", async () => {
+    const originalNow = Date.now();
+    const expiry = Math.floor(originalNow / 1000) + 3600;
+    setSystemTime(expiry * 1000 - 1000);
+    mockedSignedExpiry = new Date(expiry * 1000);
+    try {
+      const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+      setSystemTime(expiry * 1000);
+      await expect(bootstrap.abandon(new CLIError("AUTH_REQUIRED", "expired", 3))).rejects.toMatchObject({
+        code: "DELEGATION_EXPIRED",
+        exitCode: 1,
+      });
+      expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    } finally {
+      setSystemTime(originalNow);
+    }
+  });
+
+  // TC-674 control: passes before and after
+  test("abandon preserves an unrelated AUTH_REQUIRED before the delegation expiry", async () => {
+    const originalNow = Date.now();
+    const expiry = Math.floor(originalNow / 1000) + 3600;
+    setSystemTime(expiry * 1000 - 1000);
+    mockedSignedExpiry = new Date(expiry * 1000);
+    try {
+      const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+      const cause = new CLIError("AUTH_REQUIRED", "unrelated", 3);
+      await expect(bootstrap.abandon(cause)).rejects.toBe(cause);
+      expect(await ProfileManager.getSession(PROFILE)).toBeNull();
+    } finally {
+      setSystemTime(originalNow);
+    }
+  });
   test("reads the key under the lock: a key rotation holding it is not overwritten with the old key", async () => {
     const rotated = { ...KEY, x: "rotated-public", d: "rotated-private" };
     const rotation = await holdLock(() => ProfileManager.setKey(PROFILE, rotated));

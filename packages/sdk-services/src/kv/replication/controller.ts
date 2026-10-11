@@ -584,7 +584,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     }
   }
 
-  async function write<T>(r: { op: "put" | "delete" | "batchPut"; space: string; entries: ReadonlyArray<{ path: string; body?: Blob | string }>; signal: AbortSignal; network: () => Promise<Result<T>> }): Promise<Result<T>> {
+  async function write<T>(r: { op: "put" | "delete" | "batchPut"; space: string; entries: ReadonlyArray<{ path: string; body?: Blob | string }>; signal: AbortSignal; conditional?: boolean; network: () => Promise<Result<T>> }): Promise<Result<T>> {
     const covered = r.entries.flatMap((entry) => {
       const prefix = configuredPrefix(entry.path);
       return prefix ? [{ key: entry.path, op: r.op === "delete" ? "delete" as const : "put" as const }] : [];
@@ -598,12 +598,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     let result: Result<T>;
     try { result = await r.network(); }
     catch (error) {
-      result = err(serviceError(ErrorCodes.NETWORK_ERROR, "KV write request failed after dispatch status became unknown", "kv", {
-        cause: error instanceof Error ? error : undefined,
-        meta: { requestMayHaveDispatched: true },
-      }));
+      const wrapped = wrapError("kv", error);
+      result = err({
+        ...wrapped,
+        meta: { ...wrapped.meta, requestMayHaveDispatched: true },
+      });
     }
-    const outcome = classifyWriteOutcome(r.op, result);
+    const outcome = classifyWriteOutcome(r.op, result, { conditional: r.conditional === true });
     let settleError: unknown;
     try { await pending.update((s) => settle(s, opId, outcome, nowDate(scheduler.now()), result.ok ? undefined : result.error.code)); } catch (error) { settleError = error; }
     emit({ type: "replication.write", space: r.space, op: r.op, keys: covered.map((x) => x.key), outcome, ...(!result.ok ? { code: result.error.code } : {}), latencyMs: scheduler.now() - started });

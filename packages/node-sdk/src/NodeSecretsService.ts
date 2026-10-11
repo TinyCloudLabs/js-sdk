@@ -10,6 +10,7 @@ import {
   type PermissionEntry,
   type Result,
   type SecretScopeOptions,
+  type SecretPutOptions,
   type ServiceError,
   type VaultError,
 } from "@tinycloud/sdk-core";
@@ -171,7 +172,7 @@ export class NodeSecretsService implements ISecretsService {
   async put(
     name: string,
     value: string,
-    options?: SecretScopeOptions,
+    options?: SecretPutOptions,
   ): ReturnType<ISecretsService["put"]> {
     const permission = await this.ensurePermission(name, options, "put");
     if (!permission.ok) return permission;

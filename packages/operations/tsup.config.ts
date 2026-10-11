@@ -18,8 +18,8 @@ export default defineConfig({
   ],
   noExternal: ['@tinycloud/sdk-core/policy', '@tinycloud/sdk-core'],
   // Keep source imports on supported sdk-core boundaries while bundling only
-  // the policy canonicalizer and capability-subset implementation. This avoids
-  // loading sdk-core's broader CJS entrypoint (and its ESM-only subpaths).
+  // the capability-subset and compact-proof verifier implementations. The
+  // build bridge avoids sdk-core's broader CJS entrypoint and ESM-only subpaths.
   esbuildOptions(options) {
     options.alias = {
       ...options.alias,
@@ -29,7 +29,7 @@ export default defineConfig({
       ),
       '@tinycloud/sdk-core': resolve(
         packageDirectory,
-        '../sdk-core/src/capabilities.ts',
+        '../sdk-core/src/operations-bundle.ts',
       ),
     };
   },

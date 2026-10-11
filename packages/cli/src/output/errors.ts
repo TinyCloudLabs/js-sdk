@@ -3,9 +3,17 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { operationWarnings, outputError } from "./formatter.js";
+import { isSafeRecovery } from "@tinycloud/operations/recovery";
+import {
+  buildSecretRequestUrl,
+  isSafeRequestAccessRecovery,
+  isValidSecretName,
+  SECRET_REQUEST_MAX_NAMES,
+} from "@tinycloud/operations/secret-request";
+import { operationWarnings, outputError, type ErrorOutputDetails } from "./formatter.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
+import { drainWarnings, mergeWarnings } from "./warnings.js";
 
 let activeProfileName: string | undefined;
 
@@ -163,18 +171,103 @@ export function handleError(error: unknown): Promise<never> {
     ? cliError.metadata
     : undefined;
   const meta: Record<string, unknown> = {};
+  if (cliError.code === "GRANT_REVOKED_LOCAL_REMOVE_FAILED" &&
+    typeof cliError.metadata?.causeCode === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/.test(cliError.metadata.causeCode)) {
+    meta.causeCode = cliError.metadata.causeCode;
+  }
   if (cliError.status !== undefined && authMeta !== undefined) meta.status = cliError.status;
   const capability = validatedCapabilityOf({ meta: authMeta });
   if (capability) {
     meta.resource = capability.resource;
     meta.requiredAction = capability.requiredAction;
   }
+  const deniedNames = cliError.metadata?.deniedNames;
+  const recovery = safeCliRecovery(cliError.metadata?.recovery, {
+    deniedNames: Array.isArray(deniedNames) && deniedNames.every((name) => typeof name === "string") ? deniedNames : [],
+  });
+  const setup = cliError.code === "NOT_FOUND" || cliError.code === "PERMISSION_DENIED"
+    ? safeCliSetup(cliError.metadata?.setup)
+    : undefined;
+  const progress = cliError.code === "NETWORK_ERROR" || cliError.code === "CANCELLED"
+    ? safeCliProgress(cliError.metadata?.progress)
+    : undefined;
   outputError(cliError.code, cliError.message, hint, {
+    ...(recovery ? { recovery } : {}),
+    ...(setup ? { setup } : {}),
+    ...(progress ? { progress } : {}),
     ...(Object.keys(meta).length ? { meta } : {}),
-    warnings: operationWarnings(cliError.metadata?.warnings),
+    warnings: mergeWarnings(drainWarnings(), operationWarnings(cliError.metadata?.warnings)),
   });
   if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
   return closeReplication().then(() => process.exit(cliError.exitCode));
+}
+
+/**
+ * The `error.recovery` a CLI error may print, validated by its `action`
+ * (R7-1). `sign_in` and `complete_migration` use the operations redaction
+ * policy; `request_access` must name only denied names from the status
+ * output that produced it (`context.deniedNames`; `[]` for every other
+ * caller, so they can never emit it). Anything else is dropped.
+ */
+export function safeCliRecovery(
+  value: unknown,
+  context: { readonly deniedNames: readonly string[] },
+): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || !("action" in value)) return undefined;
+  const action = value.action;
+  switch (action) {
+    case "sign_in":
+    case "complete_migration":
+      return isSafeRecovery(value, action) ? { ...value } : undefined;
+    case "request_access":
+      return isSafeRequestAccessRecovery(value, context.deniedNames)
+        ? { ...value, names: [...value.names] }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+const SETUP_KEYS: Record<string, true> = { url: true, names: true, scope: true, owner: true, action: true };
+
+/**
+ * Exactly `{url, names, scope?, owner, action: "add_secret"}`, where `url` is
+ * the canonical `/request` link the builder produces for those fields.
+ */
+function safeCliSetup(value: unknown): ErrorOutputDetails["setup"] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  // Plain JSON-like metadata object: the checks below validate every key read.
+  const setup: Record<string, unknown> = { ...value };
+  if (!Object.keys(setup).every((key) => SETUP_KEYS[key] === true)) return undefined;
+  const { url, names, scope, owner, action } = setup;
+  if (action !== "add_secret" || typeof url !== "string" || typeof owner !== "string") return undefined;
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) return undefined;
+  if (scope !== undefined && typeof scope !== "string") return undefined;
+  try {
+    const link = buildSecretRequestUrl({ owner, names, ...(scope !== undefined ? { scope } : {}) });
+    if (link.url !== url || link.owner !== owner || link.names.length !== names.length) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { url, names: [...names], ...(scope !== undefined ? { scope } : {}), owner, action };
+}
+
+function safeNameList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > SECRET_REQUEST_MAX_NAMES) return undefined;
+  if (!value.every((name) => typeof name === "string" && isValidSecretName(name))) return undefined;
+  if (new Set(value).size !== value.length) return undefined;
+  return [...value];
+}
+
+/** Exactly `{present, pending}`, two disjoint lists of valid secret names. */
+function safeCliProgress(value: unknown): ErrorOutputDetails["progress"] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  if (!("present" in value) || !("pending" in value) || Object.keys(value).length !== 2) return undefined;
+  const present = safeNameList(value.present);
+  const pending = safeNameList(value.pending);
+  if (!present || !pending || present.some((name) => pending.includes(name))) return undefined;
+  return { present, pending };
 }
 
 function buildAuthHint(error: CLIError): string | undefined {
