@@ -25,6 +25,7 @@ import {
 } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
+import { mergeWarnings } from "../output/warnings.js";
 import { ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -355,20 +356,20 @@ function withOperationWarnings(error: unknown, warnings: readonly CanonicalSecre
 
 /**
  * The canonical read, possibly after a session refresh or an approved
- * escalation. Warnings from every invocation are kept, deduplicated, on the
- * returned envelope or on the error that ends the command.
+ * escalation. Keep the largest multiplicity of each warning across replay
+ * attempts, whether the command succeeds or an approval throws.
  */
 async function invokeCanonicalSecretGet(params: CanonicalSecretGetParams): Promise<CanonicalSecretGetResult> {
-  const warnings = new Map<string, CanonicalSecretGetWarning>();
+  let warnings: CanonicalSecretGetWarning[] = [];
   const collect = (result: CanonicalSecretGetResult): CanonicalSecretGetResult => {
-    for (const warning of result.warnings ?? []) warnings.set(JSON.stringify(warning), warning);
+    warnings = mergeWarnings(warnings, result.warnings ?? []);
     return result;
   };
   try {
     const result = await canonicalSecretGet(params, collect);
-    return warnings.size === 0 ? result : { ...result, warnings: [...warnings.values()] };
+    return warnings.length === 0 ? result : { ...result, warnings };
   } catch (error) {
-    throw withOperationWarnings(error, [...warnings.values()]);
+    throw withOperationWarnings(error, warnings);
   }
 }
 

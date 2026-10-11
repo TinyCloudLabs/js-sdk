@@ -1,5 +1,6 @@
 import ora from "ora";
 import { theme } from "./theme.js";
+import { drainWarnings, mergeWarnings } from "./warnings.js";
 
 export function outputJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
@@ -15,7 +16,7 @@ export interface OperationWarningOutput {
 function warningLine(warnings: readonly OperationWarningOutput[]): string {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; the old grant expires on its own.`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
 }
 
 /**
@@ -39,7 +40,7 @@ export function outputError(
         process.stderr.write(`  ${theme.hint(line)}\n`);
       }
     }
-    if (warnings.length > 0) process.stderr.write(`  ${theme.warn(warningLine(warnings))}\n`);
+    if (warnings.length > 0) process.stderr.write(`  ${theme.warn("!")} ${warningLine(warnings)}\n`);
   } else {
     const payload: {
       error: {
@@ -66,10 +67,11 @@ export function outputError(
  * command's output has been written.
  */
 export function outputWarnings(warnings: readonly OperationWarningOutput[]): void {
-  if (warnings.length === 0) return;
+  const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
+  if (combined.length === 0) return;
   process.stderr.write(shouldOutputJson()
-    ? `${JSON.stringify({ warnings })}\n`
-    : `${theme.warn("!")} ${warningLine(warnings)}\n`);
+    ? `${JSON.stringify({ warnings: combined })}\n`
+    : `${theme.warn("!")} ${warningLine(combined)}\n`);
 }
 
 const WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;

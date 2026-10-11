@@ -697,20 +697,21 @@ test("`tc kv get` never activates a stored compact delegation broader than its r
   }
 }, 300_000);
 
-test("the CLI's legacy replay installs an unbound signed-login grant, never one that carries a binding", async () => {
+test("CLI replay refuses a missing proof and installs a verified, bound signed-login grant", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-cli-legacy-"));
   const previousTcHome = process.env.TC_HOME;
   process.env.TC_HOME = home;
   const fixture = await hermeticFixture();
   try {
+    await disableLocalNodeDiscovery(home, fixture.ownerProfile);
     await disableLocalNodeDiscovery(home, fixture.profile);
-    // An owner-signed login (CACAO) for the delegate's session key, stored the
-    // way the CLI stores its own grants: no `siweProof`.
+    // A CACAO signed by the owner for the owner's persisted session. A copy
+    // without its SIWE proof cannot be verified from stored bytes.
     const { NodeWasmBindings, PrivateKeySigner } = await import("@tinycloud/node-sdk");
     const wasm = new NodeWasmBindings();
     const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
     const address = await signer.getAddress();
-    const spaceId = fixture.hermetic.restorableSession.spaceId as string;
+    const spaceId = fixture.hermetic.ownerRestorableSession.spaceId as string;
     const issuedAt = new Date();
     const expiry = new Date(issuedAt.getTime() + 60 * 60_000);
     const prepared = wasm.prepareSession({
@@ -721,28 +722,76 @@ test("the CLI's legacy replay installs an unbound signed-login grant, never one 
       issuedAt: issuedAt.toISOString(),
       expirationTime: expiry.toISOString(),
       spaceId,
-      jwk: fixture.hermetic.restorableSession.jwk as object,
+      jwk: fixture.hermetic.ownerRestorableSession.jwk as object,
     });
-    const session = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
+    const signature = await signer.signMessage(prepared.siwe);
+    const session = wasm.completeSessionSetup({ ...prepared, signature });
     const grant = {
       cid: session.delegationCid,
       delegationHeader: { Authorization: session.delegationHeader.Authorization },
       spaceId,
       path: "vault/secrets/HERMETIC_DELEGATION_CANARY",
       actions: ["tinycloud.kv/get"],
-      delegateDID: fixture.sessionDid,
+      delegateDID: (fixture.hermetic.ownerRestorableSession.verificationMethod as string).split("#", 1)[0]!,
       ownerAddress: address,
       chainId: 1,
       expiry: expiry.toISOString(),
       host: fixture.hermetic.host,
     };
-    const activationsDuring = (records: readonly unknown[]) => kvGetActivations(home, fixture, records);
+    const activationsDuring = async (records: readonly unknown[]): Promise<number> => {
+      await writeFile(join(home, ".tinycloud/profiles", fixture.ownerProfile, "additional-delegations.json"), JSON.stringify(records));
+      const before = fixture.hermetic.nativeBearerStats().delegationAttempts as number;
+      await runTinyCloudCliExit(home, ["--profile", fixture.ownerProfile, "kv", "get", grant.path]);
+      return (fixture.hermetic.nativeBearerStats().delegationAttempts as number) - before;
+    };
 
+    const withoutProof = { delegation: grant, permissions: [] };
+    const withProof = {
+      delegation: {
+        ...grant,
+        siweProof: { siwe: prepared.siwe, signature },
+      },
+      permissions: [],
+      authorityRequest: {
+        requestId: `cli-grant:${grant.cid}`,
+        requested: [{ service: "tinycloud.kv", space: spaceId, path: grant.path, actions: grant.actions }],
+      },
+    };
     const baseline = await activationsDuring([]);
-    expect(await activationsDuring([{ delegation: grant, permissions: [] }])).toBe(baseline + 1);
+    const attemptsBeforeProofless = fixture.hermetic.nativeBearerStats().delegationAttempts as number;
+    await writeFile(join(home, ".tinycloud/profiles", fixture.ownerProfile, "additional-delegations.json"), JSON.stringify([withoutProof]));
+    const missing = await runTinyCloudCliExit(home, ["--profile", fixture.ownerProfile, "kv", "get", grant.path]);
+    expect((fixture.hermetic.nativeBearerStats().delegationAttempts as number) - attemptsBeforeProofless).toBe(baseline);
+    const missingEnvelope = JSON.parse(missing.stderr) as { warnings?: unknown[]; error?: { warnings?: unknown[] } };
+    expect(missingEnvelope.warnings ?? missingEnvelope.error?.warnings).toEqual([{
+      code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: grant.cid,
+    }]);
+    expect(await activationsDuring([withProof])).toBe(baseline + 1);
     for (const authorityRequest of [{ requestId: "req_empty", requested: [] }, { requestId: "req_malformed" }]) {
-      expect(await activationsDuring([{ delegation: grant, permissions: [], authorityRequest }])).toBe(baseline);
+      expect(await activationsDuring([{ ...withProof, authorityRequest }])).toBe(baseline);
     }
+    const compact = await fixture.hermetic.mintDelegation();
+    const parts = compact.delegationHeader.Authorization.split(".");
+    const compactSignature = parts[2]!;
+    parts[2] = `${compactSignature[0] === "A" ? "B" : "A"}${compactSignature.slice(1)}`;
+    const corruptedAuthorization = parts.join(".");
+    const corrupted = {
+      ...compact,
+      cid: wasm.computeCid(new TextEncoder().encode(corruptedAuthorization), 0x55n),
+      delegationHeader: { Authorization: corruptedAuthorization },
+    };
+    const beforeCorrupted = fixture.hermetic.nativeBearerStats().delegationAttempts as number;
+    await writeFile(join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"), JSON.stringify([{
+      delegation: corrupted,
+      permissions: [],
+      authorityRequest: { requestId: "req_compact", requested: fixture.hermetic.permissions },
+    }]));
+    const rejected = await runTinyCloudCliExit(home, ["--profile", fixture.profile, "kv", "get", grant.path]);
+    expect(fixture.hermetic.nativeBearerStats().delegationAttempts).toBe(beforeCorrupted);
+    const rejectedEnvelope = JSON.parse(rejected.stderr) as { warnings?: unknown[]; error?: { warnings?: unknown[] } };
+    expect(rejectedEnvelope.warnings ?? rejectedEnvelope.error?.warnings).toEqual([{
+      code: "STORED_GRANT_SKIPPED", reason: "proof_invalid", grantCid: corrupted.cid,
+    }]);
   } finally {
     fixture.hermetic.stop();
     if (previousTcHome === undefined) delete process.env.TC_HOME;
@@ -751,7 +800,7 @@ test("the CLI's legacy replay installs an unbound signed-login grant, never one 
   }
 }, 300_000);
 
-test("an ordinary command on a local profile migrates it; one with another --private-key does not", async () => {
+test("an unbound compact grant waits for local-profile migration even with --private-key", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-local-migration-"));
   const previousTcHome = process.env.TC_HOME;
   process.env.TC_HOME = home;
@@ -760,15 +809,56 @@ test("an ordinary command on a local profile migrates it; one with another --pri
   const migrated = () => readFile(marker, "utf8").then(() => true, () => false);
   try {
     await disableLocalNodeDiscovery(home, fixture.ownerProfile);
+    const grant = await fixture.hermetic.mintDelegationForAudience(
+      (fixture.hermetic.ownerRestorableSession.verificationMethod as string).split("#", 1)[0]!,
+    );
+    const store = join(home, ".tinycloud/profiles", fixture.ownerProfile, "additional-delegations.json");
+    await writeFile(store, "[]");
+    const baselineBefore = fixture.hermetic.nativeBearerStats().delegationAttempts as number;
     await runTinyCloudCliExit(home, [
-      "--profile", fixture.ownerProfile, "secrets", "list",
-      "--private-key", "1111111111111111111111111111111111111111111111111111111111111111",
+      "--profile", fixture.ownerProfile, "secrets", "list", "--private-key", fixture.hermetic.ownerPrivateKey,
     ]);
+    const baselineAttempts = (fixture.hermetic.nativeBearerStats().delegationAttempts as number) - baselineBefore;
+    await writeFile(store, JSON.stringify([{ delegation: grant, permissions: fixture.hermetic.permissions }]));
+    const attemptsBefore = fixture.hermetic.nativeBearerStats().delegationAttempts as number;
+    const explicit = await runTinyCloudCliExit(home, [
+      "--profile", fixture.ownerProfile, "secrets", "list", "--private-key", fixture.hermetic.ownerPrivateKey,
+    ]);
+    expect((fixture.hermetic.nativeBearerStats().delegationAttempts as number) - attemptsBefore).toBe(baselineAttempts);
+    const envelope = JSON.parse(explicit.stderr) as { warnings?: unknown[]; error?: { warnings?: unknown[] } };
+    expect(envelope.warnings ?? envelope.error?.warnings).toContainEqual({
+      code: "STORED_GRANT_SKIPPED", reason: "unbound", grantCid: grant.cid,
+    });
     expect(await migrated()).toBe(false);
 
     const caps = await runTinyCloudCliExit(home, ["--profile", fixture.ownerProfile, "auth", "caps"]);
     expect(caps.exitCode, caps.stderr).toBe(0);
     expect(await migrated()).toBe(true);
+    expect(fixture.hermetic.nativeBearerStats().delegationAttempts).toBeGreaterThan(attemptsBefore);
+  } finally {
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("an explicit private key on an OpenKey profile never replays its stored grants", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-explicit-key-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  try {
+    await disableLocalNodeDiscovery(home, fixture.profile);
+    const grant = await fixture.hermetic.mintDelegation();
+    await writeFile(join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"), JSON.stringify([
+      { delegation: { ...grant, delegationHeader: { Authorization: "unverified" } }, permissions: [] },
+    ]));
+    const result = await runTinyCloudCliExit(home, [
+      "--profile", fixture.profile, "secrets", "list", "--private-key", fixture.hermetic.ownerPrivateKey,
+    ]);
+    expect(result.stderr).not.toContain("STORED_GRANT_SKIPPED");
+    expect(result.stderr).not.toContain("proof_missing");
   } finally {
     fixture.hermetic.stop();
     if (previousTcHome === undefined) delete process.env.TC_HOME;

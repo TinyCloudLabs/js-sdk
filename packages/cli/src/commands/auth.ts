@@ -79,7 +79,8 @@ import {
   keyToDID,
 } from "../auth/local-key.js";
 import { theme } from "../output/theme.js";
-import { bootstrapDelegatedSession, ensureAuthenticated } from "../lib/sdk.js";
+import { registerAuthGrantsCommand } from "./auth-grants.js";
+import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
 import { withSignInHint } from "../auth/session-expired.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
@@ -140,8 +141,9 @@ async function promptAuthMethod(): Promise<AuthMethod> {
   });
 }
 
-export function registerAuthCommand(program: Command): void {
+export function registerAuthCommand(program: Command, options?: { openKeyAcquisition?: OpenKeyAcquisition }): void {
   const auth = program.command("auth").description("Authentication management");
+  registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
 
   auth
     .command("login")
@@ -570,7 +572,7 @@ export function registerAuthCommand(program: Command): void {
         const imported = normalizeDelegationImport(parsed);
         // Loaded on use: a static import would evaluate the operations
         // delegation-binding bundle in every command that registers `auth`.
-        const { activateUnboundCompactImport, storedDelegationKind } = await import(
+        const { activateUnboundImport, storedDelegationKind, verifiedCompactAudience, STORED_GRANT_SKIP_REASONS } = await import(
           "@tinycloud/operations/delegation-binding"
         );
         const kind = storedDelegationKind({ delegation: imported.delegation });
@@ -581,50 +583,90 @@ export function registerAuthCommand(program: Command): void {
             ExitCode.USAGE_ERROR,
           );
         }
+        // Neither a session grant nor a cross-user wallet-mode grant can be
+        // imported without verifiable signed bytes. Reject before restoring a
+        // session, writing a row, or recording grant history.
+        if (kind === "other") {
+          throw new CLIError(
+            "INVALID_AUTH_IMPORT",
+            "Imported delegation must carry verifiable signed proof.",
+            ExitCode.USAGE_ERROR,
+          );
+        }
+        // Identify the persisted profile before a session restore can replay
+        // old grants, or first-session bootstrap can modify local profile data.
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        let bootstrap: DelegatedSessionBootstrap | undefined;
         let node;
         try {
           node = await ensureAuthenticated(ctx);
         } catch (error) {
-          const profile = await ProfileManager.getProfile(ctx.profile);
           const session = await ProfileManager.getSession(ctx.profile);
           if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
-          node = (await bootstrapDelegatedSession(ctx, imported.delegation)).node;
+          bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+          node = bootstrap.node;
         }
-        // A delegation whose audience is this profile's own session key can be
-        // installed as a runtime grant (useRuntimeDelegation activates it for
-        // matching service calls). A cross-user delegation — audience is this
-        // profile's stable identity DID or another principal — cannot: the node
-        // rejects runtime delegations that don't target the session key. Persist
-        // it and let the read path activate it via useDelegation in wallet mode.
-        const targetsSessionKey =
-          typeof imported.delegation.delegateDID === "string" &&
-          principalDidEquals(imported.delegation.delegateDID, node.sessionDid);
+        // Only signed compact bytes can classify an import as cross-user.
+        // Transport metadata cannot turn a damaged session grant into a silent
+        // wallet-mode import. Signed-login proofs are validated by activation.
+        const signedAudience = kind === "compact"
+          ? verifiedCompactAudience(node as unknown as RuntimeDelegationActivator, imported.delegation)
+          : undefined;
+        let transportMatchesAudience = false;
+        if (signedAudience !== undefined) {
+          try {
+            transportMatchesAudience = principalDidEquals(imported.delegation.delegateDID, signedAudience);
+          } catch {
+            // Malformed transport DIDs never qualify as a foreign grant.
+          }
+        }
+        if (kind === "compact" && (signedAudience === undefined || !transportMatchesAudience)) {
+          const reason = signedAudience === undefined ? "proof_invalid" : "audience_mismatch";
+          const refusal = new CLIError(
+            "DELEGATION_REJECTED",
+            `Imported delegation was rejected (${reason}). No grant was stored.`,
+            ExitCode.ERROR,
+          );
+          if (bootstrap) await bootstrap.abandon(refusal);
+          throw refusal;
+        }
+        const targetsSessionKey = kind === "signed-login" || (
+          signedAudience !== undefined && principalDidEquals(signedAudience, node.sessionDid)
+        );
         let activated = false;
         let permissions = imported.permissions;
-        if (targetsSessionKey && kind === "compact") {
-          // No stored request contains this compact UCAN, so it is validated as
-          // replay validates it and bound to exactly the capabilities it signs.
-          // Replay then holds the stored record to that binding.
-          const record = await activateUnboundCompactImport(
-            node as unknown as RuntimeDelegationActivator,
-            imported.delegation,
-            ctx.host,
-          );
+        if (targetsSessionKey) {
+          let record;
+          try {
+            // Activation validates the signed authority before any store write.
+            record = await activateUnboundImport(
+              node as unknown as RuntimeDelegationActivator,
+              imported.delegation,
+              ctx.host,
+            );
+          } catch (error) {
+            const candidate = error !== null && typeof error === "object" && "reason" in error
+              ? error.reason : undefined;
+            const reason = typeof candidate === "string" &&
+              (STORED_GRANT_SKIP_REASONS as readonly string[]).includes(candidate)
+              ? candidate : "invalid";
+            const refusal = new CLIError(
+              "DELEGATION_REJECTED",
+              `Imported delegation was rejected (${reason}). No grant was stored.`,
+              ExitCode.ERROR,
+            );
+            if (bootstrap) await bootstrap.abandon(refusal);
+            throw refusal;
+          }
           await appendAdditionalDelegation(ctx.profile, record);
           permissions = record.permissions;
           activated = true;
         } else {
+          // Cross-user imports still persist for wallet-mode use (TC-656).
           await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
             imported.delegation,
             imported.permissions,
           ));
-          if (targetsSessionKey) {
-            await node.useRuntimeDelegation({
-              ...imported.delegation,
-              delegationHeader: { Authorization: imported.delegation.delegationHeader.Authorization },
-            });
-            activated = true;
-          }
         }
         await appendGrantHistory(ctx.profile, {
           addedCaps: permissions,
@@ -1210,6 +1252,13 @@ export async function ensureDelegationAuthority(params: {
   }
 
   if (params.profile.authMethod === "openkey") {
+    if (params.requested.some(isRawCidRevocationPermission)) {
+      throw new CLIError(
+        "RAW_RECAP_RESOURCE_UNSUPPORTED",
+        "OpenKey cannot sign raw urn:cid revocation authority.",
+        ExitCode.PERMISSION_DENIED,
+      );
+    }
     const key = await ProfileManager.getKey(params.ctx.profile);
     if (!key) {
       throw new CLIError(
@@ -1230,29 +1279,14 @@ export async function ensureDelegationAuthority(params: {
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     if (params.persist === false) {
       const request = grantRequestPermissions(params.requested, anchorSpace);
-      let delegationData: Awaited<ReturnType<OpenKeyAcquisition>>;
-      try {
-        delegationData = await acquireOpenKey(params.profile.did, {
-          jwk: key,
-          host: params.ctx.host,
-          permissions: request,
-          reason: permissionGrantReason(params.reason, request),
-          openkeyHost,
-          expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
-        });
-      } catch (error) {
-        if (
-          params.requested.some(isRawCidRevocationPermission) &&
-          /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))
-        ) {
-          throw new CLIError(
-            "RAW_RECAP_RESOURCE_UNSUPPORTED",
-            "The OpenKey/WASM ReCap encoder does not support raw urn:cid revocation resources.",
-            ExitCode.PERMISSION_DENIED,
-          );
-        }
-        throw error;
-      }
+      const delegationData = await acquireOpenKey(params.profile.did, {
+        jwk: key,
+        host: params.ctx.host,
+        permissions: request,
+        reason: permissionGrantReason(params.reason, request),
+        openkeyHost,
+        expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+      });
       const delegation = portableFromOpenKeyDelegation(
         delegationData,
         request,

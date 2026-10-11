@@ -124,6 +124,7 @@ mock.module("../config/profiles.js", () => ({
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => node,
   bootstrapDelegatedSession: async () => node,
+  restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
 }));
 
 mock.module("@tinycloud/operations", () => ({

@@ -22,55 +22,66 @@ function isRawRequest(permission: PermissionEntry): boolean {
 }
 
 /**
- * `spacePrefixFromPermissions` and `assertRawEncryptionPermission` in
- * delegate-session.ts, as deployed with TC-598. It refuses what those refuse:
- * - a non-raw entry without a space, or entries in more than one space;
- * - a request without `tinycloud.capabilities/read` when requesting a space;
- * - a raw network entry inside a space, with any action but decrypt, owned by
- *   anyone but the signer, or with an invalid network name.
- * It then has the owner sign exactly the requested abilities, nested in that
- * space, with raw encryption resources as top-level ReCap resources.
+ * Mirrors OpenKey commit a733255c, `delegate-session.ts`:
+ * `spacePrefixFromPermissions` treats only encryption URNs as space-less;
+ * `sessionAbilitiesFromPermissions` emits only encryption URNs as top-level
+ * ReCap resources. Raw `urn:cid:` is therefore another space, not a raw
+ * capability. Browser refusals surface to the CLI as an auth timeout.
+ *
+ * This stand-in is deliberately narrower on baseline capabilities/read: it
+ * requires read for every space delegation, whereas production requires it
+ * conditionally. CLI grant requests include read, so this does not narrow
+ * the supported CLI flows.
  */
 export function openKeyDelegate(params: {
   wasm: NodeWasmBindings;
   signer: PrivateKeySigner;
   sessionKey: object;
   sessionDid: string;
-}): { delegate: OpenKeyDelegate; requests: PermissionEntry[][] } {
+}): { delegate: OpenKeyDelegate; requests: PermissionEntry[][]; refusals: Array<{ code: "invalid_permissions"; message: string }> } {
   const requests: PermissionEntry[][] = [];
+  const refusals: Array<{ code: "invalid_permissions"; message: string }> = [];
   const delegate: OpenKeyDelegate = async (_did, { permissions = [] } = {}) => {
     requests.push(permissions);
+    const refuse = (message: string): never => {
+      refusals.push({ code: "invalid_permissions", message });
+      throw new Error("Authentication timed out after 5 minutes");
+    };
     const address = await params.signer.getAddress();
-    if (permissions.length === 0) throw new Error("permissions must be a non-empty array");
+    if (permissions.length === 0) refuse("permissions must be a non-empty array");
     permissions.forEach((p, index) => {
       if (!isRawRequest(p) && (typeof p.space !== "string" || p.space.length === 0)) {
-        throw new Error(`permissions[${index}].space is required`);
+        refuse(`permissions[${index}].space is required`);
       }
       if (!isRawRequest(p)) return;
       if (p.space !== undefined && p.space !== "encryption") {
-        throw new Error(`permissions[${index}].space must be "encryption" or absent for a raw encryption network`);
+        refuse(`permissions[${index}].space must be "encryption" or absent for a raw encryption network`);
       }
       if (p.actions.length === 0 || p.actions.some((action) => action !== "tinycloud.encryption/decrypt")) {
-        throw new Error(`permissions[${index}].actions must be ["tinycloud.encryption/decrypt"] for a raw encryption network`);
+        refuse(`permissions[${index}].actions must be ["tinycloud.encryption/decrypt"] for a raw encryption network`);
       }
       const network = RAW_NETWORK.exec(p.path);
-      if (!network || network[1] !== "1" || network[2]!.toLowerCase() !== address.toLowerCase()) {
-        throw new Error(`permissions[${index}].path must be an encryption network owned by the signer`);
+      if (!network) return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
+      if (network[1] !== "1" || network[2]!.toLowerCase() !== address.toLowerCase()) {
+        return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
       }
       if (!NETWORK_NAME.test(network[3]!)) {
-        throw new Error(`permissions[${index}].path names an invalid network`);
+        refuse(`permissions[${index}].path names an invalid network`);
       }
     });
     const hasSpacePermission = permissions.some((permission) => !isRawRequest(permission));
     if (hasSpacePermission && !permissions.some((p) =>
       p.service === "tinycloud.capabilities" && p.actions.includes("tinycloud.capabilities/read")
     )) {
-      throw new Error("capabilities/read is required for a space delegation");
+      refuse("capabilities/read is required for a space delegation");
     }
     const spaces = new Set(permissions.filter((p) => !isRawRequest(p)).map((p) =>
       p.space!.replace(/0x[0-9a-fA-F]{40}/, (owner) => owner.toLowerCase())));
     if (spaces.size > 1 || spaces.size === 0) {
-      throw new Error("permissions must belong to a single space");
+      refuse("permissions must belong to a single space");
+    }
+    if (permissions.some((p) => p.space?.startsWith("urn:cid:"))) {
+      refuse("raw urn:cid revocation resources cannot be encoded as top-level ReCap resources");
     }
     const space = [...spaces][0] ?? "applications";
     const abilities: Record<string, Record<string, string[]>> = {};
@@ -99,5 +110,5 @@ export function openKeyDelegate(params: {
       address, chainId: 1, spaceId, verificationMethod: params.sessionDid, siwe: prepared.siwe, signature,
     };
   };
-  return { delegate, requests };
+  return { delegate, requests, refusals };
 }

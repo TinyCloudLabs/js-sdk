@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 1 migrated registration(s).
 - 1 partially migrated registration(s).
-- 122 legacy registration(s) remain Commander-owned.
+- 125 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -80,7 +80,23 @@ tc delegation revoke <cid>
 
 Actions are auto-prefixed with `tinycloud.` if not already.
 
-`tc auth import` stores delegations in the profile's `additional-delegations.json`; a compact-UCAN delegation addressed to the profile's session key is stored with an `authorityRequest` binding. Later commands install such a delegation only when its signed capabilities fit inside that binding. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) describes how each import route binds a delegation, the one-time migration of records from earlier releases, and how to recover a record that installs nothing.
+`tc auth import` stores delegations in `additional-delegations.json`. Every replay path installs only a grant with a locally verified proof and a binding containing its signed authority; unbound and proof-less grants never install, including while migration is deferred. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) covers migration and recovery.
+
+### Stored grants
+
+```bash
+tc --profile PROFILE auth grants list --json
+tc --profile PROFILE auth grants remove <cid>
+tc --profile PROFILE auth grants remove <cid> --revoke --yes
+```
+
+`list` is local and does not contact the node. Its JSON contains `profile`, `session` (`cid` recomputed from stored header and `expiresAt`, or `null`), `localVerification` (`available`, `session_missing`, `session_expired`, `session_invalid`), and `grants`. Each indexed grant row contains `cid` (CID-shaped or `null`), `expiry`, `expired`, `local` (`verified`, `refused`, `not_checked`, `for_another_key`), `reason` (fixed skip code or `null`), `node: "not_checked"`, `bound`, `proof` (`siwe`, `compact`, `missing`, or `null`), `source`, `scope`, and `scopeSource` (`signed` or `stored`). `for_another_key` means the stored audience names another key; its scope is unverified stored metadata and it cannot install in this session. Local verification checks signed scope and binding, not the node's delegation chain or revocation status. Human output shows `CID | LOCAL | EXPIRES | SOURCE | BOUND | SCOPE` and the session CID.
+
+`for_another_key` is decided from a verified signed compact audience, CID, and matching transport DID, not an unsigned `delegateDID` alone. Tampered records retain their refusal reason, and proofless records retain `proof_missing`.
+
+Local `remove` deletes every row matching that exact CID, and is available to delegates. `--revoke` alone is owner-only: it uses normal verified local-node discovery unless a host is explicit, revokes on the node, and removes the rows only after success. If the local removal then fails, `GRANT_REVOKED_LOCAL_REMOVE_FAILED` directs a local-only retry without `--revoke`. OpenKey cannot sign raw `urn:cid` authority on the deployed version; owner OpenKey revocation uses a verified CID-bound owner-space fallback, or immediately fails `RAW_RECAP_RESOURCE_UNSUPPORTED`. Local removal does not revoke the delegation; delegated sessions cannot use `--revoke` because this SDK cannot issue a delegatee self-revocation.
+
+A concurrent local removal after revocation reports `removed: 0` as success. Other local cleanup failures include `error.meta.causeCode` (for example `PROFILE_LOCK_TIMEOUT`).
 
 ## Spaces
 

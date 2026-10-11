@@ -21,7 +21,7 @@ mock.module("@tinycloud/node-sdk", () => ({
   },
 }));
 mock.module("./permissions.js", () => ({
-  replayAdditionalDelegations: async () => {},
+  replayAdditionalDelegations: async () => [],
 }));
 
 // Imported after TC_HOME and the module mocks above are in place.

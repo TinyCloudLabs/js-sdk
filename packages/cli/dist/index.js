@@ -72,12 +72,51 @@ var init_theme = __esm({
   }
 });
 
+// src/output/warnings.ts
+function warningKey(warning) {
+  return JSON.stringify([warning.code, warning.reason, warning.grantCid ?? null]);
+}
+function mergeWarnings(first, second) {
+  const merged = [...first];
+  const counts = /* @__PURE__ */ new Map();
+  for (const warning of first) {
+    const key = warningKey(warning);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const seen = /* @__PURE__ */ new Map();
+  for (const warning of second) {
+    const key = warningKey(warning);
+    const occurrence = (seen.get(key) ?? 0) + 1;
+    seen.set(key, occurrence);
+    if (occurrence > (counts.get(key) ?? 0)) merged.push(warning);
+  }
+  return merged;
+}
+function recordWarnings(warnings) {
+  if (warnings.length === 0) return;
+  const holder = globalThis;
+  holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
+}
+function drainWarnings() {
+  const holder = globalThis;
+  const warnings = holder[PENDING_WARNINGS] ?? [];
+  delete holder[PENDING_WARNINGS];
+  return warnings;
+}
+var PENDING_WARNINGS;
+var init_warnings = __esm({
+  "src/output/warnings.ts"() {
+    "use strict";
+    PENDING_WARNINGS = /* @__PURE__ */ Symbol.for("tinycloud.cli.pendingWarnings.v1");
+  }
+});
+
 // src/output/formatter.ts
 import ora from "ora";
 function warningLine(warnings) {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; the old grant expires on its own.`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
 }
 function outputError(code3, message, hint, details = {}) {
   const { meta, warnings = [] } = details;
@@ -92,7 +131,7 @@ function outputError(code3, message, hint, details = {}) {
 `);
       }
     }
-    if (warnings.length > 0) process.stderr.write(`  ${theme.warn(warningLine(warnings))}
+    if (warnings.length > 0) process.stderr.write(`  ${theme.warn("!")} ${warningLine(warnings)}
 `);
   } else {
     const payload = {
@@ -103,6 +142,13 @@ function outputError(code3, message, hint, details = {}) {
     if (warnings.length > 0) payload.error.warnings = warnings;
     process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
   }
+}
+function outputWarnings(warnings) {
+  const combined = mergeWarnings(drainWarnings(), operationWarnings(warnings));
+  if (combined.length === 0) return;
+  process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: combined })}
+` : `${theme.warn("!")} ${warningLine(combined)}
+`);
 }
 function operationWarnings(value) {
   if (!Array.isArray(value)) return [];
@@ -129,6 +175,7 @@ var init_formatter = __esm({
   "src/output/formatter.ts"() {
     "use strict";
     init_theme();
+    init_warnings();
     WARNING_CODE = /^[A-Z][A-Z_]{0,63}$/;
     WARNING_REASON = /^[a-z][a-z_]{0,63}$/;
     DELEGATION_CID = /^bafkr4i[a-z2-7]{52}$/;
@@ -286,6 +333,9 @@ function handleError(error) {
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
   const meta = {};
+  if (cliError.code === "GRANT_REVOKED_LOCAL_REMOVE_FAILED" && typeof cliError.metadata?.causeCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(cliError.metadata.causeCode)) {
+    meta.causeCode = cliError.metadata.causeCode;
+  }
   if (cliError.status !== void 0 && authMeta !== void 0) meta.status = cliError.status;
   const capability = validatedCapabilityOf({ meta: authMeta });
   if (capability) {
@@ -294,7 +344,7 @@ function handleError(error) {
   }
   outputError(cliError.code, cliError.message, hint, {
     ...Object.keys(meta).length ? { meta } : {},
-    warnings: operationWarnings(cliError.metadata?.warnings)
+    warnings: mergeWarnings(drainWarnings(), operationWarnings(cliError.metadata?.warnings))
   });
   process.exit(cliError.exitCode);
 }
@@ -366,6 +416,7 @@ var init_errors = __esm({
     init_constants();
     init_formatter();
     init_storage();
+    init_warnings();
     CLIError = class extends Error {
       constructor(code3, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
@@ -5845,59 +5896,14 @@ import {
   withProfileLock as withProfileLock2,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
-async function loadAdditionalDelegations(profile) {
-  return readAdditionalDelegations(profile);
-}
 async function replayAdditionalDelegations(node, profile, options) {
-  const {
-    operationSpaceResolver,
-    prepareStoredDelegationReplay,
-    replayStoredDelegation,
-    storedDelegationKind
-  } = await import("@tinycloud/operations/delegation-binding");
-  const activator = node;
-  const migrated = await prepareStoredDelegationReplay(profile, activator, {
+  const { operationSpaceResolver, replayProfileDelegations } = await import("@tinycloud/operations/delegation-binding");
+  const { warnings } = await replayProfileDelegations(profile, node, {
     host: options.host,
-    migrate: options.migrate
+    migrate: options.migrate,
+    resolveSpace: operationSpaceResolver(node, options.ownerSpace)
   });
-  const resolveSpace = operationSpaceResolver(node, options.ownerSpace);
-  const entries = await loadAdditionalDelegations(profile);
-  for (const stored of entries) {
-    const kind = storedDelegationKind(stored);
-    if (kind === "compact" || kind === "signed-login") {
-      const replay = await replayStoredDelegation(activator, stored, {
-        host: options.host,
-        migrated,
-        resolveSpace
-      });
-      if (replay.status === "skipped" && process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping a stored delegation: ${replay.reason}
-`);
-      }
-      continue;
-    }
-    if (kind === "refused") {
-      if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write("[replay] skipping a malformed stored record or one bound to a request it cannot be held to\n");
-      }
-      continue;
-    }
-    const entry = stored;
-    const expiry = entry.delegation.expiry instanceof Date ? entry.delegation.expiry : new Date(entry.delegation.expiry);
-    if (expiry.getTime() <= Date.now()) continue;
-    try {
-      await node.useRuntimeDelegation({
-        ...entry.delegation,
-        delegationHeader: { Authorization: entry.delegation.delegationHeader.Authorization },
-        expiry
-      });
-    } catch (err) {
-      if (process.env.TC_DEBUG_REPLAY === "1") {
-        process.stderr.write(`[replay] skipping ${entry.delegation.cid}: ${err.message}
-`);
-      }
-    }
-  }
+  return warnings;
 }
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
@@ -5922,6 +5928,7 @@ __export(sdk_exports, {
   createSDKInstance: () => createSDKInstance,
   ensureAuthenticated: () => ensureAuthenticated,
   jwkHasPrivateParameter: () => jwkHasPrivateParameter,
+  restoreProfileSessionNode: () => restoreProfileSessionNode,
   selectSignerJwk: () => selectSignerJwk
 });
 import { TinyCloudNode } from "@tinycloud/node-sdk";
@@ -5960,6 +5967,44 @@ async function restoreProfileSession(node, profileName, profile, sessionData) {
     throw error;
   }
 }
+function persistedSessionData(profileName, profile, session, key) {
+  return {
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    spaceId: session.spaceId,
+    jwk: signerJwkForProfile(profileName, session.jwk, key),
+    verificationMethod: session.verificationMethod ?? profile.sessionDid ?? profile.did,
+    address: session.address,
+    chainId: session.chainId,
+    siwe: session.siwe,
+    signature: session.signature
+  };
+}
+async function restoreProfileSessionNode(ctx) {
+  const profile = await ProfileManager.getProfile(ctx.profile);
+  const session = await ProfileManager.getSession(ctx.profile);
+  if (!session) return { unavailable: "session_missing" };
+  if (typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") {
+    return { unavailable: "session_invalid" };
+  }
+  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now()) {
+    return { unavailable: "session_expired" };
+  }
+  const key = await ProfileManager.getKey(ctx.profile);
+  try {
+    const node = new TinyCloudNode({
+      host: ctx.host,
+      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
+    });
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    return { node };
+  } catch (error) {
+    if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
+      return { unavailable: "session_expired" };
+    }
+    return { unavailable: "session_invalid" };
+  }
+}
 async function createSDKInstance(ctx, options) {
   const profile = options?.privateKey ? await ProfileManager.getProfile(ctx.profile).catch(() => null) : await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile);
@@ -5977,56 +6022,35 @@ async function createSDKInstance(ctx, options) {
       host: ctx.host,
       privateKey: effectivePrivateKey
     });
-    let restoredOwnSession2 = false;
-    if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-      await restoreProfileSession(node2, ctx.profile, profile, {
-        delegationHeader: session.delegationHeader,
-        delegationCid: session.delegationCid,
-        spaceId: session.spaceId,
-        jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
-        verificationMethod: session.verificationMethod ?? profile?.sessionDid ?? profile?.did,
-        address: session.address,
-        chainId: session.chainId,
-        siwe: session.siwe,
-        signature: session.signature
-      });
-      restoredOwnSession2 = true;
+    const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
+    if (restoredOwnSession) {
+      await restoreProfileSession(node2, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
     } else {
       await node2.signIn();
     }
-    await replayAdditionalDelegations(node2, ctx.profile, {
-      host: ctx.host,
-      ownerSpace: profile.spaceId,
-      migrate: restoredOwnSession2 && options?.privateKey === void 0
-    });
+    if (restoredOwnSession) {
+      recordWarnings(await replayAdditionalDelegations(node2, ctx.profile, {
+        host: ctx.host,
+        ownerSpace: profile.spaceId,
+        migrate: options?.privateKey === void 0
+      }));
+    }
     return node2;
   }
   const node = new TinyCloudNode({
     host: ctx.host,
     privateKey: options?.privateKey
   });
-  let restoredOwnSession = false;
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, {
-      delegationHeader: session.delegationHeader,
-      delegationCid: session.delegationCid,
-      spaceId: session.spaceId,
-      jwk: signerJwkForProfile(ctx.profile, session.jwk, key),
-      verificationMethod: session.verificationMethod ?? profile?.did,
-      address: session.address,
-      chainId: session.chainId,
-      siwe: session.siwe,
-      signature: session.signature
-    });
-    restoredOwnSession = true;
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
+      host: ctx.host,
+      ownerSpace: profile?.spaceId,
+      migrate: true
+    }));
   }
-  await replayAdditionalDelegations(node, ctx.profile, {
-    host: ctx.host,
-    ownerSpace: profile?.spaceId,
-    migrate: restoredOwnSession
-  });
   return node;
 }
 async function bootstrapDelegatedSession(ctx, delegation) {
@@ -6154,6 +6178,7 @@ var init_sdk = __esm({
     init_constants();
     init_permissions();
     init_session_expired();
+    init_warnings();
     BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
   }
 });
@@ -18147,6 +18172,9 @@ program.hook("preAction", async (thisCommand) => {
     } catch {
     }
   }
+});
+program.hook("postAction", () => {
+  outputWarnings([]);
 });
 configureShareCommandServices({
   targetAdapter: shareAuthority.targetAdapter,
