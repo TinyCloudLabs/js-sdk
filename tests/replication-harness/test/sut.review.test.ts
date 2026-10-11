@@ -2,8 +2,18 @@ import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { checkInstalledIntegrity, cleanupPublishedSutCache, installedFilesSha256, publishedCachePrefix, verifyInstalledFiles } from "../src/clients/sut";
+import { checkInstalledIntegrity, cleanupPublishedSutCache, installedFilesSha256, publishedCachePrefix, resolveSdkLoader, verifyInstalledFiles } from "../src/clients/sut";
 
+  test("creates a published SDK loader in a fresh prefix", async () => {
+    const prefix = await mkdtemp(join(tmpdir(), "tc893-published-loader-"));
+    try {
+      const loader = await resolveSdkLoader(prefix, "published");
+      expect(loader).toBe(join(prefix, "tc893-load-node-sdk.mjs"));
+      expect(await Bun.file(loader).text()).toBe('export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
+    } finally {
+      await rm(prefix, { recursive: true, force: true });
+    }
+  });
 describe("published SUT integrity", () => {
   test("rejects installed package-lock integrity that differs from the registry", async () => {
     const prefix = await mkdtemp(join(tmpdir(), "tc893-integrity-"));

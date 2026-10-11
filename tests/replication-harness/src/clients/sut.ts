@@ -133,7 +133,11 @@ export async function verifyInstalledFiles(packageJson: string, expected: string
 
 export async function resolveSdkLoader(rootInput: string, source: "workspace" | "published"): Promise<string> {
   const root = await realpath(rootInput);
-  if (source === "published") return join(root, "tc893-load-node-sdk.mjs");
+  if (source === "published") {
+    const shimPath = join(root, "tc893-load-node-sdk.mjs");
+    await writeFile(shimPath, 'export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
+    return shimPath;
+  }
   const loaderRoot = join(tmpdir(), "tc893-sdk-loaders", createHash("sha256").update(root).digest("hex"));
   const modules = join(loaderRoot, "node_modules");
   await mkdir(modules, { recursive: true });
@@ -189,8 +193,7 @@ async function installPublishedFresh(request: SutResolutionRequest, prefix: stri
   catch (error) { return fail("Resolved CLI entry is missing", { packageJson: cli.packageJson, bin, error: String(error) }); }
   const nodeModules = `${prefix}${sep}node_modules${sep}`;
   if (!entry.startsWith(nodeModules)) fail("Resolved CLI entry escapes the anchored node_modules directory", { prefix, entry });
-  const shimPath = join(prefix, "tc893-load-node-sdk.mjs");
-  await writeFile(shimPath, 'export * as sdk from "@tinycloud/node-sdk";\nexport const resolved = import.meta.resolve("@tinycloud/node-sdk");\n');
+  const shimPath = await resolveSdkLoader(prefix, "published");
   const sdkShim = await import(pathToFileURL(shimPath).href) as { sdk: unknown; resolved: string };
   if (!hasSdkPhase1Export(sdkShim.sdk)) fail("Published SDK lacks sqliteReplicaStorage required for Phase 1", { version: nodeSdk.data.version, cliEntry: entry, cliVersion: cli.data.version });
   const [cliFilesSha256, sdkFilesSha256] = await Promise.all([installedFilesSha256(cli.packageJson), installedFilesSha256(nodeSdk.packageJson)]);

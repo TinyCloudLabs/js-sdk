@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -102,10 +102,18 @@ export async function registerGateRuntime(configure: GateRuntimeRegistrar): Prom
         if (typeof cliBin !== "string" || typeof cliVersion !== "string" || typeof sdkVersion !== "string") {
           throw new Error("PUBLISHED_SUT_PACKAGE_METADATA_INVALID: installed packages lack version or CLI bin metadata");
         }
-        const cliEntry = resolve(dirname(cli.packageJson), cliBin);
+        let cliEntry: string;
+        try { cliEntry = await realpath(resolve(dirname(cli.packageJson), cliBin)); }
+        catch (error) { throw new Error(`PUBLISHED_SUT_CLI_ENTRY_MISSING: ${String(error)}`); }
+        if (!cliEntry.startsWith(`${prefix}/node_modules/`)) throw new Error(`PUBLISHED_SUT_CLI_ENTRY_UNANCHORED: ${cliEntry}`);
         const sdkLoader = await adapters.resolveSdkLoader(prefix, "published");
-        const sdkShim = await import(pathToFileURL(sdkLoader).href) as { resolved?: unknown };
+        const sdkShim = await import(pathToFileURL(sdkLoader).href) as { sdk?: unknown; resolved?: unknown };
         if (typeof sdkShim.resolved !== "string") throw new Error("PUBLISHED_SUT_SDK_LOADER_INVALID: SDK loader did not resolve an entry");
+        const sdkEntryPath = sdkShim.resolved.startsWith("file:") ? fileURLToPath(sdkShim.resolved) : sdkShim.resolved;
+        if (!sdkEntryPath.startsWith(`${prefix}/node_modules/`)) throw new Error("PUBLISHED_SUT_SDK_LOADER_INVALID: SDK loader did not resolve an anchored entry");
+        if (sdkShim.sdk === null || typeof sdkShim.sdk !== "object" || !("sqliteReplicaStorage" in sdkShim.sdk)) {
+          throw new Error(`PUBLISHED_SUT_SDK_PHASE1_EXPORT_MISSING: ${sdkVersion}`);
+        }
         sut = {
           source: "published", root: prefix, lockfileSha256: lockHash,
           cli: { version: cliVersion, packageJson: cli.packageJson, entry: cliEntry, integrity: inputs.sut.cli.integrity },
