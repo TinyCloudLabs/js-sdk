@@ -1,5 +1,28 @@
 # @tinycloudlabs/sdk-services
 
+## 3.2.0-beta.3
+
+### Minor Changes
+
+- df18325: Add the Phase 1 replication contract, canonical identity and scope helpers, network-only KV read option, and nullable KVService read-through seam. With the seam unset, KV operations retain their existing network behavior. Pending-write stores declare whether their committed epoch and records survive restarts; for non-durable stores, controllers must require a successful in-process sync before serving local reads, otherwise use the network with `REPLICA_UNPROVEN_SINCE_START`. Node/CLI adapters must provide durable pending state and fail closed to network reads rather than silently falling back to memory.
+- df18325: Add the `KVReplication` policy controller and identity-scoped memory pending store, including per-replica catch-up fences, pending-write outcome handling, local get/list parity, and replication events.
+  Stale-read timeouts now refresh replica status before offline admission and distinguish timeout-owned cancellation from aborts of a shared sync by its caller, close, or purge.
+  Local GET and every local LIST probe now require complete coverage and valid authority from read-time metadata; a refusal falls back to network or restarts a `tcr1` continuation.
+  The post-drain status refresh is bounded and caller-cancellable; status failures refuse offline admission.
+- df18325: Move replication controller and memory pending-store factories out of the platform-agnostic root export. They remain available from `@tinycloud/sdk-services/kv/replication` for Node-only runtime integration, preventing Web SDK consumers from bundling the Node replication controller.
+
+  Replication authority can now mark compact delegate sessions as session-only so a refusing session grant cannot fall back to installed device grants; an installed grant also cannot widen a refusal by the current session. KV operations avoid readiness awaits when no read-through is configured.
+
+  In foreground read-through, reaching `staleSyncTimeoutMs` now aborts and drains the sync before serving an eligible replica result offline; a sync that exceeds the drain budget falls back to the network. Settled outcomes during the drain retain their normal classification: synced results proceed through fresh-replica gates, network failures and timeout-caused aborts may serve offline, and busy or other errors use the network with their code.
+
+### Patch Changes
+
+- df18325: Bound the sign-in account-registry drain to four seconds and abort its SQL, KV, and hosting requests on expiry. Registry failures remain warning-only, so sign-in succeeds after the bounded drain.
+- df18325: Keep published segment-aware replica selection unchanged while using sdk-core capability containment only for authority. Bare selectors now request get/sync grants for the exact path and slash descendants through the shared public `grantPathsForSelector` helper; root and trailing-slash selectors remain single-path grants. LIST local serving requires complete selection coverage, and nested LIST pending writes force network fallback or cursor restart.
+- df18325: Run account-registry SQL, KV, and hosting requests through a dedicated per-operation context so the sign-in deadline cannot abort unrelated requests or persist in cached space-scoped services. Await SQL and DuckDB error-body reads before disposing request cancellation listeners.
+- df18325: Replica status reads existing SQLite state read-only without creating a replica, identity, device, or blob directories, and never recreates a database that does not exist or was purged. Existing databases use normal read-only WAL mode so committed revocation and reset state is visible; SQLite may create its own WAL or shared-memory sidecars. Missing databases remain untouched, and open/read failures report unavailable rather than healthy. Inspection explicitly finalizes prepared statements before closing both inspection and ordinary store handles. Status inspection is bounded and cancelled on controller close or purge; in-process grant revocation remains visible after the handle is generation-fenced.
+- df18325: Keep conditional KV write failures out of the replication committed epoch, and preserve timeout and abort error classifications for covered writes while marking their dispatch outcome ambiguous.
+
 ## 3.2.0-beta.2
 
 ### Minor Changes

@@ -1,5 +1,19 @@
 # @tinycloudlabs/sdk-services-test
 
+## 18.0.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-services@3.2.0-beta.3
+
 ## 18.0.0-beta.0
 
 ### Patch Changes

@@ -1,5 +1,28 @@
 # @tinycloud/cli
 
+## 1.2.0-beta.3
+
+### Minor Changes
+
+- df18325: Add the opt-in replication flags, saved login prefixes, diagnostics log and report, bounded replication shutdown that forces a successful exit after a stalled drain, and lease-safe logout cleanup under one profile lock for legacy and flag-owned replicas. Registrations arriving during shutdown are drained before completion. The new login authority is limited to prefixes already covered by an unrestricted `get`; scoped logins are never broadened. Scoped app manifests preserve ReCap caveats, so caveated-only gets cannot authorize replication. Fresh local login still bootstraps missing profiles, key rotation preserves saved scoped permissions, and replication-enabled unscoped logins retain their full KV/SQL defaults. A missing replication grant emits one warning per prefix per invocation while reads remain network-backed.
+
+  The CLI now supplies profile-partitioned SQLite storage to the node runtime and registers the node's live replication control surface for reports. Secret/vault existence reads that determine CLI behavior bypass local replicas and remain network-authoritative. Replication profile writes are serialized by the profile guard; with `TC_REPLICATION` unset, no replica store is opened.
+
+  `TC_REPLICATION_VERIFY=1` now forwards the verification policy to the node runtime; with the flag unset, CLI replication remains disabled and creates no replication directory.
+
+### Patch Changes
+
+- df18325: Keep published segment-aware replica selection unchanged while using sdk-core capability containment only for authority. Bare selectors now request get/sync grants for the exact path and slash descendants through the shared public `grantPathsForSelector` helper; root and trailing-slash selectors remain single-path grants. LIST local serving requires complete selection coverage, and nested LIST pending writes force network fallback or cursor restart.
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-core@3.2.0-beta.3
+  - @tinycloud/node-sdk@3.2.0-beta.3
+  - @tinycloud/operations@0.5.0-beta.3
+
 ## 1.2.0-beta.2
 
 ### Minor Changes

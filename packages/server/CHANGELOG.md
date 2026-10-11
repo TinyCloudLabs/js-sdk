@@ -1,5 +1,18 @@
 # @tinycloud/server
 
+## 2.5.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-core@3.2.0-beta.3
+  - @tinycloud/node-sdk@3.2.0-beta.3
+
 ## 2.5.1-beta.2
 
 ### Patch Changes

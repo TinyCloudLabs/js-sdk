@@ -1,5 +1,19 @@
 # @tinycloudlabs/web-sdk
 
+## 3.2.0-beta.3
+
+### Patch Changes
+
+- df18325: Generate the CoordinationOS vendor manifest from its pinned compatibility contract version, independent of the package's release version, so vendor builds remain reproducible after package version bumps.
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-core@3.2.0-beta.3
+  - @tinycloud/node-sdk@3.2.0-beta.3
+
 ## 3.2.0-beta.2
 
 ### Minor Changes

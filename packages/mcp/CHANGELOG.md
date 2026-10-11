@@ -1,5 +1,17 @@
 # @tinycloud/mcp
 
+## 0.5.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/node-sdk@3.2.0-beta.3
+  - @tinycloud/operations@0.5.0-beta.3
+
 ## 0.5.0-beta.2
 
 ### Minor Changes
