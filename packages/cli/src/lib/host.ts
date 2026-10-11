@@ -4,7 +4,7 @@ import {
 } from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
-import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
+import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { resolveSpaceUri } from "./space.js";
 
@@ -43,14 +43,23 @@ export function profileLocalNodeIdentityStore(
  * or null when discovery is disabled, nothing local is running, or the local
  * node fails identity verification — callers fall back to their normal host.
  */
+export interface LocalDiscovery {
+  readonly host: string | null;
+  /** True when probing waits for a stored session that did not verify locally. */
+  readonly deferred: boolean;
+}
+
 export async function discoverLocalNodeHost(
   profileName: string,
-): Promise<string | null> {
-  const profile = await ProfileManager.getProfile(profileName).catch(
-    () => null,
-  );
-  if (profile?.autoDiscoverLocalNode === false) {
-    return null;
+  options: { readonly awaitStoredSession: boolean },
+): Promise<LocalDiscovery> {
+  const profile = await ProfileManager.getProfile(profileName).catch(() => null);
+  if (profile?.autoDiscoverLocalNode === false) return { host: null, deferred: false };
+  if (!profile?.localNodeUrl && !profile?.localLinkName) return { host: null, deferred: false };
+  if (options.awaitStoredSession) {
+    // sdk.ts imports ProfileManager, so load its verifier lazily to avoid a module cycle.
+    const { storedSessionVerifiesLocally } = await import("./sdk.js");
+    if (!await storedSessionVerifiesLocally(profileName)) return { host: null, deferred: true };
   }
   const discovered = await discoverLocalTinyCloudNode({
     localNodeUrl: profile?.localNodeUrl,
@@ -58,7 +67,17 @@ export async function discoverLocalNodeHost(
     expectedNodeDid: profile?.expectedNodeDid,
     identityStore: profileLocalNodeIdentityStore(profileName),
   });
-  return discovered?.url ?? null;
+  return { host: discovered?.url ?? null, deferred: false };
+}
+
+/** Runs discovery `resolveContext` deferred, for a flow that replaces the refused session. A caller that chose another host keeps it. */
+export async function completeDeferredLocalDiscovery(ctx: CLIContext): Promise<void> {
+  const deferred = ctx.localDiscovery;
+  if (deferred === undefined) return;
+  delete ctx.localDiscovery;
+  if (ctx.host !== deferred.deferredFrom) return;
+  const discovered = await discoverLocalNodeHost(ctx.profile, { awaitStoredSession: false });
+  if (discovered.host !== null) ctx.host = discovered.host;
 }
 
 /** Minimal shape of a kv/sql service error this module inspects. */

@@ -1,4 +1,4 @@
-import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
@@ -111,13 +111,23 @@ export function expectedOwnerFor(profileName: string, profile: ProfileConfig | n
   return pinned ?? requested;
 }
 
-/** Expiry recorded in a saved session (explicit fields, else the SIWE message). */
+/** Expiry for proof-free imports comes only from signed compact UCAN `exp`; proof-bearing sessions use their SIWE/explicit expiry. */
 export function sessionExpiresAt(session: Record<string, unknown> | null): string | null {
   if (session === null) return null;
+  const hasProof = ["siwe", "signature", "address", "chainId"].some((field) => session[field] !== undefined);
+  const header = session.delegationHeader;
+  const hasDelegationHeader = typeof header === "object" && header !== null;
+  const authorization = hasDelegationHeader ? (header as { Authorization?: unknown }).Authorization : undefined;
+  // Imported records have no SIWE proof. Their expiry must come from the compact UCAN's signed payload,
+  // never from mutable local metadata such as `expiresAt`.
+  if (!hasProof && hasDelegationHeader) {
+    return typeof authorization === "string" ? signedCompactUcanExpiry(authorization)?.toISOString() ?? null : null;
+  }
   const candidates = [session.expiresAt, session.expiry, session.expirationTime,
     typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : undefined];
   const value = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
-  return typeof value === "string" ? new Date(value).toISOString() : null;
+  if (typeof value === "string") return new Date(value).toISOString();
+  return null;
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */

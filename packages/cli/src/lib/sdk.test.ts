@@ -61,8 +61,8 @@ mock.module("@tinycloud/node-sdk", () => ({
       restoreCalls.push({ jwk: args.jwk });
     }
   },
+  signedCompactUcanExpiry: () => undefined,
 }));
-
 // sdk.js -> permissions.js -> sdk-core/manifest.js pulls in the published
 // @tinycloud/sdk-services dist, whose build is currently broken on import.
 // Stub the one symbol the resolver needs (replayAdditionalDelegations) so the

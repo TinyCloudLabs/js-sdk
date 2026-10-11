@@ -731,396 +731,6 @@ var init_space = __esm({
   }
 });
 
-// src/lib/host.ts
-var host_exports = {};
-__export(host_exports, {
-  discoverLocalNodeHost: () => discoverLocalNodeHost,
-  isRootAuthority: () => isRootAuthority,
-  ownerDidFromSpaceUri: () => ownerDidFromSpaceUri,
-  profileLocalNodeIdentityStore: () => profileLocalNodeIdentityStore,
-  resolveHostSpace: () => resolveHostSpace,
-  spaceNameFromUri: () => spaceNameFromUri,
-  unhostedSpaceError: () => unhostedSpaceError
-});
-import {
-  discoverLocalTinyCloudNode
-} from "@tinycloud/sdk-core";
-function profileLocalNodeIdentityStore(profileName2) {
-  return {
-    get: async (url) => {
-      const profile = await ProfileManager.getProfile(profileName2).catch(
-        () => null
-      );
-      return profile?.pinnedLocalNodeDids?.[url];
-    },
-    set: async (url, nodeDid) => {
-      if (!await ProfileManager.profileExists(profileName2)) return;
-      await ProfileManager.updateProfile(profileName2, (profile) => ({
-        ...profile,
-        pinnedLocalNodeDids: {
-          ...profile.pinnedLocalNodeDids,
-          [url]: nodeDid
-        }
-      }));
-    }
-  };
-}
-async function discoverLocalNodeHost(profileName2) {
-  const profile = await ProfileManager.getProfile(profileName2).catch(
-    () => null
-  );
-  if (profile?.autoDiscoverLocalNode === false) {
-    return null;
-  }
-  const discovered = await discoverLocalTinyCloudNode({
-    localNodeUrl: profile?.localNodeUrl,
-    localLinkName: profile?.localLinkName,
-    expectedNodeDid: profile?.expectedNodeDid,
-    identityStore: profileLocalNodeIdentityStore(profileName2)
-  });
-  return discovered?.url ?? null;
-}
-function canonicalizeAddress2(address) {
-  const trimmed = address.trim();
-  return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
-}
-async function resolveLocalAddress(profile, profileName2) {
-  const session = await ProfileManager.getSession(profileName2);
-  const sessAddr = session?.address;
-  if (typeof sessAddr === "string" && sessAddr.length > 0) {
-    return canonicalizeAddress2(sessAddr);
-  }
-  if (profile.address) return canonicalizeAddress2(profile.address);
-  if (profile.ownerDid) {
-    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
-    if (match) return canonicalizeAddress2(match[1]);
-  }
-  return null;
-}
-function ownerAddressFromSpaceUri(spaceUri) {
-  const match = spaceUri.match(/^tinycloud:pkh:eip155:\d+:(0x[a-fA-F0-9]{40}):/);
-  return match ? canonicalizeAddress2(match[1]) : null;
-}
-function ownerDidFromSpaceUri(spaceUri) {
-  const match = spaceUri.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
-  if (!match) return null;
-  return `did:pkh:eip155:${match[1]}:${canonicalizeAddress2(match[2])}`;
-}
-async function isRootAuthority(spaceUri, profileName2) {
-  const profile = await ProfileManager.getProfile(profileName2);
-  if (resolveProfilePosture(profile) === "delegate-session") return false;
-  const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
-  if (!ownerAddr) return false;
-  const selfAddr = await resolveLocalAddress(profile, profileName2);
-  return selfAddr !== null && selfAddr === ownerAddr;
-}
-function spaceNameFromUri(spaceUri) {
-  return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
-}
-async function unhostedSpaceError(error, spaceUri, profileName2) {
-  if (!spaceUri) return null;
-  const status = error.meta?.status;
-  const isUnhosted = status === 404 && /space not found/i.test(error.message);
-  if (!isUnhosted) return null;
-  const spaceName = spaceNameFromUri(spaceUri);
-  const owner = await isRootAuthority(spaceUri, profileName2);
-  const hint = owner ? [
-    "You are the owner. Host it once:",
-    `  tc space host ${spaceName}`,
-    "Then retry."
-  ].join("\n") : [
-    "You are a delegate and CANNOT host this space \u2014 only its owner can.",
-    "Emit a host request:",
-    `  tc space host-request ${spaceName} --emit ./host-request.json`,
-    "Send it to the owner; they run `tc space host` and confirm. Then retry."
-  ].join("\n");
-  const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
-  return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
-}
-async function resolveHostSpace(name, profileName2) {
-  const resolved = await resolveSpaceUri(name, profileName2);
-  if (!resolved) {
-    throw new Error(`Could not resolve a space for "${name}".`);
-  }
-  return resolved;
-}
-var init_host = __esm({
-  "src/lib/host.ts"() {
-    "use strict";
-    init_profiles();
-    init_constants();
-    init_types();
-    init_errors();
-    init_space();
-  }
-});
-
-// src/config/profiles.ts
-import { chmod, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
-import { join as join3 } from "path";
-import {
-  profilePath,
-  readSession,
-  recordProfileDeletion,
-  refuseWriteToDeletedProfile,
-  removeSession,
-  withProfileLock,
-  writeSession
-} from "@tinycloud/operations/state";
-var ProfileManager;
-var init_profiles = __esm({
-  "src/config/profiles.ts"() {
-    "use strict";
-    init_constants();
-    init_storage();
-    init_errors();
-    ProfileManager = class _ProfileManager {
-      // ── Initialization ──────────────────────────────────────────────────
-      /**
-       * Runs `action` holding the profile's store lock (shared with operations
-       * and MCP). Reentrant, so the writers below can be called inside it; hold
-       * it around a whole read-modify-write, not just each write.
-       */
-      static async withLock(name, action, options) {
-        return withProfileLock(name, action, options);
-      }
-      /**
-       * Read-modify-write of profile.json under the profile lock, so concurrent
-       * updates (another command, a login commit) are never erased.
-       */
-      static async updateProfile(name, update) {
-        return _ProfileManager.withLock(name, async () => {
-          const next = update(await _ProfileManager.getProfile(name));
-          await _ProfileManager.setProfile(name, next);
-          return next;
-        });
-      }
-      /**
-       * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist and
-       * (re)sets both to 0700: older releases created them 0775.
-       */
-      static async ensureConfigDir() {
-        for (const directory of [CONFIG_DIR, PROFILES_DIR]) {
-          await ensureDir(directory);
-          await chmod(directory, PRIVATE_DIR_MODE);
-        }
-      }
-      /** Owner-only profile directory (0700), created or tightened before any write into it. */
-      static async ensureProfileDir(name) {
-        await _ProfileManager.ensureConfigDir();
-        const profileDir = join3(PROFILES_DIR, name);
-        await ensureDir(profileDir);
-        await chmod(profileDir, PRIVATE_DIR_MODE);
-        return profileDir;
-      }
-      // ── Global config ───────────────────────────────────────────────────
-      /**
-       * Reads config.json. Returns a default config if the file is missing.
-       */
-      static async getConfig() {
-        const config = await readJson(CONFIG_FILE);
-        if (!config) {
-          return { defaultProfile: DEFAULT_PROFILE, version: 1 };
-        }
-        return config;
-      }
-      /**
-       * Writes the global config to config.json.
-       */
-      static async setConfig(config) {
-        await _ProfileManager.ensureConfigDir();
-        await writeJson(CONFIG_FILE, config);
-      }
-      // ── Profile CRUD ────────────────────────────────────────────────────
-      /**
-       * Returns the profile config for the given name.
-       * Throws CLIError if the profile doesn't exist.
-       */
-      static async getProfile(name) {
-        const profilePath4 = join3(PROFILES_DIR, name, "profile.json");
-        const profile = await readJson(profilePath4);
-        if (!profile) {
-          throw new CLIError(
-            "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`
-          );
-        }
-        return profile;
-      }
-      /**
-       * Saves a profile config under the profile lock, creating the profile
-       * directory if needed. Use `updateProfile` to change an existing profile.
-       */
-      static async setProfile(name, data) {
-        await _ProfileManager.withLock(name, async () => {
-          await writeJson(join3(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
-        });
-      }
-      /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
-      static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm2(join3(PROFILES_DIR, name, "profile.json"), { force: true }));
-      }
-      /**
-       * Returns true if a profile directory exists.
-       */
-      static async profileExists(name) {
-        return fileExists(join3(PROFILES_DIR, name, "profile.json"));
-      }
-      /**
-       * Returns an array of profile directory names.
-       */
-      static async listProfiles() {
-        return listDirs(PROFILES_DIR);
-      }
-      /**
-       * Deletes a profile. Its key, session, settings, stores and cache are
-       * removed while holding the profile lock, so another writer's critical
-       * section never sees them vanish midway: session and key first, settings
-       * last, so a crash midway never leaves a session or key without its
-       * profile. The deletion is then recorded, so a store write that waited for
-       * the lock meanwhile refuses rather than recreating a profile with only a
-       * session in it. `.lock` itself is left to the lock's release; the
-       * then-empty directory is removed afterwards unless another writer took
-       * the lock (or wrote) meanwhile. A profile directory that is a symlink is
-       * unlinked, its target left alone.
-       * Throws if the name is not one path segment or names the default profile.
-       */
-      static async deleteProfile(name) {
-        let profileDir;
-        try {
-          profileDir = profilePath(name);
-        } catch {
-          throw new CLIError(
-            "INVALID_PROFILE_NAME",
-            `Invalid profile name "${name}": a profile name is one path segment (no "/", "\\", "." or "..").`,
-            ExitCode.USAGE_ERROR
-          );
-        }
-        const config = await _ProfileManager.getConfig();
-        if (config.defaultProfile === name) {
-          throw new CLIError(
-            "PROFILE_DELETE_DEFAULT",
-            `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`
-          );
-        }
-        const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
-          if (error.code === "ENOENT") return "missing";
-          throw error;
-        });
-        if (kind === "missing") return;
-        if (kind === "link") {
-          await rm2(profileDir, { force: true });
-          return;
-        }
-        await _ProfileManager.withLock(name, async () => {
-          for (const file of ["session.json", "key.json"]) await rm2(join3(profileDir, file), { force: true });
-          for (const entry of await readdir2(profileDir)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm2(join3(profileDir, entry), { recursive: true, force: true });
-          }
-          await rm2(join3(profileDir, "profile.json"), { force: true });
-          await recordProfileDeletion(name);
-        });
-        await rmdir(profileDir).catch((error) => {
-          if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
-        });
-      }
-      // ── Key management ──────────────────────────────────────────────────
-      /**
-       * Returns the parsed JWK for a profile, or null if no key exists.
-       */
-      static async getKey(name) {
-        return readJson(join3(PROFILES_DIR, name, "key.json"));
-      }
-      /**
-       * Saves a JWK key under the profile lock (0600, in an owner-only profile
-       * directory). Refused (PROFILE_NOT_FOUND) if the profile was deleted while
-       * this waited for the lock, rather than leaving a key-only profile.
-       */
-      static async setKey(name, jwk) {
-        await _ProfileManager.withLock(name, async () => {
-          await refuseWriteToDeletedProfile(name);
-          await writeJson(join3(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
-        });
-      }
-      /** Removes key.json under the profile lock (rollback of a key a failed login created). */
-      static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm2(join3(PROFILES_DIR, name, "key.json"), { force: true }));
-      }
-      // ── Session management ──────────────────────────────────────────────
-      /**
-       * Returns the parsed session for a profile, or null if none exists.
-       */
-      static async getSession(name) {
-        return readSession(name);
-      }
-      /**
-       * Saves session data for a profile.
-       */
-      static async setSession(name, session) {
-        await writeSession(name, session);
-      }
-      /**
-       * Removes the session file for a profile.
-       */
-      static async clearSession(name) {
-        await removeSession(name);
-      }
-      // ── Cache management ────────────────────────────────────────────────
-      /**
-       * Returns the profile's cache directory (share history lives here),
-       * created or tightened to 0700.
-       */
-      static async getCacheDir(name) {
-        const cacheDir = join3(await _ProfileManager.ensureProfileDir(name), "cache");
-        await ensureDir(cacheDir);
-        await chmod(cacheDir, PRIVATE_DIR_MODE);
-        return cacheDir;
-      }
-      // ── Resolution helpers ──────────────────────────────────────────────
-      /**
-       * Resolves the full CLI context from flags, env vars, and config.
-       *
-       * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
-       * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
-       *
-       * Local-node discovery (TC-106) only runs when no explicit host was given
-       * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
-       * after DID verification against the profile's pinned identity, prefers one
-       * over the stored/default host. Loopback requires an explicit `localNodeUrl`.
-       * Disable discovery per profile with
-       * `autoDiscoverLocalNode: false` in profile.json.
-       */
-      static async resolveContext(options) {
-        const config = await _ProfileManager.getConfig();
-        const profile = options.profile ?? process.env.TC_PROFILE ?? config.defaultProfile ?? DEFAULT_PROFILE;
-        let profileHost;
-        try {
-          const profileConfig = await _ProfileManager.getProfile(profile);
-          profileHost = profileConfig.host;
-        } catch {
-        }
-        const explicitHost = options.host ?? process.env.TC_HOST;
-        let host = explicitHost ?? profileHost ?? DEFAULT_HOST;
-        if (explicitHost === void 0) {
-          const { discoverLocalNodeHost: discoverLocalNodeHost2 } = await Promise.resolve().then(() => (init_host(), host_exports));
-          const localHost = await discoverLocalNodeHost2(profile);
-          if (localHost) {
-            host = localHost;
-          }
-        }
-        setActiveProfileName(profile);
-        return {
-          profile,
-          host,
-          verbose: options.verbose ?? false,
-          noCache: options.noCache ?? false,
-          quiet: options.quiet ?? false
-        };
-      }
-    };
-  }
-});
-
 // ../../node_modules/ms/index.js
 var require_ms = __commonJS({
   "../../node_modules/ms/index.js"(exports, module) {
@@ -1944,125 +1554,17 @@ var init_sha2 = __esm({
   }
 });
 
-// ../sdk-services/dist/internal/decrypt-transport-response-error.cjs
-var require_decrypt_transport_response_error = __commonJS({
-  "../sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
+// ../../node_modules/@noble/hashes/esm/sha256.js
+var sha2562;
+var init_sha256 = __esm({
+  "../../node_modules/@noble/hashes/esm/sha256.js"() {
     "use strict";
-    var __defProp3 = Object.defineProperty;
-    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
-    var __getOwnPropNames2 = Object.getOwnPropertyNames;
-    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
-    var __export3 = (target, all) => {
-      for (var name in all)
-        __defProp3(target, name, { get: all[name], enumerable: true });
-    };
-    var __copyProps2 = (to, from4, except, desc) => {
-      if (from4 && typeof from4 === "object" || typeof from4 === "function") {
-        for (let key of __getOwnPropNames2(from4))
-          if (!__hasOwnProp2.call(to, key) && key !== except)
-            __defProp3(to, key, { get: () => from4[key], enumerable: !(desc = __getOwnPropDesc2(from4, key)) || desc.enumerable });
-      }
-      return to;
-    };
-    var __toCommonJS = (mod2) => __copyProps2(__defProp3({}, "__esModule", { value: true }), mod2);
-    var DecryptTransportResponseError_exports = {};
-    __export3(DecryptTransportResponseError_exports, {
-      DecryptTransportResponseError: () => DecryptTransportResponseError2
-    });
-    module.exports = __toCommonJS(DecryptTransportResponseError_exports);
-    var DecryptTransportResponseError2 = class extends Error {
-      constructor(status, permissionHint) {
-        super("Node decrypt request failed");
-        this.status = status;
-        this.permissionHint = permissionHint;
-        this.name = "DecryptTransportResponseError";
-      }
-    };
+    init_sha2();
+    sha2562 = sha256;
   }
 });
 
-// src/commands/account.ts
-init_profiles();
-init_constants();
-import open from "open";
-import { readFile as readFile3 } from "fs/promises";
-
-// src/lib/sdk.ts
-init_profiles();
-init_types();
-init_errors();
-init_constants();
-import { TinyCloudNode } from "@tinycloud/node-sdk";
-
-// src/lib/permissions.ts
-import { appendFile, chmod as chmod2, readFile as readFile2 } from "fs/promises";
-import { join as join4 } from "path";
-import {
-  buildPermissionRequestArtifact,
-  isPermissionRequestArtifact
-} from "@tinycloud/operations/artifacts";
-import {
-  additionalDelegationsPath as sharedAdditionalDelegationsPath,
-  authRequestsPath as sharedAuthRequestsPath,
-  profileStoreMetadataPath,
-  readAdditionalDelegations,
-  readAuthRequests,
-  refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
-  updateProfileStore,
-  withProfileLock as withProfileLock2,
-  writeJsonAtomic
-} from "@tinycloud/operations/state";
-
-// ../sdk-core/src/manifest.ts
-var import_ms = __toESM(require_ms(), 1);
-
-// ../../node_modules/@noble/hashes/esm/sha256.js
-init_sha2();
-var sha2562 = sha256;
-
 // ../bootstrap/dist/index.js
-var CAPABILITIES = [
-  { urn: "tinycloud.kv/get", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.kv/list", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.kv/metadata", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.kv/put", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.kv/del", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.kv/delete", service: "tinycloud.kv", status: "deprecated-alias", aliasOf: "tinycloud.kv/del" },
-  { urn: "tinycloud.kv/sync", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.kv/retain", service: "tinycloud.kv", status: "active" },
-  { urn: "tinycloud.sql/read", service: "tinycloud.sql", status: "active" },
-  { urn: "tinycloud.sql/select", service: "tinycloud.sql", status: "deprecated-alias", aliasOf: "tinycloud.sql/read" },
-  { urn: "tinycloud.sql/write", service: "tinycloud.sql", status: "active" },
-  { urn: "tinycloud.sql/schema", service: "tinycloud.sql", status: "active" },
-  { urn: "tinycloud.sql/admin", service: "tinycloud.sql", status: "active", implies: ["tinycloud.sql/schema"] },
-  { urn: "tinycloud.sql/*", service: "tinycloud.sql", status: "active", implies: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema", "tinycloud.sql/admin"] },
-  { urn: "tinycloud.duckdb/read", service: "tinycloud.duckdb", status: "active" },
-  { urn: "tinycloud.duckdb/write", service: "tinycloud.duckdb", status: "active" },
-  { urn: "tinycloud.duckdb/admin", service: "tinycloud.duckdb", status: "active" },
-  { urn: "tinycloud.duckdb/import", service: "tinycloud.duckdb", status: "active" },
-  { urn: "tinycloud.duckdb/export", service: "tinycloud.duckdb", status: "active" },
-  { urn: "tinycloud.duckdb/select", service: "tinycloud.duckdb", status: "deprecated-alias", aliasOf: "tinycloud.duckdb/read" },
-  { urn: "tinycloud.duckdb/*", service: "tinycloud.duckdb", status: "active", implies: ["tinycloud.duckdb/read", "tinycloud.duckdb/write", "tinycloud.duckdb/admin", "tinycloud.duckdb/import", "tinycloud.duckdb/export"] },
-  { urn: "tinycloud.capabilities/read", service: "tinycloud.capabilities", status: "active" },
-  { urn: "tinycloud.delegation/status", service: "tinycloud.delegation", status: "active" },
-  { urn: "tinycloud.delegation/list", service: "tinycloud.delegation", status: "active" },
-  { urn: "tinycloud.hooks/subscribe", service: "tinycloud.hooks", status: "active" },
-  { urn: "tinycloud.hooks/register", service: "tinycloud.hooks", status: "active" },
-  { urn: "tinycloud.hooks/list", service: "tinycloud.hooks", status: "active" },
-  { urn: "tinycloud.hooks/unregister", service: "tinycloud.hooks", status: "active" },
-  { urn: "tinycloud.encryption/decrypt", service: "tinycloud.encryption", status: "active" },
-  { urn: "tinycloud.encryption/network.create", service: "tinycloud.encryption", status: "active" },
-  { urn: "tinycloud.encryption/network.revoke", service: "tinycloud.encryption", status: "active" },
-  { urn: "tinycloud.space/host", service: "tinycloud.space", status: "active" },
-  { urn: "tinycloud.space/create", service: "tinycloud.space", status: "active" },
-  { urn: "tinycloud.space/list", service: "tinycloud.space", status: "active" },
-  { urn: "tinycloud.space/info", service: "tinycloud.space", status: "active" },
-  { urn: "tinycloud.vfs/get", service: "tinycloud.vfs", status: "reserved" },
-  { urn: "tinycloud.vfs/list", service: "tinycloud.vfs", status: "reserved" },
-  { urn: "tinycloud.vfs/metadata", service: "tinycloud.vfs", status: "reserved" },
-  { urn: "tinycloud.vfs/put", service: "tinycloud.vfs", status: "reserved" },
-  { urn: "tinycloud.vfs/delete", service: "tinycloud.vfs", status: "reserved" }
-];
 function actionKey(action) {
   if (action === "*") return "ALL";
   return action.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -2081,287 +1583,6 @@ function deriveServiceConstants(service) {
   }
   return out;
 }
-var KV = deriveServiceConstants("kv");
-var SQL = {
-  ...deriveServiceConstants("sql"),
-  EXECUTE: "tinycloud.sql/execute",
-  EXPORT: "tinycloud.sql/export"
-};
-var DUCKDB = {
-  ...deriveServiceConstants("duckdb"),
-  DESCRIBE: "tinycloud.duckdb/describe",
-  EXECUTE: "tinycloud.duckdb/execute"
-};
-var CAPABILITIES2 = deriveServiceConstants("capabilities");
-var HOOKS = deriveServiceConstants("hooks");
-var ENCRYPTION = deriveServiceConstants("encryption");
-var SPACE = deriveServiceConstants("space");
-var CAPABILITY_REGISTRY = CAPABILITIES;
-var DEFAULT_MANIFEST_SPACE = "applications";
-var ACCOUNT_REGISTRY_SPACE = "account";
-var ACCOUNT_REGISTRY_PATH = "applications/";
-var SECRETS_SPACE = "secrets";
-var BOOTSTRAP_DEFAULT_SPACE = "default";
-var BOOTSTRAP_PUBLIC_SPACE = "public";
-var AGENTS_SPACE = "agents";
-var BOOTSTRAP_ENCRYPTION_NETWORK_NAME = "default";
-var BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE = `urn:tinycloud:encryption:{ownerDid}:${BOOTSTRAP_ENCRYPTION_NETWORK_NAME}`;
-var DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1e3;
-var VAULT_PERMISSION_SERVICE = "tinycloud.vault";
-var ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
-var ENCRYPTION_MANIFEST_SPACE = "encryption";
-var NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
-var BOOTSTRAP_SPACE_NAMES = [
-  BOOTSTRAP_DEFAULT_SPACE,
-  DEFAULT_MANIFEST_SPACE,
-  ACCOUNT_REGISTRY_SPACE,
-  SECRETS_SPACE,
-  BOOTSTRAP_PUBLIC_SPACE,
-  AGENTS_SPACE
-];
-var TINYCLOUD_DEFAULT_SPACE_MANIFEST = {
-  app_id: "xyz.tinycloud.default",
-  name: "TinyCloud Default Space",
-  space: BOOTSTRAP_DEFAULT_SPACE,
-  prefix: "",
-  defaults: false,
-  includePublicSpace: false,
-  permissions: [
-    {
-      service: "tinycloud.kv",
-      space: BOOTSTRAP_DEFAULT_SPACE,
-      // Empty path = whole service on this space. Do NOT use "/": the recap
-      // encoder joins it as `<space>/<service>//`, which the node's byte-prefix
-      // resource matching can never extend (real paths start `<service>/x…`).
-      path: "",
-      actions: ["get", "put", "del", "list", "metadata"]
-    },
-    {
-      service: "tinycloud.sql",
-      space: BOOTSTRAP_DEFAULT_SPACE,
-      path: "",
-      actions: ["read", "write"]
-    }
-  ]
-};
-var TINYCLOUD_APPLICATIONS_SPACE_MANIFEST = {
-  app_id: "xyz.tinycloud.applications",
-  name: "TinyCloud Applications Space",
-  space: DEFAULT_MANIFEST_SPACE,
-  prefix: "",
-  defaults: false,
-  includePublicSpace: false,
-  permissions: [
-    {
-      service: "tinycloud.kv",
-      space: DEFAULT_MANIFEST_SPACE,
-      // Empty path = whole service on this space. Do NOT use "/": the recap
-      // encoder joins it as `<space>/<service>//`, which the node's byte-prefix
-      // resource matching can never extend (real paths start `<service>/x…`).
-      path: "",
-      actions: ["get", "put", "del", "list", "metadata"]
-    },
-    {
-      service: "tinycloud.sql",
-      space: DEFAULT_MANIFEST_SPACE,
-      path: "",
-      actions: ["read", "write"]
-    }
-  ]
-};
-var TINYCLOUD_ACCOUNT_SPACE_MANIFEST = {
-  app_id: "xyz.tinycloud.account",
-  name: "TinyCloud Account Registry",
-  space: ACCOUNT_REGISTRY_SPACE,
-  prefix: "",
-  defaults: false,
-  includePublicSpace: false,
-  permissions: [
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "applications/",
-      actions: ["get", "put", "list"]
-    },
-    {
-      service: "tinycloud.kv",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "spaces/",
-      actions: ["get", "put", "list"]
-    },
-    {
-      service: "tinycloud.sql",
-      space: ACCOUNT_REGISTRY_SPACE,
-      path: "account",
-      actions: ["read", "write", "schema"]
-    }
-  ]
-};
-var TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST = {
-  app_id: "xyz.tinycloud.secrets",
-  name: "TinyCloud Secrets",
-  space: SECRETS_SPACE,
-  prefix: "",
-  defaults: false,
-  includePublicSpace: false,
-  permissions: [
-    {
-      service: "tinycloud.vault",
-      space: SECRETS_SPACE,
-      path: "secrets/",
-      actions: ["read"],
-      skipPrefix: true
-    },
-    {
-      service: "tinycloud.kv",
-      space: SECRETS_SPACE,
-      path: "variables",
-      actions: ["list", "metadata"],
-      skipPrefix: true
-    },
-    {
-      service: "tinycloud.kv",
-      space: SECRETS_SPACE,
-      path: "variables/",
-      actions: ["get", "put", "del", "list", "metadata"],
-      skipPrefix: true
-    },
-    {
-      service: "tinycloud.sql",
-      space: SECRETS_SPACE,
-      path: "default",
-      actions: ["read", "write", "schema"],
-      skipPrefix: true
-    },
-    {
-      service: "tinycloud.capabilities",
-      space: SECRETS_SPACE,
-      path: "",
-      actions: ["read"],
-      skipPrefix: true
-    }
-  ]
-};
-var TINYCLOUD_PUBLIC_SPACE_MANIFEST = {
-  app_id: "xyz.tinycloud.public",
-  name: "TinyCloud Public Space",
-  space: BOOTSTRAP_PUBLIC_SPACE,
-  prefix: "",
-  defaults: false,
-  includePublicSpace: false,
-  permissions: [
-    {
-      service: "tinycloud.kv",
-      space: BOOTSTRAP_PUBLIC_SPACE,
-      path: "",
-      actions: ["get", "list", "metadata"]
-    }
-  ]
-};
-var TINYCLOUD_AGENTS_SPACE_MANIFEST = {
-  app_id: "xyz.tinycloud.agents",
-  name: "TinyCloud Agents Space",
-  space: AGENTS_SPACE,
-  prefix: "",
-  defaults: false,
-  includePublicSpace: false,
-  permissions: [
-    {
-      service: "tinycloud.kv",
-      space: AGENTS_SPACE,
-      path: "",
-      actions: ["get", "put", "del", "list", "metadata"]
-    }
-  ]
-};
-var BOOTSTRAP_SPACE_MANIFESTS = {
-  [BOOTSTRAP_DEFAULT_SPACE]: TINYCLOUD_DEFAULT_SPACE_MANIFEST,
-  [DEFAULT_MANIFEST_SPACE]: TINYCLOUD_APPLICATIONS_SPACE_MANIFEST,
-  [ACCOUNT_REGISTRY_SPACE]: TINYCLOUD_ACCOUNT_SPACE_MANIFEST,
-  [SECRETS_SPACE]: TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
-  [BOOTSTRAP_PUBLIC_SPACE]: TINYCLOUD_PUBLIC_SPACE_MANIFEST,
-  [AGENTS_SPACE]: TINYCLOUD_AGENTS_SPACE_MANIFEST
-};
-var BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS = [
-  TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST
-];
-var ACCOUNT_INDEX_SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS applications (
-    app_id TEXT PRIMARY KEY,
-    name TEXT,
-    description TEXT,
-    updated_at TEXT,
-    manifest_json TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS application_state (
-    app_id TEXT PRIMARY KEY,
-    manifest_hash TEXT NOT NULL,
-    indexed_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS spaces (
-    space_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    owner_did TEXT NOT NULL,
-    type TEXT NOT NULL,
-    permissions_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    registered_at TEXT,
-    updated_at TEXT NOT NULL,
-    expires_at TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS delegations (
-    cid TEXT PRIMARY KEY,
-    direction TEXT NOT NULL,
-    space_id TEXT NOT NULL,
-    space_name TEXT,
-    counterparty_did TEXT NOT NULL,
-    delegate_did TEXT NOT NULL,
-    delegator_did TEXT,
-    path TEXT NOT NULL,
-    actions_json TEXT NOT NULL,
-    expiry TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at TEXT,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS sync_state (
-    source TEXT PRIMARY KEY,
-    synced_at TEXT NOT NULL,
-    count INTEGER NOT NULL
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_delegations_direction ON delegations(direction)",
-  "CREATE INDEX IF NOT EXISTS idx_delegations_space ON delegations(space_id)",
-  "CREATE INDEX IF NOT EXISTS idx_delegations_counterparty ON delegations(counterparty_did)",
-  "CREATE INDEX IF NOT EXISTS idx_spaces_owner ON spaces(owner_did)",
-  "CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(type)"
-];
-var SECRET_RECORDS_SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS secret_records (
-    scope TEXT NOT NULL,
-    name TEXT NOT NULL,
-    provider_id TEXT,
-    custom_note TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_tested TEXT,
-    test_status TEXT,
-    test_message TEXT,
-    PRIMARY KEY(scope, name)
-  )`
-];
-var BOOTSTRAP_MANIFEST = {
-  spaces: BOOTSTRAP_SPACE_NAMES.map((name) => ({
-    name,
-    manifest: BOOTSTRAP_SPACE_MANIFESTS[name],
-    persistedAsApplication: name === SECRETS_SPACE
-  })),
-  applications: BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS,
-  accountIndexSchema: ACCOUNT_INDEX_SCHEMA,
-  secretRecordsSchema: SECRET_RECORDS_SCHEMA,
-  encryptionNetwork: {
-    name: BOOTSTRAP_ENCRYPTION_NETWORK_NAME
-  }
-};
 function cloneManifest(manifest) {
   return {
     ...manifest,
@@ -2496,88 +1717,4401 @@ function composeBootstrapSpaceManifest(space) {
     includeAccountRegistryPermissions: false
   });
 }
-var ACCOUNT_MANIFEST_PERMISSIONS = Object.freeze([
-  {
-    service: "tinycloud.kv",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: ACCOUNT_REGISTRY_PATH,
-    actions: [KV.GET, KV.PUT, KV.LIST]
-  },
-  {
-    service: "tinycloud.kv",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "spaces/",
-    actions: [KV.GET, KV.PUT, KV.LIST]
-  },
-  {
-    service: "tinycloud.kv",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "system/bootstrap/complete",
-    actions: [KV.GET, KV.PUT]
-  },
-  {
-    service: "tinycloud.delegation",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "",
-    actions: ["tinycloud.delegation/list"]
-  },
-  {
-    service: "tinycloud.sql",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "account",
-    actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA]
-  },
-  {
-    service: "tinycloud.capabilities",
-    space: ACCOUNT_REGISTRY_SPACE,
-    path: "",
-    actions: [CAPABILITIES2.READ]
+var CAPABILITIES, KV, SQL, DUCKDB, CAPABILITIES2, HOOKS, ENCRYPTION, SPACE, CAPABILITY_REGISTRY, DEFAULT_MANIFEST_SPACE, ACCOUNT_REGISTRY_SPACE, ACCOUNT_REGISTRY_PATH, SECRETS_SPACE, BOOTSTRAP_DEFAULT_SPACE, BOOTSTRAP_PUBLIC_SPACE, AGENTS_SPACE, BOOTSTRAP_ENCRYPTION_NETWORK_NAME, BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE, DEFAULT_EXPIRY_MS, VAULT_PERMISSION_SERVICE, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, NETWORK_CREATE_ACTION, BOOTSTRAP_SPACE_NAMES, TINYCLOUD_DEFAULT_SPACE_MANIFEST, TINYCLOUD_APPLICATIONS_SPACE_MANIFEST, TINYCLOUD_ACCOUNT_SPACE_MANIFEST, TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST, TINYCLOUD_PUBLIC_SPACE_MANIFEST, TINYCLOUD_AGENTS_SPACE_MANIFEST, BOOTSTRAP_SPACE_MANIFESTS, BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS, ACCOUNT_INDEX_SCHEMA, SECRET_RECORDS_SCHEMA, BOOTSTRAP_MANIFEST, ACCOUNT_MANIFEST_PERMISSIONS, BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST, BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST, BOOTSTRAP_SESSION_REQUESTS, ACCOUNT_SESSION_RAW_ALLOWLIST, BOOTSTRAP_ALLOWLIST;
+var init_dist = __esm({
+  "../bootstrap/dist/index.js"() {
+    "use strict";
+    CAPABILITIES = [
+      { urn: "tinycloud.kv/get", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.kv/list", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.kv/metadata", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.kv/put", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.kv/del", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.kv/delete", service: "tinycloud.kv", status: "deprecated-alias", aliasOf: "tinycloud.kv/del" },
+      { urn: "tinycloud.kv/sync", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.kv/retain", service: "tinycloud.kv", status: "active" },
+      { urn: "tinycloud.sql/read", service: "tinycloud.sql", status: "active" },
+      { urn: "tinycloud.sql/select", service: "tinycloud.sql", status: "deprecated-alias", aliasOf: "tinycloud.sql/read" },
+      { urn: "tinycloud.sql/write", service: "tinycloud.sql", status: "active" },
+      { urn: "tinycloud.sql/schema", service: "tinycloud.sql", status: "active" },
+      { urn: "tinycloud.sql/admin", service: "tinycloud.sql", status: "active", implies: ["tinycloud.sql/schema"] },
+      { urn: "tinycloud.sql/*", service: "tinycloud.sql", status: "active", implies: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema", "tinycloud.sql/admin"] },
+      { urn: "tinycloud.duckdb/read", service: "tinycloud.duckdb", status: "active" },
+      { urn: "tinycloud.duckdb/write", service: "tinycloud.duckdb", status: "active" },
+      { urn: "tinycloud.duckdb/admin", service: "tinycloud.duckdb", status: "active" },
+      { urn: "tinycloud.duckdb/import", service: "tinycloud.duckdb", status: "active" },
+      { urn: "tinycloud.duckdb/export", service: "tinycloud.duckdb", status: "active" },
+      { urn: "tinycloud.duckdb/select", service: "tinycloud.duckdb", status: "deprecated-alias", aliasOf: "tinycloud.duckdb/read" },
+      { urn: "tinycloud.duckdb/*", service: "tinycloud.duckdb", status: "active", implies: ["tinycloud.duckdb/read", "tinycloud.duckdb/write", "tinycloud.duckdb/admin", "tinycloud.duckdb/import", "tinycloud.duckdb/export"] },
+      { urn: "tinycloud.capabilities/read", service: "tinycloud.capabilities", status: "active" },
+      { urn: "tinycloud.delegation/status", service: "tinycloud.delegation", status: "active" },
+      { urn: "tinycloud.delegation/list", service: "tinycloud.delegation", status: "active" },
+      { urn: "tinycloud.hooks/subscribe", service: "tinycloud.hooks", status: "active" },
+      { urn: "tinycloud.hooks/register", service: "tinycloud.hooks", status: "active" },
+      { urn: "tinycloud.hooks/list", service: "tinycloud.hooks", status: "active" },
+      { urn: "tinycloud.hooks/unregister", service: "tinycloud.hooks", status: "active" },
+      { urn: "tinycloud.encryption/decrypt", service: "tinycloud.encryption", status: "active" },
+      { urn: "tinycloud.encryption/network.create", service: "tinycloud.encryption", status: "active" },
+      { urn: "tinycloud.encryption/network.revoke", service: "tinycloud.encryption", status: "active" },
+      { urn: "tinycloud.space/host", service: "tinycloud.space", status: "active" },
+      { urn: "tinycloud.space/create", service: "tinycloud.space", status: "active" },
+      { urn: "tinycloud.space/list", service: "tinycloud.space", status: "active" },
+      { urn: "tinycloud.space/info", service: "tinycloud.space", status: "active" },
+      { urn: "tinycloud.vfs/get", service: "tinycloud.vfs", status: "reserved" },
+      { urn: "tinycloud.vfs/list", service: "tinycloud.vfs", status: "reserved" },
+      { urn: "tinycloud.vfs/metadata", service: "tinycloud.vfs", status: "reserved" },
+      { urn: "tinycloud.vfs/put", service: "tinycloud.vfs", status: "reserved" },
+      { urn: "tinycloud.vfs/delete", service: "tinycloud.vfs", status: "reserved" }
+    ];
+    KV = deriveServiceConstants("kv");
+    SQL = {
+      ...deriveServiceConstants("sql"),
+      EXECUTE: "tinycloud.sql/execute",
+      EXPORT: "tinycloud.sql/export"
+    };
+    DUCKDB = {
+      ...deriveServiceConstants("duckdb"),
+      DESCRIBE: "tinycloud.duckdb/describe",
+      EXECUTE: "tinycloud.duckdb/execute"
+    };
+    CAPABILITIES2 = deriveServiceConstants("capabilities");
+    HOOKS = deriveServiceConstants("hooks");
+    ENCRYPTION = deriveServiceConstants("encryption");
+    SPACE = deriveServiceConstants("space");
+    CAPABILITY_REGISTRY = CAPABILITIES;
+    DEFAULT_MANIFEST_SPACE = "applications";
+    ACCOUNT_REGISTRY_SPACE = "account";
+    ACCOUNT_REGISTRY_PATH = "applications/";
+    SECRETS_SPACE = "secrets";
+    BOOTSTRAP_DEFAULT_SPACE = "default";
+    BOOTSTRAP_PUBLIC_SPACE = "public";
+    AGENTS_SPACE = "agents";
+    BOOTSTRAP_ENCRYPTION_NETWORK_NAME = "default";
+    BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE = `urn:tinycloud:encryption:{ownerDid}:${BOOTSTRAP_ENCRYPTION_NETWORK_NAME}`;
+    DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1e3;
+    VAULT_PERMISSION_SERVICE = "tinycloud.vault";
+    ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
+    ENCRYPTION_MANIFEST_SPACE = "encryption";
+    NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
+    BOOTSTRAP_SPACE_NAMES = [
+      BOOTSTRAP_DEFAULT_SPACE,
+      DEFAULT_MANIFEST_SPACE,
+      ACCOUNT_REGISTRY_SPACE,
+      SECRETS_SPACE,
+      BOOTSTRAP_PUBLIC_SPACE,
+      AGENTS_SPACE
+    ];
+    TINYCLOUD_DEFAULT_SPACE_MANIFEST = {
+      app_id: "xyz.tinycloud.default",
+      name: "TinyCloud Default Space",
+      space: BOOTSTRAP_DEFAULT_SPACE,
+      prefix: "",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: BOOTSTRAP_DEFAULT_SPACE,
+          // Empty path = whole service on this space. Do NOT use "/": the recap
+          // encoder joins it as `<space>/<service>//`, which the node's byte-prefix
+          // resource matching can never extend (real paths start `<service>/x…`).
+          path: "",
+          actions: ["get", "put", "del", "list", "metadata"]
+        },
+        {
+          service: "tinycloud.sql",
+          space: BOOTSTRAP_DEFAULT_SPACE,
+          path: "",
+          actions: ["read", "write"]
+        }
+      ]
+    };
+    TINYCLOUD_APPLICATIONS_SPACE_MANIFEST = {
+      app_id: "xyz.tinycloud.applications",
+      name: "TinyCloud Applications Space",
+      space: DEFAULT_MANIFEST_SPACE,
+      prefix: "",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: DEFAULT_MANIFEST_SPACE,
+          // Empty path = whole service on this space. Do NOT use "/": the recap
+          // encoder joins it as `<space>/<service>//`, which the node's byte-prefix
+          // resource matching can never extend (real paths start `<service>/x…`).
+          path: "",
+          actions: ["get", "put", "del", "list", "metadata"]
+        },
+        {
+          service: "tinycloud.sql",
+          space: DEFAULT_MANIFEST_SPACE,
+          path: "",
+          actions: ["read", "write"]
+        }
+      ]
+    };
+    TINYCLOUD_ACCOUNT_SPACE_MANIFEST = {
+      app_id: "xyz.tinycloud.account",
+      name: "TinyCloud Account Registry",
+      space: ACCOUNT_REGISTRY_SPACE,
+      prefix: "",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: ACCOUNT_REGISTRY_SPACE,
+          path: "applications/",
+          actions: ["get", "put", "list"]
+        },
+        {
+          service: "tinycloud.kv",
+          space: ACCOUNT_REGISTRY_SPACE,
+          path: "spaces/",
+          actions: ["get", "put", "list"]
+        },
+        {
+          service: "tinycloud.sql",
+          space: ACCOUNT_REGISTRY_SPACE,
+          path: "account",
+          actions: ["read", "write", "schema"]
+        }
+      ]
+    };
+    TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST = {
+      app_id: "xyz.tinycloud.secrets",
+      name: "TinyCloud Secrets",
+      space: SECRETS_SPACE,
+      prefix: "",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        {
+          service: "tinycloud.vault",
+          space: SECRETS_SPACE,
+          path: "secrets/",
+          actions: ["read"],
+          skipPrefix: true
+        },
+        {
+          service: "tinycloud.kv",
+          space: SECRETS_SPACE,
+          path: "variables",
+          actions: ["list", "metadata"],
+          skipPrefix: true
+        },
+        {
+          service: "tinycloud.kv",
+          space: SECRETS_SPACE,
+          path: "variables/",
+          actions: ["get", "put", "del", "list", "metadata"],
+          skipPrefix: true
+        },
+        {
+          service: "tinycloud.sql",
+          space: SECRETS_SPACE,
+          path: "default",
+          actions: ["read", "write", "schema"],
+          skipPrefix: true
+        },
+        {
+          service: "tinycloud.capabilities",
+          space: SECRETS_SPACE,
+          path: "",
+          actions: ["read"],
+          skipPrefix: true
+        }
+      ]
+    };
+    TINYCLOUD_PUBLIC_SPACE_MANIFEST = {
+      app_id: "xyz.tinycloud.public",
+      name: "TinyCloud Public Space",
+      space: BOOTSTRAP_PUBLIC_SPACE,
+      prefix: "",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: BOOTSTRAP_PUBLIC_SPACE,
+          path: "",
+          actions: ["get", "list", "metadata"]
+        }
+      ]
+    };
+    TINYCLOUD_AGENTS_SPACE_MANIFEST = {
+      app_id: "xyz.tinycloud.agents",
+      name: "TinyCloud Agents Space",
+      space: AGENTS_SPACE,
+      prefix: "",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        {
+          service: "tinycloud.kv",
+          space: AGENTS_SPACE,
+          path: "",
+          actions: ["get", "put", "del", "list", "metadata"]
+        }
+      ]
+    };
+    BOOTSTRAP_SPACE_MANIFESTS = {
+      [BOOTSTRAP_DEFAULT_SPACE]: TINYCLOUD_DEFAULT_SPACE_MANIFEST,
+      [DEFAULT_MANIFEST_SPACE]: TINYCLOUD_APPLICATIONS_SPACE_MANIFEST,
+      [ACCOUNT_REGISTRY_SPACE]: TINYCLOUD_ACCOUNT_SPACE_MANIFEST,
+      [SECRETS_SPACE]: TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST,
+      [BOOTSTRAP_PUBLIC_SPACE]: TINYCLOUD_PUBLIC_SPACE_MANIFEST,
+      [AGENTS_SPACE]: TINYCLOUD_AGENTS_SPACE_MANIFEST
+    };
+    BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS = [
+      TINYCLOUD_SECRETS_BOOTSTRAP_MANIFEST
+    ];
+    ACCOUNT_INDEX_SCHEMA = [
+      `CREATE TABLE IF NOT EXISTS applications (
+    app_id TEXT PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    updated_at TEXT,
+    manifest_json TEXT NOT NULL
+  )`,
+      `CREATE TABLE IF NOT EXISTS application_state (
+    app_id TEXT PRIMARY KEY,
+    manifest_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL
+  )`,
+      `CREATE TABLE IF NOT EXISTS spaces (
+    space_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_did TEXT NOT NULL,
+    type TEXT NOT NULL,
+    permissions_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    registered_at TEXT,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT
+  )`,
+      `CREATE TABLE IF NOT EXISTS delegations (
+    cid TEXT PRIMARY KEY,
+    direction TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    space_name TEXT,
+    counterparty_did TEXT NOT NULL,
+    delegate_did TEXT NOT NULL,
+    delegator_did TEXT,
+    path TEXT NOT NULL,
+    actions_json TEXT NOT NULL,
+    expiry TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT,
+    updated_at TEXT NOT NULL
+  )`,
+      `CREATE TABLE IF NOT EXISTS sync_state (
+    source TEXT PRIMARY KEY,
+    synced_at TEXT NOT NULL,
+    count INTEGER NOT NULL
+  )`,
+      "CREATE INDEX IF NOT EXISTS idx_delegations_direction ON delegations(direction)",
+      "CREATE INDEX IF NOT EXISTS idx_delegations_space ON delegations(space_id)",
+      "CREATE INDEX IF NOT EXISTS idx_delegations_counterparty ON delegations(counterparty_did)",
+      "CREATE INDEX IF NOT EXISTS idx_spaces_owner ON spaces(owner_did)",
+      "CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(type)"
+    ];
+    SECRET_RECORDS_SCHEMA = [
+      `CREATE TABLE IF NOT EXISTS secret_records (
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider_id TEXT,
+    custom_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_tested TEXT,
+    test_status TEXT,
+    test_message TEXT,
+    PRIMARY KEY(scope, name)
+  )`
+    ];
+    BOOTSTRAP_MANIFEST = {
+      spaces: BOOTSTRAP_SPACE_NAMES.map((name) => ({
+        name,
+        manifest: BOOTSTRAP_SPACE_MANIFESTS[name],
+        persistedAsApplication: name === SECRETS_SPACE
+      })),
+      applications: BOOTSTRAP_PERSISTED_APPLICATION_MANIFESTS,
+      accountIndexSchema: ACCOUNT_INDEX_SCHEMA,
+      secretRecordsSchema: SECRET_RECORDS_SCHEMA,
+      encryptionNetwork: {
+        name: BOOTSTRAP_ENCRYPTION_NETWORK_NAME
+      }
+    };
+    ACCOUNT_MANIFEST_PERMISSIONS = Object.freeze([
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: ACCOUNT_REGISTRY_PATH,
+        actions: [KV.GET, KV.PUT, KV.LIST]
+      },
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "spaces/",
+        actions: [KV.GET, KV.PUT, KV.LIST]
+      },
+      {
+        service: "tinycloud.kv",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "system/bootstrap/complete",
+        actions: [KV.GET, KV.PUT]
+      },
+      {
+        service: "tinycloud.delegation",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "",
+        actions: ["tinycloud.delegation/list"]
+      },
+      {
+        service: "tinycloud.sql",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "account",
+        actions: [SQL.READ, SQL.WRITE, SQL.SCHEMA]
+      },
+      {
+        service: "tinycloud.capabilities",
+        space: ACCOUNT_REGISTRY_SPACE,
+        path: "",
+        actions: [CAPABILITIES2.READ]
+      }
+    ]);
+    BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST = composeBootstrapSpaceManifest(BOOTSTRAP_DEFAULT_SPACE);
+    BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST = {
+      ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+      resources: [
+        ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
+        ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
+          ...resource,
+          actions: [...resource.actions]
+        }))
+      ]
+    };
+    BOOTSTRAP_SESSION_REQUESTS = Object.freeze(
+      Object.fromEntries(
+        BOOTSTRAP_SPACE_NAMES.map((space) => [
+          space,
+          space === BOOTSTRAP_DEFAULT_SPACE ? BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST : composeBootstrapSpaceManifest(space)
+        ])
+      )
+    );
+    ACCOUNT_SESSION_RAW_ALLOWLIST = Object.freeze([
+      {
+        service: "tinycloud.encryption",
+        resource: BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE,
+        actions: [NETWORK_CREATE_ACTION]
+      }
+    ]);
+    BOOTSTRAP_ALLOWLIST = Object.freeze(
+      BOOTSTRAP_SPACE_NAMES.flatMap((space) => [
+        {
+          kind: "session",
+          service: "tinycloud.session",
+          space,
+          actions: ["siwe"],
+          resources: BOOTSTRAP_SESSION_REQUESTS[space].resources,
+          ...space === ACCOUNT_REGISTRY_SPACE ? { rawAbilities: ACCOUNT_SESSION_RAW_ALLOWLIST } : {}
+        },
+        {
+          kind: "space/host",
+          service: "tinycloud.space",
+          space,
+          actions: [SPACE.HOST]
+        }
+      ])
+    );
   }
-]);
-var BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST = composeBootstrapSpaceManifest(BOOTSTRAP_DEFAULT_SPACE);
-var BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST = {
-  ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
-  resources: [
-    ...BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST.resources,
-    ...ACCOUNT_MANIFEST_PERMISSIONS.map((resource) => ({
-      ...resource,
-      actions: [...resource.actions]
-    }))
-  ]
-};
-var BOOTSTRAP_SESSION_REQUESTS = Object.freeze(
-  Object.fromEntries(
-    BOOTSTRAP_SPACE_NAMES.map((space) => [
-      space,
-      space === BOOTSTRAP_DEFAULT_SPACE ? BOOTSTRAP_WIDENED_DEFAULT_SESSION_REQUEST : composeBootstrapSpaceManifest(space)
-    ])
-  )
-);
-var ACCOUNT_SESSION_RAW_ALLOWLIST = Object.freeze([
-  {
-    service: "tinycloud.encryption",
-    resource: BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE,
-    actions: [NETWORK_CREATE_ACTION]
+});
+
+// ../../node_modules/zod/v3/helpers/util.js
+var util, objectUtil, ZodParsedType, getParsedType;
+var init_util = __esm({
+  "../../node_modules/zod/v3/helpers/util.js"() {
+    "use strict";
+    (function(util3) {
+      util3.assertEqual = (_) => {
+      };
+      function assertIs(_arg) {
+      }
+      util3.assertIs = assertIs;
+      function assertNever(_x) {
+        throw new Error();
+      }
+      util3.assertNever = assertNever;
+      util3.arrayToEnum = (items) => {
+        const obj = {};
+        for (const item of items) {
+          obj[item] = item;
+        }
+        return obj;
+      };
+      util3.getValidEnumValues = (obj) => {
+        const validKeys = util3.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+        const filtered = {};
+        for (const k of validKeys) {
+          filtered[k] = obj[k];
+        }
+        return util3.objectValues(filtered);
+      };
+      util3.objectValues = (obj) => {
+        return util3.objectKeys(obj).map(function(e) {
+          return obj[e];
+        });
+      };
+      util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object2) => {
+        const keys = [];
+        for (const key in object2) {
+          if (Object.prototype.hasOwnProperty.call(object2, key)) {
+            keys.push(key);
+          }
+        }
+        return keys;
+      };
+      util3.find = (arr, checker) => {
+        for (const item of arr) {
+          if (checker(item))
+            return item;
+        }
+        return void 0;
+      };
+      util3.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+      function joinValues(array, separator = " | ") {
+        return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
+      }
+      util3.joinValues = joinValues;
+      util3.jsonStringifyReplacer = (_, value) => {
+        if (typeof value === "bigint") {
+          return value.toString();
+        }
+        return value;
+      };
+    })(util || (util = {}));
+    (function(objectUtil3) {
+      objectUtil3.mergeShapes = (first, second) => {
+        return {
+          ...first,
+          ...second
+          // second overwrites first
+        };
+      };
+    })(objectUtil || (objectUtil = {}));
+    ZodParsedType = util.arrayToEnum([
+      "string",
+      "nan",
+      "number",
+      "integer",
+      "float",
+      "boolean",
+      "date",
+      "bigint",
+      "symbol",
+      "function",
+      "undefined",
+      "null",
+      "array",
+      "object",
+      "unknown",
+      "promise",
+      "void",
+      "never",
+      "map",
+      "set"
+    ]);
+    getParsedType = (data) => {
+      const t = typeof data;
+      switch (t) {
+        case "undefined":
+          return ZodParsedType.undefined;
+        case "string":
+          return ZodParsedType.string;
+        case "number":
+          return Number.isNaN(data) ? ZodParsedType.nan : ZodParsedType.number;
+        case "boolean":
+          return ZodParsedType.boolean;
+        case "function":
+          return ZodParsedType.function;
+        case "bigint":
+          return ZodParsedType.bigint;
+        case "symbol":
+          return ZodParsedType.symbol;
+        case "object":
+          if (Array.isArray(data)) {
+            return ZodParsedType.array;
+          }
+          if (data === null) {
+            return ZodParsedType.null;
+          }
+          if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {
+            return ZodParsedType.promise;
+          }
+          if (typeof Map !== "undefined" && data instanceof Map) {
+            return ZodParsedType.map;
+          }
+          if (typeof Set !== "undefined" && data instanceof Set) {
+            return ZodParsedType.set;
+          }
+          if (typeof Date !== "undefined" && data instanceof Date) {
+            return ZodParsedType.date;
+          }
+          return ZodParsedType.object;
+        default:
+          return ZodParsedType.unknown;
+      }
+    };
   }
-]);
-var BOOTSTRAP_ALLOWLIST = Object.freeze(
-  BOOTSTRAP_SPACE_NAMES.flatMap((space) => [
-    {
-      kind: "session",
-      service: "tinycloud.session",
-      space,
-      actions: ["siwe"],
-      resources: BOOTSTRAP_SESSION_REQUESTS[space].resources,
-      ...space === ACCOUNT_REGISTRY_SPACE ? { rawAbilities: ACCOUNT_SESSION_RAW_ALLOWLIST } : {}
-    },
-    {
-      kind: "space/host",
-      service: "tinycloud.space",
-      space,
-      actions: [SPACE.HOST]
+});
+
+// ../../node_modules/zod/v3/ZodError.js
+var ZodIssueCode, quotelessJson, ZodError;
+var init_ZodError = __esm({
+  "../../node_modules/zod/v3/ZodError.js"() {
+    "use strict";
+    init_util();
+    ZodIssueCode = util.arrayToEnum([
+      "invalid_type",
+      "invalid_literal",
+      "custom",
+      "invalid_union",
+      "invalid_union_discriminator",
+      "invalid_enum_value",
+      "unrecognized_keys",
+      "invalid_arguments",
+      "invalid_return_type",
+      "invalid_date",
+      "invalid_string",
+      "too_small",
+      "too_big",
+      "invalid_intersection_types",
+      "not_multiple_of",
+      "not_finite"
+    ]);
+    quotelessJson = (obj) => {
+      const json = JSON.stringify(obj, null, 2);
+      return json.replace(/"([^"]+)":/g, "$1:");
+    };
+    ZodError = class _ZodError2 extends Error {
+      get errors() {
+        return this.issues;
+      }
+      constructor(issues) {
+        super();
+        this.issues = [];
+        this.addIssue = (sub) => {
+          this.issues = [...this.issues, sub];
+        };
+        this.addIssues = (subs = []) => {
+          this.issues = [...this.issues, ...subs];
+        };
+        const actualProto = new.target.prototype;
+        if (Object.setPrototypeOf) {
+          Object.setPrototypeOf(this, actualProto);
+        } else {
+          this.__proto__ = actualProto;
+        }
+        this.name = "ZodError";
+        this.issues = issues;
+      }
+      format(_mapper) {
+        const mapper = _mapper || function(issue) {
+          return issue.message;
+        };
+        const fieldErrors = { _errors: [] };
+        const processError = (error) => {
+          for (const issue of error.issues) {
+            if (issue.code === "invalid_union") {
+              issue.unionErrors.map(processError);
+            } else if (issue.code === "invalid_return_type") {
+              processError(issue.returnTypeError);
+            } else if (issue.code === "invalid_arguments") {
+              processError(issue.argumentsError);
+            } else if (issue.path.length === 0) {
+              fieldErrors._errors.push(mapper(issue));
+            } else {
+              let curr = fieldErrors;
+              let i = 0;
+              while (i < issue.path.length) {
+                const el = issue.path[i];
+                const terminal = i === issue.path.length - 1;
+                if (!terminal) {
+                  curr[el] = curr[el] || { _errors: [] };
+                } else {
+                  curr[el] = curr[el] || { _errors: [] };
+                  curr[el]._errors.push(mapper(issue));
+                }
+                curr = curr[el];
+                i++;
+              }
+            }
+          }
+        };
+        processError(this);
+        return fieldErrors;
+      }
+      static assert(value) {
+        if (!(value instanceof _ZodError2)) {
+          throw new Error(`Not a ZodError: ${value}`);
+        }
+      }
+      toString() {
+        return this.message;
+      }
+      get message() {
+        return JSON.stringify(this.issues, util.jsonStringifyReplacer, 2);
+      }
+      get isEmpty() {
+        return this.issues.length === 0;
+      }
+      flatten(mapper = (issue) => issue.message) {
+        const fieldErrors = {};
+        const formErrors = [];
+        for (const sub of this.issues) {
+          if (sub.path.length > 0) {
+            const firstEl = sub.path[0];
+            fieldErrors[firstEl] = fieldErrors[firstEl] || [];
+            fieldErrors[firstEl].push(mapper(sub));
+          } else {
+            formErrors.push(mapper(sub));
+          }
+        }
+        return { formErrors, fieldErrors };
+      }
+      get formErrors() {
+        return this.flatten();
+      }
+    };
+    ZodError.create = (issues) => {
+      const error = new ZodError(issues);
+      return error;
+    };
+  }
+});
+
+// ../../node_modules/zod/v3/locales/en.js
+var errorMap, en_default;
+var init_en = __esm({
+  "../../node_modules/zod/v3/locales/en.js"() {
+    "use strict";
+    init_ZodError();
+    init_util();
+    errorMap = (issue, _ctx) => {
+      let message;
+      switch (issue.code) {
+        case ZodIssueCode.invalid_type:
+          if (issue.received === ZodParsedType.undefined) {
+            message = "Required";
+          } else {
+            message = `Expected ${issue.expected}, received ${issue.received}`;
+          }
+          break;
+        case ZodIssueCode.invalid_literal:
+          message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util.jsonStringifyReplacer)}`;
+          break;
+        case ZodIssueCode.unrecognized_keys:
+          message = `Unrecognized key(s) in object: ${util.joinValues(issue.keys, ", ")}`;
+          break;
+        case ZodIssueCode.invalid_union:
+          message = `Invalid input`;
+          break;
+        case ZodIssueCode.invalid_union_discriminator:
+          message = `Invalid discriminator value. Expected ${util.joinValues(issue.options)}`;
+          break;
+        case ZodIssueCode.invalid_enum_value:
+          message = `Invalid enum value. Expected ${util.joinValues(issue.options)}, received '${issue.received}'`;
+          break;
+        case ZodIssueCode.invalid_arguments:
+          message = `Invalid function arguments`;
+          break;
+        case ZodIssueCode.invalid_return_type:
+          message = `Invalid function return type`;
+          break;
+        case ZodIssueCode.invalid_date:
+          message = `Invalid date`;
+          break;
+        case ZodIssueCode.invalid_string:
+          if (typeof issue.validation === "object") {
+            if ("includes" in issue.validation) {
+              message = `Invalid input: must include "${issue.validation.includes}"`;
+              if (typeof issue.validation.position === "number") {
+                message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
+              }
+            } else if ("startsWith" in issue.validation) {
+              message = `Invalid input: must start with "${issue.validation.startsWith}"`;
+            } else if ("endsWith" in issue.validation) {
+              message = `Invalid input: must end with "${issue.validation.endsWith}"`;
+            } else {
+              util.assertNever(issue.validation);
+            }
+          } else if (issue.validation !== "regex") {
+            message = `Invalid ${issue.validation}`;
+          } else {
+            message = "Invalid";
+          }
+          break;
+        case ZodIssueCode.too_small:
+          if (issue.type === "array")
+            message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
+          else if (issue.type === "string")
+            message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
+          else if (issue.type === "number")
+            message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+          else if (issue.type === "bigint")
+            message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+          else if (issue.type === "date")
+            message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
+          else
+            message = "Invalid input";
+          break;
+        case ZodIssueCode.too_big:
+          if (issue.type === "array")
+            message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
+          else if (issue.type === "string")
+            message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
+          else if (issue.type === "number")
+            message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+          else if (issue.type === "bigint")
+            message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+          else if (issue.type === "date")
+            message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
+          else
+            message = "Invalid input";
+          break;
+        case ZodIssueCode.custom:
+          message = `Invalid input`;
+          break;
+        case ZodIssueCode.invalid_intersection_types:
+          message = `Intersection results could not be merged`;
+          break;
+        case ZodIssueCode.not_multiple_of:
+          message = `Number must be a multiple of ${issue.multipleOf}`;
+          break;
+        case ZodIssueCode.not_finite:
+          message = "Number must be finite";
+          break;
+        default:
+          message = _ctx.defaultError;
+          util.assertNever(issue);
+      }
+      return { message };
+    };
+    en_default = errorMap;
+  }
+});
+
+// ../../node_modules/zod/v3/errors.js
+function setErrorMap(map) {
+  overrideErrorMap = map;
+}
+function getErrorMap() {
+  return overrideErrorMap;
+}
+var overrideErrorMap;
+var init_errors2 = __esm({
+  "../../node_modules/zod/v3/errors.js"() {
+    "use strict";
+    init_en();
+    overrideErrorMap = en_default;
+  }
+});
+
+// ../../node_modules/zod/v3/helpers/parseUtil.js
+function addIssueToContext(ctx, issueData) {
+  const overrideMap = getErrorMap();
+  const issue = makeIssue({
+    issueData,
+    data: ctx.data,
+    path: ctx.path,
+    errorMaps: [
+      ctx.common.contextualErrorMap,
+      // contextual error map is first priority
+      ctx.schemaErrorMap,
+      // then schema-bound map if available
+      overrideMap,
+      // then global override map
+      overrideMap === en_default ? void 0 : en_default
+      // then global default map
+    ].filter((x) => !!x)
+  });
+  ctx.common.issues.push(issue);
+}
+var makeIssue, EMPTY_PATH, ParseStatus, INVALID, DIRTY, OK, isAborted, isDirty, isValid, isAsync;
+var init_parseUtil = __esm({
+  "../../node_modules/zod/v3/helpers/parseUtil.js"() {
+    "use strict";
+    init_errors2();
+    init_en();
+    makeIssue = (params) => {
+      const { data, path, errorMaps, issueData } = params;
+      const fullPath = [...path, ...issueData.path || []];
+      const fullIssue = {
+        ...issueData,
+        path: fullPath
+      };
+      if (issueData.message !== void 0) {
+        return {
+          ...issueData,
+          path: fullPath,
+          message: issueData.message
+        };
+      }
+      let errorMessage2 = "";
+      const maps = errorMaps.filter((m) => !!m).slice().reverse();
+      for (const map of maps) {
+        errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
+      }
+      return {
+        ...issueData,
+        path: fullPath,
+        message: errorMessage2
+      };
+    };
+    EMPTY_PATH = [];
+    ParseStatus = class _ParseStatus2 {
+      constructor() {
+        this.value = "valid";
+      }
+      dirty() {
+        if (this.value === "valid")
+          this.value = "dirty";
+      }
+      abort() {
+        if (this.value !== "aborted")
+          this.value = "aborted";
+      }
+      static mergeArray(status, results) {
+        const arrayValue = [];
+        for (const s of results) {
+          if (s.status === "aborted")
+            return INVALID;
+          if (s.status === "dirty")
+            status.dirty();
+          arrayValue.push(s.value);
+        }
+        return { status: status.value, value: arrayValue };
+      }
+      static async mergeObjectAsync(status, pairs) {
+        const syncPairs = [];
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value = await pair.value;
+          syncPairs.push({
+            key,
+            value
+          });
+        }
+        return _ParseStatus2.mergeObjectSync(status, syncPairs);
+      }
+      static mergeObjectSync(status, pairs) {
+        const finalObject = {};
+        for (const pair of pairs) {
+          const { key, value } = pair;
+          if (key.status === "aborted")
+            return INVALID;
+          if (value.status === "aborted")
+            return INVALID;
+          if (key.status === "dirty")
+            status.dirty();
+          if (value.status === "dirty")
+            status.dirty();
+          if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
+            finalObject[key.value] = value.value;
+          }
+        }
+        return { status: status.value, value: finalObject };
+      }
+    };
+    INVALID = Object.freeze({
+      status: "aborted"
+    });
+    DIRTY = (value) => ({ status: "dirty", value });
+    OK = (value) => ({ status: "valid", value });
+    isAborted = (x) => x.status === "aborted";
+    isDirty = (x) => x.status === "dirty";
+    isValid = (x) => x.status === "valid";
+    isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
+  }
+});
+
+// ../../node_modules/zod/v3/helpers/typeAliases.js
+var init_typeAliases = __esm({
+  "../../node_modules/zod/v3/helpers/typeAliases.js"() {
+    "use strict";
+  }
+});
+
+// ../../node_modules/zod/v3/helpers/errorUtil.js
+var errorUtil;
+var init_errorUtil = __esm({
+  "../../node_modules/zod/v3/helpers/errorUtil.js"() {
+    "use strict";
+    (function(errorUtil3) {
+      errorUtil3.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+      errorUtil3.toString = (message) => typeof message === "string" ? message : message?.message;
+    })(errorUtil || (errorUtil = {}));
+  }
+});
+
+// ../../node_modules/zod/v3/types.js
+function processCreateParams(params) {
+  if (!params)
+    return {};
+  const { errorMap: errorMap3, invalid_type_error, required_error, description } = params;
+  if (errorMap3 && (invalid_type_error || required_error)) {
+    throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
+  }
+  if (errorMap3)
+    return { errorMap: errorMap3, description };
+  const customMap = (iss, ctx) => {
+    const { message } = params;
+    if (iss.code === "invalid_enum_value") {
+      return { message: message ?? ctx.defaultError };
     }
-  ])
-);
+    if (typeof ctx.data === "undefined") {
+      return { message: message ?? required_error ?? ctx.defaultError };
+    }
+    if (iss.code !== "invalid_type")
+      return { message: ctx.defaultError };
+    return { message: message ?? invalid_type_error ?? ctx.defaultError };
+  };
+  return { errorMap: customMap, description };
+}
+function timeRegexSource(args) {
+  let secondsRegexSource = `[0-5]\\d`;
+  if (args.precision) {
+    secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
+  } else if (args.precision == null) {
+    secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
+  }
+  const secondsQuantifier = args.precision ? "+" : "?";
+  return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
+}
+function timeRegex(args) {
+  return new RegExp(`^${timeRegexSource(args)}$`);
+}
+function datetimeRegex(args) {
+  let regex = `${dateRegexSource}T${timeRegexSource(args)}`;
+  const opts = [];
+  opts.push(args.local ? `Z?` : `Z`);
+  if (args.offset)
+    opts.push(`([+-]\\d{2}:?\\d{2})`);
+  regex = `${regex}(${opts.join("|")})`;
+  return new RegExp(`^${regex}$`);
+}
+function isValidIP(ip, version) {
+  if ((version === "v4" || !version) && ipv4Regex.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6Regex.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function isValidJWT(jwt, alg) {
+  if (!jwtRegex.test(jwt))
+    return false;
+  try {
+    const [header] = jwt.split(".");
+    if (!header)
+      return false;
+    const base643 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base643));
+    if (typeof decoded !== "object" || decoded === null)
+      return false;
+    if ("typ" in decoded && decoded?.typ !== "JWT")
+      return false;
+    if (!decoded.alg)
+      return false;
+    if (alg && decoded.alg !== alg)
+      return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isValidCidr(ip, version) {
+  if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function floatSafeRemainder(val, step) {
+  const valDecCount = (val.toString().split(".")[1] || "").length;
+  const stepDecCount = (step.toString().split(".")[1] || "").length;
+  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
+  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
+  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
+  return valInt % stepInt / 10 ** decCount;
+}
+function deepPartialify(schema) {
+  if (schema instanceof ZodObject) {
+    const newShape = {};
+    for (const key in schema.shape) {
+      const fieldSchema = schema.shape[key];
+      newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
+    }
+    return new ZodObject({
+      ...schema._def,
+      shape: () => newShape
+    });
+  } else if (schema instanceof ZodArray) {
+    return new ZodArray({
+      ...schema._def,
+      type: deepPartialify(schema.element)
+    });
+  } else if (schema instanceof ZodOptional) {
+    return ZodOptional.create(deepPartialify(schema.unwrap()));
+  } else if (schema instanceof ZodNullable) {
+    return ZodNullable.create(deepPartialify(schema.unwrap()));
+  } else if (schema instanceof ZodTuple) {
+    return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
+  } else {
+    return schema;
+  }
+}
+function mergeValues(a, b) {
+  const aType = getParsedType(a);
+  const bType = getParsedType(b);
+  if (a === b) {
+    return { valid: true, data: a };
+  } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
+    const bKeys = util.objectKeys(b);
+    const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const newObj = { ...a, ...b };
+    for (const key of sharedKeys) {
+      const sharedValue = mergeValues(a[key], b[key]);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newObj[key] = sharedValue.data;
+    }
+    return { valid: true, data: newObj };
+  } else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
+    if (a.length !== b.length) {
+      return { valid: false };
+    }
+    const newArray = [];
+    for (let index = 0; index < a.length; index++) {
+      const itemA = a[index];
+      const itemB = b[index];
+      const sharedValue = mergeValues(itemA, itemB);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newArray.push(sharedValue.data);
+    }
+    return { valid: true, data: newArray };
+  } else if (aType === ZodParsedType.date && bType === ZodParsedType.date && +a === +b) {
+    return { valid: true, data: a };
+  } else {
+    return { valid: false };
+  }
+}
+function createZodEnum(values, params) {
+  return new ZodEnum({
+    values,
+    typeName: ZodFirstPartyTypeKind.ZodEnum,
+    ...processCreateParams(params)
+  });
+}
+function cleanParams(params, data) {
+  const p = typeof params === "function" ? params(data) : typeof params === "string" ? { message: params } : params;
+  const p2 = typeof p === "string" ? { message: p } : p;
+  return p2;
+}
+function custom(check, _params = {}, fatal) {
+  if (check)
+    return ZodAny.create().superRefine((data, ctx) => {
+      const r = check(data);
+      if (r instanceof Promise) {
+        return r.then((r2) => {
+          if (!r2) {
+            const params = cleanParams(_params, data);
+            const _fatal = params.fatal ?? fatal ?? true;
+            ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+          }
+        });
+      }
+      if (!r) {
+        const params = cleanParams(_params, data);
+        const _fatal = params.fatal ?? fatal ?? true;
+        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+      }
+      return;
+    });
+  return ZodAny.create();
+}
+var ParseInputLazyPath, handleResult, ZodType, cuidRegex, cuid2Regex, ulidRegex, uuidRegex, nanoidRegex, jwtRegex, durationRegex, emailRegex, _emojiRegex, emojiRegex, ipv4Regex, ipv4CidrRegex, ipv6Regex, ipv6CidrRegex, base64Regex, base64urlRegex, dateRegexSource, dateRegex, ZodString, ZodNumber, ZodBigInt, ZodBoolean, ZodDate, ZodSymbol, ZodUndefined, ZodNull, ZodAny, ZodUnknown, ZodNever, ZodVoid, ZodArray, ZodObject, ZodUnion, getDiscriminator, ZodDiscriminatedUnion, ZodIntersection, ZodTuple, ZodRecord, ZodMap, ZodSet, ZodFunction, ZodLazy, ZodLiteral, ZodEnum, ZodNativeEnum, ZodPromise, ZodEffects, ZodOptional, ZodNullable, ZodDefault, ZodCatch, ZodNaN, BRAND, ZodBranded, ZodPipeline, ZodReadonly, late, ZodFirstPartyTypeKind, instanceOfType, stringType, numberType, nanType, bigIntType, booleanType, dateType, symbolType, undefinedType, nullType, anyType, unknownType, neverType, voidType, arrayType, objectType, strictObjectType, unionType, discriminatedUnionType, intersectionType, tupleType, recordType, mapType, setType, functionType, lazyType, literalType, enumType, nativeEnumType, promiseType, effectsType, optionalType, nullableType, preprocessType, pipelineType, ostring, onumber, oboolean, coerce, NEVER;
+var init_types2 = __esm({
+  "../../node_modules/zod/v3/types.js"() {
+    "use strict";
+    init_ZodError();
+    init_errors2();
+    init_errorUtil();
+    init_parseUtil();
+    init_util();
+    ParseInputLazyPath = class {
+      constructor(parent, value, path, key) {
+        this._cachedPath = [];
+        this.parent = parent;
+        this.data = value;
+        this._path = path;
+        this._key = key;
+      }
+      get path() {
+        if (!this._cachedPath.length) {
+          if (Array.isArray(this._key)) {
+            this._cachedPath.push(...this._path, ...this._key);
+          } else {
+            this._cachedPath.push(...this._path, this._key);
+          }
+        }
+        return this._cachedPath;
+      }
+    };
+    handleResult = (ctx, result) => {
+      if (isValid(result)) {
+        return { success: true, data: result.value };
+      } else {
+        if (!ctx.common.issues.length) {
+          throw new Error("Validation failed but no issues detected.");
+        }
+        return {
+          success: false,
+          get error() {
+            if (this._error)
+              return this._error;
+            const error = new ZodError(ctx.common.issues);
+            this._error = error;
+            return this._error;
+          }
+        };
+      }
+    };
+    ZodType = class {
+      get description() {
+        return this._def.description;
+      }
+      _getType(input) {
+        return getParsedType(input.data);
+      }
+      _getOrReturnCtx(input, ctx) {
+        return ctx || {
+          common: input.parent.common,
+          data: input.data,
+          parsedType: getParsedType(input.data),
+          schemaErrorMap: this._def.errorMap,
+          path: input.path,
+          parent: input.parent
+        };
+      }
+      _processInputParams(input) {
+        return {
+          status: new ParseStatus(),
+          ctx: {
+            common: input.parent.common,
+            data: input.data,
+            parsedType: getParsedType(input.data),
+            schemaErrorMap: this._def.errorMap,
+            path: input.path,
+            parent: input.parent
+          }
+        };
+      }
+      _parseSync(input) {
+        const result = this._parse(input);
+        if (isAsync(result)) {
+          throw new Error("Synchronous parse encountered promise.");
+        }
+        return result;
+      }
+      _parseAsync(input) {
+        const result = this._parse(input);
+        return Promise.resolve(result);
+      }
+      parse(data, params) {
+        const result = this.safeParse(data, params);
+        if (result.success)
+          return result.data;
+        throw result.error;
+      }
+      safeParse(data, params) {
+        const ctx = {
+          common: {
+            issues: [],
+            async: params?.async ?? false,
+            contextualErrorMap: params?.errorMap
+          },
+          path: params?.path || [],
+          schemaErrorMap: this._def.errorMap,
+          parent: null,
+          data,
+          parsedType: getParsedType(data)
+        };
+        const result = this._parseSync({ data, path: ctx.path, parent: ctx });
+        return handleResult(ctx, result);
+      }
+      "~validate"(data) {
+        const ctx = {
+          common: {
+            issues: [],
+            async: !!this["~standard"].async
+          },
+          path: [],
+          schemaErrorMap: this._def.errorMap,
+          parent: null,
+          data,
+          parsedType: getParsedType(data)
+        };
+        if (!this["~standard"].async) {
+          try {
+            const result = this._parseSync({ data, path: [], parent: ctx });
+            return isValid(result) ? {
+              value: result.value
+            } : {
+              issues: ctx.common.issues
+            };
+          } catch (err2) {
+            if (err2?.message?.toLowerCase()?.includes("encountered")) {
+              this["~standard"].async = true;
+            }
+            ctx.common = {
+              issues: [],
+              async: true
+            };
+          }
+        }
+        return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid(result) ? {
+          value: result.value
+        } : {
+          issues: ctx.common.issues
+        });
+      }
+      async parseAsync(data, params) {
+        const result = await this.safeParseAsync(data, params);
+        if (result.success)
+          return result.data;
+        throw result.error;
+      }
+      async safeParseAsync(data, params) {
+        const ctx = {
+          common: {
+            issues: [],
+            contextualErrorMap: params?.errorMap,
+            async: true
+          },
+          path: params?.path || [],
+          schemaErrorMap: this._def.errorMap,
+          parent: null,
+          data,
+          parsedType: getParsedType(data)
+        };
+        const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
+        const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+        return handleResult(ctx, result);
+      }
+      refine(check, message) {
+        const getIssueProperties = (val) => {
+          if (typeof message === "string" || typeof message === "undefined") {
+            return { message };
+          } else if (typeof message === "function") {
+            return message(val);
+          } else {
+            return message;
+          }
+        };
+        return this._refinement((val, ctx) => {
+          const result = check(val);
+          const setError = () => ctx.addIssue({
+            code: ZodIssueCode.custom,
+            ...getIssueProperties(val)
+          });
+          if (typeof Promise !== "undefined" && result instanceof Promise) {
+            return result.then((data) => {
+              if (!data) {
+                setError();
+                return false;
+              } else {
+                return true;
+              }
+            });
+          }
+          if (!result) {
+            setError();
+            return false;
+          } else {
+            return true;
+          }
+        });
+      }
+      refinement(check, refinementData) {
+        return this._refinement((val, ctx) => {
+          if (!check(val)) {
+            ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
+            return false;
+          } else {
+            return true;
+          }
+        });
+      }
+      _refinement(refinement) {
+        return new ZodEffects({
+          schema: this,
+          typeName: ZodFirstPartyTypeKind.ZodEffects,
+          effect: { type: "refinement", refinement }
+        });
+      }
+      superRefine(refinement) {
+        return this._refinement(refinement);
+      }
+      constructor(def) {
+        this.spa = this.safeParseAsync;
+        this._def = def;
+        this.parse = this.parse.bind(this);
+        this.safeParse = this.safeParse.bind(this);
+        this.parseAsync = this.parseAsync.bind(this);
+        this.safeParseAsync = this.safeParseAsync.bind(this);
+        this.spa = this.spa.bind(this);
+        this.refine = this.refine.bind(this);
+        this.refinement = this.refinement.bind(this);
+        this.superRefine = this.superRefine.bind(this);
+        this.optional = this.optional.bind(this);
+        this.nullable = this.nullable.bind(this);
+        this.nullish = this.nullish.bind(this);
+        this.array = this.array.bind(this);
+        this.promise = this.promise.bind(this);
+        this.or = this.or.bind(this);
+        this.and = this.and.bind(this);
+        this.transform = this.transform.bind(this);
+        this.brand = this.brand.bind(this);
+        this.default = this.default.bind(this);
+        this.catch = this.catch.bind(this);
+        this.describe = this.describe.bind(this);
+        this.pipe = this.pipe.bind(this);
+        this.readonly = this.readonly.bind(this);
+        this.isNullable = this.isNullable.bind(this);
+        this.isOptional = this.isOptional.bind(this);
+        this["~standard"] = {
+          version: 1,
+          vendor: "zod",
+          validate: (data) => this["~validate"](data)
+        };
+      }
+      optional() {
+        return ZodOptional.create(this, this._def);
+      }
+      nullable() {
+        return ZodNullable.create(this, this._def);
+      }
+      nullish() {
+        return this.nullable().optional();
+      }
+      array() {
+        return ZodArray.create(this);
+      }
+      promise() {
+        return ZodPromise.create(this, this._def);
+      }
+      or(option) {
+        return ZodUnion.create([this, option], this._def);
+      }
+      and(incoming) {
+        return ZodIntersection.create(this, incoming, this._def);
+      }
+      transform(transform) {
+        return new ZodEffects({
+          ...processCreateParams(this._def),
+          schema: this,
+          typeName: ZodFirstPartyTypeKind.ZodEffects,
+          effect: { type: "transform", transform }
+        });
+      }
+      default(def) {
+        const defaultValueFunc = typeof def === "function" ? def : () => def;
+        return new ZodDefault({
+          ...processCreateParams(this._def),
+          innerType: this,
+          defaultValue: defaultValueFunc,
+          typeName: ZodFirstPartyTypeKind.ZodDefault
+        });
+      }
+      brand() {
+        return new ZodBranded({
+          typeName: ZodFirstPartyTypeKind.ZodBranded,
+          type: this,
+          ...processCreateParams(this._def)
+        });
+      }
+      catch(def) {
+        const catchValueFunc = typeof def === "function" ? def : () => def;
+        return new ZodCatch({
+          ...processCreateParams(this._def),
+          innerType: this,
+          catchValue: catchValueFunc,
+          typeName: ZodFirstPartyTypeKind.ZodCatch
+        });
+      }
+      describe(description) {
+        const This = this.constructor;
+        return new This({
+          ...this._def,
+          description
+        });
+      }
+      pipe(target) {
+        return ZodPipeline.create(this, target);
+      }
+      readonly() {
+        return ZodReadonly.create(this);
+      }
+      isOptional() {
+        return this.safeParse(void 0).success;
+      }
+      isNullable() {
+        return this.safeParse(null).success;
+      }
+    };
+    cuidRegex = /^c[^\s-]{8,}$/i;
+    cuid2Regex = /^[0-9a-z]+$/;
+    ulidRegex = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+    uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
+    nanoidRegex = /^[a-z0-9_-]{21}$/i;
+    jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
+    durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
+    emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
+    _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
+    ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
+    ipv4CidrRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
+    ipv6Regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
+    ipv6CidrRegex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
+    base64Regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+    base64urlRegex = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
+    dateRegexSource = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
+    dateRegex = new RegExp(`^${dateRegexSource}$`);
+    ZodString = class _ZodString2 extends ZodType {
+      _parse(input) {
+        if (this._def.coerce) {
+          input.data = String(input.data);
+        }
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.string) {
+          const ctx2 = this._getOrReturnCtx(input);
+          addIssueToContext(ctx2, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.string,
+            received: ctx2.parsedType
+          });
+          return INVALID;
+        }
+        const status = new ParseStatus();
+        let ctx = void 0;
+        for (const check of this._def.checks) {
+          if (check.kind === "min") {
+            if (input.data.length < check.value) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_small,
+                minimum: check.value,
+                type: "string",
+                inclusive: true,
+                exact: false,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "max") {
+            if (input.data.length > check.value) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_big,
+                maximum: check.value,
+                type: "string",
+                inclusive: true,
+                exact: false,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "length") {
+            const tooBig = input.data.length > check.value;
+            const tooSmall = input.data.length < check.value;
+            if (tooBig || tooSmall) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              if (tooBig) {
+                addIssueToContext(ctx, {
+                  code: ZodIssueCode.too_big,
+                  maximum: check.value,
+                  type: "string",
+                  inclusive: true,
+                  exact: true,
+                  message: check.message
+                });
+              } else if (tooSmall) {
+                addIssueToContext(ctx, {
+                  code: ZodIssueCode.too_small,
+                  minimum: check.value,
+                  type: "string",
+                  inclusive: true,
+                  exact: true,
+                  message: check.message
+                });
+              }
+              status.dirty();
+            }
+          } else if (check.kind === "email") {
+            if (!emailRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "email",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "emoji") {
+            if (!emojiRegex) {
+              emojiRegex = new RegExp(_emojiRegex, "u");
+            }
+            if (!emojiRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "emoji",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "uuid") {
+            if (!uuidRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "uuid",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "nanoid") {
+            if (!nanoidRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "nanoid",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "cuid") {
+            if (!cuidRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "cuid",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "cuid2") {
+            if (!cuid2Regex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "cuid2",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "ulid") {
+            if (!ulidRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "ulid",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "url") {
+            try {
+              new URL(input.data);
+            } catch {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "url",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "regex") {
+            check.regex.lastIndex = 0;
+            const testResult = check.regex.test(input.data);
+            if (!testResult) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "regex",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "trim") {
+            input.data = input.data.trim();
+          } else if (check.kind === "includes") {
+            if (!input.data.includes(check.value, check.position)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_string,
+                validation: { includes: check.value, position: check.position },
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "toLowerCase") {
+            input.data = input.data.toLowerCase();
+          } else if (check.kind === "toUpperCase") {
+            input.data = input.data.toUpperCase();
+          } else if (check.kind === "startsWith") {
+            if (!input.data.startsWith(check.value)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_string,
+                validation: { startsWith: check.value },
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "endsWith") {
+            if (!input.data.endsWith(check.value)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_string,
+                validation: { endsWith: check.value },
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "datetime") {
+            const regex = datetimeRegex(check);
+            if (!regex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_string,
+                validation: "datetime",
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "date") {
+            const regex = dateRegex;
+            if (!regex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_string,
+                validation: "date",
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "time") {
+            const regex = timeRegex(check);
+            if (!regex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_string,
+                validation: "time",
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "duration") {
+            if (!durationRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "duration",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "ip") {
+            if (!isValidIP(input.data, check.version)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "ip",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "jwt") {
+            if (!isValidJWT(input.data, check.alg)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "jwt",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "cidr") {
+            if (!isValidCidr(input.data, check.version)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "cidr",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "base64") {
+            if (!base64Regex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "base64",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "base64url") {
+            if (!base64urlRegex.test(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                validation: "base64url",
+                code: ZodIssueCode.invalid_string,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else {
+            util.assertNever(check);
+          }
+        }
+        return { status: status.value, value: input.data };
+      }
+      _regex(regex, validation, message) {
+        return this.refinement((data) => regex.test(data), {
+          validation,
+          code: ZodIssueCode.invalid_string,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      _addCheck(check) {
+        return new _ZodString2({
+          ...this._def,
+          checks: [...this._def.checks, check]
+        });
+      }
+      email(message) {
+        return this._addCheck({ kind: "email", ...errorUtil.errToObj(message) });
+      }
+      url(message) {
+        return this._addCheck({ kind: "url", ...errorUtil.errToObj(message) });
+      }
+      emoji(message) {
+        return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message) });
+      }
+      uuid(message) {
+        return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message) });
+      }
+      nanoid(message) {
+        return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message) });
+      }
+      cuid(message) {
+        return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message) });
+      }
+      cuid2(message) {
+        return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message) });
+      }
+      ulid(message) {
+        return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message) });
+      }
+      base64(message) {
+        return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message) });
+      }
+      base64url(message) {
+        return this._addCheck({
+          kind: "base64url",
+          ...errorUtil.errToObj(message)
+        });
+      }
+      jwt(options) {
+        return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options) });
+      }
+      ip(options) {
+        return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options) });
+      }
+      cidr(options) {
+        return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options) });
+      }
+      datetime(options) {
+        if (typeof options === "string") {
+          return this._addCheck({
+            kind: "datetime",
+            precision: null,
+            offset: false,
+            local: false,
+            message: options
+          });
+        }
+        return this._addCheck({
+          kind: "datetime",
+          precision: typeof options?.precision === "undefined" ? null : options?.precision,
+          offset: options?.offset ?? false,
+          local: options?.local ?? false,
+          ...errorUtil.errToObj(options?.message)
+        });
+      }
+      date(message) {
+        return this._addCheck({ kind: "date", message });
+      }
+      time(options) {
+        if (typeof options === "string") {
+          return this._addCheck({
+            kind: "time",
+            precision: null,
+            message: options
+          });
+        }
+        return this._addCheck({
+          kind: "time",
+          precision: typeof options?.precision === "undefined" ? null : options?.precision,
+          ...errorUtil.errToObj(options?.message)
+        });
+      }
+      duration(message) {
+        return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message) });
+      }
+      regex(regex, message) {
+        return this._addCheck({
+          kind: "regex",
+          regex,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      includes(value, options) {
+        return this._addCheck({
+          kind: "includes",
+          value,
+          position: options?.position,
+          ...errorUtil.errToObj(options?.message)
+        });
+      }
+      startsWith(value, message) {
+        return this._addCheck({
+          kind: "startsWith",
+          value,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      endsWith(value, message) {
+        return this._addCheck({
+          kind: "endsWith",
+          value,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      min(minLength, message) {
+        return this._addCheck({
+          kind: "min",
+          value: minLength,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      max(maxLength, message) {
+        return this._addCheck({
+          kind: "max",
+          value: maxLength,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      length(len, message) {
+        return this._addCheck({
+          kind: "length",
+          value: len,
+          ...errorUtil.errToObj(message)
+        });
+      }
+      /**
+       * Equivalent to `.min(1)`
+       */
+      nonempty(message) {
+        return this.min(1, errorUtil.errToObj(message));
+      }
+      trim() {
+        return new _ZodString2({
+          ...this._def,
+          checks: [...this._def.checks, { kind: "trim" }]
+        });
+      }
+      toLowerCase() {
+        return new _ZodString2({
+          ...this._def,
+          checks: [...this._def.checks, { kind: "toLowerCase" }]
+        });
+      }
+      toUpperCase() {
+        return new _ZodString2({
+          ...this._def,
+          checks: [...this._def.checks, { kind: "toUpperCase" }]
+        });
+      }
+      get isDatetime() {
+        return !!this._def.checks.find((ch) => ch.kind === "datetime");
+      }
+      get isDate() {
+        return !!this._def.checks.find((ch) => ch.kind === "date");
+      }
+      get isTime() {
+        return !!this._def.checks.find((ch) => ch.kind === "time");
+      }
+      get isDuration() {
+        return !!this._def.checks.find((ch) => ch.kind === "duration");
+      }
+      get isEmail() {
+        return !!this._def.checks.find((ch) => ch.kind === "email");
+      }
+      get isURL() {
+        return !!this._def.checks.find((ch) => ch.kind === "url");
+      }
+      get isEmoji() {
+        return !!this._def.checks.find((ch) => ch.kind === "emoji");
+      }
+      get isUUID() {
+        return !!this._def.checks.find((ch) => ch.kind === "uuid");
+      }
+      get isNANOID() {
+        return !!this._def.checks.find((ch) => ch.kind === "nanoid");
+      }
+      get isCUID() {
+        return !!this._def.checks.find((ch) => ch.kind === "cuid");
+      }
+      get isCUID2() {
+        return !!this._def.checks.find((ch) => ch.kind === "cuid2");
+      }
+      get isULID() {
+        return !!this._def.checks.find((ch) => ch.kind === "ulid");
+      }
+      get isIP() {
+        return !!this._def.checks.find((ch) => ch.kind === "ip");
+      }
+      get isCIDR() {
+        return !!this._def.checks.find((ch) => ch.kind === "cidr");
+      }
+      get isBase64() {
+        return !!this._def.checks.find((ch) => ch.kind === "base64");
+      }
+      get isBase64url() {
+        return !!this._def.checks.find((ch) => ch.kind === "base64url");
+      }
+      get minLength() {
+        let min = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "min") {
+            if (min === null || ch.value > min)
+              min = ch.value;
+          }
+        }
+        return min;
+      }
+      get maxLength() {
+        let max = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "max") {
+            if (max === null || ch.value < max)
+              max = ch.value;
+          }
+        }
+        return max;
+      }
+    };
+    ZodString.create = (params) => {
+      return new ZodString({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZodString,
+        coerce: params?.coerce ?? false,
+        ...processCreateParams(params)
+      });
+    };
+    ZodNumber = class _ZodNumber2 extends ZodType {
+      constructor() {
+        super(...arguments);
+        this.min = this.gte;
+        this.max = this.lte;
+        this.step = this.multipleOf;
+      }
+      _parse(input) {
+        if (this._def.coerce) {
+          input.data = Number(input.data);
+        }
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.number) {
+          const ctx2 = this._getOrReturnCtx(input);
+          addIssueToContext(ctx2, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.number,
+            received: ctx2.parsedType
+          });
+          return INVALID;
+        }
+        let ctx = void 0;
+        const status = new ParseStatus();
+        for (const check of this._def.checks) {
+          if (check.kind === "int") {
+            if (!util.isInteger(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.invalid_type,
+                expected: "integer",
+                received: "float",
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "min") {
+            const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+            if (tooSmall) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_small,
+                minimum: check.value,
+                type: "number",
+                inclusive: check.inclusive,
+                exact: false,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "max") {
+            const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+            if (tooBig) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_big,
+                maximum: check.value,
+                type: "number",
+                inclusive: check.inclusive,
+                exact: false,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "multipleOf") {
+            if (floatSafeRemainder(input.data, check.value) !== 0) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.not_multiple_of,
+                multipleOf: check.value,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "finite") {
+            if (!Number.isFinite(input.data)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.not_finite,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else {
+            util.assertNever(check);
+          }
+        }
+        return { status: status.value, value: input.data };
+      }
+      gte(value, message) {
+        return this.setLimit("min", value, true, errorUtil.toString(message));
+      }
+      gt(value, message) {
+        return this.setLimit("min", value, false, errorUtil.toString(message));
+      }
+      lte(value, message) {
+        return this.setLimit("max", value, true, errorUtil.toString(message));
+      }
+      lt(value, message) {
+        return this.setLimit("max", value, false, errorUtil.toString(message));
+      }
+      setLimit(kind, value, inclusive, message) {
+        return new _ZodNumber2({
+          ...this._def,
+          checks: [
+            ...this._def.checks,
+            {
+              kind,
+              value,
+              inclusive,
+              message: errorUtil.toString(message)
+            }
+          ]
+        });
+      }
+      _addCheck(check) {
+        return new _ZodNumber2({
+          ...this._def,
+          checks: [...this._def.checks, check]
+        });
+      }
+      int(message) {
+        return this._addCheck({
+          kind: "int",
+          message: errorUtil.toString(message)
+        });
+      }
+      positive(message) {
+        return this._addCheck({
+          kind: "min",
+          value: 0,
+          inclusive: false,
+          message: errorUtil.toString(message)
+        });
+      }
+      negative(message) {
+        return this._addCheck({
+          kind: "max",
+          value: 0,
+          inclusive: false,
+          message: errorUtil.toString(message)
+        });
+      }
+      nonpositive(message) {
+        return this._addCheck({
+          kind: "max",
+          value: 0,
+          inclusive: true,
+          message: errorUtil.toString(message)
+        });
+      }
+      nonnegative(message) {
+        return this._addCheck({
+          kind: "min",
+          value: 0,
+          inclusive: true,
+          message: errorUtil.toString(message)
+        });
+      }
+      multipleOf(value, message) {
+        return this._addCheck({
+          kind: "multipleOf",
+          value,
+          message: errorUtil.toString(message)
+        });
+      }
+      finite(message) {
+        return this._addCheck({
+          kind: "finite",
+          message: errorUtil.toString(message)
+        });
+      }
+      safe(message) {
+        return this._addCheck({
+          kind: "min",
+          inclusive: true,
+          value: Number.MIN_SAFE_INTEGER,
+          message: errorUtil.toString(message)
+        })._addCheck({
+          kind: "max",
+          inclusive: true,
+          value: Number.MAX_SAFE_INTEGER,
+          message: errorUtil.toString(message)
+        });
+      }
+      get minValue() {
+        let min = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "min") {
+            if (min === null || ch.value > min)
+              min = ch.value;
+          }
+        }
+        return min;
+      }
+      get maxValue() {
+        let max = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "max") {
+            if (max === null || ch.value < max)
+              max = ch.value;
+          }
+        }
+        return max;
+      }
+      get isInt() {
+        return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util.isInteger(ch.value));
+      }
+      get isFinite() {
+        let max = null;
+        let min = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {
+            return true;
+          } else if (ch.kind === "min") {
+            if (min === null || ch.value > min)
+              min = ch.value;
+          } else if (ch.kind === "max") {
+            if (max === null || ch.value < max)
+              max = ch.value;
+          }
+        }
+        return Number.isFinite(min) && Number.isFinite(max);
+      }
+    };
+    ZodNumber.create = (params) => {
+      return new ZodNumber({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZodNumber,
+        coerce: params?.coerce || false,
+        ...processCreateParams(params)
+      });
+    };
+    ZodBigInt = class _ZodBigInt2 extends ZodType {
+      constructor() {
+        super(...arguments);
+        this.min = this.gte;
+        this.max = this.lte;
+      }
+      _parse(input) {
+        if (this._def.coerce) {
+          try {
+            input.data = BigInt(input.data);
+          } catch {
+            return this._getInvalidInput(input);
+          }
+        }
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.bigint) {
+          return this._getInvalidInput(input);
+        }
+        let ctx = void 0;
+        const status = new ParseStatus();
+        for (const check of this._def.checks) {
+          if (check.kind === "min") {
+            const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+            if (tooSmall) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_small,
+                type: "bigint",
+                minimum: check.value,
+                inclusive: check.inclusive,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "max") {
+            const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+            if (tooBig) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_big,
+                type: "bigint",
+                maximum: check.value,
+                inclusive: check.inclusive,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "multipleOf") {
+            if (input.data % check.value !== BigInt(0)) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.not_multiple_of,
+                multipleOf: check.value,
+                message: check.message
+              });
+              status.dirty();
+            }
+          } else {
+            util.assertNever(check);
+          }
+        }
+        return { status: status.value, value: input.data };
+      }
+      _getInvalidInput(input) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.bigint,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      gte(value, message) {
+        return this.setLimit("min", value, true, errorUtil.toString(message));
+      }
+      gt(value, message) {
+        return this.setLimit("min", value, false, errorUtil.toString(message));
+      }
+      lte(value, message) {
+        return this.setLimit("max", value, true, errorUtil.toString(message));
+      }
+      lt(value, message) {
+        return this.setLimit("max", value, false, errorUtil.toString(message));
+      }
+      setLimit(kind, value, inclusive, message) {
+        return new _ZodBigInt2({
+          ...this._def,
+          checks: [
+            ...this._def.checks,
+            {
+              kind,
+              value,
+              inclusive,
+              message: errorUtil.toString(message)
+            }
+          ]
+        });
+      }
+      _addCheck(check) {
+        return new _ZodBigInt2({
+          ...this._def,
+          checks: [...this._def.checks, check]
+        });
+      }
+      positive(message) {
+        return this._addCheck({
+          kind: "min",
+          value: BigInt(0),
+          inclusive: false,
+          message: errorUtil.toString(message)
+        });
+      }
+      negative(message) {
+        return this._addCheck({
+          kind: "max",
+          value: BigInt(0),
+          inclusive: false,
+          message: errorUtil.toString(message)
+        });
+      }
+      nonpositive(message) {
+        return this._addCheck({
+          kind: "max",
+          value: BigInt(0),
+          inclusive: true,
+          message: errorUtil.toString(message)
+        });
+      }
+      nonnegative(message) {
+        return this._addCheck({
+          kind: "min",
+          value: BigInt(0),
+          inclusive: true,
+          message: errorUtil.toString(message)
+        });
+      }
+      multipleOf(value, message) {
+        return this._addCheck({
+          kind: "multipleOf",
+          value,
+          message: errorUtil.toString(message)
+        });
+      }
+      get minValue() {
+        let min = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "min") {
+            if (min === null || ch.value > min)
+              min = ch.value;
+          }
+        }
+        return min;
+      }
+      get maxValue() {
+        let max = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "max") {
+            if (max === null || ch.value < max)
+              max = ch.value;
+          }
+        }
+        return max;
+      }
+    };
+    ZodBigInt.create = (params) => {
+      return new ZodBigInt({
+        checks: [],
+        typeName: ZodFirstPartyTypeKind.ZodBigInt,
+        coerce: params?.coerce ?? false,
+        ...processCreateParams(params)
+      });
+    };
+    ZodBoolean = class extends ZodType {
+      _parse(input) {
+        if (this._def.coerce) {
+          input.data = Boolean(input.data);
+        }
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.boolean) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.boolean,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+    };
+    ZodBoolean.create = (params) => {
+      return new ZodBoolean({
+        typeName: ZodFirstPartyTypeKind.ZodBoolean,
+        coerce: params?.coerce || false,
+        ...processCreateParams(params)
+      });
+    };
+    ZodDate = class _ZodDate2 extends ZodType {
+      _parse(input) {
+        if (this._def.coerce) {
+          input.data = new Date(input.data);
+        }
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.date) {
+          const ctx2 = this._getOrReturnCtx(input);
+          addIssueToContext(ctx2, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.date,
+            received: ctx2.parsedType
+          });
+          return INVALID;
+        }
+        if (Number.isNaN(input.data.getTime())) {
+          const ctx2 = this._getOrReturnCtx(input);
+          addIssueToContext(ctx2, {
+            code: ZodIssueCode.invalid_date
+          });
+          return INVALID;
+        }
+        const status = new ParseStatus();
+        let ctx = void 0;
+        for (const check of this._def.checks) {
+          if (check.kind === "min") {
+            if (input.data.getTime() < check.value) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_small,
+                message: check.message,
+                inclusive: true,
+                exact: false,
+                minimum: check.value,
+                type: "date"
+              });
+              status.dirty();
+            }
+          } else if (check.kind === "max") {
+            if (input.data.getTime() > check.value) {
+              ctx = this._getOrReturnCtx(input, ctx);
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_big,
+                message: check.message,
+                inclusive: true,
+                exact: false,
+                maximum: check.value,
+                type: "date"
+              });
+              status.dirty();
+            }
+          } else {
+            util.assertNever(check);
+          }
+        }
+        return {
+          status: status.value,
+          value: new Date(input.data.getTime())
+        };
+      }
+      _addCheck(check) {
+        return new _ZodDate2({
+          ...this._def,
+          checks: [...this._def.checks, check]
+        });
+      }
+      min(minDate, message) {
+        return this._addCheck({
+          kind: "min",
+          value: minDate.getTime(),
+          message: errorUtil.toString(message)
+        });
+      }
+      max(maxDate, message) {
+        return this._addCheck({
+          kind: "max",
+          value: maxDate.getTime(),
+          message: errorUtil.toString(message)
+        });
+      }
+      get minDate() {
+        let min = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "min") {
+            if (min === null || ch.value > min)
+              min = ch.value;
+          }
+        }
+        return min != null ? new Date(min) : null;
+      }
+      get maxDate() {
+        let max = null;
+        for (const ch of this._def.checks) {
+          if (ch.kind === "max") {
+            if (max === null || ch.value < max)
+              max = ch.value;
+          }
+        }
+        return max != null ? new Date(max) : null;
+      }
+    };
+    ZodDate.create = (params) => {
+      return new ZodDate({
+        checks: [],
+        coerce: params?.coerce || false,
+        typeName: ZodFirstPartyTypeKind.ZodDate,
+        ...processCreateParams(params)
+      });
+    };
+    ZodSymbol = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.symbol) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.symbol,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+    };
+    ZodSymbol.create = (params) => {
+      return new ZodSymbol({
+        typeName: ZodFirstPartyTypeKind.ZodSymbol,
+        ...processCreateParams(params)
+      });
+    };
+    ZodUndefined = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.undefined) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.undefined,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+    };
+    ZodUndefined.create = (params) => {
+      return new ZodUndefined({
+        typeName: ZodFirstPartyTypeKind.ZodUndefined,
+        ...processCreateParams(params)
+      });
+    };
+    ZodNull = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.null) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.null,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+    };
+    ZodNull.create = (params) => {
+      return new ZodNull({
+        typeName: ZodFirstPartyTypeKind.ZodNull,
+        ...processCreateParams(params)
+      });
+    };
+    ZodAny = class extends ZodType {
+      constructor() {
+        super(...arguments);
+        this._any = true;
+      }
+      _parse(input) {
+        return OK(input.data);
+      }
+    };
+    ZodAny.create = (params) => {
+      return new ZodAny({
+        typeName: ZodFirstPartyTypeKind.ZodAny,
+        ...processCreateParams(params)
+      });
+    };
+    ZodUnknown = class extends ZodType {
+      constructor() {
+        super(...arguments);
+        this._unknown = true;
+      }
+      _parse(input) {
+        return OK(input.data);
+      }
+    };
+    ZodUnknown.create = (params) => {
+      return new ZodUnknown({
+        typeName: ZodFirstPartyTypeKind.ZodUnknown,
+        ...processCreateParams(params)
+      });
+    };
+    ZodNever = class extends ZodType {
+      _parse(input) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.never,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+    };
+    ZodNever.create = (params) => {
+      return new ZodNever({
+        typeName: ZodFirstPartyTypeKind.ZodNever,
+        ...processCreateParams(params)
+      });
+    };
+    ZodVoid = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.undefined) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.void,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+    };
+    ZodVoid.create = (params) => {
+      return new ZodVoid({
+        typeName: ZodFirstPartyTypeKind.ZodVoid,
+        ...processCreateParams(params)
+      });
+    };
+    ZodArray = class _ZodArray2 extends ZodType {
+      _parse(input) {
+        const { ctx, status } = this._processInputParams(input);
+        const def = this._def;
+        if (ctx.parsedType !== ZodParsedType.array) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.array,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        if (def.exactLength !== null) {
+          const tooBig = ctx.data.length > def.exactLength.value;
+          const tooSmall = ctx.data.length < def.exactLength.value;
+          if (tooBig || tooSmall) {
+            addIssueToContext(ctx, {
+              code: tooBig ? ZodIssueCode.too_big : ZodIssueCode.too_small,
+              minimum: tooSmall ? def.exactLength.value : void 0,
+              maximum: tooBig ? def.exactLength.value : void 0,
+              type: "array",
+              inclusive: true,
+              exact: true,
+              message: def.exactLength.message
+            });
+            status.dirty();
+          }
+        }
+        if (def.minLength !== null) {
+          if (ctx.data.length < def.minLength.value) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              minimum: def.minLength.value,
+              type: "array",
+              inclusive: true,
+              exact: false,
+              message: def.minLength.message
+            });
+            status.dirty();
+          }
+        }
+        if (def.maxLength !== null) {
+          if (ctx.data.length > def.maxLength.value) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              maximum: def.maxLength.value,
+              type: "array",
+              inclusive: true,
+              exact: false,
+              message: def.maxLength.message
+            });
+            status.dirty();
+          }
+        }
+        if (ctx.common.async) {
+          return Promise.all([...ctx.data].map((item, i) => {
+            return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+          })).then((result2) => {
+            return ParseStatus.mergeArray(status, result2);
+          });
+        }
+        const result = [...ctx.data].map((item, i) => {
+          return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+        });
+        return ParseStatus.mergeArray(status, result);
+      }
+      get element() {
+        return this._def.type;
+      }
+      min(minLength, message) {
+        return new _ZodArray2({
+          ...this._def,
+          minLength: { value: minLength, message: errorUtil.toString(message) }
+        });
+      }
+      max(maxLength, message) {
+        return new _ZodArray2({
+          ...this._def,
+          maxLength: { value: maxLength, message: errorUtil.toString(message) }
+        });
+      }
+      length(len, message) {
+        return new _ZodArray2({
+          ...this._def,
+          exactLength: { value: len, message: errorUtil.toString(message) }
+        });
+      }
+      nonempty(message) {
+        return this.min(1, message);
+      }
+    };
+    ZodArray.create = (schema, params) => {
+      return new ZodArray({
+        type: schema,
+        minLength: null,
+        maxLength: null,
+        exactLength: null,
+        typeName: ZodFirstPartyTypeKind.ZodArray,
+        ...processCreateParams(params)
+      });
+    };
+    ZodObject = class _ZodObject2 extends ZodType {
+      constructor() {
+        super(...arguments);
+        this._cached = null;
+        this.nonstrict = this.passthrough;
+        this.augment = this.extend;
+      }
+      _getCached() {
+        if (this._cached !== null)
+          return this._cached;
+        const shape = this._def.shape();
+        const keys = util.objectKeys(shape);
+        this._cached = { shape, keys };
+        return this._cached;
+      }
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.object) {
+          const ctx2 = this._getOrReturnCtx(input);
+          addIssueToContext(ctx2, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.object,
+            received: ctx2.parsedType
+          });
+          return INVALID;
+        }
+        const { status, ctx } = this._processInputParams(input);
+        const { shape, keys: shapeKeys } = this._getCached();
+        const extraKeys = [];
+        if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
+          for (const key in ctx.data) {
+            if (!shapeKeys.includes(key)) {
+              extraKeys.push(key);
+            }
+          }
+        }
+        const pairs = [];
+        for (const key of shapeKeys) {
+          const keyValidator = shape[key];
+          const value = ctx.data[key];
+          pairs.push({
+            key: { status: "valid", value: key },
+            value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
+            alwaysSet: key in ctx.data
+          });
+        }
+        if (this._def.catchall instanceof ZodNever) {
+          const unknownKeys = this._def.unknownKeys;
+          if (unknownKeys === "passthrough") {
+            for (const key of extraKeys) {
+              pairs.push({
+                key: { status: "valid", value: key },
+                value: { status: "valid", value: ctx.data[key] }
+              });
+            }
+          } else if (unknownKeys === "strict") {
+            if (extraKeys.length > 0) {
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.unrecognized_keys,
+                keys: extraKeys
+              });
+              status.dirty();
+            }
+          } else if (unknownKeys === "strip") {
+          } else {
+            throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
+          }
+        } else {
+          const catchall = this._def.catchall;
+          for (const key of extraKeys) {
+            const value = ctx.data[key];
+            pairs.push({
+              key: { status: "valid", value: key },
+              value: catchall._parse(
+                new ParseInputLazyPath(ctx, value, ctx.path, key)
+                //, ctx.child(key), value, getParsedType(value)
+              ),
+              alwaysSet: key in ctx.data
+            });
+          }
+        }
+        if (ctx.common.async) {
+          return Promise.resolve().then(async () => {
+            const syncPairs = [];
+            for (const pair of pairs) {
+              const key = await pair.key;
+              const value = await pair.value;
+              syncPairs.push({
+                key,
+                value,
+                alwaysSet: pair.alwaysSet
+              });
+            }
+            return syncPairs;
+          }).then((syncPairs) => {
+            return ParseStatus.mergeObjectSync(status, syncPairs);
+          });
+        } else {
+          return ParseStatus.mergeObjectSync(status, pairs);
+        }
+      }
+      get shape() {
+        return this._def.shape();
+      }
+      strict(message) {
+        errorUtil.errToObj;
+        return new _ZodObject2({
+          ...this._def,
+          unknownKeys: "strict",
+          ...message !== void 0 ? {
+            errorMap: (issue, ctx) => {
+              const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
+              if (issue.code === "unrecognized_keys")
+                return {
+                  message: errorUtil.errToObj(message).message ?? defaultError
+                };
+              return {
+                message: defaultError
+              };
+            }
+          } : {}
+        });
+      }
+      strip() {
+        return new _ZodObject2({
+          ...this._def,
+          unknownKeys: "strip"
+        });
+      }
+      passthrough() {
+        return new _ZodObject2({
+          ...this._def,
+          unknownKeys: "passthrough"
+        });
+      }
+      // const AugmentFactory =
+      //   <Def extends ZodObjectDef>(def: Def) =>
+      //   <Augmentation extends ZodRawShape>(
+      //     augmentation: Augmentation
+      //   ): ZodObject<
+      //     extendShape<ReturnType<Def["shape"]>, Augmentation>,
+      //     Def["unknownKeys"],
+      //     Def["catchall"]
+      //   > => {
+      //     return new ZodObject({
+      //       ...def,
+      //       shape: () => ({
+      //         ...def.shape(),
+      //         ...augmentation,
+      //       }),
+      //     }) as any;
+      //   };
+      extend(augmentation) {
+        return new _ZodObject2({
+          ...this._def,
+          shape: () => ({
+            ...this._def.shape(),
+            ...augmentation
+          })
+        });
+      }
+      /**
+       * Prior to zod@1.0.12 there was a bug in the
+       * inferred type of merged objects. Please
+       * upgrade if you are experiencing issues.
+       */
+      merge(merging) {
+        const merged = new _ZodObject2({
+          unknownKeys: merging._def.unknownKeys,
+          catchall: merging._def.catchall,
+          shape: () => ({
+            ...this._def.shape(),
+            ...merging._def.shape()
+          }),
+          typeName: ZodFirstPartyTypeKind.ZodObject
+        });
+        return merged;
+      }
+      // merge<
+      //   Incoming extends AnyZodObject,
+      //   Augmentation extends Incoming["shape"],
+      //   NewOutput extends {
+      //     [k in keyof Augmentation | keyof Output]: k extends keyof Augmentation
+      //       ? Augmentation[k]["_output"]
+      //       : k extends keyof Output
+      //       ? Output[k]
+      //       : never;
+      //   },
+      //   NewInput extends {
+      //     [k in keyof Augmentation | keyof Input]: k extends keyof Augmentation
+      //       ? Augmentation[k]["_input"]
+      //       : k extends keyof Input
+      //       ? Input[k]
+      //       : never;
+      //   }
+      // >(
+      //   merging: Incoming
+      // ): ZodObject<
+      //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
+      //   Incoming["_def"]["unknownKeys"],
+      //   Incoming["_def"]["catchall"],
+      //   NewOutput,
+      //   NewInput
+      // > {
+      //   const merged: any = new ZodObject({
+      //     unknownKeys: merging._def.unknownKeys,
+      //     catchall: merging._def.catchall,
+      //     shape: () =>
+      //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
+      //     typeName: ZodFirstPartyTypeKind.ZodObject,
+      //   }) as any;
+      //   return merged;
+      // }
+      setKey(key, schema) {
+        return this.augment({ [key]: schema });
+      }
+      // merge<Incoming extends AnyZodObject>(
+      //   merging: Incoming
+      // ): //ZodObject<T & Incoming["_shape"], UnknownKeys, Catchall> = (merging) => {
+      // ZodObject<
+      //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
+      //   Incoming["_def"]["unknownKeys"],
+      //   Incoming["_def"]["catchall"]
+      // > {
+      //   // const mergedShape = objectUtil.mergeShapes(
+      //   //   this._def.shape(),
+      //   //   merging._def.shape()
+      //   // );
+      //   const merged: any = new ZodObject({
+      //     unknownKeys: merging._def.unknownKeys,
+      //     catchall: merging._def.catchall,
+      //     shape: () =>
+      //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
+      //     typeName: ZodFirstPartyTypeKind.ZodObject,
+      //   }) as any;
+      //   return merged;
+      // }
+      catchall(index) {
+        return new _ZodObject2({
+          ...this._def,
+          catchall: index
+        });
+      }
+      pick(mask) {
+        const shape = {};
+        for (const key of util.objectKeys(mask)) {
+          if (mask[key] && this.shape[key]) {
+            shape[key] = this.shape[key];
+          }
+        }
+        return new _ZodObject2({
+          ...this._def,
+          shape: () => shape
+        });
+      }
+      omit(mask) {
+        const shape = {};
+        for (const key of util.objectKeys(this.shape)) {
+          if (!mask[key]) {
+            shape[key] = this.shape[key];
+          }
+        }
+        return new _ZodObject2({
+          ...this._def,
+          shape: () => shape
+        });
+      }
+      /**
+       * @deprecated
+       */
+      deepPartial() {
+        return deepPartialify(this);
+      }
+      partial(mask) {
+        const newShape = {};
+        for (const key of util.objectKeys(this.shape)) {
+          const fieldSchema = this.shape[key];
+          if (mask && !mask[key]) {
+            newShape[key] = fieldSchema;
+          } else {
+            newShape[key] = fieldSchema.optional();
+          }
+        }
+        return new _ZodObject2({
+          ...this._def,
+          shape: () => newShape
+        });
+      }
+      required(mask) {
+        const newShape = {};
+        for (const key of util.objectKeys(this.shape)) {
+          if (mask && !mask[key]) {
+            newShape[key] = this.shape[key];
+          } else {
+            const fieldSchema = this.shape[key];
+            let newField = fieldSchema;
+            while (newField instanceof ZodOptional) {
+              newField = newField._def.innerType;
+            }
+            newShape[key] = newField;
+          }
+        }
+        return new _ZodObject2({
+          ...this._def,
+          shape: () => newShape
+        });
+      }
+      keyof() {
+        return createZodEnum(util.objectKeys(this.shape));
+      }
+    };
+    ZodObject.create = (shape, params) => {
+      return new ZodObject({
+        shape: () => shape,
+        unknownKeys: "strip",
+        catchall: ZodNever.create(),
+        typeName: ZodFirstPartyTypeKind.ZodObject,
+        ...processCreateParams(params)
+      });
+    };
+    ZodObject.strictCreate = (shape, params) => {
+      return new ZodObject({
+        shape: () => shape,
+        unknownKeys: "strict",
+        catchall: ZodNever.create(),
+        typeName: ZodFirstPartyTypeKind.ZodObject,
+        ...processCreateParams(params)
+      });
+    };
+    ZodObject.lazycreate = (shape, params) => {
+      return new ZodObject({
+        shape,
+        unknownKeys: "strip",
+        catchall: ZodNever.create(),
+        typeName: ZodFirstPartyTypeKind.ZodObject,
+        ...processCreateParams(params)
+      });
+    };
+    ZodUnion = class extends ZodType {
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        const options = this._def.options;
+        function handleResults(results) {
+          for (const result of results) {
+            if (result.result.status === "valid") {
+              return result.result;
+            }
+          }
+          for (const result of results) {
+            if (result.result.status === "dirty") {
+              ctx.common.issues.push(...result.ctx.common.issues);
+              return result.result;
+            }
+          }
+          const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_union,
+            unionErrors
+          });
+          return INVALID;
+        }
+        if (ctx.common.async) {
+          return Promise.all(options.map(async (option) => {
+            const childCtx = {
+              ...ctx,
+              common: {
+                ...ctx.common,
+                issues: []
+              },
+              parent: null
+            };
+            return {
+              result: await option._parseAsync({
+                data: ctx.data,
+                path: ctx.path,
+                parent: childCtx
+              }),
+              ctx: childCtx
+            };
+          })).then(handleResults);
+        } else {
+          let dirty = void 0;
+          const issues = [];
+          for (const option of options) {
+            const childCtx = {
+              ...ctx,
+              common: {
+                ...ctx.common,
+                issues: []
+              },
+              parent: null
+            };
+            const result = option._parseSync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: childCtx
+            });
+            if (result.status === "valid") {
+              return result;
+            } else if (result.status === "dirty" && !dirty) {
+              dirty = { result, ctx: childCtx };
+            }
+            if (childCtx.common.issues.length) {
+              issues.push(childCtx.common.issues);
+            }
+          }
+          if (dirty) {
+            ctx.common.issues.push(...dirty.ctx.common.issues);
+            return dirty.result;
+          }
+          const unionErrors = issues.map((issues2) => new ZodError(issues2));
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_union,
+            unionErrors
+          });
+          return INVALID;
+        }
+      }
+      get options() {
+        return this._def.options;
+      }
+    };
+    ZodUnion.create = (types, params) => {
+      return new ZodUnion({
+        options: types,
+        typeName: ZodFirstPartyTypeKind.ZodUnion,
+        ...processCreateParams(params)
+      });
+    };
+    getDiscriminator = (type) => {
+      if (type instanceof ZodLazy) {
+        return getDiscriminator(type.schema);
+      } else if (type instanceof ZodEffects) {
+        return getDiscriminator(type.innerType());
+      } else if (type instanceof ZodLiteral) {
+        return [type.value];
+      } else if (type instanceof ZodEnum) {
+        return type.options;
+      } else if (type instanceof ZodNativeEnum) {
+        return util.objectValues(type.enum);
+      } else if (type instanceof ZodDefault) {
+        return getDiscriminator(type._def.innerType);
+      } else if (type instanceof ZodUndefined) {
+        return [void 0];
+      } else if (type instanceof ZodNull) {
+        return [null];
+      } else if (type instanceof ZodOptional) {
+        return [void 0, ...getDiscriminator(type.unwrap())];
+      } else if (type instanceof ZodNullable) {
+        return [null, ...getDiscriminator(type.unwrap())];
+      } else if (type instanceof ZodBranded) {
+        return getDiscriminator(type.unwrap());
+      } else if (type instanceof ZodReadonly) {
+        return getDiscriminator(type.unwrap());
+      } else if (type instanceof ZodCatch) {
+        return getDiscriminator(type._def.innerType);
+      } else {
+        return [];
+      }
+    };
+    ZodDiscriminatedUnion = class _ZodDiscriminatedUnion2 extends ZodType {
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.object) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.object,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        const discriminator = this.discriminator;
+        const discriminatorValue = ctx.data[discriminator];
+        const option = this.optionsMap.get(discriminatorValue);
+        if (!option) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_union_discriminator,
+            options: Array.from(this.optionsMap.keys()),
+            path: [discriminator]
+          });
+          return INVALID;
+        }
+        if (ctx.common.async) {
+          return option._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          });
+        } else {
+          return option._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          });
+        }
+      }
+      get discriminator() {
+        return this._def.discriminator;
+      }
+      get options() {
+        return this._def.options;
+      }
+      get optionsMap() {
+        return this._def.optionsMap;
+      }
+      /**
+       * The constructor of the discriminated union schema. Its behaviour is very similar to that of the normal z.union() constructor.
+       * However, it only allows a union of objects, all of which need to share a discriminator property. This property must
+       * have a different value for each object in the union.
+       * @param discriminator the name of the discriminator property
+       * @param types an array of object schemas
+       * @param params
+       */
+      static create(discriminator, options, params) {
+        const optionsMap = /* @__PURE__ */ new Map();
+        for (const type of options) {
+          const discriminatorValues = getDiscriminator(type.shape[discriminator]);
+          if (!discriminatorValues.length) {
+            throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
+          }
+          for (const value of discriminatorValues) {
+            if (optionsMap.has(value)) {
+              throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+            }
+            optionsMap.set(value, type);
+          }
+        }
+        return new _ZodDiscriminatedUnion2({
+          typeName: ZodFirstPartyTypeKind.ZodDiscriminatedUnion,
+          discriminator,
+          options,
+          optionsMap,
+          ...processCreateParams(params)
+        });
+      }
+    };
+    ZodIntersection = class extends ZodType {
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        const handleParsed = (parsedLeft, parsedRight) => {
+          if (isAborted(parsedLeft) || isAborted(parsedRight)) {
+            return INVALID;
+          }
+          const merged = mergeValues(parsedLeft.value, parsedRight.value);
+          if (!merged.valid) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_intersection_types
+            });
+            return INVALID;
+          }
+          if (isDirty(parsedLeft) || isDirty(parsedRight)) {
+            status.dirty();
+          }
+          return { status: status.value, value: merged.data };
+        };
+        if (ctx.common.async) {
+          return Promise.all([
+            this._def.left._parseAsync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: ctx
+            }),
+            this._def.right._parseAsync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: ctx
+            })
+          ]).then(([left, right]) => handleParsed(left, right));
+        } else {
+          return handleParsed(this._def.left._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          }), this._def.right._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          }));
+        }
+      }
+    };
+    ZodIntersection.create = (left, right, params) => {
+      return new ZodIntersection({
+        left,
+        right,
+        typeName: ZodFirstPartyTypeKind.ZodIntersection,
+        ...processCreateParams(params)
+      });
+    };
+    ZodTuple = class _ZodTuple2 extends ZodType {
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.array) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.array,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        if (ctx.data.length < this._def.items.length) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            minimum: this._def.items.length,
+            inclusive: true,
+            exact: false,
+            type: "array"
+          });
+          return INVALID;
+        }
+        const rest = this._def.rest;
+        if (!rest && ctx.data.length > this._def.items.length) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            maximum: this._def.items.length,
+            inclusive: true,
+            exact: false,
+            type: "array"
+          });
+          status.dirty();
+        }
+        const items = [...ctx.data].map((item, itemIndex) => {
+          const schema = this._def.items[itemIndex] || this._def.rest;
+          if (!schema)
+            return null;
+          return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
+        }).filter((x) => !!x);
+        if (ctx.common.async) {
+          return Promise.all(items).then((results) => {
+            return ParseStatus.mergeArray(status, results);
+          });
+        } else {
+          return ParseStatus.mergeArray(status, items);
+        }
+      }
+      get items() {
+        return this._def.items;
+      }
+      rest(rest) {
+        return new _ZodTuple2({
+          ...this._def,
+          rest
+        });
+      }
+    };
+    ZodTuple.create = (schemas, params) => {
+      if (!Array.isArray(schemas)) {
+        throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
+      }
+      return new ZodTuple({
+        items: schemas,
+        typeName: ZodFirstPartyTypeKind.ZodTuple,
+        rest: null,
+        ...processCreateParams(params)
+      });
+    };
+    ZodRecord = class _ZodRecord2 extends ZodType {
+      get keySchema() {
+        return this._def.keyType;
+      }
+      get valueSchema() {
+        return this._def.valueType;
+      }
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.object) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.object,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        const pairs = [];
+        const keyType = this._def.keyType;
+        const valueType = this._def.valueType;
+        for (const key in ctx.data) {
+          pairs.push({
+            key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
+            value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
+            alwaysSet: key in ctx.data
+          });
+        }
+        if (ctx.common.async) {
+          return ParseStatus.mergeObjectAsync(status, pairs);
+        } else {
+          return ParseStatus.mergeObjectSync(status, pairs);
+        }
+      }
+      get element() {
+        return this._def.valueType;
+      }
+      static create(first, second, third) {
+        if (second instanceof ZodType) {
+          return new _ZodRecord2({
+            keyType: first,
+            valueType: second,
+            typeName: ZodFirstPartyTypeKind.ZodRecord,
+            ...processCreateParams(third)
+          });
+        }
+        return new _ZodRecord2({
+          keyType: ZodString.create(),
+          valueType: first,
+          typeName: ZodFirstPartyTypeKind.ZodRecord,
+          ...processCreateParams(second)
+        });
+      }
+    };
+    ZodMap = class extends ZodType {
+      get keySchema() {
+        return this._def.keyType;
+      }
+      get valueSchema() {
+        return this._def.valueType;
+      }
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.map) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.map,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        const keyType = this._def.keyType;
+        const valueType = this._def.valueType;
+        const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+          return {
+            key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
+            value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
+          };
+        });
+        if (ctx.common.async) {
+          const finalMap = /* @__PURE__ */ new Map();
+          return Promise.resolve().then(async () => {
+            for (const pair of pairs) {
+              const key = await pair.key;
+              const value = await pair.value;
+              if (key.status === "aborted" || value.status === "aborted") {
+                return INVALID;
+              }
+              if (key.status === "dirty" || value.status === "dirty") {
+                status.dirty();
+              }
+              finalMap.set(key.value, value.value);
+            }
+            return { status: status.value, value: finalMap };
+          });
+        } else {
+          const finalMap = /* @__PURE__ */ new Map();
+          for (const pair of pairs) {
+            const key = pair.key;
+            const value = pair.value;
+            if (key.status === "aborted" || value.status === "aborted") {
+              return INVALID;
+            }
+            if (key.status === "dirty" || value.status === "dirty") {
+              status.dirty();
+            }
+            finalMap.set(key.value, value.value);
+          }
+          return { status: status.value, value: finalMap };
+        }
+      }
+    };
+    ZodMap.create = (keyType, valueType, params) => {
+      return new ZodMap({
+        valueType,
+        keyType,
+        typeName: ZodFirstPartyTypeKind.ZodMap,
+        ...processCreateParams(params)
+      });
+    };
+    ZodSet = class _ZodSet2 extends ZodType {
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.set) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.set,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        const def = this._def;
+        if (def.minSize !== null) {
+          if (ctx.data.size < def.minSize.value) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              minimum: def.minSize.value,
+              type: "set",
+              inclusive: true,
+              exact: false,
+              message: def.minSize.message
+            });
+            status.dirty();
+          }
+        }
+        if (def.maxSize !== null) {
+          if (ctx.data.size > def.maxSize.value) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              maximum: def.maxSize.value,
+              type: "set",
+              inclusive: true,
+              exact: false,
+              message: def.maxSize.message
+            });
+            status.dirty();
+          }
+        }
+        const valueType = this._def.valueType;
+        function finalizeSet(elements2) {
+          const parsedSet = /* @__PURE__ */ new Set();
+          for (const element of elements2) {
+            if (element.status === "aborted")
+              return INVALID;
+            if (element.status === "dirty")
+              status.dirty();
+            parsedSet.add(element.value);
+          }
+          return { status: status.value, value: parsedSet };
+        }
+        const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
+        if (ctx.common.async) {
+          return Promise.all(elements).then((elements2) => finalizeSet(elements2));
+        } else {
+          return finalizeSet(elements);
+        }
+      }
+      min(minSize, message) {
+        return new _ZodSet2({
+          ...this._def,
+          minSize: { value: minSize, message: errorUtil.toString(message) }
+        });
+      }
+      max(maxSize, message) {
+        return new _ZodSet2({
+          ...this._def,
+          maxSize: { value: maxSize, message: errorUtil.toString(message) }
+        });
+      }
+      size(size, message) {
+        return this.min(size, message).max(size, message);
+      }
+      nonempty(message) {
+        return this.min(1, message);
+      }
+    };
+    ZodSet.create = (valueType, params) => {
+      return new ZodSet({
+        valueType,
+        minSize: null,
+        maxSize: null,
+        typeName: ZodFirstPartyTypeKind.ZodSet,
+        ...processCreateParams(params)
+      });
+    };
+    ZodFunction = class _ZodFunction2 extends ZodType {
+      constructor() {
+        super(...arguments);
+        this.validate = this.implement;
+      }
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.function) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.function,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        function makeArgsIssue(args, error) {
+          return makeIssue({
+            data: args,
+            path: ctx.path,
+            errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+            issueData: {
+              code: ZodIssueCode.invalid_arguments,
+              argumentsError: error
+            }
+          });
+        }
+        function makeReturnsIssue(returns, error) {
+          return makeIssue({
+            data: returns,
+            path: ctx.path,
+            errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+            issueData: {
+              code: ZodIssueCode.invalid_return_type,
+              returnTypeError: error
+            }
+          });
+        }
+        const params = { errorMap: ctx.common.contextualErrorMap };
+        const fn = ctx.data;
+        if (this._def.returns instanceof ZodPromise) {
+          const me = this;
+          return OK(async function(...args) {
+            const error = new ZodError([]);
+            const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
+              error.addIssue(makeArgsIssue(args, e));
+              throw error;
+            });
+            const result = await Reflect.apply(fn, this, parsedArgs);
+            const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
+              error.addIssue(makeReturnsIssue(result, e));
+              throw error;
+            });
+            return parsedReturns;
+          });
+        } else {
+          const me = this;
+          return OK(function(...args) {
+            const parsedArgs = me._def.args.safeParse(args, params);
+            if (!parsedArgs.success) {
+              throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
+            }
+            const result = Reflect.apply(fn, this, parsedArgs.data);
+            const parsedReturns = me._def.returns.safeParse(result, params);
+            if (!parsedReturns.success) {
+              throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
+            }
+            return parsedReturns.data;
+          });
+        }
+      }
+      parameters() {
+        return this._def.args;
+      }
+      returnType() {
+        return this._def.returns;
+      }
+      args(...items) {
+        return new _ZodFunction2({
+          ...this._def,
+          args: ZodTuple.create(items).rest(ZodUnknown.create())
+        });
+      }
+      returns(returnType) {
+        return new _ZodFunction2({
+          ...this._def,
+          returns: returnType
+        });
+      }
+      implement(func) {
+        const validatedFunc = this.parse(func);
+        return validatedFunc;
+      }
+      strictImplement(func) {
+        const validatedFunc = this.parse(func);
+        return validatedFunc;
+      }
+      static create(args, returns, params) {
+        return new _ZodFunction2({
+          args: args ? args : ZodTuple.create([]).rest(ZodUnknown.create()),
+          returns: returns || ZodUnknown.create(),
+          typeName: ZodFirstPartyTypeKind.ZodFunction,
+          ...processCreateParams(params)
+        });
+      }
+    };
+    ZodLazy = class extends ZodType {
+      get schema() {
+        return this._def.getter();
+      }
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        const lazySchema = this._def.getter();
+        return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
+      }
+    };
+    ZodLazy.create = (getter, params) => {
+      return new ZodLazy({
+        getter,
+        typeName: ZodFirstPartyTypeKind.ZodLazy,
+        ...processCreateParams(params)
+      });
+    };
+    ZodLiteral = class extends ZodType {
+      _parse(input) {
+        if (input.data !== this._def.value) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            received: ctx.data,
+            code: ZodIssueCode.invalid_literal,
+            expected: this._def.value
+          });
+          return INVALID;
+        }
+        return { status: "valid", value: input.data };
+      }
+      get value() {
+        return this._def.value;
+      }
+    };
+    ZodLiteral.create = (value, params) => {
+      return new ZodLiteral({
+        value,
+        typeName: ZodFirstPartyTypeKind.ZodLiteral,
+        ...processCreateParams(params)
+      });
+    };
+    ZodEnum = class _ZodEnum2 extends ZodType {
+      _parse(input) {
+        if (typeof input.data !== "string") {
+          const ctx = this._getOrReturnCtx(input);
+          const expectedValues = this._def.values;
+          addIssueToContext(ctx, {
+            expected: util.joinValues(expectedValues),
+            received: ctx.parsedType,
+            code: ZodIssueCode.invalid_type
+          });
+          return INVALID;
+        }
+        if (!this._cache) {
+          this._cache = new Set(this._def.values);
+        }
+        if (!this._cache.has(input.data)) {
+          const ctx = this._getOrReturnCtx(input);
+          const expectedValues = this._def.values;
+          addIssueToContext(ctx, {
+            received: ctx.data,
+            code: ZodIssueCode.invalid_enum_value,
+            options: expectedValues
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+      get options() {
+        return this._def.values;
+      }
+      get enum() {
+        const enumValues = {};
+        for (const val of this._def.values) {
+          enumValues[val] = val;
+        }
+        return enumValues;
+      }
+      get Values() {
+        const enumValues = {};
+        for (const val of this._def.values) {
+          enumValues[val] = val;
+        }
+        return enumValues;
+      }
+      get Enum() {
+        const enumValues = {};
+        for (const val of this._def.values) {
+          enumValues[val] = val;
+        }
+        return enumValues;
+      }
+      extract(values, newDef = this._def) {
+        return _ZodEnum2.create(values, {
+          ...this._def,
+          ...newDef
+        });
+      }
+      exclude(values, newDef = this._def) {
+        return _ZodEnum2.create(this.options.filter((opt) => !values.includes(opt)), {
+          ...this._def,
+          ...newDef
+        });
+      }
+    };
+    ZodEnum.create = createZodEnum;
+    ZodNativeEnum = class extends ZodType {
+      _parse(input) {
+        const nativeEnumValues = util.getValidEnumValues(this._def.values);
+        const ctx = this._getOrReturnCtx(input);
+        if (ctx.parsedType !== ZodParsedType.string && ctx.parsedType !== ZodParsedType.number) {
+          const expectedValues = util.objectValues(nativeEnumValues);
+          addIssueToContext(ctx, {
+            expected: util.joinValues(expectedValues),
+            received: ctx.parsedType,
+            code: ZodIssueCode.invalid_type
+          });
+          return INVALID;
+        }
+        if (!this._cache) {
+          this._cache = new Set(util.getValidEnumValues(this._def.values));
+        }
+        if (!this._cache.has(input.data)) {
+          const expectedValues = util.objectValues(nativeEnumValues);
+          addIssueToContext(ctx, {
+            received: ctx.data,
+            code: ZodIssueCode.invalid_enum_value,
+            options: expectedValues
+          });
+          return INVALID;
+        }
+        return OK(input.data);
+      }
+      get enum() {
+        return this._def.values;
+      }
+    };
+    ZodNativeEnum.create = (values, params) => {
+      return new ZodNativeEnum({
+        values,
+        typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
+        ...processCreateParams(params)
+      });
+    };
+    ZodPromise = class extends ZodType {
+      unwrap() {
+        return this._def.type;
+      }
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        if (ctx.parsedType !== ZodParsedType.promise && ctx.common.async === false) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.promise,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        const promisified = ctx.parsedType === ZodParsedType.promise ? ctx.data : Promise.resolve(ctx.data);
+        return OK(promisified.then((data) => {
+          return this._def.type.parseAsync(data, {
+            path: ctx.path,
+            errorMap: ctx.common.contextualErrorMap
+          });
+        }));
+      }
+    };
+    ZodPromise.create = (schema, params) => {
+      return new ZodPromise({
+        type: schema,
+        typeName: ZodFirstPartyTypeKind.ZodPromise,
+        ...processCreateParams(params)
+      });
+    };
+    ZodEffects = class extends ZodType {
+      innerType() {
+        return this._def.schema;
+      }
+      sourceType() {
+        return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
+      }
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        const effect = this._def.effect || null;
+        const checkCtx = {
+          addIssue: (arg) => {
+            addIssueToContext(ctx, arg);
+            if (arg.fatal) {
+              status.abort();
+            } else {
+              status.dirty();
+            }
+          },
+          get path() {
+            return ctx.path;
+          }
+        };
+        checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
+        if (effect.type === "preprocess") {
+          const processed = effect.transform(ctx.data, checkCtx);
+          if (ctx.common.async) {
+            return Promise.resolve(processed).then(async (processed2) => {
+              if (status.value === "aborted")
+                return INVALID;
+              const result = await this._def.schema._parseAsync({
+                data: processed2,
+                path: ctx.path,
+                parent: ctx
+              });
+              if (result.status === "aborted")
+                return INVALID;
+              if (result.status === "dirty")
+                return DIRTY(result.value);
+              if (status.value === "dirty")
+                return DIRTY(result.value);
+              return result;
+            });
+          } else {
+            if (status.value === "aborted")
+              return INVALID;
+            const result = this._def.schema._parseSync({
+              data: processed,
+              path: ctx.path,
+              parent: ctx
+            });
+            if (result.status === "aborted")
+              return INVALID;
+            if (result.status === "dirty")
+              return DIRTY(result.value);
+            if (status.value === "dirty")
+              return DIRTY(result.value);
+            return result;
+          }
+        }
+        if (effect.type === "refinement") {
+          const executeRefinement = (acc) => {
+            const result = effect.refinement(acc, checkCtx);
+            if (ctx.common.async) {
+              return Promise.resolve(result);
+            }
+            if (result instanceof Promise) {
+              throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
+            }
+            return acc;
+          };
+          if (ctx.common.async === false) {
+            const inner = this._def.schema._parseSync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: ctx
+            });
+            if (inner.status === "aborted")
+              return INVALID;
+            if (inner.status === "dirty")
+              status.dirty();
+            executeRefinement(inner.value);
+            return { status: status.value, value: inner.value };
+          } else {
+            return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
+              if (inner.status === "aborted")
+                return INVALID;
+              if (inner.status === "dirty")
+                status.dirty();
+              return executeRefinement(inner.value).then(() => {
+                return { status: status.value, value: inner.value };
+              });
+            });
+          }
+        }
+        if (effect.type === "transform") {
+          if (ctx.common.async === false) {
+            const base4 = this._def.schema._parseSync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: ctx
+            });
+            if (!isValid(base4))
+              return INVALID;
+            const result = effect.transform(base4.value, checkCtx);
+            if (result instanceof Promise) {
+              throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
+            }
+            return { status: status.value, value: result };
+          } else {
+            return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base4) => {
+              if (!isValid(base4))
+                return INVALID;
+              return Promise.resolve(effect.transform(base4.value, checkCtx)).then((result) => ({
+                status: status.value,
+                value: result
+              }));
+            });
+          }
+        }
+        util.assertNever(effect);
+      }
+    };
+    ZodEffects.create = (schema, effect, params) => {
+      return new ZodEffects({
+        schema,
+        typeName: ZodFirstPartyTypeKind.ZodEffects,
+        effect,
+        ...processCreateParams(params)
+      });
+    };
+    ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
+      return new ZodEffects({
+        schema,
+        effect: { type: "preprocess", transform: preprocess },
+        typeName: ZodFirstPartyTypeKind.ZodEffects,
+        ...processCreateParams(params)
+      });
+    };
+    ZodOptional = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType === ZodParsedType.undefined) {
+          return OK(void 0);
+        }
+        return this._def.innerType._parse(input);
+      }
+      unwrap() {
+        return this._def.innerType;
+      }
+    };
+    ZodOptional.create = (type, params) => {
+      return new ZodOptional({
+        innerType: type,
+        typeName: ZodFirstPartyTypeKind.ZodOptional,
+        ...processCreateParams(params)
+      });
+    };
+    ZodNullable = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType === ZodParsedType.null) {
+          return OK(null);
+        }
+        return this._def.innerType._parse(input);
+      }
+      unwrap() {
+        return this._def.innerType;
+      }
+    };
+    ZodNullable.create = (type, params) => {
+      return new ZodNullable({
+        innerType: type,
+        typeName: ZodFirstPartyTypeKind.ZodNullable,
+        ...processCreateParams(params)
+      });
+    };
+    ZodDefault = class extends ZodType {
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        let data = ctx.data;
+        if (ctx.parsedType === ZodParsedType.undefined) {
+          data = this._def.defaultValue();
+        }
+        return this._def.innerType._parse({
+          data,
+          path: ctx.path,
+          parent: ctx
+        });
+      }
+      removeDefault() {
+        return this._def.innerType;
+      }
+    };
+    ZodDefault.create = (type, params) => {
+      return new ZodDefault({
+        innerType: type,
+        typeName: ZodFirstPartyTypeKind.ZodDefault,
+        defaultValue: typeof params.default === "function" ? params.default : () => params.default,
+        ...processCreateParams(params)
+      });
+    };
+    ZodCatch = class extends ZodType {
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        const newCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          }
+        };
+        const result = this._def.innerType._parse({
+          data: newCtx.data,
+          path: newCtx.path,
+          parent: {
+            ...newCtx
+          }
+        });
+        if (isAsync(result)) {
+          return result.then((result2) => {
+            return {
+              status: "valid",
+              value: result2.status === "valid" ? result2.value : this._def.catchValue({
+                get error() {
+                  return new ZodError(newCtx.common.issues);
+                },
+                input: newCtx.data
+              })
+            };
+          });
+        } else {
+          return {
+            status: "valid",
+            value: result.status === "valid" ? result.value : this._def.catchValue({
+              get error() {
+                return new ZodError(newCtx.common.issues);
+              },
+              input: newCtx.data
+            })
+          };
+        }
+      }
+      removeCatch() {
+        return this._def.innerType;
+      }
+    };
+    ZodCatch.create = (type, params) => {
+      return new ZodCatch({
+        innerType: type,
+        typeName: ZodFirstPartyTypeKind.ZodCatch,
+        catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
+        ...processCreateParams(params)
+      });
+    };
+    ZodNaN = class extends ZodType {
+      _parse(input) {
+        const parsedType = this._getType(input);
+        if (parsedType !== ZodParsedType.nan) {
+          const ctx = this._getOrReturnCtx(input);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: ZodParsedType.nan,
+            received: ctx.parsedType
+          });
+          return INVALID;
+        }
+        return { status: "valid", value: input.data };
+      }
+    };
+    ZodNaN.create = (params) => {
+      return new ZodNaN({
+        typeName: ZodFirstPartyTypeKind.ZodNaN,
+        ...processCreateParams(params)
+      });
+    };
+    BRAND = /* @__PURE__ */ Symbol("zod_brand");
+    ZodBranded = class extends ZodType {
+      _parse(input) {
+        const { ctx } = this._processInputParams(input);
+        const data = ctx.data;
+        return this._def.type._parse({
+          data,
+          path: ctx.path,
+          parent: ctx
+        });
+      }
+      unwrap() {
+        return this._def.type;
+      }
+    };
+    ZodPipeline = class _ZodPipeline2 extends ZodType {
+      _parse(input) {
+        const { status, ctx } = this._processInputParams(input);
+        if (ctx.common.async) {
+          const handleAsync = async () => {
+            const inResult = await this._def.in._parseAsync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: ctx
+            });
+            if (inResult.status === "aborted")
+              return INVALID;
+            if (inResult.status === "dirty") {
+              status.dirty();
+              return DIRTY(inResult.value);
+            } else {
+              return this._def.out._parseAsync({
+                data: inResult.value,
+                path: ctx.path,
+                parent: ctx
+              });
+            }
+          };
+          return handleAsync();
+        } else {
+          const inResult = this._def.in._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (inResult.status === "aborted")
+            return INVALID;
+          if (inResult.status === "dirty") {
+            status.dirty();
+            return {
+              status: "dirty",
+              value: inResult.value
+            };
+          } else {
+            return this._def.out._parseSync({
+              data: inResult.value,
+              path: ctx.path,
+              parent: ctx
+            });
+          }
+        }
+      }
+      static create(a, b) {
+        return new _ZodPipeline2({
+          in: a,
+          out: b,
+          typeName: ZodFirstPartyTypeKind.ZodPipeline
+        });
+      }
+    };
+    ZodReadonly = class extends ZodType {
+      _parse(input) {
+        const result = this._def.innerType._parse(input);
+        const freeze = (data) => {
+          if (isValid(data)) {
+            data.value = Object.freeze(data.value);
+          }
+          return data;
+        };
+        return isAsync(result) ? result.then((data) => freeze(data)) : freeze(result);
+      }
+      unwrap() {
+        return this._def.innerType;
+      }
+    };
+    ZodReadonly.create = (type, params) => {
+      return new ZodReadonly({
+        innerType: type,
+        typeName: ZodFirstPartyTypeKind.ZodReadonly,
+        ...processCreateParams(params)
+      });
+    };
+    late = {
+      object: ZodObject.lazycreate
+    };
+    (function(ZodFirstPartyTypeKind3) {
+      ZodFirstPartyTypeKind3["ZodString"] = "ZodString";
+      ZodFirstPartyTypeKind3["ZodNumber"] = "ZodNumber";
+      ZodFirstPartyTypeKind3["ZodNaN"] = "ZodNaN";
+      ZodFirstPartyTypeKind3["ZodBigInt"] = "ZodBigInt";
+      ZodFirstPartyTypeKind3["ZodBoolean"] = "ZodBoolean";
+      ZodFirstPartyTypeKind3["ZodDate"] = "ZodDate";
+      ZodFirstPartyTypeKind3["ZodSymbol"] = "ZodSymbol";
+      ZodFirstPartyTypeKind3["ZodUndefined"] = "ZodUndefined";
+      ZodFirstPartyTypeKind3["ZodNull"] = "ZodNull";
+      ZodFirstPartyTypeKind3["ZodAny"] = "ZodAny";
+      ZodFirstPartyTypeKind3["ZodUnknown"] = "ZodUnknown";
+      ZodFirstPartyTypeKind3["ZodNever"] = "ZodNever";
+      ZodFirstPartyTypeKind3["ZodVoid"] = "ZodVoid";
+      ZodFirstPartyTypeKind3["ZodArray"] = "ZodArray";
+      ZodFirstPartyTypeKind3["ZodObject"] = "ZodObject";
+      ZodFirstPartyTypeKind3["ZodUnion"] = "ZodUnion";
+      ZodFirstPartyTypeKind3["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+      ZodFirstPartyTypeKind3["ZodIntersection"] = "ZodIntersection";
+      ZodFirstPartyTypeKind3["ZodTuple"] = "ZodTuple";
+      ZodFirstPartyTypeKind3["ZodRecord"] = "ZodRecord";
+      ZodFirstPartyTypeKind3["ZodMap"] = "ZodMap";
+      ZodFirstPartyTypeKind3["ZodSet"] = "ZodSet";
+      ZodFirstPartyTypeKind3["ZodFunction"] = "ZodFunction";
+      ZodFirstPartyTypeKind3["ZodLazy"] = "ZodLazy";
+      ZodFirstPartyTypeKind3["ZodLiteral"] = "ZodLiteral";
+      ZodFirstPartyTypeKind3["ZodEnum"] = "ZodEnum";
+      ZodFirstPartyTypeKind3["ZodEffects"] = "ZodEffects";
+      ZodFirstPartyTypeKind3["ZodNativeEnum"] = "ZodNativeEnum";
+      ZodFirstPartyTypeKind3["ZodOptional"] = "ZodOptional";
+      ZodFirstPartyTypeKind3["ZodNullable"] = "ZodNullable";
+      ZodFirstPartyTypeKind3["ZodDefault"] = "ZodDefault";
+      ZodFirstPartyTypeKind3["ZodCatch"] = "ZodCatch";
+      ZodFirstPartyTypeKind3["ZodPromise"] = "ZodPromise";
+      ZodFirstPartyTypeKind3["ZodBranded"] = "ZodBranded";
+      ZodFirstPartyTypeKind3["ZodPipeline"] = "ZodPipeline";
+      ZodFirstPartyTypeKind3["ZodReadonly"] = "ZodReadonly";
+    })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
+    instanceOfType = (cls, params = {
+      message: `Input not instance of ${cls.name}`
+    }) => custom((data) => data instanceof cls, params);
+    stringType = ZodString.create;
+    numberType = ZodNumber.create;
+    nanType = ZodNaN.create;
+    bigIntType = ZodBigInt.create;
+    booleanType = ZodBoolean.create;
+    dateType = ZodDate.create;
+    symbolType = ZodSymbol.create;
+    undefinedType = ZodUndefined.create;
+    nullType = ZodNull.create;
+    anyType = ZodAny.create;
+    unknownType = ZodUnknown.create;
+    neverType = ZodNever.create;
+    voidType = ZodVoid.create;
+    arrayType = ZodArray.create;
+    objectType = ZodObject.create;
+    strictObjectType = ZodObject.strictCreate;
+    unionType = ZodUnion.create;
+    discriminatedUnionType = ZodDiscriminatedUnion.create;
+    intersectionType = ZodIntersection.create;
+    tupleType = ZodTuple.create;
+    recordType = ZodRecord.create;
+    mapType = ZodMap.create;
+    setType = ZodSet.create;
+    functionType = ZodFunction.create;
+    lazyType = ZodLazy.create;
+    literalType = ZodLiteral.create;
+    enumType = ZodEnum.create;
+    nativeEnumType = ZodNativeEnum.create;
+    promiseType = ZodPromise.create;
+    effectsType = ZodEffects.create;
+    optionalType = ZodOptional.create;
+    nullableType = ZodNullable.create;
+    preprocessType = ZodEffects.createWithPreprocess;
+    pipelineType = ZodPipeline.create;
+    ostring = () => stringType().optional();
+    onumber = () => numberType().optional();
+    oboolean = () => booleanType().optional();
+    coerce = {
+      string: ((arg) => ZodString.create({ ...arg, coerce: true })),
+      number: ((arg) => ZodNumber.create({ ...arg, coerce: true })),
+      boolean: ((arg) => ZodBoolean.create({
+        ...arg,
+        coerce: true
+      })),
+      bigint: ((arg) => ZodBigInt.create({ ...arg, coerce: true })),
+      date: ((arg) => ZodDate.create({ ...arg, coerce: true }))
+    };
+    NEVER = INVALID;
+  }
+});
 
 // ../../node_modules/zod/v3/external.js
 var external_exports = {};
@@ -2690,4001 +6224,65 @@ __export(external_exports, {
   util: () => util,
   void: () => voidType
 });
-
-// ../../node_modules/zod/v3/helpers/util.js
-var util;
-(function(util3) {
-  util3.assertEqual = (_) => {
-  };
-  function assertIs(_arg) {
+var init_external = __esm({
+  "../../node_modules/zod/v3/external.js"() {
+    "use strict";
+    init_errors2();
+    init_parseUtil();
+    init_typeAliases();
+    init_util();
+    init_types2();
+    init_ZodError();
   }
-  util3.assertIs = assertIs;
-  function assertNever(_x) {
-    throw new Error();
-  }
-  util3.assertNever = assertNever;
-  util3.arrayToEnum = (items) => {
-    const obj = {};
-    for (const item of items) {
-      obj[item] = item;
-    }
-    return obj;
-  };
-  util3.getValidEnumValues = (obj) => {
-    const validKeys = util3.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
-    const filtered = {};
-    for (const k of validKeys) {
-      filtered[k] = obj[k];
-    }
-    return util3.objectValues(filtered);
-  };
-  util3.objectValues = (obj) => {
-    return util3.objectKeys(obj).map(function(e) {
-      return obj[e];
-    });
-  };
-  util3.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object2) => {
-    const keys = [];
-    for (const key in object2) {
-      if (Object.prototype.hasOwnProperty.call(object2, key)) {
-        keys.push(key);
-      }
-    }
-    return keys;
-  };
-  util3.find = (arr, checker) => {
-    for (const item of arr) {
-      if (checker(item))
-        return item;
-    }
-    return void 0;
-  };
-  util3.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
-  function joinValues(array, separator = " | ") {
-    return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
-  }
-  util3.joinValues = joinValues;
-  util3.jsonStringifyReplacer = (_, value) => {
-    if (typeof value === "bigint") {
-      return value.toString();
-    }
-    return value;
-  };
-})(util || (util = {}));
-var objectUtil;
-(function(objectUtil3) {
-  objectUtil3.mergeShapes = (first, second) => {
-    return {
-      ...first,
-      ...second
-      // second overwrites first
-    };
-  };
-})(objectUtil || (objectUtil = {}));
-var ZodParsedType = util.arrayToEnum([
-  "string",
-  "nan",
-  "number",
-  "integer",
-  "float",
-  "boolean",
-  "date",
-  "bigint",
-  "symbol",
-  "function",
-  "undefined",
-  "null",
-  "array",
-  "object",
-  "unknown",
-  "promise",
-  "void",
-  "never",
-  "map",
-  "set"
-]);
-var getParsedType = (data) => {
-  const t = typeof data;
-  switch (t) {
-    case "undefined":
-      return ZodParsedType.undefined;
-    case "string":
-      return ZodParsedType.string;
-    case "number":
-      return Number.isNaN(data) ? ZodParsedType.nan : ZodParsedType.number;
-    case "boolean":
-      return ZodParsedType.boolean;
-    case "function":
-      return ZodParsedType.function;
-    case "bigint":
-      return ZodParsedType.bigint;
-    case "symbol":
-      return ZodParsedType.symbol;
-    case "object":
-      if (Array.isArray(data)) {
-        return ZodParsedType.array;
-      }
-      if (data === null) {
-        return ZodParsedType.null;
-      }
-      if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {
-        return ZodParsedType.promise;
-      }
-      if (typeof Map !== "undefined" && data instanceof Map) {
-        return ZodParsedType.map;
-      }
-      if (typeof Set !== "undefined" && data instanceof Set) {
-        return ZodParsedType.set;
-      }
-      if (typeof Date !== "undefined" && data instanceof Date) {
-        return ZodParsedType.date;
-      }
-      return ZodParsedType.object;
-    default:
-      return ZodParsedType.unknown;
-  }
-};
-
-// ../../node_modules/zod/v3/ZodError.js
-var ZodIssueCode = util.arrayToEnum([
-  "invalid_type",
-  "invalid_literal",
-  "custom",
-  "invalid_union",
-  "invalid_union_discriminator",
-  "invalid_enum_value",
-  "unrecognized_keys",
-  "invalid_arguments",
-  "invalid_return_type",
-  "invalid_date",
-  "invalid_string",
-  "too_small",
-  "too_big",
-  "invalid_intersection_types",
-  "not_multiple_of",
-  "not_finite"
-]);
-var quotelessJson = (obj) => {
-  const json = JSON.stringify(obj, null, 2);
-  return json.replace(/"([^"]+)":/g, "$1:");
-};
-var ZodError = class _ZodError2 extends Error {
-  get errors() {
-    return this.issues;
-  }
-  constructor(issues) {
-    super();
-    this.issues = [];
-    this.addIssue = (sub) => {
-      this.issues = [...this.issues, sub];
-    };
-    this.addIssues = (subs = []) => {
-      this.issues = [...this.issues, ...subs];
-    };
-    const actualProto = new.target.prototype;
-    if (Object.setPrototypeOf) {
-      Object.setPrototypeOf(this, actualProto);
-    } else {
-      this.__proto__ = actualProto;
-    }
-    this.name = "ZodError";
-    this.issues = issues;
-  }
-  format(_mapper) {
-    const mapper = _mapper || function(issue) {
-      return issue.message;
-    };
-    const fieldErrors = { _errors: [] };
-    const processError = (error) => {
-      for (const issue of error.issues) {
-        if (issue.code === "invalid_union") {
-          issue.unionErrors.map(processError);
-        } else if (issue.code === "invalid_return_type") {
-          processError(issue.returnTypeError);
-        } else if (issue.code === "invalid_arguments") {
-          processError(issue.argumentsError);
-        } else if (issue.path.length === 0) {
-          fieldErrors._errors.push(mapper(issue));
-        } else {
-          let curr = fieldErrors;
-          let i = 0;
-          while (i < issue.path.length) {
-            const el = issue.path[i];
-            const terminal = i === issue.path.length - 1;
-            if (!terminal) {
-              curr[el] = curr[el] || { _errors: [] };
-            } else {
-              curr[el] = curr[el] || { _errors: [] };
-              curr[el]._errors.push(mapper(issue));
-            }
-            curr = curr[el];
-            i++;
-          }
-        }
-      }
-    };
-    processError(this);
-    return fieldErrors;
-  }
-  static assert(value) {
-    if (!(value instanceof _ZodError2)) {
-      throw new Error(`Not a ZodError: ${value}`);
-    }
-  }
-  toString() {
-    return this.message;
-  }
-  get message() {
-    return JSON.stringify(this.issues, util.jsonStringifyReplacer, 2);
-  }
-  get isEmpty() {
-    return this.issues.length === 0;
-  }
-  flatten(mapper = (issue) => issue.message) {
-    const fieldErrors = {};
-    const formErrors = [];
-    for (const sub of this.issues) {
-      if (sub.path.length > 0) {
-        const firstEl = sub.path[0];
-        fieldErrors[firstEl] = fieldErrors[firstEl] || [];
-        fieldErrors[firstEl].push(mapper(sub));
-      } else {
-        formErrors.push(mapper(sub));
-      }
-    }
-    return { formErrors, fieldErrors };
-  }
-  get formErrors() {
-    return this.flatten();
-  }
-};
-ZodError.create = (issues) => {
-  const error = new ZodError(issues);
-  return error;
-};
-
-// ../../node_modules/zod/v3/locales/en.js
-var errorMap = (issue, _ctx) => {
-  let message;
-  switch (issue.code) {
-    case ZodIssueCode.invalid_type:
-      if (issue.received === ZodParsedType.undefined) {
-        message = "Required";
-      } else {
-        message = `Expected ${issue.expected}, received ${issue.received}`;
-      }
-      break;
-    case ZodIssueCode.invalid_literal:
-      message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util.jsonStringifyReplacer)}`;
-      break;
-    case ZodIssueCode.unrecognized_keys:
-      message = `Unrecognized key(s) in object: ${util.joinValues(issue.keys, ", ")}`;
-      break;
-    case ZodIssueCode.invalid_union:
-      message = `Invalid input`;
-      break;
-    case ZodIssueCode.invalid_union_discriminator:
-      message = `Invalid discriminator value. Expected ${util.joinValues(issue.options)}`;
-      break;
-    case ZodIssueCode.invalid_enum_value:
-      message = `Invalid enum value. Expected ${util.joinValues(issue.options)}, received '${issue.received}'`;
-      break;
-    case ZodIssueCode.invalid_arguments:
-      message = `Invalid function arguments`;
-      break;
-    case ZodIssueCode.invalid_return_type:
-      message = `Invalid function return type`;
-      break;
-    case ZodIssueCode.invalid_date:
-      message = `Invalid date`;
-      break;
-    case ZodIssueCode.invalid_string:
-      if (typeof issue.validation === "object") {
-        if ("includes" in issue.validation) {
-          message = `Invalid input: must include "${issue.validation.includes}"`;
-          if (typeof issue.validation.position === "number") {
-            message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
-          }
-        } else if ("startsWith" in issue.validation) {
-          message = `Invalid input: must start with "${issue.validation.startsWith}"`;
-        } else if ("endsWith" in issue.validation) {
-          message = `Invalid input: must end with "${issue.validation.endsWith}"`;
-        } else {
-          util.assertNever(issue.validation);
-        }
-      } else if (issue.validation !== "regex") {
-        message = `Invalid ${issue.validation}`;
-      } else {
-        message = "Invalid";
-      }
-      break;
-    case ZodIssueCode.too_small:
-      if (issue.type === "array")
-        message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
-      else if (issue.type === "string")
-        message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
-      else if (issue.type === "number")
-        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
-      else if (issue.type === "bigint")
-        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
-      else if (issue.type === "date")
-        message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
-      else
-        message = "Invalid input";
-      break;
-    case ZodIssueCode.too_big:
-      if (issue.type === "array")
-        message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
-      else if (issue.type === "string")
-        message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
-      else if (issue.type === "number")
-        message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
-      else if (issue.type === "bigint")
-        message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
-      else if (issue.type === "date")
-        message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
-      else
-        message = "Invalid input";
-      break;
-    case ZodIssueCode.custom:
-      message = `Invalid input`;
-      break;
-    case ZodIssueCode.invalid_intersection_types:
-      message = `Intersection results could not be merged`;
-      break;
-    case ZodIssueCode.not_multiple_of:
-      message = `Number must be a multiple of ${issue.multipleOf}`;
-      break;
-    case ZodIssueCode.not_finite:
-      message = "Number must be finite";
-      break;
-    default:
-      message = _ctx.defaultError;
-      util.assertNever(issue);
-  }
-  return { message };
-};
-var en_default = errorMap;
-
-// ../../node_modules/zod/v3/errors.js
-var overrideErrorMap = en_default;
-function setErrorMap(map) {
-  overrideErrorMap = map;
-}
-function getErrorMap() {
-  return overrideErrorMap;
-}
-
-// ../../node_modules/zod/v3/helpers/parseUtil.js
-var makeIssue = (params) => {
-  const { data, path, errorMaps, issueData } = params;
-  const fullPath = [...path, ...issueData.path || []];
-  const fullIssue = {
-    ...issueData,
-    path: fullPath
-  };
-  if (issueData.message !== void 0) {
-    return {
-      ...issueData,
-      path: fullPath,
-      message: issueData.message
-    };
-  }
-  let errorMessage2 = "";
-  const maps = errorMaps.filter((m) => !!m).slice().reverse();
-  for (const map of maps) {
-    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
-  }
-  return {
-    ...issueData,
-    path: fullPath,
-    message: errorMessage2
-  };
-};
-var EMPTY_PATH = [];
-function addIssueToContext(ctx, issueData) {
-  const overrideMap = getErrorMap();
-  const issue = makeIssue({
-    issueData,
-    data: ctx.data,
-    path: ctx.path,
-    errorMaps: [
-      ctx.common.contextualErrorMap,
-      // contextual error map is first priority
-      ctx.schemaErrorMap,
-      // then schema-bound map if available
-      overrideMap,
-      // then global override map
-      overrideMap === en_default ? void 0 : en_default
-      // then global default map
-    ].filter((x) => !!x)
-  });
-  ctx.common.issues.push(issue);
-}
-var ParseStatus = class _ParseStatus2 {
-  constructor() {
-    this.value = "valid";
-  }
-  dirty() {
-    if (this.value === "valid")
-      this.value = "dirty";
-  }
-  abort() {
-    if (this.value !== "aborted")
-      this.value = "aborted";
-  }
-  static mergeArray(status, results) {
-    const arrayValue = [];
-    for (const s of results) {
-      if (s.status === "aborted")
-        return INVALID;
-      if (s.status === "dirty")
-        status.dirty();
-      arrayValue.push(s.value);
-    }
-    return { status: status.value, value: arrayValue };
-  }
-  static async mergeObjectAsync(status, pairs) {
-    const syncPairs = [];
-    for (const pair of pairs) {
-      const key = await pair.key;
-      const value = await pair.value;
-      syncPairs.push({
-        key,
-        value
-      });
-    }
-    return _ParseStatus2.mergeObjectSync(status, syncPairs);
-  }
-  static mergeObjectSync(status, pairs) {
-    const finalObject = {};
-    for (const pair of pairs) {
-      const { key, value } = pair;
-      if (key.status === "aborted")
-        return INVALID;
-      if (value.status === "aborted")
-        return INVALID;
-      if (key.status === "dirty")
-        status.dirty();
-      if (value.status === "dirty")
-        status.dirty();
-      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
-        finalObject[key.value] = value.value;
-      }
-    }
-    return { status: status.value, value: finalObject };
-  }
-};
-var INVALID = Object.freeze({
-  status: "aborted"
 });
-var DIRTY = (value) => ({ status: "dirty", value });
-var OK = (value) => ({ status: "valid", value });
-var isAborted = (x) => x.status === "aborted";
-var isDirty = (x) => x.status === "dirty";
-var isValid = (x) => x.status === "valid";
-var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
-// ../../node_modules/zod/v3/helpers/errorUtil.js
-var errorUtil;
-(function(errorUtil3) {
-  errorUtil3.errToObj = (message) => typeof message === "string" ? { message } : message || {};
-  errorUtil3.toString = (message) => typeof message === "string" ? message : message?.message;
-})(errorUtil || (errorUtil = {}));
+// ../../node_modules/zod/index.js
+var init_zod = __esm({
+  "../../node_modules/zod/index.js"() {
+    "use strict";
+    init_external();
+    init_external();
+  }
+});
 
-// ../../node_modules/zod/v3/types.js
-var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
-    this._cachedPath = [];
-    this.parent = parent;
-    this.data = value;
-    this._path = path;
-    this._key = key;
-  }
-  get path() {
-    if (!this._cachedPath.length) {
-      if (Array.isArray(this._key)) {
-        this._cachedPath.push(...this._path, ...this._key);
-      } else {
-        this._cachedPath.push(...this._path, this._key);
+// ../sdk-services/dist/internal/decrypt-transport-response-error.cjs
+var require_decrypt_transport_response_error = __commonJS({
+  "../sdk-services/dist/internal/decrypt-transport-response-error.cjs"(exports, module) {
+    "use strict";
+    var __defProp3 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export3 = (target, all) => {
+      for (var name in all)
+        __defProp3(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from4, except, desc) => {
+      if (from4 && typeof from4 === "object" || typeof from4 === "function") {
+        for (let key of __getOwnPropNames2(from4))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp3(to, key, { get: () => from4[key], enumerable: !(desc = __getOwnPropDesc2(from4, key)) || desc.enumerable });
       }
-    }
-    return this._cachedPath;
-  }
-};
-var handleResult = (ctx, result) => {
-  if (isValid(result)) {
-    return { success: true, data: result.value };
-  } else {
-    if (!ctx.common.issues.length) {
-      throw new Error("Validation failed but no issues detected.");
-    }
-    return {
-      success: false,
-      get error() {
-        if (this._error)
-          return this._error;
-        const error = new ZodError(ctx.common.issues);
-        this._error = error;
-        return this._error;
+      return to;
+    };
+    var __toCommonJS = (mod2) => __copyProps2(__defProp3({}, "__esModule", { value: true }), mod2);
+    var DecryptTransportResponseError_exports = {};
+    __export3(DecryptTransportResponseError_exports, {
+      DecryptTransportResponseError: () => DecryptTransportResponseError2
+    });
+    module.exports = __toCommonJS(DecryptTransportResponseError_exports);
+    var DecryptTransportResponseError2 = class extends Error {
+      constructor(status, permissionHint) {
+        super("Node decrypt request failed");
+        this.status = status;
+        this.permissionHint = permissionHint;
+        this.name = "DecryptTransportResponseError";
       }
     };
   }
-};
-function processCreateParams(params) {
-  if (!params)
-    return {};
-  const { errorMap: errorMap3, invalid_type_error, required_error, description } = params;
-  if (errorMap3 && (invalid_type_error || required_error)) {
-    throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
-  }
-  if (errorMap3)
-    return { errorMap: errorMap3, description };
-  const customMap = (iss, ctx) => {
-    const { message } = params;
-    if (iss.code === "invalid_enum_value") {
-      return { message: message ?? ctx.defaultError };
-    }
-    if (typeof ctx.data === "undefined") {
-      return { message: message ?? required_error ?? ctx.defaultError };
-    }
-    if (iss.code !== "invalid_type")
-      return { message: ctx.defaultError };
-    return { message: message ?? invalid_type_error ?? ctx.defaultError };
-  };
-  return { errorMap: customMap, description };
-}
-var ZodType = class {
-  get description() {
-    return this._def.description;
-  }
-  _getType(input) {
-    return getParsedType(input.data);
-  }
-  _getOrReturnCtx(input, ctx) {
-    return ctx || {
-      common: input.parent.common,
-      data: input.data,
-      parsedType: getParsedType(input.data),
-      schemaErrorMap: this._def.errorMap,
-      path: input.path,
-      parent: input.parent
-    };
-  }
-  _processInputParams(input) {
-    return {
-      status: new ParseStatus(),
-      ctx: {
-        common: input.parent.common,
-        data: input.data,
-        parsedType: getParsedType(input.data),
-        schemaErrorMap: this._def.errorMap,
-        path: input.path,
-        parent: input.parent
-      }
-    };
-  }
-  _parseSync(input) {
-    const result = this._parse(input);
-    if (isAsync(result)) {
-      throw new Error("Synchronous parse encountered promise.");
-    }
-    return result;
-  }
-  _parseAsync(input) {
-    const result = this._parse(input);
-    return Promise.resolve(result);
-  }
-  parse(data, params) {
-    const result = this.safeParse(data, params);
-    if (result.success)
-      return result.data;
-    throw result.error;
-  }
-  safeParse(data, params) {
-    const ctx = {
-      common: {
-        issues: [],
-        async: params?.async ?? false,
-        contextualErrorMap: params?.errorMap
-      },
-      path: params?.path || [],
-      schemaErrorMap: this._def.errorMap,
-      parent: null,
-      data,
-      parsedType: getParsedType(data)
-    };
-    const result = this._parseSync({ data, path: ctx.path, parent: ctx });
-    return handleResult(ctx, result);
-  }
-  "~validate"(data) {
-    const ctx = {
-      common: {
-        issues: [],
-        async: !!this["~standard"].async
-      },
-      path: [],
-      schemaErrorMap: this._def.errorMap,
-      parent: null,
-      data,
-      parsedType: getParsedType(data)
-    };
-    if (!this["~standard"].async) {
-      try {
-        const result = this._parseSync({ data, path: [], parent: ctx });
-        return isValid(result) ? {
-          value: result.value
-        } : {
-          issues: ctx.common.issues
-        };
-      } catch (err2) {
-        if (err2?.message?.toLowerCase()?.includes("encountered")) {
-          this["~standard"].async = true;
-        }
-        ctx.common = {
-          issues: [],
-          async: true
-        };
-      }
-    }
-    return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid(result) ? {
-      value: result.value
-    } : {
-      issues: ctx.common.issues
-    });
-  }
-  async parseAsync(data, params) {
-    const result = await this.safeParseAsync(data, params);
-    if (result.success)
-      return result.data;
-    throw result.error;
-  }
-  async safeParseAsync(data, params) {
-    const ctx = {
-      common: {
-        issues: [],
-        contextualErrorMap: params?.errorMap,
-        async: true
-      },
-      path: params?.path || [],
-      schemaErrorMap: this._def.errorMap,
-      parent: null,
-      data,
-      parsedType: getParsedType(data)
-    };
-    const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
-    const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
-    return handleResult(ctx, result);
-  }
-  refine(check, message) {
-    const getIssueProperties = (val) => {
-      if (typeof message === "string" || typeof message === "undefined") {
-        return { message };
-      } else if (typeof message === "function") {
-        return message(val);
-      } else {
-        return message;
-      }
-    };
-    return this._refinement((val, ctx) => {
-      const result = check(val);
-      const setError = () => ctx.addIssue({
-        code: ZodIssueCode.custom,
-        ...getIssueProperties(val)
-      });
-      if (typeof Promise !== "undefined" && result instanceof Promise) {
-        return result.then((data) => {
-          if (!data) {
-            setError();
-            return false;
-          } else {
-            return true;
-          }
-        });
-      }
-      if (!result) {
-        setError();
-        return false;
-      } else {
-        return true;
-      }
-    });
-  }
-  refinement(check, refinementData) {
-    return this._refinement((val, ctx) => {
-      if (!check(val)) {
-        ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
-        return false;
-      } else {
-        return true;
-      }
-    });
-  }
-  _refinement(refinement) {
-    return new ZodEffects({
-      schema: this,
-      typeName: ZodFirstPartyTypeKind.ZodEffects,
-      effect: { type: "refinement", refinement }
-    });
-  }
-  superRefine(refinement) {
-    return this._refinement(refinement);
-  }
-  constructor(def) {
-    this.spa = this.safeParseAsync;
-    this._def = def;
-    this.parse = this.parse.bind(this);
-    this.safeParse = this.safeParse.bind(this);
-    this.parseAsync = this.parseAsync.bind(this);
-    this.safeParseAsync = this.safeParseAsync.bind(this);
-    this.spa = this.spa.bind(this);
-    this.refine = this.refine.bind(this);
-    this.refinement = this.refinement.bind(this);
-    this.superRefine = this.superRefine.bind(this);
-    this.optional = this.optional.bind(this);
-    this.nullable = this.nullable.bind(this);
-    this.nullish = this.nullish.bind(this);
-    this.array = this.array.bind(this);
-    this.promise = this.promise.bind(this);
-    this.or = this.or.bind(this);
-    this.and = this.and.bind(this);
-    this.transform = this.transform.bind(this);
-    this.brand = this.brand.bind(this);
-    this.default = this.default.bind(this);
-    this.catch = this.catch.bind(this);
-    this.describe = this.describe.bind(this);
-    this.pipe = this.pipe.bind(this);
-    this.readonly = this.readonly.bind(this);
-    this.isNullable = this.isNullable.bind(this);
-    this.isOptional = this.isOptional.bind(this);
-    this["~standard"] = {
-      version: 1,
-      vendor: "zod",
-      validate: (data) => this["~validate"](data)
-    };
-  }
-  optional() {
-    return ZodOptional.create(this, this._def);
-  }
-  nullable() {
-    return ZodNullable.create(this, this._def);
-  }
-  nullish() {
-    return this.nullable().optional();
-  }
-  array() {
-    return ZodArray.create(this);
-  }
-  promise() {
-    return ZodPromise.create(this, this._def);
-  }
-  or(option) {
-    return ZodUnion.create([this, option], this._def);
-  }
-  and(incoming) {
-    return ZodIntersection.create(this, incoming, this._def);
-  }
-  transform(transform) {
-    return new ZodEffects({
-      ...processCreateParams(this._def),
-      schema: this,
-      typeName: ZodFirstPartyTypeKind.ZodEffects,
-      effect: { type: "transform", transform }
-    });
-  }
-  default(def) {
-    const defaultValueFunc = typeof def === "function" ? def : () => def;
-    return new ZodDefault({
-      ...processCreateParams(this._def),
-      innerType: this,
-      defaultValue: defaultValueFunc,
-      typeName: ZodFirstPartyTypeKind.ZodDefault
-    });
-  }
-  brand() {
-    return new ZodBranded({
-      typeName: ZodFirstPartyTypeKind.ZodBranded,
-      type: this,
-      ...processCreateParams(this._def)
-    });
-  }
-  catch(def) {
-    const catchValueFunc = typeof def === "function" ? def : () => def;
-    return new ZodCatch({
-      ...processCreateParams(this._def),
-      innerType: this,
-      catchValue: catchValueFunc,
-      typeName: ZodFirstPartyTypeKind.ZodCatch
-    });
-  }
-  describe(description) {
-    const This = this.constructor;
-    return new This({
-      ...this._def,
-      description
-    });
-  }
-  pipe(target) {
-    return ZodPipeline.create(this, target);
-  }
-  readonly() {
-    return ZodReadonly.create(this);
-  }
-  isOptional() {
-    return this.safeParse(void 0).success;
-  }
-  isNullable() {
-    return this.safeParse(null).success;
-  }
-};
-var cuidRegex = /^c[^\s-]{8,}$/i;
-var cuid2Regex = /^[0-9a-z]+$/;
-var ulidRegex = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
-var uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
-var nanoidRegex = /^[a-z0-9_-]{21}$/i;
-var jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
-var durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
-var emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
-var _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
-var emojiRegex;
-var ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
-var ipv4CidrRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
-var ipv6Regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
-var ipv6CidrRegex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
-var base64Regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
-var base64urlRegex = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
-var dateRegexSource = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
-var dateRegex = new RegExp(`^${dateRegexSource}$`);
-function timeRegexSource(args) {
-  let secondsRegexSource = `[0-5]\\d`;
-  if (args.precision) {
-    secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
-  } else if (args.precision == null) {
-    secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
-  }
-  const secondsQuantifier = args.precision ? "+" : "?";
-  return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
-}
-function timeRegex(args) {
-  return new RegExp(`^${timeRegexSource(args)}$`);
-}
-function datetimeRegex(args) {
-  let regex = `${dateRegexSource}T${timeRegexSource(args)}`;
-  const opts = [];
-  opts.push(args.local ? `Z?` : `Z`);
-  if (args.offset)
-    opts.push(`([+-]\\d{2}:?\\d{2})`);
-  regex = `${regex}(${opts.join("|")})`;
-  return new RegExp(`^${regex}$`);
-}
-function isValidIP(ip, version) {
-  if ((version === "v4" || !version) && ipv4Regex.test(ip)) {
-    return true;
-  }
-  if ((version === "v6" || !version) && ipv6Regex.test(ip)) {
-    return true;
-  }
-  return false;
-}
-function isValidJWT(jwt, alg) {
-  if (!jwtRegex.test(jwt))
-    return false;
-  try {
-    const [header] = jwt.split(".");
-    if (!header)
-      return false;
-    const base643 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
-    const decoded = JSON.parse(atob(base643));
-    if (typeof decoded !== "object" || decoded === null)
-      return false;
-    if ("typ" in decoded && decoded?.typ !== "JWT")
-      return false;
-    if (!decoded.alg)
-      return false;
-    if (alg && decoded.alg !== alg)
-      return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-function isValidCidr(ip, version) {
-  if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {
-    return true;
-  }
-  if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {
-    return true;
-  }
-  return false;
-}
-var ZodString = class _ZodString2 extends ZodType {
-  _parse(input) {
-    if (this._def.coerce) {
-      input.data = String(input.data);
-    }
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.string) {
-      const ctx2 = this._getOrReturnCtx(input);
-      addIssueToContext(ctx2, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.string,
-        received: ctx2.parsedType
-      });
-      return INVALID;
-    }
-    const status = new ParseStatus();
-    let ctx = void 0;
-    for (const check of this._def.checks) {
-      if (check.kind === "min") {
-        if (input.data.length < check.value) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_small,
-            minimum: check.value,
-            type: "string",
-            inclusive: true,
-            exact: false,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "max") {
-        if (input.data.length > check.value) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_big,
-            maximum: check.value,
-            type: "string",
-            inclusive: true,
-            exact: false,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "length") {
-        const tooBig = input.data.length > check.value;
-        const tooSmall = input.data.length < check.value;
-        if (tooBig || tooSmall) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          if (tooBig) {
-            addIssueToContext(ctx, {
-              code: ZodIssueCode.too_big,
-              maximum: check.value,
-              type: "string",
-              inclusive: true,
-              exact: true,
-              message: check.message
-            });
-          } else if (tooSmall) {
-            addIssueToContext(ctx, {
-              code: ZodIssueCode.too_small,
-              minimum: check.value,
-              type: "string",
-              inclusive: true,
-              exact: true,
-              message: check.message
-            });
-          }
-          status.dirty();
-        }
-      } else if (check.kind === "email") {
-        if (!emailRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "email",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "emoji") {
-        if (!emojiRegex) {
-          emojiRegex = new RegExp(_emojiRegex, "u");
-        }
-        if (!emojiRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "emoji",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "uuid") {
-        if (!uuidRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "uuid",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "nanoid") {
-        if (!nanoidRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "nanoid",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "cuid") {
-        if (!cuidRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "cuid",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "cuid2") {
-        if (!cuid2Regex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "cuid2",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "ulid") {
-        if (!ulidRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "ulid",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "url") {
-        try {
-          new URL(input.data);
-        } catch {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "url",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "regex") {
-        check.regex.lastIndex = 0;
-        const testResult = check.regex.test(input.data);
-        if (!testResult) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "regex",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "trim") {
-        input.data = input.data.trim();
-      } else if (check.kind === "includes") {
-        if (!input.data.includes(check.value, check.position)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_string,
-            validation: { includes: check.value, position: check.position },
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "toLowerCase") {
-        input.data = input.data.toLowerCase();
-      } else if (check.kind === "toUpperCase") {
-        input.data = input.data.toUpperCase();
-      } else if (check.kind === "startsWith") {
-        if (!input.data.startsWith(check.value)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_string,
-            validation: { startsWith: check.value },
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "endsWith") {
-        if (!input.data.endsWith(check.value)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_string,
-            validation: { endsWith: check.value },
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "datetime") {
-        const regex = datetimeRegex(check);
-        if (!regex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_string,
-            validation: "datetime",
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "date") {
-        const regex = dateRegex;
-        if (!regex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_string,
-            validation: "date",
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "time") {
-        const regex = timeRegex(check);
-        if (!regex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_string,
-            validation: "time",
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "duration") {
-        if (!durationRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "duration",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "ip") {
-        if (!isValidIP(input.data, check.version)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "ip",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "jwt") {
-        if (!isValidJWT(input.data, check.alg)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "jwt",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "cidr") {
-        if (!isValidCidr(input.data, check.version)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "cidr",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "base64") {
-        if (!base64Regex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "base64",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "base64url") {
-        if (!base64urlRegex.test(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            validation: "base64url",
-            code: ZodIssueCode.invalid_string,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else {
-        util.assertNever(check);
-      }
-    }
-    return { status: status.value, value: input.data };
-  }
-  _regex(regex, validation, message) {
-    return this.refinement((data) => regex.test(data), {
-      validation,
-      code: ZodIssueCode.invalid_string,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  _addCheck(check) {
-    return new _ZodString2({
-      ...this._def,
-      checks: [...this._def.checks, check]
-    });
-  }
-  email(message) {
-    return this._addCheck({ kind: "email", ...errorUtil.errToObj(message) });
-  }
-  url(message) {
-    return this._addCheck({ kind: "url", ...errorUtil.errToObj(message) });
-  }
-  emoji(message) {
-    return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message) });
-  }
-  uuid(message) {
-    return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message) });
-  }
-  nanoid(message) {
-    return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message) });
-  }
-  cuid(message) {
-    return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message) });
-  }
-  cuid2(message) {
-    return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message) });
-  }
-  ulid(message) {
-    return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message) });
-  }
-  base64(message) {
-    return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message) });
-  }
-  base64url(message) {
-    return this._addCheck({
-      kind: "base64url",
-      ...errorUtil.errToObj(message)
-    });
-  }
-  jwt(options) {
-    return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options) });
-  }
-  ip(options) {
-    return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options) });
-  }
-  cidr(options) {
-    return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options) });
-  }
-  datetime(options) {
-    if (typeof options === "string") {
-      return this._addCheck({
-        kind: "datetime",
-        precision: null,
-        offset: false,
-        local: false,
-        message: options
-      });
-    }
-    return this._addCheck({
-      kind: "datetime",
-      precision: typeof options?.precision === "undefined" ? null : options?.precision,
-      offset: options?.offset ?? false,
-      local: options?.local ?? false,
-      ...errorUtil.errToObj(options?.message)
-    });
-  }
-  date(message) {
-    return this._addCheck({ kind: "date", message });
-  }
-  time(options) {
-    if (typeof options === "string") {
-      return this._addCheck({
-        kind: "time",
-        precision: null,
-        message: options
-      });
-    }
-    return this._addCheck({
-      kind: "time",
-      precision: typeof options?.precision === "undefined" ? null : options?.precision,
-      ...errorUtil.errToObj(options?.message)
-    });
-  }
-  duration(message) {
-    return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message) });
-  }
-  regex(regex, message) {
-    return this._addCheck({
-      kind: "regex",
-      regex,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  includes(value, options) {
-    return this._addCheck({
-      kind: "includes",
-      value,
-      position: options?.position,
-      ...errorUtil.errToObj(options?.message)
-    });
-  }
-  startsWith(value, message) {
-    return this._addCheck({
-      kind: "startsWith",
-      value,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  endsWith(value, message) {
-    return this._addCheck({
-      kind: "endsWith",
-      value,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  min(minLength, message) {
-    return this._addCheck({
-      kind: "min",
-      value: minLength,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  max(maxLength, message) {
-    return this._addCheck({
-      kind: "max",
-      value: maxLength,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  length(len, message) {
-    return this._addCheck({
-      kind: "length",
-      value: len,
-      ...errorUtil.errToObj(message)
-    });
-  }
-  /**
-   * Equivalent to `.min(1)`
-   */
-  nonempty(message) {
-    return this.min(1, errorUtil.errToObj(message));
-  }
-  trim() {
-    return new _ZodString2({
-      ...this._def,
-      checks: [...this._def.checks, { kind: "trim" }]
-    });
-  }
-  toLowerCase() {
-    return new _ZodString2({
-      ...this._def,
-      checks: [...this._def.checks, { kind: "toLowerCase" }]
-    });
-  }
-  toUpperCase() {
-    return new _ZodString2({
-      ...this._def,
-      checks: [...this._def.checks, { kind: "toUpperCase" }]
-    });
-  }
-  get isDatetime() {
-    return !!this._def.checks.find((ch) => ch.kind === "datetime");
-  }
-  get isDate() {
-    return !!this._def.checks.find((ch) => ch.kind === "date");
-  }
-  get isTime() {
-    return !!this._def.checks.find((ch) => ch.kind === "time");
-  }
-  get isDuration() {
-    return !!this._def.checks.find((ch) => ch.kind === "duration");
-  }
-  get isEmail() {
-    return !!this._def.checks.find((ch) => ch.kind === "email");
-  }
-  get isURL() {
-    return !!this._def.checks.find((ch) => ch.kind === "url");
-  }
-  get isEmoji() {
-    return !!this._def.checks.find((ch) => ch.kind === "emoji");
-  }
-  get isUUID() {
-    return !!this._def.checks.find((ch) => ch.kind === "uuid");
-  }
-  get isNANOID() {
-    return !!this._def.checks.find((ch) => ch.kind === "nanoid");
-  }
-  get isCUID() {
-    return !!this._def.checks.find((ch) => ch.kind === "cuid");
-  }
-  get isCUID2() {
-    return !!this._def.checks.find((ch) => ch.kind === "cuid2");
-  }
-  get isULID() {
-    return !!this._def.checks.find((ch) => ch.kind === "ulid");
-  }
-  get isIP() {
-    return !!this._def.checks.find((ch) => ch.kind === "ip");
-  }
-  get isCIDR() {
-    return !!this._def.checks.find((ch) => ch.kind === "cidr");
-  }
-  get isBase64() {
-    return !!this._def.checks.find((ch) => ch.kind === "base64");
-  }
-  get isBase64url() {
-    return !!this._def.checks.find((ch) => ch.kind === "base64url");
-  }
-  get minLength() {
-    let min = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "min") {
-        if (min === null || ch.value > min)
-          min = ch.value;
-      }
-    }
-    return min;
-  }
-  get maxLength() {
-    let max = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "max") {
-        if (max === null || ch.value < max)
-          max = ch.value;
-      }
-    }
-    return max;
-  }
-};
-ZodString.create = (params) => {
-  return new ZodString({
-    checks: [],
-    typeName: ZodFirstPartyTypeKind.ZodString,
-    coerce: params?.coerce ?? false,
-    ...processCreateParams(params)
-  });
-};
-function floatSafeRemainder(val, step) {
-  const valDecCount = (val.toString().split(".")[1] || "").length;
-  const stepDecCount = (step.toString().split(".")[1] || "").length;
-  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
-  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
-  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
-  return valInt % stepInt / 10 ** decCount;
-}
-var ZodNumber = class _ZodNumber2 extends ZodType {
-  constructor() {
-    super(...arguments);
-    this.min = this.gte;
-    this.max = this.lte;
-    this.step = this.multipleOf;
-  }
-  _parse(input) {
-    if (this._def.coerce) {
-      input.data = Number(input.data);
-    }
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.number) {
-      const ctx2 = this._getOrReturnCtx(input);
-      addIssueToContext(ctx2, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.number,
-        received: ctx2.parsedType
-      });
-      return INVALID;
-    }
-    let ctx = void 0;
-    const status = new ParseStatus();
-    for (const check of this._def.checks) {
-      if (check.kind === "int") {
-        if (!util.isInteger(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_type,
-            expected: "integer",
-            received: "float",
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "min") {
-        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
-        if (tooSmall) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_small,
-            minimum: check.value,
-            type: "number",
-            inclusive: check.inclusive,
-            exact: false,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "max") {
-        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
-        if (tooBig) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_big,
-            maximum: check.value,
-            type: "number",
-            inclusive: check.inclusive,
-            exact: false,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "multipleOf") {
-        if (floatSafeRemainder(input.data, check.value) !== 0) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.not_multiple_of,
-            multipleOf: check.value,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "finite") {
-        if (!Number.isFinite(input.data)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.not_finite,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else {
-        util.assertNever(check);
-      }
-    }
-    return { status: status.value, value: input.data };
-  }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil.toString(message));
-  }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil.toString(message));
-  }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil.toString(message));
-  }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil.toString(message));
-  }
-  setLimit(kind, value, inclusive, message) {
-    return new _ZodNumber2({
-      ...this._def,
-      checks: [
-        ...this._def.checks,
-        {
-          kind,
-          value,
-          inclusive,
-          message: errorUtil.toString(message)
-        }
-      ]
-    });
-  }
-  _addCheck(check) {
-    return new _ZodNumber2({
-      ...this._def,
-      checks: [...this._def.checks, check]
-    });
-  }
-  int(message) {
-    return this._addCheck({
-      kind: "int",
-      message: errorUtil.toString(message)
-    });
-  }
-  positive(message) {
-    return this._addCheck({
-      kind: "min",
-      value: 0,
-      inclusive: false,
-      message: errorUtil.toString(message)
-    });
-  }
-  negative(message) {
-    return this._addCheck({
-      kind: "max",
-      value: 0,
-      inclusive: false,
-      message: errorUtil.toString(message)
-    });
-  }
-  nonpositive(message) {
-    return this._addCheck({
-      kind: "max",
-      value: 0,
-      inclusive: true,
-      message: errorUtil.toString(message)
-    });
-  }
-  nonnegative(message) {
-    return this._addCheck({
-      kind: "min",
-      value: 0,
-      inclusive: true,
-      message: errorUtil.toString(message)
-    });
-  }
-  multipleOf(value, message) {
-    return this._addCheck({
-      kind: "multipleOf",
-      value,
-      message: errorUtil.toString(message)
-    });
-  }
-  finite(message) {
-    return this._addCheck({
-      kind: "finite",
-      message: errorUtil.toString(message)
-    });
-  }
-  safe(message) {
-    return this._addCheck({
-      kind: "min",
-      inclusive: true,
-      value: Number.MIN_SAFE_INTEGER,
-      message: errorUtil.toString(message)
-    })._addCheck({
-      kind: "max",
-      inclusive: true,
-      value: Number.MAX_SAFE_INTEGER,
-      message: errorUtil.toString(message)
-    });
-  }
-  get minValue() {
-    let min = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "min") {
-        if (min === null || ch.value > min)
-          min = ch.value;
-      }
-    }
-    return min;
-  }
-  get maxValue() {
-    let max = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "max") {
-        if (max === null || ch.value < max)
-          max = ch.value;
-      }
-    }
-    return max;
-  }
-  get isInt() {
-    return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util.isInteger(ch.value));
-  }
-  get isFinite() {
-    let max = null;
-    let min = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {
-        return true;
-      } else if (ch.kind === "min") {
-        if (min === null || ch.value > min)
-          min = ch.value;
-      } else if (ch.kind === "max") {
-        if (max === null || ch.value < max)
-          max = ch.value;
-      }
-    }
-    return Number.isFinite(min) && Number.isFinite(max);
-  }
-};
-ZodNumber.create = (params) => {
-  return new ZodNumber({
-    checks: [],
-    typeName: ZodFirstPartyTypeKind.ZodNumber,
-    coerce: params?.coerce || false,
-    ...processCreateParams(params)
-  });
-};
-var ZodBigInt = class _ZodBigInt2 extends ZodType {
-  constructor() {
-    super(...arguments);
-    this.min = this.gte;
-    this.max = this.lte;
-  }
-  _parse(input) {
-    if (this._def.coerce) {
-      try {
-        input.data = BigInt(input.data);
-      } catch {
-        return this._getInvalidInput(input);
-      }
-    }
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.bigint) {
-      return this._getInvalidInput(input);
-    }
-    let ctx = void 0;
-    const status = new ParseStatus();
-    for (const check of this._def.checks) {
-      if (check.kind === "min") {
-        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
-        if (tooSmall) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_small,
-            type: "bigint",
-            minimum: check.value,
-            inclusive: check.inclusive,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "max") {
-        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
-        if (tooBig) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_big,
-            type: "bigint",
-            maximum: check.value,
-            inclusive: check.inclusive,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "multipleOf") {
-        if (input.data % check.value !== BigInt(0)) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.not_multiple_of,
-            multipleOf: check.value,
-            message: check.message
-          });
-          status.dirty();
-        }
-      } else {
-        util.assertNever(check);
-      }
-    }
-    return { status: status.value, value: input.data };
-  }
-  _getInvalidInput(input) {
-    const ctx = this._getOrReturnCtx(input);
-    addIssueToContext(ctx, {
-      code: ZodIssueCode.invalid_type,
-      expected: ZodParsedType.bigint,
-      received: ctx.parsedType
-    });
-    return INVALID;
-  }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil.toString(message));
-  }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil.toString(message));
-  }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil.toString(message));
-  }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil.toString(message));
-  }
-  setLimit(kind, value, inclusive, message) {
-    return new _ZodBigInt2({
-      ...this._def,
-      checks: [
-        ...this._def.checks,
-        {
-          kind,
-          value,
-          inclusive,
-          message: errorUtil.toString(message)
-        }
-      ]
-    });
-  }
-  _addCheck(check) {
-    return new _ZodBigInt2({
-      ...this._def,
-      checks: [...this._def.checks, check]
-    });
-  }
-  positive(message) {
-    return this._addCheck({
-      kind: "min",
-      value: BigInt(0),
-      inclusive: false,
-      message: errorUtil.toString(message)
-    });
-  }
-  negative(message) {
-    return this._addCheck({
-      kind: "max",
-      value: BigInt(0),
-      inclusive: false,
-      message: errorUtil.toString(message)
-    });
-  }
-  nonpositive(message) {
-    return this._addCheck({
-      kind: "max",
-      value: BigInt(0),
-      inclusive: true,
-      message: errorUtil.toString(message)
-    });
-  }
-  nonnegative(message) {
-    return this._addCheck({
-      kind: "min",
-      value: BigInt(0),
-      inclusive: true,
-      message: errorUtil.toString(message)
-    });
-  }
-  multipleOf(value, message) {
-    return this._addCheck({
-      kind: "multipleOf",
-      value,
-      message: errorUtil.toString(message)
-    });
-  }
-  get minValue() {
-    let min = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "min") {
-        if (min === null || ch.value > min)
-          min = ch.value;
-      }
-    }
-    return min;
-  }
-  get maxValue() {
-    let max = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "max") {
-        if (max === null || ch.value < max)
-          max = ch.value;
-      }
-    }
-    return max;
-  }
-};
-ZodBigInt.create = (params) => {
-  return new ZodBigInt({
-    checks: [],
-    typeName: ZodFirstPartyTypeKind.ZodBigInt,
-    coerce: params?.coerce ?? false,
-    ...processCreateParams(params)
-  });
-};
-var ZodBoolean = class extends ZodType {
-  _parse(input) {
-    if (this._def.coerce) {
-      input.data = Boolean(input.data);
-    }
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.boolean) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.boolean,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-};
-ZodBoolean.create = (params) => {
-  return new ZodBoolean({
-    typeName: ZodFirstPartyTypeKind.ZodBoolean,
-    coerce: params?.coerce || false,
-    ...processCreateParams(params)
-  });
-};
-var ZodDate = class _ZodDate2 extends ZodType {
-  _parse(input) {
-    if (this._def.coerce) {
-      input.data = new Date(input.data);
-    }
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.date) {
-      const ctx2 = this._getOrReturnCtx(input);
-      addIssueToContext(ctx2, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.date,
-        received: ctx2.parsedType
-      });
-      return INVALID;
-    }
-    if (Number.isNaN(input.data.getTime())) {
-      const ctx2 = this._getOrReturnCtx(input);
-      addIssueToContext(ctx2, {
-        code: ZodIssueCode.invalid_date
-      });
-      return INVALID;
-    }
-    const status = new ParseStatus();
-    let ctx = void 0;
-    for (const check of this._def.checks) {
-      if (check.kind === "min") {
-        if (input.data.getTime() < check.value) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_small,
-            message: check.message,
-            inclusive: true,
-            exact: false,
-            minimum: check.value,
-            type: "date"
-          });
-          status.dirty();
-        }
-      } else if (check.kind === "max") {
-        if (input.data.getTime() > check.value) {
-          ctx = this._getOrReturnCtx(input, ctx);
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.too_big,
-            message: check.message,
-            inclusive: true,
-            exact: false,
-            maximum: check.value,
-            type: "date"
-          });
-          status.dirty();
-        }
-      } else {
-        util.assertNever(check);
-      }
-    }
-    return {
-      status: status.value,
-      value: new Date(input.data.getTime())
-    };
-  }
-  _addCheck(check) {
-    return new _ZodDate2({
-      ...this._def,
-      checks: [...this._def.checks, check]
-    });
-  }
-  min(minDate, message) {
-    return this._addCheck({
-      kind: "min",
-      value: minDate.getTime(),
-      message: errorUtil.toString(message)
-    });
-  }
-  max(maxDate, message) {
-    return this._addCheck({
-      kind: "max",
-      value: maxDate.getTime(),
-      message: errorUtil.toString(message)
-    });
-  }
-  get minDate() {
-    let min = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "min") {
-        if (min === null || ch.value > min)
-          min = ch.value;
-      }
-    }
-    return min != null ? new Date(min) : null;
-  }
-  get maxDate() {
-    let max = null;
-    for (const ch of this._def.checks) {
-      if (ch.kind === "max") {
-        if (max === null || ch.value < max)
-          max = ch.value;
-      }
-    }
-    return max != null ? new Date(max) : null;
-  }
-};
-ZodDate.create = (params) => {
-  return new ZodDate({
-    checks: [],
-    coerce: params?.coerce || false,
-    typeName: ZodFirstPartyTypeKind.ZodDate,
-    ...processCreateParams(params)
-  });
-};
-var ZodSymbol = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.symbol) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.symbol,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-};
-ZodSymbol.create = (params) => {
-  return new ZodSymbol({
-    typeName: ZodFirstPartyTypeKind.ZodSymbol,
-    ...processCreateParams(params)
-  });
-};
-var ZodUndefined = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.undefined) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.undefined,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-};
-ZodUndefined.create = (params) => {
-  return new ZodUndefined({
-    typeName: ZodFirstPartyTypeKind.ZodUndefined,
-    ...processCreateParams(params)
-  });
-};
-var ZodNull = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.null) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.null,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-};
-ZodNull.create = (params) => {
-  return new ZodNull({
-    typeName: ZodFirstPartyTypeKind.ZodNull,
-    ...processCreateParams(params)
-  });
-};
-var ZodAny = class extends ZodType {
-  constructor() {
-    super(...arguments);
-    this._any = true;
-  }
-  _parse(input) {
-    return OK(input.data);
-  }
-};
-ZodAny.create = (params) => {
-  return new ZodAny({
-    typeName: ZodFirstPartyTypeKind.ZodAny,
-    ...processCreateParams(params)
-  });
-};
-var ZodUnknown = class extends ZodType {
-  constructor() {
-    super(...arguments);
-    this._unknown = true;
-  }
-  _parse(input) {
-    return OK(input.data);
-  }
-};
-ZodUnknown.create = (params) => {
-  return new ZodUnknown({
-    typeName: ZodFirstPartyTypeKind.ZodUnknown,
-    ...processCreateParams(params)
-  });
-};
-var ZodNever = class extends ZodType {
-  _parse(input) {
-    const ctx = this._getOrReturnCtx(input);
-    addIssueToContext(ctx, {
-      code: ZodIssueCode.invalid_type,
-      expected: ZodParsedType.never,
-      received: ctx.parsedType
-    });
-    return INVALID;
-  }
-};
-ZodNever.create = (params) => {
-  return new ZodNever({
-    typeName: ZodFirstPartyTypeKind.ZodNever,
-    ...processCreateParams(params)
-  });
-};
-var ZodVoid = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.undefined) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.void,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-};
-ZodVoid.create = (params) => {
-  return new ZodVoid({
-    typeName: ZodFirstPartyTypeKind.ZodVoid,
-    ...processCreateParams(params)
-  });
-};
-var ZodArray = class _ZodArray2 extends ZodType {
-  _parse(input) {
-    const { ctx, status } = this._processInputParams(input);
-    const def = this._def;
-    if (ctx.parsedType !== ZodParsedType.array) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.array,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    if (def.exactLength !== null) {
-      const tooBig = ctx.data.length > def.exactLength.value;
-      const tooSmall = ctx.data.length < def.exactLength.value;
-      if (tooBig || tooSmall) {
-        addIssueToContext(ctx, {
-          code: tooBig ? ZodIssueCode.too_big : ZodIssueCode.too_small,
-          minimum: tooSmall ? def.exactLength.value : void 0,
-          maximum: tooBig ? def.exactLength.value : void 0,
-          type: "array",
-          inclusive: true,
-          exact: true,
-          message: def.exactLength.message
-        });
-        status.dirty();
-      }
-    }
-    if (def.minLength !== null) {
-      if (ctx.data.length < def.minLength.value) {
-        addIssueToContext(ctx, {
-          code: ZodIssueCode.too_small,
-          minimum: def.minLength.value,
-          type: "array",
-          inclusive: true,
-          exact: false,
-          message: def.minLength.message
-        });
-        status.dirty();
-      }
-    }
-    if (def.maxLength !== null) {
-      if (ctx.data.length > def.maxLength.value) {
-        addIssueToContext(ctx, {
-          code: ZodIssueCode.too_big,
-          maximum: def.maxLength.value,
-          type: "array",
-          inclusive: true,
-          exact: false,
-          message: def.maxLength.message
-        });
-        status.dirty();
-      }
-    }
-    if (ctx.common.async) {
-      return Promise.all([...ctx.data].map((item, i) => {
-        return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
-      })).then((result2) => {
-        return ParseStatus.mergeArray(status, result2);
-      });
-    }
-    const result = [...ctx.data].map((item, i) => {
-      return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
-    });
-    return ParseStatus.mergeArray(status, result);
-  }
-  get element() {
-    return this._def.type;
-  }
-  min(minLength, message) {
-    return new _ZodArray2({
-      ...this._def,
-      minLength: { value: minLength, message: errorUtil.toString(message) }
-    });
-  }
-  max(maxLength, message) {
-    return new _ZodArray2({
-      ...this._def,
-      maxLength: { value: maxLength, message: errorUtil.toString(message) }
-    });
-  }
-  length(len, message) {
-    return new _ZodArray2({
-      ...this._def,
-      exactLength: { value: len, message: errorUtil.toString(message) }
-    });
-  }
-  nonempty(message) {
-    return this.min(1, message);
-  }
-};
-ZodArray.create = (schema, params) => {
-  return new ZodArray({
-    type: schema,
-    minLength: null,
-    maxLength: null,
-    exactLength: null,
-    typeName: ZodFirstPartyTypeKind.ZodArray,
-    ...processCreateParams(params)
-  });
-};
-function deepPartialify(schema) {
-  if (schema instanceof ZodObject) {
-    const newShape = {};
-    for (const key in schema.shape) {
-      const fieldSchema = schema.shape[key];
-      newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
-    }
-    return new ZodObject({
-      ...schema._def,
-      shape: () => newShape
-    });
-  } else if (schema instanceof ZodArray) {
-    return new ZodArray({
-      ...schema._def,
-      type: deepPartialify(schema.element)
-    });
-  } else if (schema instanceof ZodOptional) {
-    return ZodOptional.create(deepPartialify(schema.unwrap()));
-  } else if (schema instanceof ZodNullable) {
-    return ZodNullable.create(deepPartialify(schema.unwrap()));
-  } else if (schema instanceof ZodTuple) {
-    return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
-  } else {
-    return schema;
-  }
-}
-var ZodObject = class _ZodObject2 extends ZodType {
-  constructor() {
-    super(...arguments);
-    this._cached = null;
-    this.nonstrict = this.passthrough;
-    this.augment = this.extend;
-  }
-  _getCached() {
-    if (this._cached !== null)
-      return this._cached;
-    const shape = this._def.shape();
-    const keys = util.objectKeys(shape);
-    this._cached = { shape, keys };
-    return this._cached;
-  }
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.object) {
-      const ctx2 = this._getOrReturnCtx(input);
-      addIssueToContext(ctx2, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.object,
-        received: ctx2.parsedType
-      });
-      return INVALID;
-    }
-    const { status, ctx } = this._processInputParams(input);
-    const { shape, keys: shapeKeys } = this._getCached();
-    const extraKeys = [];
-    if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
-      for (const key in ctx.data) {
-        if (!shapeKeys.includes(key)) {
-          extraKeys.push(key);
-        }
-      }
-    }
-    const pairs = [];
-    for (const key of shapeKeys) {
-      const keyValidator = shape[key];
-      const value = ctx.data[key];
-      pairs.push({
-        key: { status: "valid", value: key },
-        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
-        alwaysSet: key in ctx.data
-      });
-    }
-    if (this._def.catchall instanceof ZodNever) {
-      const unknownKeys = this._def.unknownKeys;
-      if (unknownKeys === "passthrough") {
-        for (const key of extraKeys) {
-          pairs.push({
-            key: { status: "valid", value: key },
-            value: { status: "valid", value: ctx.data[key] }
-          });
-        }
-      } else if (unknownKeys === "strict") {
-        if (extraKeys.length > 0) {
-          addIssueToContext(ctx, {
-            code: ZodIssueCode.unrecognized_keys,
-            keys: extraKeys
-          });
-          status.dirty();
-        }
-      } else if (unknownKeys === "strip") {
-      } else {
-        throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
-      }
-    } else {
-      const catchall = this._def.catchall;
-      for (const key of extraKeys) {
-        const value = ctx.data[key];
-        pairs.push({
-          key: { status: "valid", value: key },
-          value: catchall._parse(
-            new ParseInputLazyPath(ctx, value, ctx.path, key)
-            //, ctx.child(key), value, getParsedType(value)
-          ),
-          alwaysSet: key in ctx.data
-        });
-      }
-    }
-    if (ctx.common.async) {
-      return Promise.resolve().then(async () => {
-        const syncPairs = [];
-        for (const pair of pairs) {
-          const key = await pair.key;
-          const value = await pair.value;
-          syncPairs.push({
-            key,
-            value,
-            alwaysSet: pair.alwaysSet
-          });
-        }
-        return syncPairs;
-      }).then((syncPairs) => {
-        return ParseStatus.mergeObjectSync(status, syncPairs);
-      });
-    } else {
-      return ParseStatus.mergeObjectSync(status, pairs);
-    }
-  }
-  get shape() {
-    return this._def.shape();
-  }
-  strict(message) {
-    errorUtil.errToObj;
-    return new _ZodObject2({
-      ...this._def,
-      unknownKeys: "strict",
-      ...message !== void 0 ? {
-        errorMap: (issue, ctx) => {
-          const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
-          if (issue.code === "unrecognized_keys")
-            return {
-              message: errorUtil.errToObj(message).message ?? defaultError
-            };
-          return {
-            message: defaultError
-          };
-        }
-      } : {}
-    });
-  }
-  strip() {
-    return new _ZodObject2({
-      ...this._def,
-      unknownKeys: "strip"
-    });
-  }
-  passthrough() {
-    return new _ZodObject2({
-      ...this._def,
-      unknownKeys: "passthrough"
-    });
-  }
-  // const AugmentFactory =
-  //   <Def extends ZodObjectDef>(def: Def) =>
-  //   <Augmentation extends ZodRawShape>(
-  //     augmentation: Augmentation
-  //   ): ZodObject<
-  //     extendShape<ReturnType<Def["shape"]>, Augmentation>,
-  //     Def["unknownKeys"],
-  //     Def["catchall"]
-  //   > => {
-  //     return new ZodObject({
-  //       ...def,
-  //       shape: () => ({
-  //         ...def.shape(),
-  //         ...augmentation,
-  //       }),
-  //     }) as any;
-  //   };
-  extend(augmentation) {
-    return new _ZodObject2({
-      ...this._def,
-      shape: () => ({
-        ...this._def.shape(),
-        ...augmentation
-      })
-    });
-  }
-  /**
-   * Prior to zod@1.0.12 there was a bug in the
-   * inferred type of merged objects. Please
-   * upgrade if you are experiencing issues.
-   */
-  merge(merging) {
-    const merged = new _ZodObject2({
-      unknownKeys: merging._def.unknownKeys,
-      catchall: merging._def.catchall,
-      shape: () => ({
-        ...this._def.shape(),
-        ...merging._def.shape()
-      }),
-      typeName: ZodFirstPartyTypeKind.ZodObject
-    });
-    return merged;
-  }
-  // merge<
-  //   Incoming extends AnyZodObject,
-  //   Augmentation extends Incoming["shape"],
-  //   NewOutput extends {
-  //     [k in keyof Augmentation | keyof Output]: k extends keyof Augmentation
-  //       ? Augmentation[k]["_output"]
-  //       : k extends keyof Output
-  //       ? Output[k]
-  //       : never;
-  //   },
-  //   NewInput extends {
-  //     [k in keyof Augmentation | keyof Input]: k extends keyof Augmentation
-  //       ? Augmentation[k]["_input"]
-  //       : k extends keyof Input
-  //       ? Input[k]
-  //       : never;
-  //   }
-  // >(
-  //   merging: Incoming
-  // ): ZodObject<
-  //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
-  //   Incoming["_def"]["unknownKeys"],
-  //   Incoming["_def"]["catchall"],
-  //   NewOutput,
-  //   NewInput
-  // > {
-  //   const merged: any = new ZodObject({
-  //     unknownKeys: merging._def.unknownKeys,
-  //     catchall: merging._def.catchall,
-  //     shape: () =>
-  //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
-  //     typeName: ZodFirstPartyTypeKind.ZodObject,
-  //   }) as any;
-  //   return merged;
-  // }
-  setKey(key, schema) {
-    return this.augment({ [key]: schema });
-  }
-  // merge<Incoming extends AnyZodObject>(
-  //   merging: Incoming
-  // ): //ZodObject<T & Incoming["_shape"], UnknownKeys, Catchall> = (merging) => {
-  // ZodObject<
-  //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
-  //   Incoming["_def"]["unknownKeys"],
-  //   Incoming["_def"]["catchall"]
-  // > {
-  //   // const mergedShape = objectUtil.mergeShapes(
-  //   //   this._def.shape(),
-  //   //   merging._def.shape()
-  //   // );
-  //   const merged: any = new ZodObject({
-  //     unknownKeys: merging._def.unknownKeys,
-  //     catchall: merging._def.catchall,
-  //     shape: () =>
-  //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
-  //     typeName: ZodFirstPartyTypeKind.ZodObject,
-  //   }) as any;
-  //   return merged;
-  // }
-  catchall(index) {
-    return new _ZodObject2({
-      ...this._def,
-      catchall: index
-    });
-  }
-  pick(mask) {
-    const shape = {};
-    for (const key of util.objectKeys(mask)) {
-      if (mask[key] && this.shape[key]) {
-        shape[key] = this.shape[key];
-      }
-    }
-    return new _ZodObject2({
-      ...this._def,
-      shape: () => shape
-    });
-  }
-  omit(mask) {
-    const shape = {};
-    for (const key of util.objectKeys(this.shape)) {
-      if (!mask[key]) {
-        shape[key] = this.shape[key];
-      }
-    }
-    return new _ZodObject2({
-      ...this._def,
-      shape: () => shape
-    });
-  }
-  /**
-   * @deprecated
-   */
-  deepPartial() {
-    return deepPartialify(this);
-  }
-  partial(mask) {
-    const newShape = {};
-    for (const key of util.objectKeys(this.shape)) {
-      const fieldSchema = this.shape[key];
-      if (mask && !mask[key]) {
-        newShape[key] = fieldSchema;
-      } else {
-        newShape[key] = fieldSchema.optional();
-      }
-    }
-    return new _ZodObject2({
-      ...this._def,
-      shape: () => newShape
-    });
-  }
-  required(mask) {
-    const newShape = {};
-    for (const key of util.objectKeys(this.shape)) {
-      if (mask && !mask[key]) {
-        newShape[key] = this.shape[key];
-      } else {
-        const fieldSchema = this.shape[key];
-        let newField = fieldSchema;
-        while (newField instanceof ZodOptional) {
-          newField = newField._def.innerType;
-        }
-        newShape[key] = newField;
-      }
-    }
-    return new _ZodObject2({
-      ...this._def,
-      shape: () => newShape
-    });
-  }
-  keyof() {
-    return createZodEnum(util.objectKeys(this.shape));
-  }
-};
-ZodObject.create = (shape, params) => {
-  return new ZodObject({
-    shape: () => shape,
-    unknownKeys: "strip",
-    catchall: ZodNever.create(),
-    typeName: ZodFirstPartyTypeKind.ZodObject,
-    ...processCreateParams(params)
-  });
-};
-ZodObject.strictCreate = (shape, params) => {
-  return new ZodObject({
-    shape: () => shape,
-    unknownKeys: "strict",
-    catchall: ZodNever.create(),
-    typeName: ZodFirstPartyTypeKind.ZodObject,
-    ...processCreateParams(params)
-  });
-};
-ZodObject.lazycreate = (shape, params) => {
-  return new ZodObject({
-    shape,
-    unknownKeys: "strip",
-    catchall: ZodNever.create(),
-    typeName: ZodFirstPartyTypeKind.ZodObject,
-    ...processCreateParams(params)
-  });
-};
-var ZodUnion = class extends ZodType {
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    const options = this._def.options;
-    function handleResults(results) {
-      for (const result of results) {
-        if (result.result.status === "valid") {
-          return result.result;
-        }
-      }
-      for (const result of results) {
-        if (result.result.status === "dirty") {
-          ctx.common.issues.push(...result.ctx.common.issues);
-          return result.result;
-        }
-      }
-      const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_union,
-        unionErrors
-      });
-      return INVALID;
-    }
-    if (ctx.common.async) {
-      return Promise.all(options.map(async (option) => {
-        const childCtx = {
-          ...ctx,
-          common: {
-            ...ctx.common,
-            issues: []
-          },
-          parent: null
-        };
-        return {
-          result: await option._parseAsync({
-            data: ctx.data,
-            path: ctx.path,
-            parent: childCtx
-          }),
-          ctx: childCtx
-        };
-      })).then(handleResults);
-    } else {
-      let dirty = void 0;
-      const issues = [];
-      for (const option of options) {
-        const childCtx = {
-          ...ctx,
-          common: {
-            ...ctx.common,
-            issues: []
-          },
-          parent: null
-        };
-        const result = option._parseSync({
-          data: ctx.data,
-          path: ctx.path,
-          parent: childCtx
-        });
-        if (result.status === "valid") {
-          return result;
-        } else if (result.status === "dirty" && !dirty) {
-          dirty = { result, ctx: childCtx };
-        }
-        if (childCtx.common.issues.length) {
-          issues.push(childCtx.common.issues);
-        }
-      }
-      if (dirty) {
-        ctx.common.issues.push(...dirty.ctx.common.issues);
-        return dirty.result;
-      }
-      const unionErrors = issues.map((issues2) => new ZodError(issues2));
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_union,
-        unionErrors
-      });
-      return INVALID;
-    }
-  }
-  get options() {
-    return this._def.options;
-  }
-};
-ZodUnion.create = (types, params) => {
-  return new ZodUnion({
-    options: types,
-    typeName: ZodFirstPartyTypeKind.ZodUnion,
-    ...processCreateParams(params)
-  });
-};
-var getDiscriminator = (type) => {
-  if (type instanceof ZodLazy) {
-    return getDiscriminator(type.schema);
-  } else if (type instanceof ZodEffects) {
-    return getDiscriminator(type.innerType());
-  } else if (type instanceof ZodLiteral) {
-    return [type.value];
-  } else if (type instanceof ZodEnum) {
-    return type.options;
-  } else if (type instanceof ZodNativeEnum) {
-    return util.objectValues(type.enum);
-  } else if (type instanceof ZodDefault) {
-    return getDiscriminator(type._def.innerType);
-  } else if (type instanceof ZodUndefined) {
-    return [void 0];
-  } else if (type instanceof ZodNull) {
-    return [null];
-  } else if (type instanceof ZodOptional) {
-    return [void 0, ...getDiscriminator(type.unwrap())];
-  } else if (type instanceof ZodNullable) {
-    return [null, ...getDiscriminator(type.unwrap())];
-  } else if (type instanceof ZodBranded) {
-    return getDiscriminator(type.unwrap());
-  } else if (type instanceof ZodReadonly) {
-    return getDiscriminator(type.unwrap());
-  } else if (type instanceof ZodCatch) {
-    return getDiscriminator(type._def.innerType);
-  } else {
-    return [];
-  }
-};
-var ZodDiscriminatedUnion = class _ZodDiscriminatedUnion2 extends ZodType {
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.object) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.object,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    const discriminator = this.discriminator;
-    const discriminatorValue = ctx.data[discriminator];
-    const option = this.optionsMap.get(discriminatorValue);
-    if (!option) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_union_discriminator,
-        options: Array.from(this.optionsMap.keys()),
-        path: [discriminator]
-      });
-      return INVALID;
-    }
-    if (ctx.common.async) {
-      return option._parseAsync({
-        data: ctx.data,
-        path: ctx.path,
-        parent: ctx
-      });
-    } else {
-      return option._parseSync({
-        data: ctx.data,
-        path: ctx.path,
-        parent: ctx
-      });
-    }
-  }
-  get discriminator() {
-    return this._def.discriminator;
-  }
-  get options() {
-    return this._def.options;
-  }
-  get optionsMap() {
-    return this._def.optionsMap;
-  }
-  /**
-   * The constructor of the discriminated union schema. Its behaviour is very similar to that of the normal z.union() constructor.
-   * However, it only allows a union of objects, all of which need to share a discriminator property. This property must
-   * have a different value for each object in the union.
-   * @param discriminator the name of the discriminator property
-   * @param types an array of object schemas
-   * @param params
-   */
-  static create(discriminator, options, params) {
-    const optionsMap = /* @__PURE__ */ new Map();
-    for (const type of options) {
-      const discriminatorValues = getDiscriminator(type.shape[discriminator]);
-      if (!discriminatorValues.length) {
-        throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
-      }
-      for (const value of discriminatorValues) {
-        if (optionsMap.has(value)) {
-          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
-        }
-        optionsMap.set(value, type);
-      }
-    }
-    return new _ZodDiscriminatedUnion2({
-      typeName: ZodFirstPartyTypeKind.ZodDiscriminatedUnion,
-      discriminator,
-      options,
-      optionsMap,
-      ...processCreateParams(params)
-    });
-  }
-};
-function mergeValues(a, b) {
-  const aType = getParsedType(a);
-  const bType = getParsedType(b);
-  if (a === b) {
-    return { valid: true, data: a };
-  } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
-    const bKeys = util.objectKeys(b);
-    const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
-    const newObj = { ...a, ...b };
-    for (const key of sharedKeys) {
-      const sharedValue = mergeValues(a[key], b[key]);
-      if (!sharedValue.valid) {
-        return { valid: false };
-      }
-      newObj[key] = sharedValue.data;
-    }
-    return { valid: true, data: newObj };
-  } else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
-    if (a.length !== b.length) {
-      return { valid: false };
-    }
-    const newArray = [];
-    for (let index = 0; index < a.length; index++) {
-      const itemA = a[index];
-      const itemB = b[index];
-      const sharedValue = mergeValues(itemA, itemB);
-      if (!sharedValue.valid) {
-        return { valid: false };
-      }
-      newArray.push(sharedValue.data);
-    }
-    return { valid: true, data: newArray };
-  } else if (aType === ZodParsedType.date && bType === ZodParsedType.date && +a === +b) {
-    return { valid: true, data: a };
-  } else {
-    return { valid: false };
-  }
-}
-var ZodIntersection = class extends ZodType {
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    const handleParsed = (parsedLeft, parsedRight) => {
-      if (isAborted(parsedLeft) || isAborted(parsedRight)) {
-        return INVALID;
-      }
-      const merged = mergeValues(parsedLeft.value, parsedRight.value);
-      if (!merged.valid) {
-        addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_intersection_types
-        });
-        return INVALID;
-      }
-      if (isDirty(parsedLeft) || isDirty(parsedRight)) {
-        status.dirty();
-      }
-      return { status: status.value, value: merged.data };
-    };
-    if (ctx.common.async) {
-      return Promise.all([
-        this._def.left._parseAsync({
-          data: ctx.data,
-          path: ctx.path,
-          parent: ctx
-        }),
-        this._def.right._parseAsync({
-          data: ctx.data,
-          path: ctx.path,
-          parent: ctx
-        })
-      ]).then(([left, right]) => handleParsed(left, right));
-    } else {
-      return handleParsed(this._def.left._parseSync({
-        data: ctx.data,
-        path: ctx.path,
-        parent: ctx
-      }), this._def.right._parseSync({
-        data: ctx.data,
-        path: ctx.path,
-        parent: ctx
-      }));
-    }
-  }
-};
-ZodIntersection.create = (left, right, params) => {
-  return new ZodIntersection({
-    left,
-    right,
-    typeName: ZodFirstPartyTypeKind.ZodIntersection,
-    ...processCreateParams(params)
-  });
-};
-var ZodTuple = class _ZodTuple2 extends ZodType {
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.array) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.array,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    if (ctx.data.length < this._def.items.length) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.too_small,
-        minimum: this._def.items.length,
-        inclusive: true,
-        exact: false,
-        type: "array"
-      });
-      return INVALID;
-    }
-    const rest = this._def.rest;
-    if (!rest && ctx.data.length > this._def.items.length) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.too_big,
-        maximum: this._def.items.length,
-        inclusive: true,
-        exact: false,
-        type: "array"
-      });
-      status.dirty();
-    }
-    const items = [...ctx.data].map((item, itemIndex) => {
-      const schema = this._def.items[itemIndex] || this._def.rest;
-      if (!schema)
-        return null;
-      return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
-    }).filter((x) => !!x);
-    if (ctx.common.async) {
-      return Promise.all(items).then((results) => {
-        return ParseStatus.mergeArray(status, results);
-      });
-    } else {
-      return ParseStatus.mergeArray(status, items);
-    }
-  }
-  get items() {
-    return this._def.items;
-  }
-  rest(rest) {
-    return new _ZodTuple2({
-      ...this._def,
-      rest
-    });
-  }
-};
-ZodTuple.create = (schemas, params) => {
-  if (!Array.isArray(schemas)) {
-    throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
-  }
-  return new ZodTuple({
-    items: schemas,
-    typeName: ZodFirstPartyTypeKind.ZodTuple,
-    rest: null,
-    ...processCreateParams(params)
-  });
-};
-var ZodRecord = class _ZodRecord2 extends ZodType {
-  get keySchema() {
-    return this._def.keyType;
-  }
-  get valueSchema() {
-    return this._def.valueType;
-  }
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.object) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.object,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    const pairs = [];
-    const keyType = this._def.keyType;
-    const valueType = this._def.valueType;
-    for (const key in ctx.data) {
-      pairs.push({
-        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
-        value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
-        alwaysSet: key in ctx.data
-      });
-    }
-    if (ctx.common.async) {
-      return ParseStatus.mergeObjectAsync(status, pairs);
-    } else {
-      return ParseStatus.mergeObjectSync(status, pairs);
-    }
-  }
-  get element() {
-    return this._def.valueType;
-  }
-  static create(first, second, third) {
-    if (second instanceof ZodType) {
-      return new _ZodRecord2({
-        keyType: first,
-        valueType: second,
-        typeName: ZodFirstPartyTypeKind.ZodRecord,
-        ...processCreateParams(third)
-      });
-    }
-    return new _ZodRecord2({
-      keyType: ZodString.create(),
-      valueType: first,
-      typeName: ZodFirstPartyTypeKind.ZodRecord,
-      ...processCreateParams(second)
-    });
-  }
-};
-var ZodMap = class extends ZodType {
-  get keySchema() {
-    return this._def.keyType;
-  }
-  get valueSchema() {
-    return this._def.valueType;
-  }
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.map) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.map,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    const keyType = this._def.keyType;
-    const valueType = this._def.valueType;
-    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
-      return {
-        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
-        value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
-      };
-    });
-    if (ctx.common.async) {
-      const finalMap = /* @__PURE__ */ new Map();
-      return Promise.resolve().then(async () => {
-        for (const pair of pairs) {
-          const key = await pair.key;
-          const value = await pair.value;
-          if (key.status === "aborted" || value.status === "aborted") {
-            return INVALID;
-          }
-          if (key.status === "dirty" || value.status === "dirty") {
-            status.dirty();
-          }
-          finalMap.set(key.value, value.value);
-        }
-        return { status: status.value, value: finalMap };
-      });
-    } else {
-      const finalMap = /* @__PURE__ */ new Map();
-      for (const pair of pairs) {
-        const key = pair.key;
-        const value = pair.value;
-        if (key.status === "aborted" || value.status === "aborted") {
-          return INVALID;
-        }
-        if (key.status === "dirty" || value.status === "dirty") {
-          status.dirty();
-        }
-        finalMap.set(key.value, value.value);
-      }
-      return { status: status.value, value: finalMap };
-    }
-  }
-};
-ZodMap.create = (keyType, valueType, params) => {
-  return new ZodMap({
-    valueType,
-    keyType,
-    typeName: ZodFirstPartyTypeKind.ZodMap,
-    ...processCreateParams(params)
-  });
-};
-var ZodSet = class _ZodSet2 extends ZodType {
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.set) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.set,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    const def = this._def;
-    if (def.minSize !== null) {
-      if (ctx.data.size < def.minSize.value) {
-        addIssueToContext(ctx, {
-          code: ZodIssueCode.too_small,
-          minimum: def.minSize.value,
-          type: "set",
-          inclusive: true,
-          exact: false,
-          message: def.minSize.message
-        });
-        status.dirty();
-      }
-    }
-    if (def.maxSize !== null) {
-      if (ctx.data.size > def.maxSize.value) {
-        addIssueToContext(ctx, {
-          code: ZodIssueCode.too_big,
-          maximum: def.maxSize.value,
-          type: "set",
-          inclusive: true,
-          exact: false,
-          message: def.maxSize.message
-        });
-        status.dirty();
-      }
-    }
-    const valueType = this._def.valueType;
-    function finalizeSet(elements2) {
-      const parsedSet = /* @__PURE__ */ new Set();
-      for (const element of elements2) {
-        if (element.status === "aborted")
-          return INVALID;
-        if (element.status === "dirty")
-          status.dirty();
-        parsedSet.add(element.value);
-      }
-      return { status: status.value, value: parsedSet };
-    }
-    const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
-    if (ctx.common.async) {
-      return Promise.all(elements).then((elements2) => finalizeSet(elements2));
-    } else {
-      return finalizeSet(elements);
-    }
-  }
-  min(minSize, message) {
-    return new _ZodSet2({
-      ...this._def,
-      minSize: { value: minSize, message: errorUtil.toString(message) }
-    });
-  }
-  max(maxSize, message) {
-    return new _ZodSet2({
-      ...this._def,
-      maxSize: { value: maxSize, message: errorUtil.toString(message) }
-    });
-  }
-  size(size, message) {
-    return this.min(size, message).max(size, message);
-  }
-  nonempty(message) {
-    return this.min(1, message);
-  }
-};
-ZodSet.create = (valueType, params) => {
-  return new ZodSet({
-    valueType,
-    minSize: null,
-    maxSize: null,
-    typeName: ZodFirstPartyTypeKind.ZodSet,
-    ...processCreateParams(params)
-  });
-};
-var ZodFunction = class _ZodFunction2 extends ZodType {
-  constructor() {
-    super(...arguments);
-    this.validate = this.implement;
-  }
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.function) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.function,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    function makeArgsIssue(args, error) {
-      return makeIssue({
-        data: args,
-        path: ctx.path,
-        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
-        issueData: {
-          code: ZodIssueCode.invalid_arguments,
-          argumentsError: error
-        }
-      });
-    }
-    function makeReturnsIssue(returns, error) {
-      return makeIssue({
-        data: returns,
-        path: ctx.path,
-        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
-        issueData: {
-          code: ZodIssueCode.invalid_return_type,
-          returnTypeError: error
-        }
-      });
-    }
-    const params = { errorMap: ctx.common.contextualErrorMap };
-    const fn = ctx.data;
-    if (this._def.returns instanceof ZodPromise) {
-      const me = this;
-      return OK(async function(...args) {
-        const error = new ZodError([]);
-        const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
-          error.addIssue(makeArgsIssue(args, e));
-          throw error;
-        });
-        const result = await Reflect.apply(fn, this, parsedArgs);
-        const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
-          error.addIssue(makeReturnsIssue(result, e));
-          throw error;
-        });
-        return parsedReturns;
-      });
-    } else {
-      const me = this;
-      return OK(function(...args) {
-        const parsedArgs = me._def.args.safeParse(args, params);
-        if (!parsedArgs.success) {
-          throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
-        }
-        const result = Reflect.apply(fn, this, parsedArgs.data);
-        const parsedReturns = me._def.returns.safeParse(result, params);
-        if (!parsedReturns.success) {
-          throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
-        }
-        return parsedReturns.data;
-      });
-    }
-  }
-  parameters() {
-    return this._def.args;
-  }
-  returnType() {
-    return this._def.returns;
-  }
-  args(...items) {
-    return new _ZodFunction2({
-      ...this._def,
-      args: ZodTuple.create(items).rest(ZodUnknown.create())
-    });
-  }
-  returns(returnType) {
-    return new _ZodFunction2({
-      ...this._def,
-      returns: returnType
-    });
-  }
-  implement(func) {
-    const validatedFunc = this.parse(func);
-    return validatedFunc;
-  }
-  strictImplement(func) {
-    const validatedFunc = this.parse(func);
-    return validatedFunc;
-  }
-  static create(args, returns, params) {
-    return new _ZodFunction2({
-      args: args ? args : ZodTuple.create([]).rest(ZodUnknown.create()),
-      returns: returns || ZodUnknown.create(),
-      typeName: ZodFirstPartyTypeKind.ZodFunction,
-      ...processCreateParams(params)
-    });
-  }
-};
-var ZodLazy = class extends ZodType {
-  get schema() {
-    return this._def.getter();
-  }
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    const lazySchema = this._def.getter();
-    return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
-  }
-};
-ZodLazy.create = (getter, params) => {
-  return new ZodLazy({
-    getter,
-    typeName: ZodFirstPartyTypeKind.ZodLazy,
-    ...processCreateParams(params)
-  });
-};
-var ZodLiteral = class extends ZodType {
-  _parse(input) {
-    if (input.data !== this._def.value) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        received: ctx.data,
-        code: ZodIssueCode.invalid_literal,
-        expected: this._def.value
-      });
-      return INVALID;
-    }
-    return { status: "valid", value: input.data };
-  }
-  get value() {
-    return this._def.value;
-  }
-};
-ZodLiteral.create = (value, params) => {
-  return new ZodLiteral({
-    value,
-    typeName: ZodFirstPartyTypeKind.ZodLiteral,
-    ...processCreateParams(params)
-  });
-};
-function createZodEnum(values, params) {
-  return new ZodEnum({
-    values,
-    typeName: ZodFirstPartyTypeKind.ZodEnum,
-    ...processCreateParams(params)
-  });
-}
-var ZodEnum = class _ZodEnum2 extends ZodType {
-  _parse(input) {
-    if (typeof input.data !== "string") {
-      const ctx = this._getOrReturnCtx(input);
-      const expectedValues = this._def.values;
-      addIssueToContext(ctx, {
-        expected: util.joinValues(expectedValues),
-        received: ctx.parsedType,
-        code: ZodIssueCode.invalid_type
-      });
-      return INVALID;
-    }
-    if (!this._cache) {
-      this._cache = new Set(this._def.values);
-    }
-    if (!this._cache.has(input.data)) {
-      const ctx = this._getOrReturnCtx(input);
-      const expectedValues = this._def.values;
-      addIssueToContext(ctx, {
-        received: ctx.data,
-        code: ZodIssueCode.invalid_enum_value,
-        options: expectedValues
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-  get options() {
-    return this._def.values;
-  }
-  get enum() {
-    const enumValues = {};
-    for (const val of this._def.values) {
-      enumValues[val] = val;
-    }
-    return enumValues;
-  }
-  get Values() {
-    const enumValues = {};
-    for (const val of this._def.values) {
-      enumValues[val] = val;
-    }
-    return enumValues;
-  }
-  get Enum() {
-    const enumValues = {};
-    for (const val of this._def.values) {
-      enumValues[val] = val;
-    }
-    return enumValues;
-  }
-  extract(values, newDef = this._def) {
-    return _ZodEnum2.create(values, {
-      ...this._def,
-      ...newDef
-    });
-  }
-  exclude(values, newDef = this._def) {
-    return _ZodEnum2.create(this.options.filter((opt) => !values.includes(opt)), {
-      ...this._def,
-      ...newDef
-    });
-  }
-};
-ZodEnum.create = createZodEnum;
-var ZodNativeEnum = class extends ZodType {
-  _parse(input) {
-    const nativeEnumValues = util.getValidEnumValues(this._def.values);
-    const ctx = this._getOrReturnCtx(input);
-    if (ctx.parsedType !== ZodParsedType.string && ctx.parsedType !== ZodParsedType.number) {
-      const expectedValues = util.objectValues(nativeEnumValues);
-      addIssueToContext(ctx, {
-        expected: util.joinValues(expectedValues),
-        received: ctx.parsedType,
-        code: ZodIssueCode.invalid_type
-      });
-      return INVALID;
-    }
-    if (!this._cache) {
-      this._cache = new Set(util.getValidEnumValues(this._def.values));
-    }
-    if (!this._cache.has(input.data)) {
-      const expectedValues = util.objectValues(nativeEnumValues);
-      addIssueToContext(ctx, {
-        received: ctx.data,
-        code: ZodIssueCode.invalid_enum_value,
-        options: expectedValues
-      });
-      return INVALID;
-    }
-    return OK(input.data);
-  }
-  get enum() {
-    return this._def.values;
-  }
-};
-ZodNativeEnum.create = (values, params) => {
-  return new ZodNativeEnum({
-    values,
-    typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
-    ...processCreateParams(params)
-  });
-};
-var ZodPromise = class extends ZodType {
-  unwrap() {
-    return this._def.type;
-  }
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    if (ctx.parsedType !== ZodParsedType.promise && ctx.common.async === false) {
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.promise,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    const promisified = ctx.parsedType === ZodParsedType.promise ? ctx.data : Promise.resolve(ctx.data);
-    return OK(promisified.then((data) => {
-      return this._def.type.parseAsync(data, {
-        path: ctx.path,
-        errorMap: ctx.common.contextualErrorMap
-      });
-    }));
-  }
-};
-ZodPromise.create = (schema, params) => {
-  return new ZodPromise({
-    type: schema,
-    typeName: ZodFirstPartyTypeKind.ZodPromise,
-    ...processCreateParams(params)
-  });
-};
-var ZodEffects = class extends ZodType {
-  innerType() {
-    return this._def.schema;
-  }
-  sourceType() {
-    return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
-  }
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    const effect = this._def.effect || null;
-    const checkCtx = {
-      addIssue: (arg) => {
-        addIssueToContext(ctx, arg);
-        if (arg.fatal) {
-          status.abort();
-        } else {
-          status.dirty();
-        }
-      },
-      get path() {
-        return ctx.path;
-      }
-    };
-    checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
-    if (effect.type === "preprocess") {
-      const processed = effect.transform(ctx.data, checkCtx);
-      if (ctx.common.async) {
-        return Promise.resolve(processed).then(async (processed2) => {
-          if (status.value === "aborted")
-            return INVALID;
-          const result = await this._def.schema._parseAsync({
-            data: processed2,
-            path: ctx.path,
-            parent: ctx
-          });
-          if (result.status === "aborted")
-            return INVALID;
-          if (result.status === "dirty")
-            return DIRTY(result.value);
-          if (status.value === "dirty")
-            return DIRTY(result.value);
-          return result;
-        });
-      } else {
-        if (status.value === "aborted")
-          return INVALID;
-        const result = this._def.schema._parseSync({
-          data: processed,
-          path: ctx.path,
-          parent: ctx
-        });
-        if (result.status === "aborted")
-          return INVALID;
-        if (result.status === "dirty")
-          return DIRTY(result.value);
-        if (status.value === "dirty")
-          return DIRTY(result.value);
-        return result;
-      }
-    }
-    if (effect.type === "refinement") {
-      const executeRefinement = (acc) => {
-        const result = effect.refinement(acc, checkCtx);
-        if (ctx.common.async) {
-          return Promise.resolve(result);
-        }
-        if (result instanceof Promise) {
-          throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
-        }
-        return acc;
-      };
-      if (ctx.common.async === false) {
-        const inner = this._def.schema._parseSync({
-          data: ctx.data,
-          path: ctx.path,
-          parent: ctx
-        });
-        if (inner.status === "aborted")
-          return INVALID;
-        if (inner.status === "dirty")
-          status.dirty();
-        executeRefinement(inner.value);
-        return { status: status.value, value: inner.value };
-      } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
-          if (inner.status === "aborted")
-            return INVALID;
-          if (inner.status === "dirty")
-            status.dirty();
-          return executeRefinement(inner.value).then(() => {
-            return { status: status.value, value: inner.value };
-          });
-        });
-      }
-    }
-    if (effect.type === "transform") {
-      if (ctx.common.async === false) {
-        const base4 = this._def.schema._parseSync({
-          data: ctx.data,
-          path: ctx.path,
-          parent: ctx
-        });
-        if (!isValid(base4))
-          return INVALID;
-        const result = effect.transform(base4.value, checkCtx);
-        if (result instanceof Promise) {
-          throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
-        }
-        return { status: status.value, value: result };
-      } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base4) => {
-          if (!isValid(base4))
-            return INVALID;
-          return Promise.resolve(effect.transform(base4.value, checkCtx)).then((result) => ({
-            status: status.value,
-            value: result
-          }));
-        });
-      }
-    }
-    util.assertNever(effect);
-  }
-};
-ZodEffects.create = (schema, effect, params) => {
-  return new ZodEffects({
-    schema,
-    typeName: ZodFirstPartyTypeKind.ZodEffects,
-    effect,
-    ...processCreateParams(params)
-  });
-};
-ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
-  return new ZodEffects({
-    schema,
-    effect: { type: "preprocess", transform: preprocess },
-    typeName: ZodFirstPartyTypeKind.ZodEffects,
-    ...processCreateParams(params)
-  });
-};
-var ZodOptional = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType === ZodParsedType.undefined) {
-      return OK(void 0);
-    }
-    return this._def.innerType._parse(input);
-  }
-  unwrap() {
-    return this._def.innerType;
-  }
-};
-ZodOptional.create = (type, params) => {
-  return new ZodOptional({
-    innerType: type,
-    typeName: ZodFirstPartyTypeKind.ZodOptional,
-    ...processCreateParams(params)
-  });
-};
-var ZodNullable = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType === ZodParsedType.null) {
-      return OK(null);
-    }
-    return this._def.innerType._parse(input);
-  }
-  unwrap() {
-    return this._def.innerType;
-  }
-};
-ZodNullable.create = (type, params) => {
-  return new ZodNullable({
-    innerType: type,
-    typeName: ZodFirstPartyTypeKind.ZodNullable,
-    ...processCreateParams(params)
-  });
-};
-var ZodDefault = class extends ZodType {
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    let data = ctx.data;
-    if (ctx.parsedType === ZodParsedType.undefined) {
-      data = this._def.defaultValue();
-    }
-    return this._def.innerType._parse({
-      data,
-      path: ctx.path,
-      parent: ctx
-    });
-  }
-  removeDefault() {
-    return this._def.innerType;
-  }
-};
-ZodDefault.create = (type, params) => {
-  return new ZodDefault({
-    innerType: type,
-    typeName: ZodFirstPartyTypeKind.ZodDefault,
-    defaultValue: typeof params.default === "function" ? params.default : () => params.default,
-    ...processCreateParams(params)
-  });
-};
-var ZodCatch = class extends ZodType {
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    const newCtx = {
-      ...ctx,
-      common: {
-        ...ctx.common,
-        issues: []
-      }
-    };
-    const result = this._def.innerType._parse({
-      data: newCtx.data,
-      path: newCtx.path,
-      parent: {
-        ...newCtx
-      }
-    });
-    if (isAsync(result)) {
-      return result.then((result2) => {
-        return {
-          status: "valid",
-          value: result2.status === "valid" ? result2.value : this._def.catchValue({
-            get error() {
-              return new ZodError(newCtx.common.issues);
-            },
-            input: newCtx.data
-          })
-        };
-      });
-    } else {
-      return {
-        status: "valid",
-        value: result.status === "valid" ? result.value : this._def.catchValue({
-          get error() {
-            return new ZodError(newCtx.common.issues);
-          },
-          input: newCtx.data
-        })
-      };
-    }
-  }
-  removeCatch() {
-    return this._def.innerType;
-  }
-};
-ZodCatch.create = (type, params) => {
-  return new ZodCatch({
-    innerType: type,
-    typeName: ZodFirstPartyTypeKind.ZodCatch,
-    catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
-    ...processCreateParams(params)
-  });
-};
-var ZodNaN = class extends ZodType {
-  _parse(input) {
-    const parsedType = this._getType(input);
-    if (parsedType !== ZodParsedType.nan) {
-      const ctx = this._getOrReturnCtx(input);
-      addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
-        expected: ZodParsedType.nan,
-        received: ctx.parsedType
-      });
-      return INVALID;
-    }
-    return { status: "valid", value: input.data };
-  }
-};
-ZodNaN.create = (params) => {
-  return new ZodNaN({
-    typeName: ZodFirstPartyTypeKind.ZodNaN,
-    ...processCreateParams(params)
-  });
-};
-var BRAND = /* @__PURE__ */ Symbol("zod_brand");
-var ZodBranded = class extends ZodType {
-  _parse(input) {
-    const { ctx } = this._processInputParams(input);
-    const data = ctx.data;
-    return this._def.type._parse({
-      data,
-      path: ctx.path,
-      parent: ctx
-    });
-  }
-  unwrap() {
-    return this._def.type;
-  }
-};
-var ZodPipeline = class _ZodPipeline2 extends ZodType {
-  _parse(input) {
-    const { status, ctx } = this._processInputParams(input);
-    if (ctx.common.async) {
-      const handleAsync = async () => {
-        const inResult = await this._def.in._parseAsync({
-          data: ctx.data,
-          path: ctx.path,
-          parent: ctx
-        });
-        if (inResult.status === "aborted")
-          return INVALID;
-        if (inResult.status === "dirty") {
-          status.dirty();
-          return DIRTY(inResult.value);
-        } else {
-          return this._def.out._parseAsync({
-            data: inResult.value,
-            path: ctx.path,
-            parent: ctx
-          });
-        }
-      };
-      return handleAsync();
-    } else {
-      const inResult = this._def.in._parseSync({
-        data: ctx.data,
-        path: ctx.path,
-        parent: ctx
-      });
-      if (inResult.status === "aborted")
-        return INVALID;
-      if (inResult.status === "dirty") {
-        status.dirty();
-        return {
-          status: "dirty",
-          value: inResult.value
-        };
-      } else {
-        return this._def.out._parseSync({
-          data: inResult.value,
-          path: ctx.path,
-          parent: ctx
-        });
-      }
-    }
-  }
-  static create(a, b) {
-    return new _ZodPipeline2({
-      in: a,
-      out: b,
-      typeName: ZodFirstPartyTypeKind.ZodPipeline
-    });
-  }
-};
-var ZodReadonly = class extends ZodType {
-  _parse(input) {
-    const result = this._def.innerType._parse(input);
-    const freeze = (data) => {
-      if (isValid(data)) {
-        data.value = Object.freeze(data.value);
-      }
-      return data;
-    };
-    return isAsync(result) ? result.then((data) => freeze(data)) : freeze(result);
-  }
-  unwrap() {
-    return this._def.innerType;
-  }
-};
-ZodReadonly.create = (type, params) => {
-  return new ZodReadonly({
-    innerType: type,
-    typeName: ZodFirstPartyTypeKind.ZodReadonly,
-    ...processCreateParams(params)
-  });
-};
-function cleanParams(params, data) {
-  const p = typeof params === "function" ? params(data) : typeof params === "string" ? { message: params } : params;
-  const p2 = typeof p === "string" ? { message: p } : p;
-  return p2;
-}
-function custom(check, _params = {}, fatal) {
-  if (check)
-    return ZodAny.create().superRefine((data, ctx) => {
-      const r = check(data);
-      if (r instanceof Promise) {
-        return r.then((r2) => {
-          if (!r2) {
-            const params = cleanParams(_params, data);
-            const _fatal = params.fatal ?? fatal ?? true;
-            ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
-          }
-        });
-      }
-      if (!r) {
-        const params = cleanParams(_params, data);
-        const _fatal = params.fatal ?? fatal ?? true;
-        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
-      }
-      return;
-    });
-  return ZodAny.create();
-}
-var late = {
-  object: ZodObject.lazycreate
-};
-var ZodFirstPartyTypeKind;
-(function(ZodFirstPartyTypeKind3) {
-  ZodFirstPartyTypeKind3["ZodString"] = "ZodString";
-  ZodFirstPartyTypeKind3["ZodNumber"] = "ZodNumber";
-  ZodFirstPartyTypeKind3["ZodNaN"] = "ZodNaN";
-  ZodFirstPartyTypeKind3["ZodBigInt"] = "ZodBigInt";
-  ZodFirstPartyTypeKind3["ZodBoolean"] = "ZodBoolean";
-  ZodFirstPartyTypeKind3["ZodDate"] = "ZodDate";
-  ZodFirstPartyTypeKind3["ZodSymbol"] = "ZodSymbol";
-  ZodFirstPartyTypeKind3["ZodUndefined"] = "ZodUndefined";
-  ZodFirstPartyTypeKind3["ZodNull"] = "ZodNull";
-  ZodFirstPartyTypeKind3["ZodAny"] = "ZodAny";
-  ZodFirstPartyTypeKind3["ZodUnknown"] = "ZodUnknown";
-  ZodFirstPartyTypeKind3["ZodNever"] = "ZodNever";
-  ZodFirstPartyTypeKind3["ZodVoid"] = "ZodVoid";
-  ZodFirstPartyTypeKind3["ZodArray"] = "ZodArray";
-  ZodFirstPartyTypeKind3["ZodObject"] = "ZodObject";
-  ZodFirstPartyTypeKind3["ZodUnion"] = "ZodUnion";
-  ZodFirstPartyTypeKind3["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
-  ZodFirstPartyTypeKind3["ZodIntersection"] = "ZodIntersection";
-  ZodFirstPartyTypeKind3["ZodTuple"] = "ZodTuple";
-  ZodFirstPartyTypeKind3["ZodRecord"] = "ZodRecord";
-  ZodFirstPartyTypeKind3["ZodMap"] = "ZodMap";
-  ZodFirstPartyTypeKind3["ZodSet"] = "ZodSet";
-  ZodFirstPartyTypeKind3["ZodFunction"] = "ZodFunction";
-  ZodFirstPartyTypeKind3["ZodLazy"] = "ZodLazy";
-  ZodFirstPartyTypeKind3["ZodLiteral"] = "ZodLiteral";
-  ZodFirstPartyTypeKind3["ZodEnum"] = "ZodEnum";
-  ZodFirstPartyTypeKind3["ZodEffects"] = "ZodEffects";
-  ZodFirstPartyTypeKind3["ZodNativeEnum"] = "ZodNativeEnum";
-  ZodFirstPartyTypeKind3["ZodOptional"] = "ZodOptional";
-  ZodFirstPartyTypeKind3["ZodNullable"] = "ZodNullable";
-  ZodFirstPartyTypeKind3["ZodDefault"] = "ZodDefault";
-  ZodFirstPartyTypeKind3["ZodCatch"] = "ZodCatch";
-  ZodFirstPartyTypeKind3["ZodPromise"] = "ZodPromise";
-  ZodFirstPartyTypeKind3["ZodBranded"] = "ZodBranded";
-  ZodFirstPartyTypeKind3["ZodPipeline"] = "ZodPipeline";
-  ZodFirstPartyTypeKind3["ZodReadonly"] = "ZodReadonly";
-})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-var instanceOfType = (cls, params = {
-  message: `Input not instance of ${cls.name}`
-}) => custom((data) => data instanceof cls, params);
-var stringType = ZodString.create;
-var numberType = ZodNumber.create;
-var nanType = ZodNaN.create;
-var bigIntType = ZodBigInt.create;
-var booleanType = ZodBoolean.create;
-var dateType = ZodDate.create;
-var symbolType = ZodSymbol.create;
-var undefinedType = ZodUndefined.create;
-var nullType = ZodNull.create;
-var anyType = ZodAny.create;
-var unknownType = ZodUnknown.create;
-var neverType = ZodNever.create;
-var voidType = ZodVoid.create;
-var arrayType = ZodArray.create;
-var objectType = ZodObject.create;
-var strictObjectType = ZodObject.strictCreate;
-var unionType = ZodUnion.create;
-var discriminatedUnionType = ZodDiscriminatedUnion.create;
-var intersectionType = ZodIntersection.create;
-var tupleType = ZodTuple.create;
-var recordType = ZodRecord.create;
-var mapType = ZodMap.create;
-var setType = ZodSet.create;
-var functionType = ZodFunction.create;
-var lazyType = ZodLazy.create;
-var literalType = ZodLiteral.create;
-var enumType = ZodEnum.create;
-var nativeEnumType = ZodNativeEnum.create;
-var promiseType = ZodPromise.create;
-var effectsType = ZodEffects.create;
-var optionalType = ZodOptional.create;
-var nullableType = ZodNullable.create;
-var preprocessType = ZodEffects.createWithPreprocess;
-var pipelineType = ZodPipeline.create;
-var ostring = () => stringType().optional();
-var onumber = () => numberType().optional();
-var oboolean = () => booleanType().optional();
-var coerce = {
-  string: ((arg) => ZodString.create({ ...arg, coerce: true })),
-  number: ((arg) => ZodNumber.create({ ...arg, coerce: true })),
-  boolean: ((arg) => ZodBoolean.create({
-    ...arg,
-    coerce: true
-  })),
-  bigint: ((arg) => ZodBigInt.create({ ...arg, coerce: true })),
-  date: ((arg) => ZodDate.create({ ...arg, coerce: true }))
-};
-var NEVER = INVALID;
+});
 
 // ../sdk-services/dist/index.js
-var import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
-var ErrorCodes = {
-  // Common errors
-  NOT_FOUND: "NOT_FOUND",
-  AUTH_EXPIRED: "AUTH_EXPIRED",
-  AUTH_REQUIRED: "AUTH_REQUIRED",
-  AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
-  /** HTTP 401: the delegation the invocation cites was revoked. */
-  AUTH_DELEGATION_REVOKED: "AUTH_DELEGATION_REVOKED",
-  /** HTTP 401: a delegation the cited one rests on was revoked. */
-  AUTH_DELEGATION_ANCESTOR_REVOKED: "AUTH_DELEGATION_ANCESTOR_REVOKED",
-  NETWORK_ERROR: "NETWORK_ERROR",
-  TIMEOUT: "TIMEOUT",
-  ABORTED: "ABORTED",
-  INVALID_INPUT: "INVALID_INPUT",
-  PERMISSION_DENIED: "PERMISSION_DENIED",
-  // KV-specific errors
-  KV_NOT_FOUND: "KV_NOT_FOUND",
-  KV_WRITE_FAILED: "KV_WRITE_FAILED",
-  KV_PRECONDITION_FAILED: "KV_PRECONDITION_FAILED",
-  KV_CONFLICT: "KV_CONFLICT",
-  KV_RESPONSE_TOO_LARGE: "KV_RESPONSE_TOO_LARGE",
-  /** HTTP 410 from the change feed: discard sync state and restart without a cursor; `meta.reason` says why. */
-  KV_SYNC_RESET_REQUIRED: "KV_SYNC_RESET_REQUIRED",
-  /** HTTP 403 from the change feed: the retention grant was refused; `meta.reason` says why. */
-  KV_RETENTION_GRANT_REFUSED: "KV_RETENTION_GRANT_REFUSED",
-  // SQL-specific errors
-  SQL_ERROR: "SQL_ERROR",
-  SQL_PERMISSION_DENIED: "SQL_PERMISSION_DENIED",
-  SQL_DATABASE_NOT_FOUND: "SQL_DATABASE_NOT_FOUND",
-  SQL_RESPONSE_TOO_LARGE: "SQL_RESPONSE_TOO_LARGE",
-  SQL_QUOTA_EXCEEDED: "SQL_QUOTA_EXCEEDED",
-  SQL_INVALID_STATEMENT: "SQL_INVALID_STATEMENT",
-  SQL_SCHEMA_ERROR: "SQL_SCHEMA_ERROR",
-  SQL_READONLY_VIOLATION: "SQL_READONLY_VIOLATION",
-  // Storage quota errors
-  STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
-  STORAGE_LIMIT_REACHED: "STORAGE_LIMIT_REACHED",
-  // DuckDB-specific errors
-  DUCKDB_ERROR: "DUCKDB_ERROR",
-  DUCKDB_PERMISSION_DENIED: "DUCKDB_PERMISSION_DENIED",
-  DUCKDB_DATABASE_NOT_FOUND: "DUCKDB_DATABASE_NOT_FOUND",
-  DUCKDB_RESPONSE_TOO_LARGE: "DUCKDB_RESPONSE_TOO_LARGE",
-  DUCKDB_QUOTA_EXCEEDED: "DUCKDB_QUOTA_EXCEEDED",
-  DUCKDB_INVALID_STATEMENT: "DUCKDB_INVALID_STATEMENT",
-  DUCKDB_SCHEMA_ERROR: "DUCKDB_SCHEMA_ERROR",
-  DUCKDB_READONLY_VIOLATION: "DUCKDB_READONLY_VIOLATION"
-};
-var defaultRetryPolicy = {
-  maxAttempts: 3,
-  backoff: "exponential",
-  baseDelayMs: 1e3,
-  maxDelayMs: 1e4,
-  retryableErrors: [ErrorCodes.NETWORK_ERROR, ErrorCodes.TIMEOUT]
-};
-var TelemetryEvents = {
-  SPAN: "telemetry.span",
-  SERVICE_REQUEST: "service.request",
-  SERVICE_RESPONSE: "service.response",
-  SERVICE_ERROR: "service.error",
-  SERVICE_RETRY: "service.retry",
-  SESSION_CHANGED: "session.changed",
-  SESSION_EXPIRED: "session.expired"
-};
 function ok(data) {
   return { ok: true, data };
 }
@@ -6700,16 +6298,6 @@ function serviceError(code3, message, service, options) {
     meta: options?.meta
   };
 }
-var REDACTED = "[REDACTED]";
-var SAFE_NUMBER_FIELDS = /* @__PURE__ */ new Set([
-  "duration",
-  "durationMs",
-  "endedAt",
-  "startedAt",
-  "status",
-  "timestamp"
-]);
-var SAFE_BOOLEAN_FIELDS = /* @__PURE__ */ new Set(["authenticated", "ok", "persisted"]);
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : void 0;
 }
@@ -6755,8 +6343,6 @@ function projectDiagnosticData(value) {
     return REDACTED;
   }
 }
-var DEBUG_FLAG = "TinyCloud_debug";
-var MAX_EVENTS = 1e3;
 function getGlobal() {
   return globalThis;
 }
@@ -6814,120 +6400,6 @@ function shouldStartEnabled() {
   const global = getGlobal();
   return isTrue(global[DEBUG_FLAG]) || isTrue(getStoredDebugFlag()) || isTrue(getProcessDebugFlag());
 }
-var TinyCloudDebugLogger = class {
-  constructor() {
-    this.enabled = shouldStartEnabled();
-    this.sequence = 0;
-    this.events = [];
-    this.maxEvents = MAX_EVENTS;
-  }
-  isEnabled() {
-    return this.enabled || isTrue(getGlobal()[DEBUG_FLAG]) || isTrue(getProcessDebugFlag());
-  }
-  enable(options = {}) {
-    this.enabled = true;
-    getGlobal()[DEBUG_FLAG] = true;
-    if (options.persist !== false) {
-      setStoredDebugFlag(true);
-    }
-    this.log("debug.enabled", { persisted: options.persist !== false });
-  }
-  disable(options = {}) {
-    this.log("debug.disabled", { persisted: options.persist !== false });
-    this.enabled = false;
-    getGlobal()[DEBUG_FLAG] = false;
-    if (options.persist !== false) {
-      setStoredDebugFlag(false);
-    }
-  }
-  clear() {
-    this.events = [];
-  }
-  getLogs() {
-    return [...this.events];
-  }
-  log(event, data, message) {
-    if (!this.isEnabled()) {
-      return void 0;
-    }
-    return this.record({
-      event,
-      data,
-      message,
-      level: "debug",
-      timestamp: Date.now(),
-      timestampIso: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  }
-  startTimer(event, data) {
-    if (!this.isEnabled()) {
-      return { stop: () => void 0 };
-    }
-    const startedAt = nowMs();
-    this.log(`${event}.start`, data);
-    return {
-      stop: (finishData) => {
-        const endedAt = nowMs();
-        return this.record({
-          event: `${event}.end`,
-          data: finishData,
-          durationMs: endedAt - startedAt,
-          startedAt,
-          endedAt,
-          level: "debug",
-          timestamp: Date.now(),
-          timestampIso: (/* @__PURE__ */ new Date()).toISOString()
-        });
-      }
-    };
-  }
-  async timeAsync(event, operation, data) {
-    if (!this.isEnabled()) {
-      return operation();
-    }
-    const timer = this.startTimer(event, data);
-    try {
-      const result = await operation();
-      timer.stop({ ok: true });
-      return result;
-    } catch (error) {
-      timer.stop({ ok: false, error });
-      throw error;
-    }
-  }
-  time(event, operation, data) {
-    if (!this.isEnabled()) {
-      return operation();
-    }
-    const timer = this.startTimer(event, data);
-    try {
-      const result = operation();
-      timer.stop({ ok: true });
-      return result;
-    } catch (error) {
-      timer.stop({ ok: false, error });
-      throw error;
-    }
-  }
-  record(event) {
-    const debugEvent = {
-      ...event,
-      ...event.data === void 0 ? {} : { data: projectDiagnosticData(event.data) },
-      ...event.message === void 0 ? {} : { message: "[REDACTED]" },
-      sequence: ++this.sequence
-    };
-    this.events.push(debugEvent);
-    if (this.events.length > this.maxEvents) {
-      this.events.splice(0, this.events.length - this.maxEvents);
-    }
-    try {
-      globalThis.console?.debug?.("[TinyCloud]", debugEvent.event, debugEvent);
-    } catch {
-    }
-    return debugEvent;
-  }
-};
-var tinyCloudDebugLogger = new TinyCloudDebugLogger();
 function enableTinyCloudDebug(options) {
   tinyCloudDebugLogger.enable(options);
   return tinyCloudDebugLogger;
@@ -6950,19 +6422,6 @@ function installTinyCloudDebugGlobals() {
   global.getTinyCloudDebugLogs = getTinyCloudDebugLogs;
   global.clearTinyCloudDebugLogs = clearTinyCloudDebugLogs;
 }
-installTinyCloudDebugGlobals();
-var ServiceErrorSchema = external_exports.object({
-  /** Error code for programmatic handling (e.g., 'KV_NOT_FOUND', 'AUTH_EXPIRED') */
-  code: external_exports.string(),
-  /** Human-readable error message */
-  message: external_exports.string(),
-  /** Service that produced the error (e.g., 'kv', 'sql') */
-  service: external_exports.string(),
-  /** Original error if this wraps another error - not validated since Error is a class */
-  cause: external_exports.unknown().optional(),
-  /** Additional metadata about the error - passthrough allows any object properties */
-  meta: external_exports.object({}).passthrough().optional()
-});
 function createResultSchema(dataSchema, errorSchema = ServiceErrorSchema) {
   return external_exports.discriminatedUnion("ok", [
     external_exports.object({
@@ -6975,17 +6434,6 @@ function createResultSchema(dataSchema, errorSchema = ServiceErrorSchema) {
     })
   ]);
 }
-var GenericResultSchema = createResultSchema(external_exports.unknown(), ServiceErrorSchema);
-var KVResponseHeadersSchema = external_exports.object({
-  /** ETag for conditional requests */
-  etag: external_exports.string().optional(),
-  /** Content type of the stored value */
-  contentType: external_exports.string().optional(),
-  /** Last modification timestamp */
-  lastModified: external_exports.string().optional(),
-  /** Content length in bytes */
-  contentLength: external_exports.number().optional()
-});
 function createKVResponseSchema(dataSchema) {
   return external_exports.object({
     /** The data payload */
@@ -6994,85 +6442,6 @@ function createKVResponseSchema(dataSchema) {
     headers: KVResponseHeadersSchema
   });
 }
-var GenericKVResponseSchema = createKVResponseSchema(external_exports.unknown());
-var KVListResponseSchema = external_exports.object({
-  /** Array of keys matching the list criteria */
-  keys: external_exports.array(external_exports.string()),
-  truncated: external_exports.boolean().optional(),
-  nextCursor: external_exports.string().optional()
-});
-var KVListResultSchema = createResultSchema(KVListResponseSchema);
-var ServiceRequestEventSchema = external_exports.object({
-  service: external_exports.string(),
-  action: external_exports.string(),
-  span: external_exports.string().optional(),
-  key: external_exports.string().optional(),
-  timestamp: external_exports.number()
-});
-var ServiceResponseEventSchema = external_exports.object({
-  service: external_exports.string(),
-  action: external_exports.string(),
-  span: external_exports.string().optional(),
-  ok: external_exports.boolean(),
-  duration: external_exports.number(),
-  durationMs: external_exports.number().optional(),
-  status: external_exports.number().optional()
-});
-var ServiceErrorEventSchema = external_exports.object({
-  service: external_exports.string(),
-  span: external_exports.string().optional(),
-  error: ServiceErrorSchema
-});
-var ServiceRetryEventSchema = external_exports.object({
-  service: external_exports.string(),
-  attempt: external_exports.number().int().positive(),
-  maxAttempts: external_exports.number().int().positive(),
-  error: ServiceErrorSchema
-});
-var TelemetrySpanEventSchema = external_exports.object({
-  span: external_exports.string(),
-  ok: external_exports.boolean(),
-  durationMs: external_exports.number(),
-  service: external_exports.string().optional(),
-  action: external_exports.string().optional(),
-  status: external_exports.number().optional(),
-  error: ServiceErrorSchema.optional()
-});
-var RetryPolicySchema = external_exports.object({
-  /** Maximum number of attempts (including initial) */
-  maxAttempts: external_exports.number().int().positive(),
-  /** Backoff strategy between retries */
-  backoff: external_exports.enum(["none", "linear", "exponential"]),
-  /** Base delay in milliseconds for backoff calculation */
-  baseDelayMs: external_exports.number().nonnegative(),
-  /** Maximum delay in milliseconds between retries */
-  maxDelayMs: external_exports.number().nonnegative(),
-  /** Error codes that should trigger a retry */
-  retryableErrors: external_exports.array(external_exports.string())
-});
-var ServiceSessionSchema = external_exports.object({
-  /** The delegation header containing the UCAN */
-  delegationHeader: external_exports.object({
-    Authorization: external_exports.string()
-  }),
-  /** The delegation CID */
-  delegationCid: external_exports.string(),
-  /** The space ID for this session */
-  spaceId: external_exports.string(),
-  /** The verification method DID */
-  verificationMethod: external_exports.string(),
-  /** The session key JWK (required for invoke) */
-  jwk: external_exports.object({}).passthrough()
-});
-var URN_PREFIX = "urn:tinycloud:encryption:";
-var NETWORK_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
-var PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
-var NetworkIdError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "NetworkIdError";
-  }
-};
 function parseNetworkId(networkId) {
   if (typeof networkId !== "string" || networkId.length === 0) {
     throw new NetworkIdError("networkId must be a non-empty string");
@@ -7176,13 +6545,6 @@ function authRequiredError(service) {
     service
   };
 }
-var RequestTimeoutError = class extends Error {
-  constructor(timeoutMs) {
-    super(`Request timed out after ${timeoutMs}ms.`);
-    this.name = "TimeoutError";
-    this.timeoutMs = timeoutMs;
-  }
-};
 function isRequestTimeoutError(error) {
   return error instanceof RequestTimeoutError || error instanceof Error && error.name === "TimeoutError" && typeof error.timeoutMs === "number";
 }
@@ -7220,12 +6582,6 @@ function parseAuthError(responseText) {
 function authUnauthorizedError(service, message, meta) {
   return serviceError(ErrorCodes.AUTH_UNAUTHORIZED, message, service, { meta });
 }
-var grantableActions = new Set(
-  CAPABILITY_REGISTRY.map(({ urn }) => urn).filter((urn) => !urn.endsWith("/*"))
-);
-var capabilityServices = new Set(
-  CAPABILITY_REGISTRY.map(({ service }) => service.slice("tinycloud.".length))
-);
 function parseCapabilityResource2(resource, service) {
   if (resource.length === 0 || resource.length > 1024 || !capabilityServices.has(service) || /[\s\p{C}*#]/u.test(resource) || resource.includes("://")) return void 0;
   const segments = resource.split("/");
@@ -7284,7 +6640,6 @@ function validatedCapabilityOf2(error) {
   }
   return void 0;
 }
-var MAX_CAUSE_DEPTH2 = 8;
 function errorStatusOf(node) {
   const meta = node.meta;
   const candidates = [
@@ -7331,8 +6686,6 @@ function storageLimitReachedError(service, message, meta) {
     meta
   };
 }
-var STORAGE_FULL_MESSAGE = "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again.";
-var STORAGE_WRITE_TOO_LARGE_MESSAGE = "This change is larger than the TinyCloud storage you have left, so it was not saved. Reading still works. Free up space or upgrade your plan to save it.";
 function parseStorageQuotaBytes(responseText) {
   const match = responseText.match(/Used:\s*(\d+)\s*bytes,\s*Limit:\s*(\d+)\s*bytes/i);
   if (!match) return void 0;
@@ -7369,429 +6722,9 @@ function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
     service
   };
 }
-var MAX_TIMER_DELAY_MS = 2147483647;
-var BaseService = class {
-  constructor() {
-    this.abortController = new AbortController();
-    this._config = {};
-  }
-  /**
-   * Get the service configuration.
-   */
-  get config() {
-    return this._config;
-  }
-  /**
-   * Initialize the service with context.
-   * Called by the SDK after instantiation.
-   *
-   * @param context - The service context
-   */
-  initialize(context) {
-    this.context = context;
-  }
-  /**
-   * Called when session changes (sign-in, sign-out, refresh).
-   * Override in subclasses to handle session changes.
-   *
-   * @param session - The new session, or null if signed out
-   */
-  onSessionChange(session) {
-  }
-  /**
-   * Called when SDK signs out.
-   * Aborts all pending operations.
-   */
-  onSignOut() {
-    this.abortController.abort();
-    this.abortController = new AbortController();
-  }
-  /**
-   * Get the abort signal for this service.
-   * Combines the service-level abort with context-level abort.
-   */
-  get abortSignal() {
-    return this.combineSignals();
-  }
-  /**
-   * Check if the service is authenticated.
-   */
-  get isAuthenticated() {
-    return this.context?.isAuthenticated ?? false;
-  }
-  /**
-   * Get the current session.
-   * Throws if not authenticated.
-   */
-  get session() {
-    if (!this.context?.session) {
-      throw new Error("Not authenticated");
-    }
-    return this.context.session;
-  }
-  /**
-   * Check authentication and return error result if not authenticated.
-   * Use this at the start of methods that require authentication.
-   *
-   * @returns true if authenticated, false otherwise
-   */
-  requireAuth() {
-    return this.isAuthenticated;
-  }
-  /**
-   * Emit a telemetry event.
-   *
-   * @param event - Event name
-   * @param data - Event data
-   */
-  emit(event, data) {
-    this.context?.emit(event, data);
-  }
-  /**
-   * Emit a service request event.
-   *
-   * @param action - The action being performed
-   * @param key - Optional key/path being accessed
-   */
-  emitRequest(action, key) {
-    const service = this.getServiceName();
-    this.emit(TelemetryEvents.SERVICE_REQUEST, {
-      service,
-      action,
-      span: this.spanName(action),
-      key,
-      timestamp: Date.now()
-    });
-  }
-  /**
-   * Emit a service response event.
-   *
-   * @param action - The action that was performed
-   * @param ok - Whether the request was successful
-   * @param startTime - Start time for duration calculation
-   * @param status - Optional HTTP status code
-   */
-  emitResponse(action, ok2, startTime, status) {
-    const service = this.getServiceName();
-    const durationMs = Date.now() - startTime;
-    const span = this.spanName(action);
-    this.emit(TelemetryEvents.SERVICE_RESPONSE, {
-      service,
-      action,
-      span,
-      ok: ok2,
-      duration: durationMs,
-      durationMs,
-      status
-    });
-    this.emit(TelemetryEvents.SPAN, {
-      span,
-      service,
-      action,
-      ok: ok2,
-      durationMs,
-      status
-    });
-  }
-  /**
-   * Emit a service error event.
-   *
-   * @param error - The service error
-   */
-  emitError(error, action) {
-    const span = action ? this.spanName(action) : void 0;
-    this.emit(TelemetryEvents.SERVICE_ERROR, {
-      service: this.getServiceName(),
-      ...span ? { span } : {},
-      error
-    });
-  }
-  /**
-   * Get the service name from the static property.
-   * Subclasses must define static serviceName.
-   */
-  getServiceName() {
-    return this.constructor.serviceName;
-  }
-  /**
-   * Stable span name used by SDK telemetry sinks.
-   */
-  spanName(action) {
-    return `sdk.${this.getServiceName()}.${action}`;
-  }
-  /**
-   * Create a combined abort signal from multiple sources.
-   *
-   * @param signals - Additional abort signals to combine
-   * @returns A combined abort signal
-   */
-  combineSignals(...signals) {
-    const controller = new AbortController();
-    const allSignals = [
-      this.abortController.signal,
-      this.context?.abortSignal,
-      ...signals.filter(Boolean)
-    ].filter(Boolean);
-    for (const signal of allSignals) {
-      if (signal.aborted) {
-        controller.abort(signal.reason);
-        return controller.signal;
-      }
-      signal.addEventListener("abort", () => controller.abort(signal.reason), {
-        once: true
-      });
-    }
-    return controller.signal;
-  }
-  /**
-   * Create the abort signal for one request, bounded by the request timeout.
-   *
-   * The signal aborts when the service signs out, the context aborts, the
-   * caller's `signal` aborts, or the timeout elapses, whichever comes first.
-   * A timeout aborts with a {@link RequestTimeoutError} (`TimeoutError`), which
-   * `wrapError` maps to `ErrorCodes.TIMEOUT`; the other sources keep their own
-   * reason (normally `AbortError`, mapped to `ErrorCodes.ABORTED`).
-   *
-   * The timeout is `timeoutMs` when given, otherwise `config.timeout`. Only a
-   * positive, finite value (at most 2^31-1 ms) applies; `undefined`, `0`, and
-   * `Infinity` mean no timeout, so a per-call `0` opts out of a configured one.
-   *
-   * Callers must call `dispose()` once the response body has been consumed,
-   * which clears the timer and removes the listeners this adds to the
-   * long-lived service and context signals.
-   *
-   * @param signal - The caller's abort signal for this request
-   * @param timeoutMs - Per-request timeout override in milliseconds
-   */
-  createRequestSignal(signal, timeoutMs) {
-    const controller = new AbortController();
-    const detachers = [];
-    let timer;
-    const dispose = () => {
-      if (timer !== void 0) {
-        clearTimeout(timer);
-        timer = void 0;
-      }
-      for (const detach of detachers.splice(0)) {
-        detach();
-      }
-    };
-    const abort = (reason) => {
-      dispose();
-      controller.abort(reason);
-    };
-    const requestSignal = { signal: controller.signal, dispose };
-    const parents = [
-      this.abortController.signal,
-      this.context?.abortSignal,
-      signal
-    ].filter((parent) => parent !== void 0);
-    for (const parent of parents) {
-      if (parent.aborted) {
-        abort(parent.reason);
-        return requestSignal;
-      }
-      const onAbort = () => abort(parent.reason);
-      parent.addEventListener("abort", onAbort, { once: true });
-      detachers.push(() => parent.removeEventListener("abort", onAbort));
-    }
-    const timeout = timeoutMs ?? this._config.timeout;
-    if (typeof timeout === "number" && timeout > 0 && timeout <= MAX_TIMER_DELAY_MS) {
-      timer = setTimeout(() => abort(new RequestTimeoutError(timeout)), timeout);
-    }
-    return requestSignal;
-  }
-  /**
-   * Wrap an operation with error handling and telemetry.
-   *
-   * @param action - The action name for telemetry
-   * @param key - Optional key for telemetry
-   * @param operation - The operation to execute
-   * @returns Result of the operation
-   */
-  async withTelemetry(action, key, operation) {
-    const startTime = Date.now();
-    this.emitRequest(action, key);
-    try {
-      const result = await operation();
-      if (result.ok) {
-        this.emitResponse(action, true, startTime);
-      } else {
-        this.emitResponse(action, false, startTime);
-        this.emitError(result.error, action);
-      }
-      return result;
-    } catch (error) {
-      const serviceError3 = wrapError2(this.getServiceName(), error);
-      this.emitResponse(action, false, startTime);
-      this.emitError(serviceError3, action);
-      return err(serviceError3);
-    }
-  }
-};
-var PrefixedKVService = class _PrefixedKVService {
-  /**
-   * Create a new PrefixedKVService.
-   *
-   * @param kv - The underlying KV service to delegate to
-   * @param prefix - The prefix to apply to all operations
-   */
-  constructor(kv, prefix) {
-    this._kv = kv;
-    this._prefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
-  }
-  /**
-   * The current prefix for this scoped view.
-   */
-  get prefix() {
-    return this._prefix;
-  }
-  /**
-   * Compute the full key path by combining prefix and key.
-   *
-   * @param key - The key to prefix
-   * @returns The full path including prefix
-   */
-  getFullKey(key) {
-    const normalizedKey = key.startsWith("/") ? key : `/${key}`;
-    return `${this._prefix}${normalizedKey}`;
-  }
-  /**
-   * Get a value by key.
-   */
-  async get(key, options) {
-    const fullKey = this.getFullKey(key);
-    return this._kv.get(fullKey, { ...options, prefix: "" });
-  }
-  async batchGet(keys, options) {
-    const response = await this._kv.batchGet(
-      keys.map((key) => this.getFullKey(key)),
-      { ...options, prefix: "" }
-    );
-    if (!response.ok) return response;
-    return ok({
-      ...response.data,
-      results: response.data.results.map((item, index) => ({
-        ...item,
-        key: keys[index]
-      }))
-    });
-  }
-  /**
-   * Store a value at a key.
-   */
-  async put(key, value, options) {
-    const fullKey = this.getFullKey(key);
-    return this._kv.put(fullKey, value, { ...options, prefix: "" });
-  }
-  /**
-   * Store multiple values within this prefix in one TinyCloud KV invocation.
-   */
-  async batchPut(items, options) {
-    return this._kv.batchPut(
-      items.map((item) => ({
-        ...item,
-        key: this.getFullKey(item.key)
-      })),
-      { ...options, prefix: "" }
-    );
-  }
-  /**
-   * List keys within this prefix.
-   */
-  async list(options) {
-    const removePrefix = options?.removePrefix ?? true;
-    return this._kv.list({
-      ...options,
-      prefix: this._prefix,
-      removePrefix
-    });
-  }
-  /**
-   * Read the change feed for everything under this prefix. A view with an
-   * empty prefix (`""` or `"/"`) is refused: the node does not serve a
-   * whole-space feed.
-   */
-  async changes(options) {
-    if (this._prefix.replace(/\/+$/, "") === "") {
-      return err(serviceError(
-        ErrorCodes.INVALID_INPUT,
-        "KV changes needs a non-empty prefix; this view has none",
-        "kv"
-      ));
-    }
-    const syncPrefix = `${this._prefix}/`;
-    const response = await this._kv.changes({ ...options, prefix: syncPrefix });
-    if (!response.ok) return response;
-    return ok({
-      ...response.data,
-      changes: response.data.changes.map((change) => ({
-        ...change,
-        key: change.key.startsWith(syncPrefix) ? change.key.slice(syncPrefix.length) : change.key
-      }))
-    });
-  }
-  /**
-   * Delete a key.
-   */
-  async delete(key, options) {
-    const fullKey = this.getFullKey(key);
-    return this._kv.delete(fullKey, { ...options, prefix: "" });
-  }
-  /**
-   * Get metadata for a key without retrieving the value.
-   */
-  async head(key, options) {
-    const fullKey = this.getFullKey(key);
-    return this._kv.head(fullKey, { ...options, prefix: "" });
-  }
-  async batchHead(keys, options) {
-    const response = await this._kv.batchHead(
-      keys.map((key) => this.getFullKey(key)),
-      { ...options, prefix: "" }
-    );
-    if (!response.ok) return response;
-    return ok({
-      ...response.data,
-      results: response.data.results.map((item, index) => ({
-        ...item,
-        key: keys[index]
-      }))
-    });
-  }
-  /**
-   * Create a short-lived signed URL for reading a KV object.
-   */
-  async createSignedReadUrl(key, options) {
-    const fullKey = this.getFullKey(key);
-    return this._kv.createSignedReadUrl(fullKey, { ...options, prefix: "" });
-  }
-  /**
-   * Create a nested prefix-scoped view.
-   */
-  withPrefix(subPrefix) {
-    const normalizedSubPrefix = subPrefix.startsWith("/") ? subPrefix : `/${subPrefix}`;
-    const combinedPrefix = `${this._prefix}${normalizedSubPrefix}`;
-    return new _PrefixedKVService(this._kv, combinedPrefix);
-  }
-};
-var DEFAULT_SIGNED_READ_URL_EXPIRY_MS = 5 * 60 * 1e3;
-var KVAction = {
-  GET: "tinycloud.kv/get",
-  PUT: "tinycloud.kv/put",
-  LIST: "tinycloud.kv/list",
-  DELETE: "tinycloud.kv/del",
-  HEAD: "tinycloud.kv/metadata",
-  /** The change feed; never implied by `*` or `tinycloud.kv/*`. */
-  SYNC: "tinycloud.kv/sync",
-  /** Retention attestation; presented through `retentionGrant`, never invoked or implied. */
-  RETAIN: "tinycloud.kv/retain"
-};
-var MAX_KV_BATCH_READ_ITEMS = 100;
 function isJsonObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-var pathByteEncoder = new TextEncoder();
 function comparePathsByBytes(a, b) {
   const left = pathByteEncoder.encode(a);
   const right = pathByteEncoder.encode(b);
@@ -7803,7 +6736,6 @@ function comparePathsByBytes(a, b) {
   }
   return left.length - right.length;
 }
-var REVOKED_BODY = /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
 function revocationCodeOf(body) {
   const match = REVOKED_BODY.exec(body.trim());
   if (match === null) return void 0;
@@ -7815,1339 +6747,6 @@ function encodeKvBatchPartName(path) {
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
   );
 }
-var KVService = class extends BaseService {
-  /**
-   * Create a new KVService instance.
-   *
-   * @param config - Service configuration
-   */
-  constructor(config = {}) {
-    super();
-    this._config = config;
-  }
-  /**
-   * Get the service configuration.
-   */
-  get config() {
-    return this._config;
-  }
-  handleQuotaErrorResponse(response, errorText, key) {
-    if (response.status !== 402 && response.status !== 413) {
-      return void 0;
-    }
-    if (response.status === 413 && !parseStorageQuotaBytes(errorText)) {
-      return void 0;
-    }
-    return err(
-      storageRejectionError(
-        "kv",
-        response.status,
-        { status: response.status, statusText: response.statusText, key },
-        errorText
-      )
-    );
-  }
-  /**
-   * Classify a KV 404 by reading the response body once.
-   *
-   * The server returns 404 both for a genuinely missing key AND for an
-   * un-hosted space (body "Space not found"). Previously get/head/delete
-   * collapsed every 404 to KV_NOT_FOUND before reading the body, so an
-   * un-hosted-space read was indistinguishable from a missing key. We now
-   * preserve status + the "Space not found" body for the un-hosted case (so the
-   * CLI/SDK can normalize it to SPACE_NOT_HOSTED, matching put/list/sql), and
-   * fall through to KV_NOT_FOUND for a real missing key.
-   */
-  async classifyNotFound(response, key) {
-    const errorText = await response.text();
-    if (/space not found/i.test(errorText)) {
-      return err(
-        serviceError(
-          ErrorCodes.KV_NOT_FOUND,
-          `KV ${response.status} - ${errorText}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        )
-      );
-    }
-    return err(serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv"));
-  }
-  /**
-   * Get the full path with optional prefix.
-   *
-   * @param key - The key
-   * @param prefixOverride - Optional prefix override
-   * @returns The full path
-   */
-  getFullPath(key, prefixOverride) {
-    const prefix = prefixOverride ?? this._config.prefix ?? "";
-    return prefix ? key === "" ? prefix : `${prefix}/${key}` : key;
-  }
-  /**
-   * Get the host URL.
-   */
-  get host() {
-    return this.context.hosts[0];
-  }
-  withJsonContentType(headers) {
-    if (Array.isArray(headers)) {
-      return [...headers, ["content-type", "application/json"]];
-    }
-    return {
-      ...headers,
-      "content-type": "application/json"
-    };
-  }
-  /**
-   * Execute an invoke operation.
-   *
-   * @param path - Resource path
-   * @param action - KV action
-   * @param body - Optional request body
-   * @param signal - Request signal from createRequestSignal()
-   * @returns Fetch response
-   */
-  async invokeOperation(path, action, body, signal, extraHeaders) {
-    const session = this.context.session;
-    const headers = this.context.invoke(
-      session,
-      "kv",
-      path,
-      action
-    );
-    const requestHeaders = Array.isArray(headers) ? [...headers, ...Object.entries(extraHeaders ?? {})] : { ...headers, ...extraHeaders };
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: requestHeaders,
-      body,
-      signal
-    });
-  }
-  /**
-   * Serialize a single put value into a fetch body.
-   *
-   * Binary values (Blob/ArrayBuffer/typed-array, incl. Node Buffer) are sent as
-   * raw bytes (as a Blob) so they round-trip byte-identically — without this a
-   * Buffer would be JSON.stringify'd into `{"type":"Buffer","data":[...]}`.
-   * Strings are returned unchanged (preserving prior behavior); other values are
-   * JSON-encoded. `contentType` overrides the inferred type for binary values.
-   */
-  serializePutValue(value, contentType) {
-    if (value instanceof Blob) {
-      if (!contentType || value.type === contentType) {
-        return value;
-      }
-      return new Blob([value], { type: contentType });
-    }
-    if (value instanceof ArrayBuffer) {
-      return new Blob([value], {
-        type: contentType ?? "application/octet-stream"
-      });
-    }
-    if (ArrayBuffer.isView(value)) {
-      const view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      return new Blob([view], {
-        type: contentType ?? "application/octet-stream"
-      });
-    }
-    if (typeof value === "string") {
-      return contentType ? new Blob([value], { type: contentType }) : value;
-    }
-    return JSON.stringify(value);
-  }
-  serializeBatchPutValue(item) {
-    const contentType = item.contentType;
-    if (item.value instanceof Blob) {
-      if (!contentType || item.value.type === contentType) {
-        return item.value;
-      }
-      return new Blob([item.value], { type: contentType });
-    }
-    if (item.value instanceof ArrayBuffer) {
-      return new Blob([item.value], {
-        type: contentType ?? "application/octet-stream"
-      });
-    }
-    if (ArrayBuffer.isView(item.value)) {
-      const value = item.value;
-      const bytes = new Uint8Array(value.byteLength);
-      bytes.set(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
-      return new Blob([bytes], {
-        type: contentType ?? "application/octet-stream"
-      });
-    }
-    if (typeof item.value === "string") {
-      return new Blob([item.value], {
-        type: contentType ?? "text/plain;charset=UTF-8"
-      });
-    }
-    const json = JSON.stringify(item.value);
-    if (json === void 0) {
-      throw new Error(`Cannot JSON serialize KV batch value for key "${item.key}"`);
-    }
-    return new Blob([json], {
-      type: contentType ?? "application/json"
-    });
-  }
-  normalizeBatchPutResponse(data) {
-    if (!data || typeof data !== "object") {
-      return void 0;
-    }
-    const response = data;
-    if (!Array.isArray(response.written) || !response.written.every((key) => typeof key === "string") || typeof response.count !== "number") {
-      return void 0;
-    }
-    return {
-      written: response.written,
-      count: response.count
-    };
-  }
-  /**
-   * Create KVResponseHeaders from fetch response headers.
-   *
-   * @param headers - Fetch response headers
-   * @returns KVResponseHeaders object
-   */
-  createResponseHeaders(headers) {
-    return {
-      etag: headers.get("etag") ?? void 0,
-      contentType: headers.get("content-type") ?? void 0,
-      lastModified: headers.get("last-modified") ?? void 0,
-      contentLength: headers.get("content-length") ? parseInt(headers.get("content-length"), 10) : void 0,
-      get: (name) => headers.get(name)
-    };
-  }
-  createBatchResponseHeaders(values) {
-    const normalized = new Map(
-      Object.entries(values).map(([name, value]) => [name.toLowerCase(), value])
-    );
-    return this.createResponseHeaders({
-      get: (name) => normalized.get(name.toLowerCase()) ?? null
-    });
-  }
-  parseBatchValue(dataBase64, headers, raw = false, binary = false) {
-    const encoded = globalThis.atob(dataBase64);
-    const bytes = Uint8Array.from(encoded, (character) => character.charCodeAt(0));
-    if (binary) return bytes;
-    const text = new TextDecoder().decode(bytes);
-    if (raw) return text;
-    const contentType = Object.entries(headers).find(
-      ([name]) => name.toLowerCase() === "content-type"
-    )?.[1];
-    return contentType?.includes("application/json") ? JSON.parse(text) : text;
-  }
-  /**
-   * Validate a batch read response and return its items in the caller's
-   * request order. The node flattens invocation abilities from a `BTreeMap`,
-   * so results arrive sorted by UTF-8 byte order of the path, not in request
-   * order. Items that carry their path in `key` are matched by path; if no
-   * item carries a key, items are assumed to be in the node's byte-sorted
-   * order and the request is aligned the same way. Any mix of keyed and
-   * keyless items, a missing requested path, an unrequested path, or a
-   * malformed item fails closed (returns undefined).
-   */
-  normalizeBatchReadResponse(data, paths, requireData) {
-    if (!data || typeof data !== "object") return void 0;
-    const response = data;
-    const items = response.results;
-    if (!Array.isArray(items) || items.length !== paths.length) {
-      return void 0;
-    }
-    for (const item of items) {
-      if (!item || typeof item !== "object" || typeof item.ok !== "boolean") {
-        return void 0;
-      }
-      if (item.ok && (!item.headers || typeof item.headers !== "object" || Object.values(item.headers).some((value) => typeof value !== "string") || requireData && typeof item.dataBase64 !== "string")) {
-        return void 0;
-      }
-      if (!item.ok && (!item.error || typeof item.error.code !== "string" || typeof item.error.message !== "string")) {
-        return void 0;
-      }
-    }
-    if (items.every((item) => typeof item.key === "string")) {
-      const byPath = new Map(items.map((item) => [item.key, item]));
-      if (byPath.size !== items.length) return void 0;
-      const aligned2 = [];
-      for (const path of paths) {
-        const item = byPath.get(path);
-        if (!item) return void 0;
-        aligned2.push(item);
-      }
-      return aligned2;
-    }
-    if (items.some((item) => item.key !== void 0)) return void 0;
-    const requestOrder = paths.map((_, index) => index).sort((a, b) => comparePathsByBytes(paths[a], paths[b]));
-    const aligned = new Array(items.length);
-    for (let position = 0; position < requestOrder.length; position++) {
-      aligned[requestOrder[position]] = items[position];
-    }
-    return aligned;
-  }
-  async batchRead(keys, action, options) {
-    if (!this.requireAuth()) return err(authRequiredError("kv"));
-    if (keys.length === 0) return ok({ results: [], count: 0 });
-    if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
-      return err(serviceError(
-        ErrorCodes.INVALID_INPUT,
-        `KV batch reads accept at most ${MAX_KV_BATCH_READ_ITEMS} keys`,
-        "kv"
-      ));
-    }
-    if (keys.length === 1) {
-      const key = keys[0];
-      const result = action === KVAction.GET ? await this.get(key, options) : await this.head(key, options);
-      return ok({
-        results: [{ key, result }],
-        count: 1
-      });
-    }
-    if (!this.context.invokeAny) {
-      return err(serviceError(
-        ErrorCodes.INVALID_INPUT,
-        "KV batch reads require SDK runtime support for multi-resource invocations",
-        "kv"
-      ));
-    }
-    const getOptions = action === KVAction.GET ? options : void 0;
-    if (getOptions?.maxResponseBytes !== void 0 && (!Number.isSafeInteger(getOptions.maxResponseBytes) || getOptions.maxResponseBytes <= 0)) {
-      return err(serviceError(
-        ErrorCodes.INVALID_INPUT,
-        "KV maxResponseBytes must be a positive safe integer",
-        "kv"
-      ));
-    }
-    const paths = keys.map((key) => this.getFullPath(key, options?.prefix));
-    if (new Set(paths).size !== paths.length) {
-      return err(serviceError(
-        ErrorCodes.INVALID_INPUT,
-        "KV batch read received duplicate keys after prefix resolution",
-        "kv"
-      ));
-    }
-    const request = this.createRequestSignal(options?.signal, options?.timeout);
-    try {
-      const session = this.context.session;
-      const invocationHeaders = this.context.invokeAny(
-        session,
-        paths.map((path) => ({
-          spaceId: session.spaceId,
-          service: "kv",
-          path,
-          action
-        }))
-      );
-      const limitHeaders = {};
-      if (getOptions?.maxResponseBytes !== void 0) {
-        limitHeaders["x-tinycloud-max-response-bytes"] = String(
-          getOptions.maxResponseBytes
-        );
-      }
-      const headers = Array.isArray(invocationHeaders) ? [...invocationHeaders, ...Object.entries(limitHeaders)] : { ...invocationHeaders, ...limitHeaders };
-      const response = await this.context.fetch(`${this.host}/invoke`, {
-        method: "POST",
-        headers,
-        signal: request.signal
-      });
-      if (!response.ok) {
-        const errorText = response.status === 401 || response.status === 403 ? await this.readAuthorizationText(response) : await response.text();
-        if (response.status === 401 || response.status === 403) {
-          return this.authorizationFailure(
-            `Failed to batch read ${keys.length} key(s)`,
-            response,
-            errorText,
-            paths,
-            action
-          );
-        }
-        if (response.status === 413) {
-          return err(serviceError(
-            ErrorCodes.KV_RESPONSE_TOO_LARGE,
-            "A KV batch value exceeds the requested response limit",
-            "kv",
-            { meta: { status: response.status, statusText: response.statusText } }
-          ));
-        }
-        return err(serviceError(
-          ErrorCodes.NETWORK_ERROR,
-          `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
-      const items = this.normalizeBatchReadResponse(
-        await response.json(),
-        paths,
-        action === KVAction.GET
-      );
-      if (!items) {
-        return err(serviceError(
-          ErrorCodes.NETWORK_ERROR,
-          "KV batch read response did not match the requested keys",
-          "kv"
-        ));
-      }
-      const results = items.map((item, index) => {
-        if (!item.ok) {
-          return {
-            key: keys[index],
-            result: err(serviceError(item.error.code, item.error.message, "kv"))
-          };
-        }
-        const headers2 = item.headers;
-        const data = action === KVAction.HEAD ? void 0 : this.parseBatchValue(
-          item.dataBase64,
-          headers2,
-          getOptions?.raw,
-          getOptions?.binary
-        );
-        return {
-          key: keys[index],
-          result: ok({
-            data,
-            headers: this.createBatchResponseHeaders(headers2)
-          })
-        };
-      });
-      return ok({ results, count: results.length });
-    } catch (error) {
-      return err(wrapError2("kv", error));
-    } finally {
-      request.dispose();
-    }
-  }
-  /**
-   * Parse response body based on content type.
-   *
-   * @param response - Fetch response
-   * @param raw - Whether to return raw text
-   * @returns Parsed data
-   */
-  async parseResponse(response, raw = false, binary = false) {
-    if (!response.ok) {
-      return void 0;
-    }
-    if (binary) {
-      return new Uint8Array(await response.arrayBuffer());
-    }
-    if (raw) {
-      return await response.text();
-    }
-    const contentType = response.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      return await response.json();
-    } else if (contentType?.startsWith("text/")) {
-      return await response.text();
-    }
-    const text = await response.text();
-    if (!text) {
-      return void 0;
-    }
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  }
-  async createSignedReadUrlError(response, key, path) {
-    let errorText = response.statusText;
-    try {
-      const text = await response.text();
-      if (text) {
-        errorText = text;
-      }
-    } catch {
-    }
-    if (response.status === 401 || response.status === 403) {
-      return this.authorizationFailure(
-        `Failed to create signed read URL for key ${JSON.stringify(key)}`,
-        response,
-        errorText,
-        [path],
-        KVAction.GET
-      );
-    }
-    const code3 = response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
-    return err(
-      serviceError(
-        code3,
-        `Failed to create signed read URL for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-        "kv",
-        { meta: { status: response.status, statusText: response.statusText } }
-      )
-    );
-  }
-  /** A known 401/403 keeps its typed status even if reading its body fails. */
-  async readAuthorizationText(response) {
-    try {
-      return await response.text();
-    } catch {
-      return "";
-    }
-  }
-  /**
-   * AUTH_UNAUTHORIZED for a 401/403 response. The message keeps the HTTP
-   * status and the server text (`<context>: <status> - <text>`, the same
-   * shape as every other KV failure) so callers that rethrow only the message
-   * still see the status; `meta.status` carries it for typed callers.
-   * Server hints must match the requested path/action (whether the node sends
-   * a relative path or full resource); metadata uses only the request-derived
-   * canonical resource under the authenticated session's space.
-   */
-  authorizationFailure(context, response, errorText, paths, expectedAction, extraMeta = {}) {
-    const { resource, action } = parseAuthError(errorText);
-    const requestedPath = paths.find(
-      (path) => resource === path || resource === `${this.context.session.spaceId}/kv/${path}`
-    );
-    const capability = requestedPath !== void 0 && action === expectedAction ? validatedCapabilityOf2({
-      service: "kv",
-      code: ErrorCodes.AUTH_UNAUTHORIZED,
-      meta: {
-        status: response.status,
-        resource: `${this.context.session.spaceId}/kv/${requestedPath}`,
-        requiredAction: action
-      }
-    }) : void 0;
-    const detail = errorText.trim().length > 0 ? errorText : response.statusText || "authorization failed";
-    return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
-      status: response.status,
-      ...extraMeta,
-      ...capability
-    }));
-  }
-  normalizeSignedReadUrlResponse(data) {
-    if (!data || typeof data !== "object") {
-      return void 0;
-    }
-    const response = data;
-    if (typeof response.url !== "string" || typeof response.ticketId !== "string" || typeof response.expiresAt !== "string") {
-      return void 0;
-    }
-    return {
-      url: new URL(response.url, this.host).toString(),
-      relativeUrl: response.url,
-      ticketId: response.ticketId,
-      expiresAt: response.expiresAt
-    };
-  }
-  /**
-   * Get a value by key.
-   */
-  async get(key, options) {
-    return this.withTelemetry("get", key, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      if (options?.maxResponseBytes !== void 0 && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes <= 0)) {
-        return err(serviceError(
-          ErrorCodes.INVALID_INPUT,
-          "KV maxResponseBytes must be a positive safe integer",
-          "kv"
-        ));
-      }
-      const path = this.getFullPath(key, options?.prefix);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.GET,
-          void 0,
-          request.signal,
-          options?.maxResponseBytes === void 0 ? void 0 : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
-        );
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            const errorText2 = await this.readAuthorizationText(response);
-            const permissionHint = parsePermissionHintFromErrorText(errorText2);
-            const structuredCapability = permissionHint?.service === "tinycloud.kv" && permissionHint.space === this.context.session.spaceId && permissionHint.path === path ? validatedCapabilityOf2({
-              service: "kv",
-              code: ErrorCodes.AUTH_UNAUTHORIZED,
-              meta: {
-                status: response.status,
-                resource: `${this.context.session.spaceId}/kv/${path}`,
-                requiredAction: KVAction.GET
-              }
-            }) : void 0;
-            return this.authorizationFailure(
-              `Failed to get key ${JSON.stringify(key)}`,
-              response,
-              errorText2,
-              [path],
-              KVAction.GET,
-              structuredCapability ? { permissionHint, ...structuredCapability } : {}
-            );
-          }
-          if (response.status === 404) {
-            return this.classifyNotFound(response, key);
-          }
-          const errorText = await response.text();
-          if (response.status === 413) {
-            return err(serviceError(
-              ErrorCodes.KV_RESPONSE_TOO_LARGE,
-              `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-        const data = await this.parseResponse(
-          response,
-          options?.raw,
-          options?.binary
-        );
-        return ok({
-          data,
-          headers: this.createResponseHeaders(response.headers)
-        });
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async batchGet(keys, options) {
-    return this.withTelemetry(
-      "batchGet",
-      String(keys.length),
-      () => this.batchRead(keys, KVAction.GET, options)
-    );
-  }
-  /**
-   * Store a value at a key.
-   */
-  async put(key, value, options) {
-    return this.withTelemetry("put", key, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      if (options?.ifMatch !== void 0 && options.ifNoneMatch !== void 0) {
-        return err(serviceError(
-          ErrorCodes.INVALID_INPUT,
-          "KV put cannot combine ifMatch and ifNoneMatch",
-          "kv"
-        ));
-      }
-      const path = this.getFullPath(key, options?.prefix);
-      const body = this.serializePutValue(value, options?.contentType);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.PUT,
-          body,
-          request.signal,
-          {
-            ...options?.ifMatch === void 0 ? {} : { "if-match": options.ifMatch },
-            ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
-          }
-        );
-        if (response.status === 401 || response.status === 403) {
-          return this.authorizationFailure(
-            `Failed to put key ${JSON.stringify(key)}`,
-            response,
-            await this.readAuthorizationText(response),
-            [path],
-            KVAction.PUT
-          );
-        }
-        if (!response.ok) {
-          const errorText = await response.text();
-          if (response.status === 412) {
-            return err(serviceError(
-              ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          if (response.status === 503 && (options?.ifMatch !== void 0 || options?.ifNoneMatch !== void 0)) {
-            return err(serviceError(
-              ErrorCodes.KV_CONFLICT,
-              `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          const quotaError = this.handleQuotaErrorResponse(
-            response,
-            errorText,
-            key
-          );
-          if (quotaError) {
-            return quotaError;
-          }
-          return err(
-            serviceError(
-              ErrorCodes.KV_WRITE_FAILED,
-              `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-        return ok({
-          data: void 0,
-          headers: this.createResponseHeaders(response.headers)
-        });
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  /**
-   * Store multiple values in one TinyCloud KV invocation.
-   */
-  async batchPut(items, options) {
-    return this.withTelemetry("batchPut", String(items.length), async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      if (items.length === 0) {
-        return ok({ written: [], count: 0 });
-      }
-      if (!this.context.invokeAny) {
-        return err(
-          serviceError(
-            ErrorCodes.INVALID_INPUT,
-            "KV batchPut requires SDK runtime support for multi-resource invocations",
-            "kv"
-          )
-        );
-      }
-      const session = this.context.session;
-      const paths = items.map((item) => this.getFullPath(item.key, options?.prefix));
-      const seen = /* @__PURE__ */ new Set();
-      for (const path of paths) {
-        if (seen.has(path)) {
-          return err(
-            serviceError(
-              ErrorCodes.INVALID_INPUT,
-              `KV batchPut received duplicate key after prefix resolution: ${path}`,
-              "kv"
-            )
-          );
-        }
-        seen.add(path);
-      }
-      let requestMayHaveDispatched = false;
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const body = new FormData();
-        for (let index = 0; index < items.length; index++) {
-          body.append(
-            encodeKvBatchPartName(paths[index]),
-            this.serializeBatchPutValue(items[index])
-          );
-        }
-        const headers = this.context.invokeAny(
-          session,
-          paths.map((path) => ({
-            spaceId: session.spaceId,
-            service: "kv",
-            path,
-            action: KVAction.PUT
-          }))
-        );
-        const url = `${this.host}/invoke`;
-        const init = {
-          method: "POST",
-          headers,
-          body,
-          signal: request.signal
-        };
-        const fetchFn = this.context.fetch;
-        requestMayHaveDispatched = true;
-        const response = await fetchFn(url, init);
-        if (!response.ok) {
-          let errorText;
-          try {
-            errorText = await response.text();
-          } catch (textError) {
-            const cause = textError instanceof Error ? textError : new Error(String(textError));
-            return err(
-              serviceError(
-                ErrorCodes.KV_WRITE_FAILED,
-                `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
-                "kv",
-                { cause, meta: { status: response.status, statusText: response.statusText } }
-              )
-            );
-          }
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              `Failed to batch put ${items.length} key(s)`,
-              response,
-              errorText,
-              paths,
-              KVAction.PUT
-            );
-          }
-          const quotaError = this.handleQuotaErrorResponse(
-            response,
-            errorText,
-            "batch"
-          );
-          if (quotaError) {
-            return quotaError;
-          }
-          return err(
-            serviceError(
-              ErrorCodes.KV_WRITE_FAILED,
-              `Failed to batch put ${items.length} key(s): ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-        let rawBody;
-        try {
-          rawBody = await response.json();
-        } catch (jsonError) {
-          const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
-          const timedOut = isRequestTimeoutError(cause);
-          return err(
-            serviceError(
-              timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
-              timedOut ? `KV batchPut response body did not arrive in time: ${cause.message}` : `KV batchPut response was not valid JSON: ${cause.message}`,
-              "kv",
-              {
-                cause,
-                meta: {
-                  ...timedOut ? { timeoutMs: cause.timeoutMs } : {},
-                  requestMayHaveDispatched: true,
-                  responseReceived: true,
-                  status: response.status,
-                  outcome: "batch-unconfirmed"
-                }
-              }
-            )
-          );
-        }
-        const batchResponse = this.normalizeBatchPutResponse(rawBody);
-        if (!batchResponse) {
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              "KV batchPut response did not include matching written keys and count",
-              "kv",
-              {
-                meta: {
-                  requestMayHaveDispatched: true,
-                  responseReceived: true,
-                  status: response.status,
-                  outcome: "batch-unconfirmed"
-                }
-              }
-            )
-          );
-        }
-        const requestedPaths = new Set(paths);
-        const writtenPaths = new Set(batchResponse.written);
-        const matchesRequest = batchResponse.count === paths.length && batchResponse.written.length === paths.length && writtenPaths.size === paths.length && batchResponse.written.every((key) => requestedPaths.has(key));
-        if (!matchesRequest) {
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
-              "kv",
-              {
-                meta: {
-                  requestMayHaveDispatched: true,
-                  responseReceived: true,
-                  status: response.status,
-                  outcome: "batch-unconfirmed"
-                }
-              }
-            )
-          );
-        }
-        return ok(batchResponse);
-      } catch (error) {
-        const wrapped = wrapError2("kv", error);
-        return err({
-          ...wrapped,
-          meta: { ...wrapped.meta, requestMayHaveDispatched }
-        });
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  /**
-   * List keys with optional prefix filtering.
-   */
-  async list(options) {
-    return this.withTelemetry("list", options?.prefix, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      if (options?.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
-        return err(serviceError(
-          ErrorCodes.INVALID_INPUT,
-          "KV list limit must be an integer from 1 through 1000",
-          "kv"
-        ));
-      }
-      let listPath = options?.prefix ?? this._config.prefix ?? "";
-      if (options?.path) {
-        listPath = listPath ? `${listPath}/${options.path}` : options.path;
-      }
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const response = await this.invokeOperation(
-          listPath,
-          KVAction.LIST,
-          void 0,
-          request.signal,
-          options?.limit === void 0 && options?.cursor === void 0 ? void 0 : {
-            ...options?.limit === void 0 ? {} : { "x-tinycloud-limit": String(options.limit) },
-            ...options?.cursor === void 0 ? {} : { "x-tinycloud-cursor": options.cursor }
-          }
-        );
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              "Failed to list keys",
-              response,
-              await this.readAuthorizationText(response),
-              [listPath],
-              KVAction.LIST
-            );
-          }
-          const errorText = await response.text();
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to list keys: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-        let keys = await this.parseResponse(response, options?.raw);
-        keys = keys ?? [];
-        if (options?.removePrefix && listPath) {
-          const prefixWithSlash = listPath.endsWith("/") ? listPath : `${listPath}/`;
-          keys = keys.map(
-            (key) => key.startsWith(prefixWithSlash) ? key.slice(prefixWithSlash.length) : key
-          );
-        }
-        return ok({
-          keys,
-          ...response.headers.get("x-tinycloud-truncated") === null ? {} : { truncated: response.headers.get("x-tinycloud-truncated") === "true" },
-          ...response.headers.get("x-tinycloud-next-cursor") === null ? {} : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? void 0 }
-        });
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  /**
-   * Read one page of the `tinycloud.kv/sync` change feed for a prefix.
-   */
-  async changes(options) {
-    return this.withTelemetry("changes", options?.prefix, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      if (typeof options?.prefix !== "string" || options.prefix.length === 0) {
-        return err(serviceError(
-          ErrorCodes.INVALID_INPUT,
-          "KV changes prefix must be a non-empty string",
-          "kv"
-        ));
-      }
-      if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
-        return err(serviceError(
-          ErrorCodes.INVALID_INPUT,
-          "KV changes limit must be an integer from 1 through 1000",
-          "kv"
-        ));
-      }
-      const headers = {};
-      if (options.limit !== void 0) headers["x-tinycloud-limit"] = String(options.limit);
-      if (options.cursor !== void 0) headers["x-tinycloud-cursor"] = options.cursor;
-      if (options.retentionGrant !== void 0) {
-        headers["x-tinycloud-retention-grant"] = options.retentionGrant;
-      }
-      const request = this.createRequestSignal(options.signal, options.timeout);
-      try {
-        const response = await this.invokeOperation(
-          options.prefix,
-          KVAction.SYNC,
-          void 0,
-          request.signal,
-          headers
-        );
-        if (!response.ok) {
-          return await this.changesFailure(response, options.prefix, request.signal);
-        }
-        const text = await response.text();
-        let body;
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = void 0;
-        }
-        const page = this.normalizeChangesResponse(body);
-        if (!page) {
-          return err(serviceError(
-            ErrorCodes.NETWORK_ERROR,
-            "KV changes response was not a tinycloud.kv/sync page",
-            "kv",
-            { meta: { status: response.status, statusText: response.statusText } }
-          ));
-        }
-        return ok(page);
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  /**
-   * Map a failed `kv/sync` response. 410 and the retention 403 carry
-   * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose whole body
-   * is the node's revocation error (see REVOKED_BODY). A body read that
-   * fails because the request was cancelled or timed out rethrows, so the
-   * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
-   */
-  async changesFailure(response, prefix, signal) {
-    if (response.status === 404) {
-      return this.classifyNotFound(response, prefix);
-    }
-    let errorText;
-    try {
-      errorText = await response.text();
-    } catch (error) {
-      if (signal.aborted) throw error;
-      errorText = "";
-    }
-    const meta = { status: response.status, statusText: response.statusText };
-    let reason;
-    let bodyCode;
-    try {
-      const body = JSON.parse(errorText);
-      const error = isJsonObject(body) ? body.error : void 0;
-      if (isJsonObject(error)) {
-        if (typeof error.code === "string") bodyCode = error.code;
-        if (typeof error.reason === "string") reason = error.reason;
-      }
-    } catch {
-    }
-    const context = `Failed to read KV changes for ${JSON.stringify(prefix)}`;
-    if (response.status === 410) {
-      return err(serviceError(
-        ErrorCodes.KV_SYNC_RESET_REQUIRED,
-        `${context}: the node requires a reset (${reason ?? "reason not given"}); discard sync state and restart without a cursor`,
-        "kv",
-        { meta: { ...meta, reason } }
-      ));
-    }
-    if (response.status === 403 && bodyCode === "RETENTION_GRANT_REFUSED") {
-      return err(serviceError(
-        ErrorCodes.KV_RETENTION_GRANT_REFUSED,
-        `${context}: the retention grant was refused (${reason ?? "reason not given"})`,
-        "kv",
-        { meta: { ...meta, reason } }
-      ));
-    }
-    if (response.status === 401) {
-      const revoked = revocationCodeOf(errorText);
-      if (revoked !== void 0) {
-        return err(serviceError(revoked, `${context}: 401 - ${errorText}`, "kv", { meta }));
-      }
-    }
-    if (response.status === 401 || response.status === 403) {
-      return this.authorizationFailure(context, response, errorText, [prefix], KVAction.SYNC);
-    }
-    return err(serviceError(
-      response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR,
-      `${context}: ${response.status} - ${errorText}`,
-      "kv",
-      { meta }
-    ));
-  }
-  normalizeChangesResponse(data) {
-    if (!isJsonObject(data)) return void 0;
-    const { changes, more, cursor, source, authority } = data;
-    if (!Array.isArray(changes) || typeof more !== "boolean" || typeof cursor !== "string" || !isJsonObject(source) || typeof source.nodeDid !== "string" || typeof source.space !== "string" || typeof source.prefix !== "string" || !isJsonObject(authority)) {
-      return void 0;
-    }
-    const { notBefore, expiresAt, retainUntil } = authority;
-    if (notBefore !== null && typeof notBefore !== "string" || expiresAt !== null && typeof expiresAt !== "string" || retainUntil !== null && typeof retainUntil !== "string") {
-      return void 0;
-    }
-    const parsed = [];
-    for (const change of changes) {
-      if (!isJsonObject(change) || typeof change.key !== "string") return void 0;
-      if (change.deleted === true) {
-        parsed.push({ key: change.key, deleted: true });
-        continue;
-      }
-      const { metadata } = change;
-      if (change.deleted !== false || typeof change.etag !== "string" || !isJsonObject(metadata) || !Object.values(metadata).every((value) => typeof value === "string")) {
-        return void 0;
-      }
-      parsed.push({
-        key: change.key,
-        deleted: false,
-        etag: change.etag,
-        metadata
-      });
-    }
-    return {
-      changes: parsed,
-      more,
-      cursor,
-      source: { nodeDid: source.nodeDid, space: source.space, prefix: source.prefix },
-      authority: { notBefore, expiresAt, retainUntil }
-    };
-  }
-  /**
-   * Delete a key.
-   */
-  async delete(key, options) {
-    return this.withTelemetry("delete", key, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      const path = this.getFullPath(key, options?.prefix);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.DELETE,
-          void 0,
-          request.signal,
-          options?.ifMatch === void 0 ? void 0 : { "if-match": options.ifMatch }
-        );
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              `Failed to delete key ${JSON.stringify(key)}`,
-              response,
-              await this.readAuthorizationText(response),
-              [path],
-              KVAction.DELETE
-            );
-          }
-          if (response.status === 404) {
-            return this.classifyNotFound(response, key);
-          }
-          const errorText = await response.text();
-          if (response.status === 412) {
-            return err(serviceError(
-              ErrorCodes.KV_PRECONDITION_FAILED,
-              `KV precondition failed for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          if (response.status === 503 && options?.ifMatch !== void 0) {
-            return err(serviceError(
-              ErrorCodes.KV_CONFLICT,
-              `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            ));
-          }
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-        return ok({
-          data: void 0,
-          headers: this.createResponseHeaders(response.headers)
-        });
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  /**
-   * Get metadata for a key without retrieving the value.
-   */
-  async head(key, options) {
-    return this.withTelemetry("head", key, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      const path = this.getFullPath(key, options?.prefix);
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.HEAD,
-          void 0,
-          request.signal
-        );
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              `Failed to get metadata for key ${JSON.stringify(key)}`,
-              response,
-              await this.readAuthorizationText(response),
-              [path],
-              KVAction.HEAD
-            );
-          }
-          if (response.status === 404) {
-            return this.classifyNotFound(response, key);
-          }
-          const errorText = await response.text();
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-        return ok({
-          data: void 0,
-          headers: this.createResponseHeaders(response.headers)
-        });
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async batchHead(keys, options) {
-    return this.withTelemetry(
-      "batchHead",
-      String(keys.length),
-      () => this.batchRead(keys, KVAction.HEAD, options)
-    );
-  }
-  /**
-   * Create a short-lived signed URL for reading a KV object.
-   */
-  async createSignedReadUrl(key, options) {
-    return this.withTelemetry("createSignedReadUrl", key, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("kv"));
-      }
-      const path = this.getFullPath(key, options?.prefix);
-      const session = this.context.session;
-      const headers = this.context.invoke(
-        session,
-        "kv",
-        path,
-        KVAction.GET
-      );
-      const body = {
-        space: session.spaceId,
-        path,
-        ttl_seconds: options?.expiresInSeconds ?? Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1e3)
-      };
-      if (options?.contentHash !== void 0) {
-        body.content_hash = options.contentHash;
-      }
-      if (options?.etag !== void 0) {
-        body.etag = options.etag;
-      }
-      const request = this.createRequestSignal(options?.signal, options?.timeout);
-      try {
-        const response = await this.context.fetch(`${this.host}/signed/kv`, {
-          method: "POST",
-          headers: this.withJsonContentType(headers),
-          body: JSON.stringify(body),
-          signal: request.signal
-        });
-        if (!response.ok) {
-          return this.createSignedReadUrlError(response, key, path);
-        }
-        const signedUrl = this.normalizeSignedReadUrlResponse(
-          await response.json()
-        );
-        if (!signedUrl) {
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              "Signed read URL response did not include url, ticketId, and expiresAt",
-              "kv"
-            )
-          );
-        }
-        return ok(signedUrl);
-      } catch (error) {
-        return err(wrapError2("kv", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  /**
-   * Create a prefix-scoped view of this KV service.
-   *
-   * Returns a PrefixedKVService that automatically prefixes all
-   * key operations with the specified prefix. This enables apps
-   * to isolate their data within a shared space.
-   *
-   * @param prefix - The prefix to apply to all operations
-   * @returns A PrefixedKVService scoped to the prefix
-   *
-   * ## Prefix Conventions
-   *
-   * | Pattern | Use Case | Example |
-   * | -- | -- | -- |
-   * | `/app.{domain}/` | App-private data | `/app.photos.xyz/settings.json` |
-   * | `/{type}/` | Shared data type | `/photos/vacation.jpg` |
-   * | `/.{name}/` | Hidden/system data | `/.cache/thumbnails/` |
-   * | `/public/` | Explicitly shareable | `/public/profile.json` |
-   *
-   * @example
-   * ```typescript
-   * const space = sdk.space('default');
-   *
-   * // Create prefix-scoped views
-   * const myApp = space.kv.withPrefix('/app.myapp.com');
-   * const sharedPhotos = space.kv.withPrefix('/photos');
-   *
-   * // Operations are automatically prefixed
-   * await myApp.put('settings.json', { theme: 'dark' });
-   * // -> Actually writes to: /app.myapp.com/settings.json
-   *
-   * await myApp.get('settings.json');
-   * // -> Actually reads from: /app.myapp.com/settings.json
-   *
-   * await sharedPhotos.list();
-   * // -> Lists: /photos/*
-   *
-   * // Nested prefixes
-   * const settings = myApp.withPrefix('/settings');
-   * await settings.get('theme.json');  // -> /app.myapp.com/settings/theme.json
-   * ```
-   */
-  withPrefix(prefix) {
-    return new PrefixedKVService(this, prefix);
-  }
-};
-KVService.serviceName = "kv";
 function parseServiceErrorBody(errorText) {
   try {
     return JSON.parse(errorText);
@@ -9182,442 +6781,6 @@ function compactMessage(message) {
   const compact = message.replace(/\s+/g, " ").trim();
   return compact.length > 500 ? `${compact.slice(0, 500)}...` : compact;
 }
-var SQLMigrations = class {
-  constructor(service, dbName) {
-    this.service = service;
-    this.dbName = dbName;
-  }
-  apply(options) {
-    return this.service.applyMigrationsOnDb(this.dbName, options);
-  }
-};
-var DatabaseHandle = class {
-  constructor(service, name) {
-    this.service = service;
-    this.name = name;
-    this.migrations = new SQLMigrations(service, name);
-  }
-  async query(sql, params, options) {
-    return this.service.queryOnDb(this.name, sql, params, options);
-  }
-  async execute(sql, params, options) {
-    return this.service.executeOnDb(this.name, sql, params, options);
-  }
-  async batch(statements, options) {
-    return this.service.batchOnDb(this.name, statements, options);
-  }
-  async executeStatement(name, params, options) {
-    return this.service.executeStatementOnDb(this.name, name, params, options);
-  }
-  async export(options) {
-    return this.service.exportDb(this.name, options);
-  }
-};
-var SQLAction = {
-  READ: SQL.READ,
-  WRITE: SQL.WRITE,
-  SCHEMA: SQL.SCHEMA,
-  ADMIN: SQL.ADMIN,
-  SELECT: SQL.SELECT,
-  EXECUTE: SQL.EXECUTE,
-  EXPORT: SQL.EXPORT,
-  ALL: SQL.ALL
-};
-var DDL_TOKENS = /* @__PURE__ */ new Set(["alter", "create", "drop"]);
-var MIGRATIONS_TABLE = "__tinycloud_sql_migrations";
-var MIGRATIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
-  key TEXT PRIMARY KEY,
-  namespace TEXT NOT NULL,
-  id TEXT NOT NULL,
-  applied_at TEXT NOT NULL,
-  statement_count INTEGER NOT NULL
-)`;
-var MIGRATIONS_META_NAMESPACE = "tinycloud.sql.migrations";
-var MIGRATIONS_META_ID = "000_metadata";
-var SQLService = class extends BaseService {
-  constructor(config = {}) {
-    super();
-    this.migrationLocks = /* @__PURE__ */ new Map();
-    this._config = config;
-  }
-  get config() {
-    return this._config;
-  }
-  get defaultDbName() {
-    return this._config.defaultDatabase ?? "default";
-  }
-  get host() {
-    return this.context.hosts[0];
-  }
-  /**
-   * Get a handle to a named database.
-   */
-  db(name) {
-    return new DatabaseHandle(this, name ?? this.defaultDbName);
-  }
-  /**
-   * Shortcut: query the default database.
-   */
-  async query(sql, params, options) {
-    return this.queryOnDb(this.defaultDbName, sql, params, options);
-  }
-  /**
-   * Shortcut: execute on the default database.
-   */
-  async execute(sql, params, options) {
-    return this.executeOnDb(this.defaultDbName, sql, params, options);
-  }
-  /**
-   * Shortcut: batch on the default database.
-   */
-  async batch(statements, options) {
-    return this.batchOnDb(this.defaultDbName, statements, options);
-  }
-  async applyMigrationsOnDb(dbName, options) {
-    const validationError = validateMigrationOptions(options);
-    if (validationError) {
-      return err(serviceError(ErrorCodes.INVALID_INPUT, validationError, "sql"));
-    }
-    const lockKey = `${dbName}\0${options.namespace}`;
-    const existing = this.migrationLocks.get(lockKey);
-    if (existing) {
-      return existing;
-    }
-    const promise = this.applyMigrationsOnDbUnlocked(dbName, options);
-    this.migrationLocks.set(lockKey, promise);
-    try {
-      return await promise;
-    } finally {
-      this.migrationLocks.delete(lockKey);
-    }
-  }
-  // === Internal methods called by DatabaseHandle ===
-  async queryOnDb(dbName, sql, params, options) {
-    return this.withTelemetry("query", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("sql"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const body = {
-          action: "query",
-          sql,
-          params: serializeSqlValues(params ?? [])
-        };
-        if (options?.maxRows !== void 0) body.maxRows = options.maxRows;
-        if (options?.maxBytes !== void 0) body.maxBytes = options.maxBytes;
-        const action = this.actionForSql(sql, SQLAction.READ);
-        const response = await this.invokeSQL(
-          dbName,
-          action,
-          body,
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "query", dbName, [action]);
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async executeOnDb(dbName, sql, params, options) {
-    return this.withTelemetry("execute", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("sql"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const body = {
-          action: "execute",
-          sql,
-          params: serializeSqlValues(params ?? [])
-        };
-        if (options?.schema) {
-          body.schema = options.schema;
-        }
-        const actions = [
-          this.actionForSql(sql, SQLAction.WRITE),
-          ...(options?.schema ?? []).map(
-            (statement) => this.actionForSql(statement, SQLAction.SCHEMA)
-          )
-        ];
-        const requestedActions2 = this.dedupeActions(actions);
-        const response = await this.invokeSQL(
-          dbName,
-          requestedActions2,
-          body,
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "execute", dbName, requestedActions2);
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async batchOnDb(dbName, statements, options) {
-    return this.withTelemetry("batch", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("sql"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const requestedActions2 = this.actionsForSqlBatch(statements);
-        const response = await this.invokeSQL(
-          dbName,
-          requestedActions2,
-          { action: "batch", statements },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "batch", dbName, requestedActions2);
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async executeStatementOnDb(dbName, name, params, options) {
-    return this.withTelemetry("executeStatement", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("sql"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeSQL(
-          dbName,
-          SQLAction.WRITE,
-          { action: "execute_statement", name, params: params ?? [] },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async exportDb(dbName, options) {
-    return this.withTelemetry("export", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("sql"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeSQL(
-          dbName,
-          SQLAction.READ,
-          { action: "export" },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
-        }
-        const resp = response;
-        if (typeof resp.blob === "function") {
-          const blob = await resp.blob();
-          return ok(blob);
-        }
-        const text = await response.text();
-        return ok(text);
-      } catch (error) {
-        return err(wrapError2("sql", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async applyMigrationsOnDbUnlocked(dbName, options) {
-    return this.withTelemetry("migrations.apply", dbName, async () => {
-      const listed = await this.queryOnDb(
-        dbName,
-        `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
-        [options.namespace],
-        { signal: options.signal }
-      );
-      const tableMissing = !listed.ok && (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND || isMissingTableError(listed.error.message));
-      if (!listed.ok && !tableMissing) return listed;
-      const appliedIds = new Set(
-        (listed.ok ? listed.data.rows : []).map((row) => rowValue(row, 0)).filter((id) => typeof id === "string")
-      );
-      const skipped = options.migrations.filter((migration) => appliedIds.has(migration.id)).map((migration) => migration.id);
-      const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
-      const applied = [];
-      if (pending.length > 0 && tableMissing) {
-        const created = await this.ensureMigrationsTable(dbName, options.signal);
-        if (!created.ok) return created;
-      }
-      for (const migration of pending) {
-        const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
-        if (!result.ok) return result;
-        applied.push(migration.id);
-      }
-      return ok({
-        database: dbName,
-        namespace: options.namespace,
-        status: applied.length > 0 ? "applied" : "already_current",
-        applied,
-        skipped
-      });
-    });
-  }
-  async applyOneMigration(dbName, namespace, migration, signal) {
-    const statements = [
-      ...migration.sql.map(
-        (statement) => typeof statement === "string" ? { sql: statement } : statement
-      ),
-      {
-        sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
-        params: [
-          migrationKey(namespace, migration.id),
-          namespace,
-          migration.id,
-          (/* @__PURE__ */ new Date()).toISOString(),
-          migration.sql.length
-        ]
-      }
-    ];
-    const result = await this.batchOnDb(dbName, statements, { signal });
-    if (!result.ok) return result;
-    return ok(void 0);
-  }
-  async ensureMigrationsTable(dbName, signal) {
-    const result = await this.batchOnDb(
-      dbName,
-      [
-        { sql: MIGRATIONS_SCHEMA },
-        {
-          sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
-          params: [
-            migrationKey(MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID),
-            MIGRATIONS_META_NAMESPACE,
-            MIGRATIONS_META_ID,
-            (/* @__PURE__ */ new Date()).toISOString(),
-            1
-          ]
-        }
-      ],
-      { signal }
-    );
-    if (!result.ok) return result;
-    return ok(void 0);
-  }
-  // === Private helpers ===
-  async invokeSQL(dbName, actions, body, signal) {
-    const session = this.context.session;
-    const actionList = Array.isArray(actions) ? actions : [actions];
-    const headers = actionList.length === 1 ? this.context.invoke(session, "sql", dbName, actionList[0]) : this.invokeSQLAny(session, dbName, actionList);
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: {
-        ...headers,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body),
-      signal
-    });
-  }
-  actionForSql(sql, fallback) {
-    const token = firstSqlToken(sql);
-    if (token === "pragma") return SQLAction.ADMIN;
-    if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.SCHEMA;
-    return fallback;
-  }
-  actionsForSqlBatch(statements) {
-    return this.dedupeActions(
-      statements.map((statement) => this.actionForSql(statement.sql, SQLAction.WRITE))
-    );
-  }
-  dedupeActions(actions) {
-    return [...new Set(actions)];
-  }
-  invokeSQLAny(session, dbName, actions) {
-    if (!this.context.invokeAny) {
-      throw new Error(
-        `SQL operation requires multiple permissions (${actions.join(", ")}) but this SDK runtime does not support multi-resource invocations`
-      );
-    }
-    return this.context.invokeAny(
-      session,
-      actions.map((action) => ({
-        spaceId: session.spaceId,
-        service: "sql",
-        path: dbName,
-        action
-      }))
-    );
-  }
-  async handleErrorResponse(response, operation, dbName, requestedActions2) {
-    const errorText = await response.text();
-    const meta = responseErrorMeta(response.status, response.statusText, errorText);
-    if (response.status === 402) {
-      return err(storageRejectionError("sql", 402, meta, errorText));
-    }
-    const errorBody = parseServiceErrorBody(errorText);
-    const errorCode2 = this.mapHttpStatusToErrorCode(
-      response.status,
-      errorBody.error
-    );
-    const message = formatServiceResponseError(
-      "SQL",
-      operation,
-      response.status,
-      errorText,
-      errorBody
-    );
-    if (response.status === 401) {
-      const { action } = parseAuthError(errorText);
-      if (action && requestedActions2.includes(action)) {
-        meta.requiredAction = action;
-        meta.resource = `${this.context.session.spaceId}/sql/${dbName}`;
-      }
-    }
-    return err(
-      serviceError(errorCode2, message, "sql", { meta })
-    );
-  }
-  mapHttpStatusToErrorCode(status, serverError) {
-    switch (status) {
-      case 400:
-        return ErrorCodes.SQL_ERROR;
-      case 401:
-        return ErrorCodes.AUTH_UNAUTHORIZED;
-      case 403:
-        if (serverError === "sql_readonly_violation") {
-          return ErrorCodes.SQL_READONLY_VIOLATION;
-        }
-        return ErrorCodes.SQL_PERMISSION_DENIED;
-      case 404:
-        return ErrorCodes.SQL_DATABASE_NOT_FOUND;
-      case 413:
-        return ErrorCodes.SQL_RESPONSE_TOO_LARGE;
-      case 429:
-        return ErrorCodes.SQL_QUOTA_EXCEEDED;
-      default:
-        return ErrorCodes.NETWORK_ERROR;
-    }
-  }
-};
-SQLService.serviceName = "sql";
 function firstSqlToken(sql) {
   let index = 0;
   while (index < sql.length) {
@@ -9700,944 +6863,6 @@ function rowValue(row, index) {
   }
   return void 0;
 }
-var DuckDbDatabaseHandle = class {
-  constructor(service, name) {
-    this.service = service;
-    this.name = name;
-  }
-  async query(sql, params, options) {
-    return this.service.queryOnDb(this.name, sql, params, options);
-  }
-  async queryArrow(sql, params, options) {
-    return this.service.queryArrowOnDb(this.name, sql, params, options);
-  }
-  async execute(sql, params, options) {
-    return this.service.executeOnDb(this.name, sql, params, options);
-  }
-  async batch(statements, options) {
-    return this.service.batchOnDb(this.name, statements, options);
-  }
-  async executeStatement(name, params, options) {
-    return this.service.executeStatementOnDb(this.name, name, params, options);
-  }
-  async describe(options) {
-    return this.service.describeDb(this.name, options);
-  }
-  async export(options) {
-    return this.service.exportOnDb(this.name, options);
-  }
-  async import(data, options) {
-    return this.service.importOnDb(this.name, data, options);
-  }
-};
-var DuckDbAction = {
-  READ: DUCKDB.READ,
-  WRITE: DUCKDB.WRITE,
-  ADMIN: DUCKDB.ADMIN,
-  DESCRIBE: DUCKDB.DESCRIBE,
-  EXPORT: DUCKDB.EXPORT,
-  IMPORT: DUCKDB.IMPORT,
-  EXECUTE: DUCKDB.EXECUTE,
-  ALL: DUCKDB.ALL
-};
-var DuckDbService = class extends BaseService {
-  constructor(config = {}) {
-    super();
-    this._config = config;
-  }
-  get config() {
-    return this._config;
-  }
-  get defaultDbName() {
-    return this._config.defaultDatabase ?? "default";
-  }
-  get host() {
-    return this.context.hosts[0];
-  }
-  /**
-   * Get a handle to a named database.
-   */
-  db(name) {
-    return new DuckDbDatabaseHandle(this, name ?? this.defaultDbName);
-  }
-  /**
-   * Shortcut: query the default database (JSON format).
-   */
-  async query(sql, params, options) {
-    return this.queryOnDb(this.defaultDbName, sql, params, options);
-  }
-  /**
-   * Shortcut: query the default database (Arrow IPC format).
-   */
-  async queryArrow(sql, params, options) {
-    return this.queryArrowOnDb(this.defaultDbName, sql, params, options);
-  }
-  /**
-   * Shortcut: execute on the default database.
-   */
-  async execute(sql, params, options) {
-    return this.executeOnDb(this.defaultDbName, sql, params, options);
-  }
-  /**
-   * Shortcut: batch on the default database.
-   */
-  async batch(statements, options) {
-    return this.batchOnDb(this.defaultDbName, statements, options);
-  }
-  // === Internal methods called by DuckDbDatabaseHandle ===
-  async queryOnDb(dbName, sql, params, options) {
-    return this.withTelemetry("query", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.READ,
-          { action: "query", sql, params: params ?? [] },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "query");
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async queryArrowOnDb(dbName, sql, params, options) {
-    return this.withTelemetry("queryArrow", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.READ,
-          { action: "query", sql, params: params ?? [] },
-          request.signal,
-          { Accept: "application/vnd.apache.arrow.stream" }
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "queryArrow");
-        }
-        const buffer = await response.arrayBuffer();
-        return ok(buffer);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async executeOnDb(dbName, sql, params, options) {
-    return this.withTelemetry("execute", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const body = {
-          action: "execute",
-          sql,
-          params: params ?? []
-        };
-        if (options?.schema) {
-          body.schema = options.schema;
-        }
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.WRITE,
-          body,
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "execute");
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async batchOnDb(dbName, statements, options) {
-    return this.withTelemetry("batch", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const body = {
-          action: "batch",
-          statements
-        };
-        if (options?.transactional !== void 0) {
-          body.transactional = options.transactional;
-        }
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.WRITE,
-          body,
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "batch");
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async executeStatementOnDb(dbName, name, params, options) {
-    return this.withTelemetry("executeStatement", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.WRITE,
-          { action: "executeStatement", name, params: params ?? [] },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "executeStatement");
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async describeDb(dbName, options) {
-    return this.withTelemetry("describe", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.READ,
-          { action: "describe" },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "describe");
-        }
-        const data = await response.json();
-        return ok(data);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async exportOnDb(dbName, options) {
-    return this.withTelemetry("export", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.EXPORT,
-          { action: "export" },
-          request.signal
-        );
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "export");
-        }
-        const blob = await response.blob();
-        return ok(blob);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  async importOnDb(dbName, data, options) {
-    return this.withTelemetry("import", dbName, async () => {
-      if (!this.requireAuth()) {
-        return err(authRequiredError("duckdb"));
-      }
-      const request = this.createRequestSignal(options?.signal);
-      try {
-        const session = this.context.session;
-        const headers = this.context.invoke(
-          session,
-          "duckdb",
-          dbName,
-          DuckDbAction.IMPORT
-        );
-        const response = await this.context.fetch(`${this.host}/invoke`, {
-          method: "POST",
-          headers: {
-            ...headers,
-            "Content-Type": "application/x-duckdb"
-          },
-          body: new Blob([data]),
-          signal: request.signal
-        });
-        if (!response.ok) {
-          return this.handleErrorResponse(response, "import");
-        }
-        return ok(void 0);
-      } catch (error) {
-        return err(wrapError2("duckdb", error));
-      } finally {
-        request.dispose();
-      }
-    });
-  }
-  // === Private helpers ===
-  async invokeDuckDb(dbName, action, body, signal, extraHeaders) {
-    const session = this.context.session;
-    const headers = this.context.invoke(session, "duckdb", dbName, action);
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: {
-        ...headers,
-        "Content-Type": "application/json",
-        ...extraHeaders
-      },
-      body: JSON.stringify(body),
-      signal
-    });
-  }
-  async handleErrorResponse(response, operation) {
-    const errorText = await response.text();
-    const meta = responseErrorMeta(response.status, response.statusText, errorText);
-    if (response.status === 402) {
-      return err(storageRejectionError("duckdb", 402, meta, errorText));
-    }
-    const errorBody = parseServiceErrorBody(errorText);
-    const errorCode2 = this.mapHttpStatusToErrorCode(
-      response.status,
-      errorBody.error
-    );
-    const message = formatServiceResponseError(
-      "DuckDB",
-      operation,
-      response.status,
-      errorText,
-      errorBody
-    );
-    if (response.status === 401) {
-      const { resource, action } = parseAuthError(errorText);
-      if (action) meta.requiredAction = action;
-      if (resource) meta.resource = resource;
-    }
-    return err(
-      serviceError(errorCode2, message, "duckdb", { meta })
-    );
-  }
-  mapHttpStatusToErrorCode(status, serverError) {
-    switch (status) {
-      case 400:
-        return ErrorCodes.DUCKDB_ERROR;
-      case 401:
-        return ErrorCodes.AUTH_UNAUTHORIZED;
-      case 403:
-        if (serverError === "duckdb_readonly_violation") {
-          return ErrorCodes.DUCKDB_READONLY_VIOLATION;
-        }
-        return ErrorCodes.DUCKDB_PERMISSION_DENIED;
-      case 404:
-        return ErrorCodes.DUCKDB_DATABASE_NOT_FOUND;
-      case 413:
-        return ErrorCodes.DUCKDB_RESPONSE_TOO_LARGE;
-      case 429:
-        return ErrorCodes.DUCKDB_QUOTA_EXCEEDED;
-      default:
-        return ErrorCodes.NETWORK_ERROR;
-    }
-  }
-};
-DuckDbService.serviceName = "duckdb";
-var AsyncQueue = class {
-  constructor() {
-    this.values = [];
-    this.waiters = [];
-    this.closed = false;
-  }
-  [Symbol.asyncIterator]() {
-    return this;
-  }
-  push(value) {
-    if (this.closed) {
-      return;
-    }
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter.resolve({ value, done: false });
-      return;
-    }
-    this.values.push(value);
-  }
-  close() {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      waiter?.resolve({ value: void 0, done: true });
-    }
-  }
-  /**
-   * Fail the queue: pending and future `next()` calls reject with `error`,
-   * so a `for await` consumer sees the iterator throw.
-   */
-  fail(error) {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    this.failure = error;
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      waiter?.reject(error);
-    }
-  }
-  next() {
-    if (this.values.length > 0) {
-      const value = this.values.shift();
-      return Promise.resolve({ value, done: false });
-    }
-    if (this.failure !== void 0) {
-      return Promise.reject(this.failure);
-    }
-    if (this.closed) {
-      return Promise.resolve({ value: void 0, done: true });
-    }
-    return new Promise((resolve5, reject) => {
-      this.waiters.push({ resolve: resolve5, reject });
-    });
-  }
-};
-var HOOK_STREAM_RETRY_BASE_DELAY_MS = 250;
-var HOOK_STREAM_RETRY_MAX_DELAY_MS = 3e4;
-var HOOK_STREAM_HEALTHY_MS = 5e3;
-var HooksService = class extends BaseService {
-  constructor(config = {}) {
-    super();
-    this._subscribers = /* @__PURE__ */ new Set();
-    this._supervising = false;
-    this._sessionGeneration = 0;
-    this._config = config;
-  }
-  get config() {
-    return this._config;
-  }
-  get host() {
-    return this._config.host ?? this.context.hosts[0];
-  }
-  async *subscribe(subscriptions, options = {}) {
-    if (!this.requireAuth()) {
-      throw new Error("Authentication required for hooks subscription");
-    }
-    if (subscriptions.length === 0) {
-      throw new Error("At least one hook subscription is required");
-    }
-    const requested = subscriptions.map(normalizeSubscription);
-    const subscriber = {
-      requested,
-      signatures: requested.map(subscriptionSignature),
-      ttlSeconds: options.ttlSeconds,
-      queue: new AsyncQueue()
-    };
-    const leave = () => {
-      this._subscribers.delete(subscriber);
-      subscriber.queue.close();
-      this.wake();
-    };
-    const { signal } = options;
-    if (signal?.aborted) {
-      return;
-    }
-    signal?.addEventListener("abort", leave, { once: true });
-    this._subscribers.add(subscriber);
-    this.wake();
-    try {
-      for await (const event of subscriber.queue) {
-        yield event;
-      }
-    } finally {
-      signal?.removeEventListener("abort", leave);
-      leave();
-    }
-  }
-  async register(webhook) {
-    if (!this.requireAuth()) {
-      return err(authRequiredError("hooks"));
-    }
-    if (typeof webhook.secret !== "string" || webhook.secret.trim().length === 0) {
-      return err(
-        serviceError(
-          ErrorCodes.INVALID_INPUT,
-          "Webhook secret is required",
-          "hooks",
-          { meta: { field: "secret" } }
-        )
-      );
-    }
-    try {
-      const response = await this.context.fetch(`${this.host}/hooks/webhooks`, {
-        method: "POST",
-        headers: {
-          ...serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/register",
-              buildScopePath(webhook.service, webhook.pathPrefix)
-            )
-          ),
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          space: webhook.space,
-          service: webhook.service,
-          pathPrefix: normalizePathPrefix(webhook.pathPrefix),
-          abilities: webhook.abilities ?? [],
-          callbackUrl: webhook.callbackUrl,
-          secret: webhook.secret
-        })
-      });
-      if (!response.ok) {
-        return err(
-          await responseError("hooks", "failed to register webhook", response)
-        );
-      }
-      const data = normalizeWebhookRecord(await response.json());
-      if (!data) {
-        return err(
-          wrapError2(
-            "hooks",
-            new Error("Webhook registration response did not include a record")
-          )
-        );
-      }
-      return ok(data);
-    } catch (error) {
-      return err(wrapError2("hooks", error));
-    }
-  }
-  async list(options = {}) {
-    if (!this.requireAuth()) {
-      return err(authRequiredError("hooks"));
-    }
-    try {
-      const query = new URLSearchParams();
-      if (options.space) {
-        query.set("space", options.space);
-      }
-      if (options.service) {
-        query.set("service", options.service);
-      }
-      if (options.pathPrefix) {
-        const normalizedPrefix = normalizePathPrefix(options.pathPrefix);
-        if (normalizedPrefix) {
-          query.set("prefix", normalizedPrefix);
-        }
-      }
-      const response = await this.context.fetch(
-        `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
-        {
-          method: "GET",
-          headers: serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/list",
-              options.service ? buildScopePath(options.service, options.pathPrefix) : "webhooks"
-            )
-          )
-        }
-      );
-      if (!response.ok) {
-        return err(
-          await responseError("hooks", "failed to list webhooks", response)
-        );
-      }
-      const payload = await response.json();
-      const records = normalizeWebhookRecordList(payload);
-      if (!records) {
-        return err(
-          wrapError2(
-            "hooks",
-            new Error("Webhook list response did not include records")
-          )
-        );
-      }
-      return ok(records);
-    } catch (error) {
-      return err(wrapError2("hooks", error));
-    }
-  }
-  async unregister(id, options = {}) {
-    if (!this.requireAuth()) {
-      return err(authRequiredError("hooks"));
-    }
-    try {
-      const response = await this.context.fetch(
-        `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
-        {
-          method: "DELETE",
-          headers: serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/unregister",
-              options.target ? buildScopePath(
-                options.target.service,
-                options.target.pathPrefix
-              ) : `webhooks/${id}`
-            )
-          )
-        }
-      );
-      if (!response.ok) {
-        return err(
-          await responseError(
-            "hooks",
-            "failed to unregister webhook",
-            response
-          )
-        );
-      }
-      return ok(void 0);
-    } catch (error) {
-      return err(wrapError2("hooks", error));
-    }
-  }
-  /**
-   * Called after anything that may change what the supervisor should do:
-   * subscribe, unsubscribe, session change, sign-out. Interrupts the running
-   * step if the plan moved away from it, and starts the supervisor if none
-   * runs. Touches only SDK-owned state, so it never throws into callers such
-   * as `ServiceContext.setSession`.
-   */
-  wake() {
-    const phase = this._phase;
-    if (phase && phase.key !== this.plan()?.key) {
-      phase.interrupt.abort();
-    }
-    if (this._supervising || this._subscribers.size === 0) {
-      return;
-    }
-    this._supervising = true;
-    this.supervise().catch(() => this.collapse());
-  }
-  /**
-   * The only owner of the shared stream. Each iteration is one attempt
-   * (mint → open → drain), then a classification and, unless the attempt was
-   * superseded or released its subscribers, a backoff. Every await is a
-   * `phase` that wake() can interrupt; an interrupted phase yields
-   * `undefined`, so a superseded mint can never act. Outside `attempt` and
-   * `pause`, which each own one catch, the loop touches only SDK state.
-   */
-  async supervise() {
-    let streak = 0;
-    for (; ; ) {
-      const plan = this.plan();
-      if (!plan) {
-        this._supervising = false;
-        return;
-      }
-      const health = { openedAt: 0, delivered: false };
-      const outcome = await this.phase(
-        plan.key,
-        (signal) => this.attempt(plan, signal, health)
-      );
-      if (health.delivered || health.openedAt > 0 && performance.now() - health.openedAt >= HOOK_STREAM_HEALTHY_MS) {
-        streak = 0;
-      }
-      if (!outcome) {
-        continue;
-      }
-      if (this.plan()?.key !== plan.key) {
-        continue;
-      }
-      if (outcome.kind === "stopped") {
-        this.release();
-        continue;
-      }
-      if (outcome.kind === "refused" && outcome.terminal) {
-        this.release(outcome.error);
-        this.report(outcome.error);
-        continue;
-      }
-      if (outcome.kind !== "ended") {
-        this.report(outcome.error);
-      }
-      streak += 1;
-      await this.phase(
-        plan.key,
-        (signal) => this.pause(streak, signal)
-      );
-    }
-  }
-  /**
-   * Run one step under an interrupt that wake() fires when the plan key moves
-   * on. An interrupted step's result is discarded. The interrupt is also
-   * fired when the step returns, which releases whatever it left open: the
-   * request signal and its listeners, an unread response body, a timer.
-   */
-  async phase(key, step) {
-    const interrupt = new AbortController();
-    this._phase = { key, interrupt };
-    try {
-      if (this.plan()?.key !== key) {
-        interrupt.abort();
-      }
-      const result = await step(interrupt.signal);
-      return interrupt.signal.aborted ? void 0 : result;
-    } finally {
-      this._phase = void 0;
-      interrupt.abort();
-    }
-  }
-  /**
-   * One mint → open → drain. The single catch site for everything the
-   * attempt touches that the SDK does not own: context accessors, invoke,
-   * fetch, response bodies, the SSE parser. Never rejects.
-   */
-  async attempt(plan, signal, health) {
-    let phase = "mint";
-    let request;
-    const owns = () => !signal.aborted && !request?.signal.aborted && this.plan()?.key === plan.key;
-    try {
-      const context = this.context;
-      const contextSignal = context.abortSignal;
-      this._lastContextSignal = contextSignal;
-      if (!context.isAuthenticated || contextSignal?.aborted) {
-        return { kind: "stopped" };
-      }
-      request = this.createRequestSignal(signal, 0);
-      const host = this.host;
-      const minted = await awaitOwned(
-        request.signal,
-        () => context.fetch(`${host}/hooks/tickets`, {
-          method: "POST",
-          headers: {
-            ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            subscriptions: plan.subscriptions,
-            ttlSeconds: plan.ttlSeconds
-          }),
-          signal: request.signal
-        })
-      );
-      if (!owns()) return { kind: "stopped" };
-      if (!minted.ok) {
-        const status = minted.status;
-        const error = await awaitOwned(
-          request.signal,
-          () => responseError("hooks", "failed to mint hook ticket", minted)
-        );
-        if (!owns()) return { kind: "stopped" };
-        return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
-      }
-      const body = await awaitOwned(request.signal, () => minted.json());
-      if (!owns()) return { kind: "stopped" };
-      const ticket = body !== null && typeof body === "object" && "ticket" in body ? body.ticket : void 0;
-      if (typeof ticket !== "string" || ticket.length === 0) {
-        throw new Error("Hook ticket response did not include a ticket");
-      }
-      phase = "open";
-      if (!owns()) return { kind: "stopped" };
-      const stream = await awaitOwned(
-        request.signal,
-        () => context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`, {
-          method: "GET",
-          headers: { accept: "text/event-stream" },
-          signal: request.signal
-        })
-      );
-      if (!owns()) return { kind: "stopped" };
-      if (!stream.ok) {
-        return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) };
-      }
-      health.openedAt = performance.now();
-      const iterator = parseSseStream(stream.body, request.signal)[Symbol.asyncIterator]();
-      try {
-        for (; ; ) {
-          const next = await awaitOwned(request.signal, () => iterator.next());
-          if (!owns()) return { kind: "stopped" };
-          if (next.done) break;
-          const message = next.value;
-          if (!message.data) continue;
-          const event = parseHookEvent(message);
-          if (!owns()) return { kind: "stopped" };
-          this.dispatch(event);
-          health.delivered = true;
-        }
-      } finally {
-        const closing = iterator.return?.();
-        if (closing) void Promise.resolve(closing).then(() => void 0, () => void 0);
-      }
-      return owns() ? { kind: "ended" } : { kind: "stopped" };
-    } catch (thrown) {
-      return request?.signal.aborted || thrown === SUPERSEDED ? { kind: "stopped" } : { kind: "failed", error: hookStreamFailure(phase, thrown) };
-    }
-  }
-  /**
-   * Back off before the next attempt. `config.streamRetry` overrides the
-   * delay and the clock; whatever they do, the pause ends by the delay or the
-   * interrupt, then yields one timer turn so an instant clock cannot starve
-   * due timers or the process.
-   */
-  async pause(attempt, signal) {
-    try {
-      this._lastContextSignal = this.context.abortSignal;
-    } catch {
-    }
-    const contextSignal = this._lastContextSignal;
-    const waits = [];
-    const aborts = [];
-    try {
-      const retry = this._config.streamRetry;
-      const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
-      waits.push((retry?.wait ?? sleep)(delayMs, attempt, signal));
-    } catch {
-      waits.push(Promise.resolve());
-    }
-    aborts.push(abortPromise(signal));
-    if (contextSignal) aborts.push(abortPromise(contextSignal));
-    try {
-      await Promise.race([...waits, ...aborts.map(({ promise }) => promise)]);
-    } catch {
-    } finally {
-      for (const abort of aborts) abort.dispose();
-    }
-    await new Promise((resolve5) => setTimeout(resolve5, 0));
-  }
-  /** The stream the current subscribers need, or undefined when none remain. */
-  plan() {
-    if (this._subscribers.size === 0) {
-      return void 0;
-    }
-    const merged = /* @__PURE__ */ new Map();
-    let ttlSeconds;
-    for (const subscriber of this._subscribers) {
-      subscriber.requested.forEach(
-        (subscription, index) => merged.set(subscriber.signatures[index], subscription)
-      );
-      if (typeof subscriber.ttlSeconds === "number") {
-        ttlSeconds = Math.min(subscriber.ttlSeconds, ttlSeconds ?? Infinity);
-      }
-    }
-    const signatures = [...merged.keys()].sort();
-    return {
-      key: JSON.stringify([this._sessionGeneration, signatures, ttlSeconds ?? null]),
-      subscriptions: signatures.map((signature) => merged.get(signature)),
-      ttlSeconds
-    };
-  }
-  dispatch(event) {
-    for (const subscriber of this._subscribers) {
-      if (matchesAnySubscription(event, subscriber.requested)) {
-        subscriber.queue.push(event);
-      }
-    }
-  }
-  /**
-   * Detach every subscriber. With `error`, their iterators throw it after
-   * draining buffered events; without, they complete.
-   */
-  release(error) {
-    const subscribers = [...this._subscribers];
-    this._subscribers.clear();
-    for (const { queue } of subscribers) {
-      if (error) {
-        queue.fail(error);
-      } else {
-        queue.close();
-      }
-    }
-  }
-  report(error) {
-    if (error.meta && typeof error.meta === "object") {
-      Object.freeze(error.meta);
-    }
-    Object.freeze(error);
-    try {
-      this.emitError(error, "stream");
-    } catch {
-    }
-  }
-  /**
-   * Unreachable by construction. If the loop ever rejects anyway, fail its
-   * subscribers visibly instead of stranding them or crashing the process.
-   */
-  collapse() {
-    this._supervising = false;
-    this._phase?.interrupt.abort();
-    this._phase = void 0;
-    const error = serviceError(
-      ErrorCodes.NETWORK_ERROR,
-      "hook stream supervisor stopped unexpectedly",
-      "hooks"
-    );
-    this.report(error);
-    this.release(error);
-  }
-  onSessionChange(session) {
-    super.onSessionChange(session);
-    this._sessionGeneration += 1;
-    this.wake();
-  }
-  onSignOut() {
-    super.onSignOut();
-    this.release();
-    this.wake();
-  }
-  createHookHeaders(action, path) {
-    return this.context.invoke(this.session, "hooks", path, action);
-  }
-  createInvokeHeaders(subscriptions) {
-    const entries = subscriptions.map((subscription) => ({
-      spaceId: subscription.space,
-      service: "hooks",
-      path: subscription.pathPrefix ? `${subscription.service}/${subscription.pathPrefix}` : subscription.service,
-      action: "tinycloud.hooks/subscribe"
-    }));
-    if (this.context.invokeAny) {
-      return this.context.invokeAny(this.session, entries);
-    }
-    if (entries.length === 1) {
-      const entry = entries[0];
-      return this.context.invoke(
-        this.session,
-        entry.service,
-        entry.path,
-        entry.action
-      );
-    }
-    throw new Error(
-      "This SDK runtime does not support multi-scope hook invocations"
-    );
-  }
-};
-HooksService.serviceName = "hooks";
 function buildScopePath(service, pathPrefix) {
   const normalized = normalizePathPrefix(pathPrefix);
   return normalized ? `${service}/${normalized}` : service;
@@ -10652,7 +6877,6 @@ function hookStreamRetryDelay(attempt) {
 function isTerminalMintRefusal(status) {
   return typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
-var SUPERSEDED = /* @__PURE__ */ Symbol("hooks attempt superseded");
 async function awaitOwned(signal, operation) {
   if (signal.aborted) {
     if (typeof operation !== "function") {
@@ -10707,15 +6931,6 @@ function hookStreamRefusal(status) {
     { meta: { phase: "open", status: code3 } }
   );
 }
-var STREAM_ERROR_NAMES = /* @__PURE__ */ new Set([
-  "Error",
-  "TypeError",
-  "AbortError",
-  "TimeoutError",
-  "SyntaxError",
-  "RangeError",
-  "NetworkError"
-]);
 function hookStreamFailure(phase, thrown) {
   const candidateName = readProperty(thrown, "name");
   const name = typeof candidateName === "string" && STREAM_ERROR_NAMES.has(candidateName) ? candidateName : "Error";
@@ -10727,32 +6942,6 @@ function hookStreamFailure(phase, thrown) {
     { meta: { phase, errorName: name, ...code3 ? { errorCode: code3 } : {} } }
   );
 }
-var STREAM_ERROR_CODES = /* @__PURE__ */ new Set([
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ETIMEDOUT",
-  "EPIPE",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ENETDOWN",
-  "EADDRNOTAVAIL",
-  "UND_ERR_SOCKET",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CLOSED",
-  "UND_ERR_ABORTED",
-  "UND_ERR_RESPONSE_STATUS_CODE",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-  "CERT_HAS_EXPIRED",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "ERR_SSL_WRONG_VERSION_NUMBER"
-]);
 function identifier(value) {
   return typeof value === "string" && STREAM_ERROR_CODES.has(value) ? value : void 0;
 }
@@ -11087,27 +7276,6 @@ function parsedStringArrayField(value, key) {
     return void 0;
   }
 }
-var VaultVersionConfig = {
-  "1": {
-    masterMessage: (spaceId) => `tinycloud-vault-master-v1:${spaceId}`,
-    identityMessage: "tinycloud-encryption-identity-v1"
-  }
-};
-var CURRENT_VAULT_VERSION = "1";
-var VaultHeaders = {
-  VERSION: "x-vault-version",
-  CIPHER: "x-vault-cipher",
-  KEY_ID: "x-vault-key-id",
-  CONTENT_TYPE: "x-vault-content-type",
-  KDF: "x-vault-kdf",
-  KEY_ROTATION: "x-vault-key-rotation",
-  GRANT_VERSION: "x-vault-grant-version",
-  GRANTOR: "x-vault-grantor"
-};
-var DB_NAME = "tinycloud-vault-cache";
-var DB_VERSION = 1;
-var STORE_NAME = "signatures";
-var WRAP_KEY_ID = "__wrap_key__";
 function isBrowser() {
   try {
     return typeof indexedDB !== "undefined" && typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined";
@@ -11324,1248 +7492,6 @@ function kvWriteError(context, error) {
     cause: new Error(`${context}: ${error.message}`)
   });
 }
-var DataVaultService = class extends BaseService {
-  /**
-   * Create a new DataVaultService instance.
-   *
-   * @param config - Service configuration including crypto and tc references
-   */
-  constructor(config) {
-    super();
-    this.masterKey = null;
-    this.encryptionIdentity = null;
-    this._isUnlocked = false;
-    this.unlockInFlight = null;
-    this.vaultConfig = config;
-    this._config = config;
-  }
-  /**
-   * Get the service configuration.
-   */
-  get config() {
-    return this._config;
-  }
-  /**
-   * Whether the vault is currently unlocked.
-   */
-  get isUnlocked() {
-    return this.usesNetworkEncryption || this._isUnlocked;
-  }
-  /**
-   * The vault's public encryption key (X25519).
-   * Throws if vault is locked.
-   */
-  get publicKey() {
-    if (this.usesNetworkEncryption) {
-      throw new Error("Network-encrypted vaults do not expose a local public key");
-    }
-    if (!this.encryptionIdentity) {
-      throw new Error("Vault is locked");
-    }
-    return this.encryptionIdentity.publicKey;
-  }
-  /**
-   * Convenience accessor for crypto operations.
-   */
-  get crypto() {
-    return this.vaultConfig.crypto;
-  }
-  /**
-   * Convenience accessor for TinyCloud instance.
-   */
-  get tc() {
-    return this.vaultConfig.tc;
-  }
-  get networkEncryption() {
-    return this.vaultConfig.encryption;
-  }
-  get usesNetworkEncryption() {
-    return this.networkEncryption !== void 0;
-  }
-  /**
-   * Get the host URL.
-   */
-  get host() {
-    return this.tc.hosts[0];
-  }
-  async decryptCapabilityProof() {
-    const proof = this.networkEncryption?.decryptCapabilityProof;
-    if (typeof proof === "function") {
-      return await proof();
-    }
-    return proof ?? { proofs: [] };
-  }
-  serializeValue(value, options) {
-    let plaintext;
-    if (value instanceof Uint8Array) {
-      plaintext = value;
-    } else if (options?.serialize) {
-      plaintext = options.serialize(value);
-    } else if (typeof value === "string") {
-      plaintext = toBytes2(value);
-    } else {
-      plaintext = toBytes2(JSON.stringify(value));
-    }
-    const contentType = options?.contentType ?? (value instanceof Uint8Array ? "application/octet-stream" : "application/json");
-    return { plaintext, contentType };
-  }
-  deserializeValue(plaintext, contentType, options) {
-    if (options?.raw) {
-      return plaintext;
-    }
-    if (options?.deserialize) {
-      return options.deserialize(plaintext);
-    }
-    if (contentType === "application/json") {
-      return JSON.parse(fromBytes(plaintext));
-    }
-    return plaintext;
-  }
-  // =========================================================================
-  // Phase 1: Core Operations
-  // =========================================================================
-  /**
-   * Unlock the vault. Derives keys from two wallet signatures:
-   * 1. Master signature (per-space) — used to derive the master encryption key
-   * 2. Identity signature (per-address) — used to derive X25519 encryption identity
-   *
-   * If the identity public key already exists in the public space, the identity
-   * signature is skipped entirely (no wallet popup). The identity private key is
-   * only needed for sharing operations.
-   *
-   * @param signer - Object with signMessage method. Optional when cached
-   *                 signatures exist (browser only).
-   */
-  async unlock(signer) {
-    if (this.usesNetworkEncryption) {
-      this._isUnlocked = true;
-      return { ok: true, data: void 0 };
-    }
-    const unlockSigner = isUnlockSigner(signer) ? signer : void 0;
-    if (this._isUnlocked && this.masterKey && (this.encryptionIdentity || !unlockSigner)) {
-      return { ok: true, data: void 0 };
-    }
-    if (this.unlockInFlight) {
-      return this.unlockInFlight;
-    }
-    this.unlockInFlight = this.withTelemetry("unlock", void 0, async () => {
-      const spaceId = this.vaultConfig.spaceId;
-      const versionConfig = VaultVersionConfig[CURRENT_VAULT_VERSION];
-      const masterCacheKey = `vault-master:${spaceId}`;
-      const identityCacheKey = `vault-identity:${this.tc.address}`;
-      try {
-        if (!this.masterKey) {
-          let masterSigBytes = await loadCachedSignature(masterCacheKey);
-          if (!masterSigBytes) {
-            if (!unlockSigner) {
-              return vaultError({
-                code: "VAULT_LOCKED",
-                message: "Signer is required when no cached master signature exists"
-              });
-            }
-            const sig = await unlockSigner.signMessage(
-              versionConfig.masterMessage(spaceId)
-            );
-            masterSigBytes = toBytes2(sig);
-            await cacheSignature(masterCacheKey, masterSigBytes);
-          }
-          this.masterKey = this.crypto.deriveKey(
-            masterSigBytes,
-            this.crypto.sha256(toBytes2(spaceId)),
-            toBytes2("vault-master")
-          );
-        }
-        const publicSpaceId = this.tc.makePublicSpaceId(this.tc.address, this.tc.chainId);
-        let existingPubKey = null;
-        try {
-          const existing = await this.tc.readPublicSpace(
-            this.host,
-            publicSpaceId,
-            ".well-known/vault-pubkey"
-          );
-          if (existing.ok && existing.data) {
-            existingPubKey = existing.data;
-          }
-        } catch {
-        }
-        if (existingPubKey) {
-          this.encryptionIdentity = {
-            publicKey: base64Decode(existingPubKey),
-            privateKey: new Uint8Array(0)
-            // private key not available without signing
-          };
-        } else {
-          let identitySigBytes = await loadCachedSignature(identityCacheKey);
-          if (!identitySigBytes) {
-            if (!unlockSigner) {
-              this.encryptionIdentity = null;
-              this._isUnlocked = true;
-              return ok(void 0);
-            }
-            const sig = await unlockSigner.signMessage(
-              versionConfig.identityMessage
-            );
-            identitySigBytes = toBytes2(sig);
-            await cacheSignature(identityCacheKey, identitySigBytes);
-          }
-          const seed = this.crypto.deriveKey(
-            identitySigBytes,
-            toBytes2("tinycloud-x25519"),
-            toBytes2("encryption-identity")
-          );
-          this.encryptionIdentity = this.crypto.x25519FromSeed(seed);
-          try {
-            const pubKeyB64 = base64Encode(this.encryptionIdentity.publicKey);
-            await this.tc.ensurePublicSpace();
-            await this.tc.publicKV.put(".well-known/vault-pubkey", pubKeyB64);
-            await this.tc.publicKV.put(".well-known/vault-version", CURRENT_VAULT_VERSION);
-            await this.tc.publicKV.put(".well-known/vault-space", this.vaultConfig.spaceId);
-          } catch {
-          }
-        }
-        this._isUnlocked = true;
-        return ok(void 0);
-      } catch (error) {
-        this.masterKey = null;
-        this.encryptionIdentity = null;
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-    try {
-      return await this.unlockInFlight;
-    } finally {
-      this.unlockInFlight = null;
-    }
-  }
-  /**
-   * Clear the cached vault signatures.
-   *
-   * @param spaceId - Clear only this space's master cache. If omitted, clears all.
-   */
-  async clearCache(spaceId) {
-    if (spaceId) {
-      await clearSignatureCache(`vault-master:${spaceId}`);
-    } else {
-      await clearSignatureCache();
-    }
-  }
-  /**
-   * Lock the vault, clearing all key material from memory.
-   */
-  lock() {
-    this.masterKey = null;
-    this.encryptionIdentity = null;
-    this._isUnlocked = false;
-  }
-  /**
-   * Called when SDK signs out. Locks the vault and aborts operations.
-   */
-  onSignOut() {
-    this.lock();
-    super.onSignOut();
-  }
-  async putNetworkEncrypted(key, value, options) {
-    const config = this.networkEncryption;
-    if (!config) {
-      return vaultError({
-        code: "VAULT_LOCKED",
-        message: "Network encryption is not configured"
-      });
-    }
-    if (!this.requireAuth()) {
-      return vaultError({
-        code: "VAULT_LOCKED",
-        message: "Authentication required"
-      });
-    }
-    try {
-      const { plaintext, contentType } = this.serializeValue(value, options);
-      const metadata = {
-        [VaultHeaders.VERSION]: "2",
-        [VaultHeaders.CIPHER]: "tinycloud-network-envelope",
-        [VaultHeaders.CONTENT_TYPE]: contentType,
-        ...options?.metadata ?? {}
-      };
-      const aad = toBytes2(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
-      const envelopeResult = await config.service.encryptToNetwork(
-        config.networkId,
-        plaintext,
-        { aad, metadata }
-      );
-      if (!envelopeResult.ok) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: new Error(envelopeResult.error.message)
-        });
-      }
-      const valuePutResult = await this.tc.kv.put(
-        `vault/${key}`,
-        JSON.stringify(envelopeResult.data)
-      );
-      if (!valuePutResult.ok) {
-        return kvWriteError("Failed to store encrypted value", valuePutResult.error);
-      }
-      return { ok: true, data: void 0 };
-    } catch (error) {
-      return vaultError({
-        code: "STORAGE_ERROR",
-        cause: toError(error)
-      });
-    }
-  }
-  async getNetworkEncrypted(key, options) {
-    const config = this.networkEncryption;
-    if (!config) {
-      return vaultError({
-        code: "VAULT_LOCKED",
-        message: "Network encryption is not configured"
-      });
-    }
-    if (!this.requireAuth()) {
-      return vaultError({
-        code: "VAULT_LOCKED",
-        message: "Authentication required"
-      });
-    }
-    try {
-      const valueResult = await this.tc.kv.get(`vault/${key}`, {
-        raw: true
-      });
-      if (!valueResult.ok) {
-        return vaultError({ code: "KEY_NOT_FOUND", key });
-      }
-      const rawEnvelope = unwrapKVData(valueResult.data);
-      const envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
-      const proof = await this.decryptCapabilityProof();
-      const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
-      if (!plaintextResult.ok) {
-        return vaultError({
-          code: "DECRYPTION_FAILED",
-          message: plaintextResult.error.message
-        });
-      }
-      const metadata = envelope.metadata ?? {};
-      const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
-      const keyId = metadata[VaultHeaders.KEY_ID] ?? envelope.encryptedSymmetricKeyHash.slice(0, 16);
-      const value = this.deserializeValue(
-        plaintextResult.data,
-        contentType,
-        options
-      );
-      return { ok: true, data: { value, metadata, keyId } };
-    } catch (error) {
-      return vaultError({
-        code: "STORAGE_ERROR",
-        cause: toError(error)
-      });
-    }
-  }
-  /**
-   * Read a network-encrypted entry while preserving safe failure phases.
-   *
-   * Unlike {@link getNetworkEncrypted}, this is intentionally message-free so
-   * an operation layer can distinguish an authorized absence from a failed
-   * read without receiving node, envelope, plaintext, or key material.
-   */
-  async readNetworkEncrypted(key, options) {
-    const config = this.networkEncryption;
-    if (!config || !this.requireAuth()) {
-      return { status: "read_failed" };
-    }
-    let valueResult;
-    try {
-      valueResult = await this.tc.kv.get(`vault/${key}`, { raw: true });
-    } catch {
-      return { status: "node_unreachable" };
-    }
-    if (!valueResult.ok) {
-      const permissionHint = parsePermissionHint(valueResult.error.meta?.permissionHint);
-      if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== void 0) {
-        return { status: "permission_required", hint: permissionHint };
-      }
-      if ((valueResult.error.code === "NOT_FOUND" || valueResult.error.code === "KV_NOT_FOUND") && !hasHttpResponse(valueResult.error)) {
-        return { status: "not_found" };
-      }
-      if (valueResult.error.code === "NETWORK_ERROR" || valueResult.error.code === "TIMEOUT" || valueResult.error.code === "ABORTED") {
-        return hasHttpResponse(valueResult.error) ? { status: "read_failed" } : { status: "node_unreachable" };
-      }
-      return { status: "read_failed" };
-    }
-    let envelope;
-    try {
-      const rawEnvelope = unwrapKVData(valueResult.data);
-      envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
-    } catch {
-      return { status: "corrupt_envelope" };
-    }
-    let plaintextResult;
-    try {
-      const proof = await this.decryptCapabilityProof();
-      plaintextResult = await config.service.decryptEnvelope(envelope, proof);
-    } catch {
-      return { status: "decrypt_failed" };
-    }
-    if (!plaintextResult.ok) {
-      const permissionHint = parsePermissionHint(
-        plaintextResult.error.permissionHint
-      );
-      if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== void 0) {
-        return { status: "permission_required", hint: permissionHint };
-      }
-      if (plaintextResult.error.code === "INVALID_ENVELOPE") {
-        return { status: "corrupt_envelope" };
-      }
-      if (plaintextResult.error.code === "TRANSPORT_ERROR") {
-        return { status: "node_unreachable" };
-      }
-      return { status: "decrypt_failed" };
-    }
-    try {
-      const metadata = envelope.metadata ?? {};
-      const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
-      const keyId = metadata[VaultHeaders.KEY_ID] ?? envelope.encryptedSymmetricKeyHash.slice(0, 16);
-      const value = this.deserializeValue(
-        plaintextResult.data,
-        contentType,
-        options
-      );
-      return { status: "ok", entry: { value, metadata, keyId } };
-    } catch {
-      return { status: "invalid_payload" };
-    }
-  }
-  async headNetworkEncrypted(key) {
-    if (!this.requireAuth()) {
-      return vaultError({
-        code: "VAULT_LOCKED",
-        message: "Authentication required"
-      });
-    }
-    try {
-      const valueResult = await this.tc.kv.get(`vault/${key}`, {
-        raw: true
-      });
-      if (!valueResult.ok) {
-        return vaultError({ code: "KEY_NOT_FOUND", key });
-      }
-      const rawEnvelope = unwrapKVData(valueResult.data);
-      const envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
-      return { ok: true, data: envelope.metadata ?? {} };
-    } catch (error) {
-      return vaultError({
-        code: "STORAGE_ERROR",
-        cause: toError(error)
-      });
-    }
-  }
-  /**
-   * Encrypt and store a value at the given key.
-   *
-   * @param key - The key to store under
-   * @param value - The value to encrypt and store
-   * @param options - Optional put configuration
-   */
-  async put(key, value, options) {
-    return this.withTelemetry("put", key, async () => {
-      if (this.usesNetworkEncryption) {
-        return this.putNetworkEncrypted(key, value, options);
-      }
-      if (!this._isUnlocked || !this.masterKey) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before storing data"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        let plaintext;
-        if (value instanceof Uint8Array) {
-          plaintext = value;
-        } else if (options?.serialize) {
-          plaintext = options.serialize(value);
-        } else if (typeof value === "string") {
-          plaintext = toBytes2(value);
-        } else {
-          plaintext = toBytes2(JSON.stringify(value));
-        }
-        const contentType = options?.contentType ?? (value instanceof Uint8Array ? "application/octet-stream" : "application/json");
-        const entryKey = this.crypto.randomBytes(32);
-        const keyId = hexEncode(this.crypto.sha256(entryKey)).slice(0, 16);
-        const encrypted = this.crypto.encrypt(entryKey, plaintext);
-        const keyBlob = this.crypto.encrypt(this.masterKey, entryKey);
-        const metadata = {
-          [VaultHeaders.VERSION]: "1",
-          [VaultHeaders.CIPHER]: "aes-256-gcm",
-          [VaultHeaders.KEY_ID]: keyId,
-          [VaultHeaders.CONTENT_TYPE]: contentType,
-          [VaultHeaders.KDF]: "hkdf-sha256",
-          [VaultHeaders.KEY_ROTATION]: this.vaultConfig.keyRotation ?? "per-write",
-          ...options?.metadata ?? {}
-        };
-        const keyMetadata = JSON.stringify({
-          keyId,
-          contentType,
-          ...metadata
-        });
-        const keyPayload = JSON.stringify({
-          key: base64Encode(keyBlob),
-          metadata: keyMetadata
-        });
-        const keyPutResult = await this.tc.kv.put(
-          `keys/${key}`,
-          keyPayload
-        );
-        if (!keyPutResult.ok) {
-          return kvWriteError("Failed to store key blob", keyPutResult.error);
-        }
-        const valuePayload = JSON.stringify({
-          data: base64Encode(encrypted),
-          metadata
-        });
-        const valuePutResult = await this.tc.kv.put(
-          `vault/${key}`,
-          valuePayload
-        );
-        if (!valuePutResult.ok) {
-          return kvWriteError("Failed to store encrypted value", valuePutResult.error);
-        }
-        return ok(void 0);
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  /**
-   * Retrieve and decrypt a value by key.
-   *
-   * @param key - The key to retrieve
-   * @param options - Optional get configuration
-   * @returns Result with the decrypted entry
-   */
-  async get(key, options) {
-    return this.withTelemetry("get", key, async () => {
-      if (this.usesNetworkEncryption) {
-        return this.getNetworkEncrypted(key, options);
-      }
-      if (!this._isUnlocked || !this.masterKey) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before reading data"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const keyResult = await this.tc.kv.get(`keys/${key}`, {
-          raw: true
-        });
-        if (!keyResult.ok) {
-          return vaultError({ code: "KEY_NOT_FOUND", key });
-        }
-        const keyEnvelope = JSON.parse(keyResult.data.data);
-        const keyBlobBytes = base64Decode(keyEnvelope.key);
-        const entryKey = this.crypto.decrypt(this.masterKey, keyBlobBytes);
-        const valueResult = await this.tc.kv.get(`vault/${key}`, {
-          raw: true
-        });
-        if (!valueResult.ok) {
-          return vaultError({ code: "KEY_NOT_FOUND", key });
-        }
-        const valueEnvelope = JSON.parse(valueResult.data.data);
-        const encryptedBytes = base64Decode(valueEnvelope.data);
-        const plaintext = this.crypto.decrypt(entryKey, encryptedBytes);
-        const metadata = valueEnvelope.metadata ?? {};
-        const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
-        const keyId = metadata[VaultHeaders.KEY_ID] ?? "";
-        let value;
-        if (options?.raw) {
-          value = plaintext;
-        } else if (options?.deserialize) {
-          value = options.deserialize(plaintext);
-        } else if (contentType === "application/json") {
-          value = JSON.parse(fromBytes(plaintext));
-        } else {
-          value = plaintext;
-        }
-        return ok({ value, metadata, keyId });
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("decryption")) {
-          return vaultError({
-            code: "DECRYPTION_FAILED",
-            message: error.message
-          });
-        }
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  /**
-   * Delete an encrypted key.
-   * Removes both the encrypted value and the key blob.
-   *
-   * @param key - The key to delete
-   */
-  async delete(key) {
-    return this.withTelemetry("delete", key, async () => {
-      if (!this.isUnlocked) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before deleting data"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        if (this.usesNetworkEncryption) {
-          const valueDelResult2 = await this.tc.kv.delete(`vault/${key}`);
-          if (!valueDelResult2.ok) {
-            return vaultError({ code: "KEY_NOT_FOUND", key });
-          }
-          return ok(void 0);
-        }
-        const [keyDelResult, valueDelResult] = await Promise.all([
-          this.tc.kv.delete(`keys/${key}`),
-          this.tc.kv.delete(`vault/${key}`)
-        ]);
-        if (!keyDelResult.ok && !valueDelResult.ok) {
-          return vaultError({ code: "KEY_NOT_FOUND", key });
-        }
-        return ok(void 0);
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  /**
-   * List vault keys with optional prefix filtering.
-   *
-   * @param options - Optional list configuration
-   * @returns Result with array of key names (vault/ prefix stripped)
-   */
-  async list(options) {
-    const page = await this.listPage(options);
-    return page.ok ? { ok: true, data: page.data.keys } : page;
-  }
-  async listPage(options) {
-    return this.withTelemetry("list", options?.prefix, async () => {
-      if (!this.isUnlocked) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before listing data"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const listPrefix = options?.prefix ? `vault/${options.prefix}` : "vault/";
-        const listResult = await this.tc.kv.list({
-          prefix: listPrefix,
-          removePrefix: true,
-          ...options?.limit === void 0 ? {} : { limit: options.limit },
-          ...options?.cursor === void 0 ? {} : { cursor: options.cursor }
-        });
-        if (!listResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to list vault keys: ${listResult.error.message}`
-            )
-          });
-        }
-        let keys = listResult.data.keys;
-        if (options?.removePrefix && options.prefix) {
-          const userPrefix = options.prefix.endsWith("/") ? options.prefix : `${options.prefix}/`;
-          keys = keys.map(
-            (k) => k.startsWith(userPrefix) ? k.slice(userPrefix.length) : k
-          );
-        }
-        return ok({
-          keys,
-          truncated: listResult.data.truncated === true,
-          ...listResult.data.nextCursor === void 0 ? {} : { nextCursor: listResult.data.nextCursor }
-        });
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  /**
-   * Get envelope metadata for a key without decrypting the value.
-   *
-   * @param key - The key to inspect
-   * @returns Result with metadata headers
-   */
-  async head(key) {
-    return this.withTelemetry("head", key, async () => {
-      if (this.usesNetworkEncryption) {
-        return this.headNetworkEncrypted(key);
-      }
-      if (!this._isUnlocked) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before reading metadata"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const valueResult = await this.tc.kv.get(`vault/${key}`, {
-          raw: true
-        });
-        if (!valueResult.ok) {
-          return vaultError({ code: "KEY_NOT_FOUND", key });
-        }
-        const valueEnvelope = JSON.parse(valueResult.data.data);
-        const metadata = valueEnvelope.metadata ?? {};
-        return ok(metadata);
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  // =========================================================================
-  // Batch Operations
-  // =========================================================================
-  /**
-   * Encrypt and store multiple entries.
-   *
-   * @param entries - Array of key/value pairs with optional per-entry options
-   * @returns Array of results, one per entry
-   */
-  async putMany(entries) {
-    return Promise.all(
-      entries.map((entry) => this.put(entry.key, entry.value, entry.options))
-    );
-  }
-  /**
-   * Retrieve and decrypt multiple keys.
-   *
-   * @param keys - Array of keys to retrieve
-   * @param options - Optional get configuration applied to all entries
-   * @returns Array of results, one per key
-   */
-  async getMany(keys, options) {
-    return Promise.all(keys.map((key) => this.get(key, options)));
-  }
-  // =========================================================================
-  // Phase 2: Sharing
-  // =========================================================================
-  /**
-   * Re-encrypt a vault key for another user (renamed from grant).
-   * Re-encrypts the data key to the recipient's public key via X25519 DH.
-   *
-   * @param key - The key to share
-   * @param recipientDID - The recipient's primary DID (did:pkh:...)
-   * @param options - Optional grant configuration
-   */
-  async reencrypt(key, recipientDID, options) {
-    return this.withTelemetry("reencrypt", key, async () => {
-      if (this.usesNetworkEncryption) {
-        void recipientDID;
-        void options;
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: new Error(
-            "Vault key grants are deprecated for network-encrypted vaults; grant tinycloud.encryption/decrypt on the network plus KV access to vault data."
-          )
-        });
-      }
-      if (!this._isUnlocked || !this.masterKey) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before granting access"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const pubKeyResult = await this.resolvePublicKey(recipientDID);
-        if (!pubKeyResult.ok) {
-          return pubKeyResult;
-        }
-        const bobPubKey = pubKeyResult.data;
-        const keyResult = await this.tc.kv.get(`keys/${key}`, {
-          raw: true
-        });
-        if (!keyResult.ok) {
-          return vaultError({ code: "KEY_NOT_FOUND", key });
-        }
-        const keyEnvelope = JSON.parse(keyResult.data.data);
-        const keyBlobBytes = base64Decode(keyEnvelope.key);
-        const entryKey = this.crypto.decrypt(this.masterKey, keyBlobBytes);
-        const ephemeralSeed = this.crypto.randomBytes(32);
-        const ephemeralKeyPair = this.crypto.x25519FromSeed(ephemeralSeed);
-        const sharedSecret = this.crypto.x25519Dh(
-          ephemeralKeyPair.privateKey,
-          bobPubKey
-        );
-        const encryptionKey = this.crypto.deriveKey(
-          sharedSecret,
-          toBytes2("tinycloud-x25519"),
-          toBytes2("vault-grant")
-        );
-        const encryptedGrant = this.crypto.encrypt(encryptionKey, entryKey);
-        const grantBlob = concatBytes2(
-          ephemeralKeyPair.publicKey,
-          encryptedGrant
-        );
-        const grantPayload = JSON.stringify({
-          grant: base64Encode(grantBlob),
-          spaceId: this.vaultConfig.spaceId,
-          metadata: {
-            [VaultHeaders.GRANT_VERSION]: "1",
-            [VaultHeaders.GRANTOR]: this.tc.did,
-            ...options?.metadata ?? {}
-          }
-        });
-        const grantPutResult = await this.tc.kv.put(
-          `grants/${recipientDID}/${key}`,
-          grantPayload
-        );
-        if (!grantPutResult.ok) {
-          return kvWriteError("Failed to store grant", grantPutResult.error);
-        }
-        return ok(void 0);
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  /**
-   * @deprecated Use reencrypt() instead.
-   */
-  async grant(key, recipientDID, options) {
-    return this.reencrypt(key, recipientDID, options);
-  }
-  /**
-   * Retrieve and decrypt a value shared by another user.
-   *
-   * @param grantorDID - The DID of the user who shared the data
-   * @param key - The key that was shared
-   * @param options - Optional get configuration
-   * @returns Result with the decrypted entry
-   */
-  async getShared(grantorDID, key, options) {
-    return this.withTelemetry("getShared", key, async () => {
-      if (this.usesNetworkEncryption) {
-        const grantorKV = options?.kv;
-        if (!grantorKV) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              "getShared requires a delegated KV service via options.kv."
-            )
-          });
-        }
-        const config = this.networkEncryption;
-        if (!config) {
-          return vaultError({
-            code: "VAULT_LOCKED",
-            message: "Network encryption is not configured"
-          });
-        }
-        if (!this.requireAuth()) {
-          return vaultError({
-            code: "VAULT_LOCKED",
-            message: "Authentication required"
-          });
-        }
-        try {
-          const valueResult = await grantorKV.get(`vault/${key}`, {
-            raw: true
-          });
-          if (!valueResult.ok) {
-            return vaultError({ code: "KEY_NOT_FOUND", key });
-          }
-          const rawEnvelope = unwrapKVData(valueResult.data);
-          const envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
-          const proof = await this.decryptCapabilityProof();
-          const plaintextResult = await config.service.decryptEnvelope(
-            envelope,
-            proof
-          );
-          if (!plaintextResult.ok) {
-            return vaultError({
-              code: "DECRYPTION_FAILED",
-              message: plaintextResult.error.message
-            });
-          }
-          const metadata = envelope.metadata ?? {};
-          const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
-          const keyId = metadata[VaultHeaders.KEY_ID] ?? envelope.encryptedSymmetricKeyHash.slice(0, 16);
-          const value = this.deserializeValue(
-            plaintextResult.data,
-            contentType,
-            options
-          );
-          void grantorDID;
-          return { ok: true, data: { value, metadata, keyId } };
-        } catch (error) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: toError(error)
-          });
-        }
-      }
-      if (!this._isUnlocked || !this.masterKey || !this.encryptionIdentity) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before reading shared data"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const myDID = this.tc.did;
-        const grantorKV = options?.kv;
-        if (!grantorKV) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              "getShared requires a delegated KV service via options.kv. Use useDelegation() to get delegated access, then pass { kv: access.kv }."
-            )
-          });
-        }
-        const grantResult = await grantorKV.get(`grants/${myDID}/${key}`, {
-          raw: true
-        });
-        if (!grantResult.ok) {
-          return vaultError({
-            code: "GRANT_NOT_FOUND",
-            grantor: grantorDID,
-            key
-          });
-        }
-        const grantEnvelope = typeof grantResult.data?.data === "string" ? JSON.parse(grantResult.data.data) : grantResult.data?.data;
-        const grantBlobBytes = base64Decode(grantEnvelope.grant);
-        const ephemeralPubKey = grantBlobBytes.slice(0, 32);
-        const encryptedGrant = grantBlobBytes.slice(32);
-        const sharedSecret = this.crypto.x25519Dh(
-          this.encryptionIdentity.privateKey,
-          ephemeralPubKey
-        );
-        const encryptionKey = this.crypto.deriveKey(
-          sharedSecret,
-          toBytes2("tinycloud-x25519"),
-          toBytes2("vault-grant")
-        );
-        const entryKey = this.crypto.decrypt(encryptionKey, encryptedGrant);
-        const valueResult = await grantorKV.get(`vault/${key}`, {
-          raw: true
-        });
-        if (!valueResult.ok) {
-          return vaultError({
-            code: "KEY_NOT_FOUND",
-            key
-          });
-        }
-        const valueEnvelope = typeof valueResult.data?.data === "string" ? JSON.parse(valueResult.data.data) : valueResult.data?.data;
-        const encryptedBytes = base64Decode(valueEnvelope.data);
-        const plaintext = this.crypto.decrypt(entryKey, encryptedBytes);
-        const metadata = valueEnvelope.metadata ?? {};
-        const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
-        const keyId = metadata[VaultHeaders.KEY_ID] ?? "";
-        let value;
-        if (options?.raw) {
-          value = plaintext;
-        } else if (options?.deserialize) {
-          value = options.deserialize(plaintext);
-        } else if (contentType === "application/json") {
-          value = JSON.parse(fromBytes(plaintext));
-        } else {
-          value = plaintext;
-        }
-        return ok({ value, metadata, keyId });
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("decryption")) {
-          return vaultError({
-            code: "DECRYPTION_FAILED",
-            message: error.message
-          });
-        }
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  /**
-   * Resolve another user's public encryption key from their DID.
-   *
-   * @param did - The DID to resolve (did:pkh:eip155:{chainId}:{address})
-   * @returns Result with the public key bytes
-   */
-  async resolvePublicKey(did) {
-    try {
-      const parts = this.parseDID(did);
-      if (!parts) {
-        return vaultError({ code: "PUBLIC_KEY_NOT_FOUND", did });
-      }
-      const spaceId = this.tc.makePublicSpaceId(
-        parts.address,
-        parts.chainId
-      );
-      const result = await this.tc.readPublicSpace(
-        this.host,
-        spaceId,
-        ".well-known/vault-pubkey"
-      );
-      if (!result.ok) {
-        return vaultError({ code: "PUBLIC_KEY_NOT_FOUND", did });
-      }
-      const pubKeyBytes = base64Decode(result.data);
-      return { ok: true, data: pubKeyBytes };
-    } catch (error) {
-      return vaultError({ code: "PUBLIC_KEY_NOT_FOUND", did });
-    }
-  }
-  /**
-   * List DIDs that have been granted access to a key.
-   *
-   * @param key - The key to list grants for
-   * @returns Result with array of recipient DIDs
-   */
-  async listGrants(key) {
-    return this.withTelemetry("listGrants", key, async () => {
-      if (this.usesNetworkEncryption) {
-        void key;
-        return { ok: true, data: [] };
-      }
-      if (!this._isUnlocked) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before listing grants"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const listResult = await this.tc.kv.list({
-          prefix: "grants/",
-          removePrefix: true
-        });
-        if (!listResult.ok) {
-          return vaultError({
-            code: "STORAGE_ERROR",
-            cause: new Error(
-              `Failed to list grants: ${listResult.error.message}`
-            )
-          });
-        }
-        const dids = [];
-        for (const grantPath of listResult.data.keys) {
-          if (grantPath.endsWith(`/${key}`)) {
-            const did = grantPath.slice(
-              0,
-              grantPath.length - key.length - 1
-            );
-            if (did) {
-              dids.push(did);
-            }
-          }
-        }
-        return ok(dids);
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  // =========================================================================
-  // Phase 3: Key Rotation / Revocation
-  // =========================================================================
-  /**
-   * Revoke a previously issued grant.
-   *
-   * This performs a full key rotation:
-   * 1. Lists current grantees
-   * 2. Removes the revoked recipient
-   * 3. Re-encrypts the value with a new entry key
-   * 4. Re-issues grants to remaining recipients
-   *
-   * @param key - The key to revoke access to
-   * @param recipientDID - The recipient whose access to revoke
-   */
-  async revoke(key, recipientDID) {
-    return this.withTelemetry("revoke", key, async () => {
-      if (this.usesNetworkEncryption) {
-        void recipientDID;
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: new Error(
-            "Vault key grants are deprecated for network-encrypted vaults; revoke KV and tinycloud.encryption/decrypt grants instead."
-          )
-        });
-      }
-      if (!this._isUnlocked || !this.masterKey) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Vault must be unlocked before revoking access"
-        });
-      }
-      if (!this.requireAuth()) {
-        return vaultError({
-          code: "VAULT_LOCKED",
-          message: "Authentication required"
-        });
-      }
-      try {
-        const granteesResult = await this.listGrants(key);
-        if (!granteesResult.ok) {
-          return granteesResult;
-        }
-        const remainingGrantees = granteesResult.data.filter(
-          (did) => did !== recipientDID
-        );
-        const deleteGrantResult = await this.tc.kv.delete(
-          `grants/${recipientDID}/${key}`
-        );
-        const getResult = await this.get(key);
-        if (!getResult.ok) {
-          return getResult;
-        }
-        const currentEntry = getResult.data;
-        const newEntryKey = this.crypto.randomBytes(32);
-        const newKeyId = hexEncode(this.crypto.sha256(newEntryKey)).slice(
-          0,
-          16
-        );
-        let plaintext;
-        if (currentEntry.value instanceof Uint8Array) {
-          plaintext = currentEntry.value;
-        } else {
-          plaintext = toBytes2(JSON.stringify(currentEntry.value));
-        }
-        const encrypted = this.crypto.encrypt(newEntryKey, plaintext);
-        const newKeyBlob = this.crypto.encrypt(this.masterKey, newEntryKey);
-        const metadata = {
-          ...currentEntry.metadata,
-          [VaultHeaders.KEY_ID]: newKeyId
-        };
-        const keyPayload = JSON.stringify({
-          key: base64Encode(newKeyBlob),
-          metadata: JSON.stringify({
-            keyId: newKeyId,
-            ...metadata
-          })
-        });
-        const keyPutResult = await this.tc.kv.put(
-          `keys/${key}`,
-          keyPayload
-        );
-        if (!keyPutResult.ok) {
-          return kvWriteError("Failed to store rotated key blob", keyPutResult.error);
-        }
-        const valuePayload = JSON.stringify({
-          data: base64Encode(encrypted),
-          metadata
-        });
-        const valuePutResult = await this.tc.kv.put(
-          `vault/${key}`,
-          valuePayload
-        );
-        if (!valuePutResult.ok) {
-          return kvWriteError("Failed to store re-encrypted value", valuePutResult.error);
-        }
-        for (const did of remainingGrantees) {
-          const grantResult = await this.reencrypt(key, did);
-          if (!grantResult.ok) {
-          }
-        }
-        return ok(void 0);
-      } catch (error) {
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: toError(error)
-        });
-      }
-    });
-  }
-  // =========================================================================
-  // Internal Helpers
-  // =========================================================================
-  /**
-   * Parse a DID string to extract address and chainId.
-   * Expected format: did:pkh:eip155:{chainId}:{address}
-   *
-   * @param did - The DID to parse
-   * @returns Parsed address and chainId, or null if invalid
-   */
-  parseDID(did) {
-    const parts = did.split(":");
-    if (parts.length !== 5 || parts[0] !== "did" || parts[1] !== "pkh" || parts[2] !== "eip155") {
-      return null;
-    }
-    const chainId = parseInt(parts[3], 10);
-    const address = parts[4];
-    if (isNaN(chainId) || !address) {
-      return null;
-    }
-    return { address, chainId };
-  }
-};
-DataVaultService.serviceName = "vault";
-var SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
-var SECRET_PREFIX = "secrets/";
-var SCOPED_SECRET_PREFIX = "secrets/scoped/";
-var RESERVED_SECRET_SCOPES = /* @__PURE__ */ new Set(["default", "global"]);
 function canonicalizeSecretScope(scope) {
   if (scope === void 0) {
     return void 0;
@@ -12638,7 +7564,6 @@ function stringify(value) {
       );
   }
 }
-var HEX = "0123456789abcdef";
 function hexEncode2(bytes) {
   let out = "";
   for (let i = 0; i < bytes.length; i++) {
@@ -12695,11 +7620,6 @@ function canonicalHashHex(sha2563, value) {
   const canonical = canonicalize(value);
   return hexEncode2(sha2563(utf8Encode(canonical)));
 }
-var DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1";
-var ENVELOPE_VERSION = 1;
-var DEFAULT_KEY_VERSION = 1;
-var DECRYPT_FACT_TYPE = "tinycloud.encryption.decrypt/v1";
-var DECRYPT_RESULT_TYPE = "tinycloud.encryption.decrypt-result/v1";
 function defaultEncryptionMessage(input) {
   switch (input.code) {
     case "NETWORK_NOT_FOUND":
@@ -13309,280 +8229,4955 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var EncryptionService = class extends BaseService {
-  constructor(config) {
-    super();
-    this._config = config;
-  }
-  get config() {
-    return this._config;
-  }
-  get crypto() {
-    return this._config.crypto;
-  }
-  async discoverNetwork(identifier2, ownerDid) {
-    this.assertActive();
-    const result = await discoverNetwork({
-      identifier: identifier2,
-      ...ownerDid !== void 0 ? { ownerDid } : {},
-      ...this._config.node !== void 0 ? { node: this._config.node } : {},
-      ...this._config.wellKnown !== void 0 ? { wellKnown: this._config.wellKnown } : {}
-    });
-    this.assertActive();
-    if (!result.ok) return result;
-    return encOk(result.data.descriptor);
-  }
-  async encryptToNetwork(networkId, plaintext, options) {
-    try {
-      this.assertActive();
-      const discovered = await this.discoverNetwork(networkId);
-      if (!discovered.ok) return discovered;
-      const usable = ensureNetworkUsableForDecrypt(discovered.data);
-      if (!usable.ok) return usable;
-      const descriptor = usable.data;
-      const networkPublicKey = base64Decode2(descriptor.publicEncryptionKey);
-      const result = encryptToNetwork(this.crypto, {
-        // Discovery returns the node's canonical network identifier. Persist
-        // that spelling in the envelope so a later response can be compared
-        // byte-for-byte (notably for checksummed did:pkh principals).
-        networkId: descriptor.networkId,
-        networkPublicKey,
-        plaintext,
-        ...options?.aad !== void 0 ? { aad: options.aad } : {},
-        alg: options?.alg ?? descriptor.alg,
-        keyVersion: options?.keyVersion ?? descriptor.keyVersion,
-        ...options?.metadata !== void 0 ? { metadata: options.metadata } : {}
-      });
-      return encOk(result.envelope);
-    } catch (error) {
-      return encErr(
-        encryptionError({
-          code: "TRANSPORT_ERROR",
-          cause: toError2(error)
-        })
-      );
-    }
-  }
-  async decryptEnvelope(envelope, capabilityProof, options) {
-    try {
-      this.assertActive();
-      const validated = validateEnvelope(this.crypto, envelope);
-      if (!validated.ok) return validated;
-      if (options?.aad !== void 0 && validated.data.aad !== base64Encode2(options.aad)) {
-        return encErr(
-          encryptionError({
-            code: "INVALID_INPUT",
-            message: "decryptEnvelope aad does not match the envelope"
-          })
-        );
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var init_dist2 = __esm({
+  "../sdk-services/dist/index.js"() {
+    "use strict";
+    init_zod();
+    init_dist();
+    init_dist();
+    init_dist();
+    import_decrypt_transport_response_error = __toESM(require_decrypt_transport_response_error(), 1);
+    ErrorCodes = {
+      // Common errors
+      NOT_FOUND: "NOT_FOUND",
+      AUTH_EXPIRED: "AUTH_EXPIRED",
+      AUTH_REQUIRED: "AUTH_REQUIRED",
+      AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
+      /** HTTP 401: the delegation the invocation cites was revoked. */
+      AUTH_DELEGATION_REVOKED: "AUTH_DELEGATION_REVOKED",
+      /** HTTP 401: a delegation the cited one rests on was revoked. */
+      AUTH_DELEGATION_ANCESTOR_REVOKED: "AUTH_DELEGATION_ANCESTOR_REVOKED",
+      NETWORK_ERROR: "NETWORK_ERROR",
+      TIMEOUT: "TIMEOUT",
+      ABORTED: "ABORTED",
+      INVALID_INPUT: "INVALID_INPUT",
+      PERMISSION_DENIED: "PERMISSION_DENIED",
+      // KV-specific errors
+      KV_NOT_FOUND: "KV_NOT_FOUND",
+      KV_WRITE_FAILED: "KV_WRITE_FAILED",
+      KV_PRECONDITION_FAILED: "KV_PRECONDITION_FAILED",
+      KV_CONFLICT: "KV_CONFLICT",
+      KV_RESPONSE_TOO_LARGE: "KV_RESPONSE_TOO_LARGE",
+      /** HTTP 410 from the change feed: discard sync state and restart without a cursor; `meta.reason` says why. */
+      KV_SYNC_RESET_REQUIRED: "KV_SYNC_RESET_REQUIRED",
+      /** HTTP 403 from the change feed: the retention grant was refused; `meta.reason` says why. */
+      KV_RETENTION_GRANT_REFUSED: "KV_RETENTION_GRANT_REFUSED",
+      // SQL-specific errors
+      SQL_ERROR: "SQL_ERROR",
+      SQL_PERMISSION_DENIED: "SQL_PERMISSION_DENIED",
+      SQL_DATABASE_NOT_FOUND: "SQL_DATABASE_NOT_FOUND",
+      SQL_RESPONSE_TOO_LARGE: "SQL_RESPONSE_TOO_LARGE",
+      SQL_QUOTA_EXCEEDED: "SQL_QUOTA_EXCEEDED",
+      SQL_INVALID_STATEMENT: "SQL_INVALID_STATEMENT",
+      SQL_SCHEMA_ERROR: "SQL_SCHEMA_ERROR",
+      SQL_READONLY_VIOLATION: "SQL_READONLY_VIOLATION",
+      // Storage quota errors
+      STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
+      STORAGE_LIMIT_REACHED: "STORAGE_LIMIT_REACHED",
+      // DuckDB-specific errors
+      DUCKDB_ERROR: "DUCKDB_ERROR",
+      DUCKDB_PERMISSION_DENIED: "DUCKDB_PERMISSION_DENIED",
+      DUCKDB_DATABASE_NOT_FOUND: "DUCKDB_DATABASE_NOT_FOUND",
+      DUCKDB_RESPONSE_TOO_LARGE: "DUCKDB_RESPONSE_TOO_LARGE",
+      DUCKDB_QUOTA_EXCEEDED: "DUCKDB_QUOTA_EXCEEDED",
+      DUCKDB_INVALID_STATEMENT: "DUCKDB_INVALID_STATEMENT",
+      DUCKDB_SCHEMA_ERROR: "DUCKDB_SCHEMA_ERROR",
+      DUCKDB_READONLY_VIOLATION: "DUCKDB_READONLY_VIOLATION"
+    };
+    defaultRetryPolicy = {
+      maxAttempts: 3,
+      backoff: "exponential",
+      baseDelayMs: 1e3,
+      maxDelayMs: 1e4,
+      retryableErrors: [ErrorCodes.NETWORK_ERROR, ErrorCodes.TIMEOUT]
+    };
+    TelemetryEvents = {
+      SPAN: "telemetry.span",
+      SERVICE_REQUEST: "service.request",
+      SERVICE_RESPONSE: "service.response",
+      SERVICE_ERROR: "service.error",
+      SERVICE_RETRY: "service.retry",
+      SESSION_CHANGED: "session.changed",
+      SESSION_EXPIRED: "session.expired"
+    };
+    REDACTED = "[REDACTED]";
+    SAFE_NUMBER_FIELDS = /* @__PURE__ */ new Set([
+      "duration",
+      "durationMs",
+      "endedAt",
+      "startedAt",
+      "status",
+      "timestamp"
+    ]);
+    SAFE_BOOLEAN_FIELDS = /* @__PURE__ */ new Set(["authenticated", "ok", "persisted"]);
+    DEBUG_FLAG = "TinyCloud_debug";
+    MAX_EVENTS = 1e3;
+    TinyCloudDebugLogger = class {
+      constructor() {
+        this.enabled = shouldStartEnabled();
+        this.sequence = 0;
+        this.events = [];
+        this.maxEvents = MAX_EVENTS;
       }
-      let descriptor;
-      if (options?.descriptor !== void 0) {
-        descriptor = options.descriptor;
-      } else {
-        const discovered = await this.discoverNetwork(envelope.networkId);
-        if (!discovered.ok) return discovered;
-        descriptor = discovered.data;
+      isEnabled() {
+        return this.enabled || isTrue(getGlobal()[DEBUG_FLAG]) || isTrue(getProcessDebugFlag());
       }
-      const usable = ensureNetworkUsableForDecrypt(descriptor);
-      if (!usable.ok) return usable;
-      const targetNode = options?.targetNode ?? descriptor.members[0]?.nodeId;
-      if (targetNode === void 0) {
-        return encErr(
-          encryptionError({
-            code: "INVALID_INPUT",
-            message: "no target node available from descriptor"
-          })
-        );
+      enable(options = {}) {
+        this.enabled = true;
+        getGlobal()[DEBUG_FLAG] = true;
+        if (options.persist !== false) {
+          setStoredDebugFlag(true);
+        }
+        this.log("debug.enabled", { persisted: options.persist !== false });
       }
-      const receiverKey = generateRandomReceiverKey({ crypto: this.crypto });
-      const receiverPublicKey = base64Encode2(receiverKey.publicKey);
-      const receiverPublicKeyHash = canonicalHashHex(
-        this.crypto.sha256,
-        receiverPublicKey
-      );
-      const body = {
-        type: DECRYPT_FACT_TYPE,
-        targetNode,
-        networkId: envelope.networkId,
-        alg: envelope.alg,
-        keyVersion: envelope.keyVersion,
-        encryptedSymmetricKey: envelope.encryptedSymmetricKey,
-        encryptedSymmetricKeyHash: envelope.encryptedSymmetricKeyHash,
-        receiverPublicKey,
-        receiverPublicKeyHash
-      };
-      const canonicalRequest = buildCanonicalDecryptRequest({
-        crypto: this.crypto,
-        body,
-        receiverPublicKey: receiverKey.publicKey
-      });
-      const facts = buildDecryptFacts({
-        crypto: this.crypto,
-        body,
-        encryptedSymmetricKeyHash: envelope.encryptedSymmetricKeyHash,
-        receiverPublicKey: receiverKey.publicKey,
-        canonicalBody: canonicalRequest.canonicalBody
-      });
-      const built = await buildDecryptInvocation(this.crypto, this._config.signer, {
-        targetNode,
-        networkId: envelope.networkId,
-        body,
-        facts,
-        proof: capabilityProof
-      });
-      this.assertActive();
-      if (!built.ok) {
-        if (built.error.code !== "TRANSPORT_ERROR") return built;
-        return encErr(
-          encryptionError({
-            code: "INVALID_INPUT",
-            message: "Unable to build decrypt request"
-          })
-        );
+      disable(options = {}) {
+        this.log("debug.disabled", { persisted: options.persist !== false });
+        this.enabled = false;
+        getGlobal()[DEBUG_FLAG] = false;
+        if (options.persist !== false) {
+          setStoredDebugFlag(false);
+        }
       }
-      let response;
-      try {
-        response = await this._config.transport.postDecrypt({
-          targetNode,
-          networkId: envelope.networkId,
-          authorization: built.data.authorization,
-          canonicalBody: built.data.canonicalBody,
-          signal: this.abortSignal
+      clear() {
+        this.events = [];
+      }
+      getLogs() {
+        return [...this.events];
+      }
+      log(event, data, message) {
+        if (!this.isEnabled()) {
+          return void 0;
+        }
+        return this.record({
+          event,
+          data,
+          message,
+          level: "debug",
+          timestamp: Date.now(),
+          timestampIso: (/* @__PURE__ */ new Date()).toISOString()
         });
-        this.assertActive();
-      } catch (error) {
-        if (error instanceof import_decrypt_transport_response_error.DecryptTransportResponseError) {
-          return encErr(
-            encryptionError(
-              error.status === 401 || error.status === 403 ? {
-                code: "DECRYPT_DENIED",
-                message: "Node denied decrypt request",
-                ...error.permissionHint === void 0 ? {} : { permissionHint: error.permissionHint }
-              } : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" }
+      }
+      startTimer(event, data) {
+        if (!this.isEnabled()) {
+          return { stop: () => void 0 };
+        }
+        const startedAt = nowMs();
+        this.log(`${event}.start`, data);
+        return {
+          stop: (finishData) => {
+            const endedAt = nowMs();
+            return this.record({
+              event: `${event}.end`,
+              data: finishData,
+              durationMs: endedAt - startedAt,
+              startedAt,
+              endedAt,
+              level: "debug",
+              timestamp: Date.now(),
+              timestampIso: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          }
+        };
+      }
+      async timeAsync(event, operation, data) {
+        if (!this.isEnabled()) {
+          return operation();
+        }
+        const timer = this.startTimer(event, data);
+        try {
+          const result = await operation();
+          timer.stop({ ok: true });
+          return result;
+        } catch (error) {
+          timer.stop({ ok: false, error });
+          throw error;
+        }
+      }
+      time(event, operation, data) {
+        if (!this.isEnabled()) {
+          return operation();
+        }
+        const timer = this.startTimer(event, data);
+        try {
+          const result = operation();
+          timer.stop({ ok: true });
+          return result;
+        } catch (error) {
+          timer.stop({ ok: false, error });
+          throw error;
+        }
+      }
+      record(event) {
+        const debugEvent = {
+          ...event,
+          ...event.data === void 0 ? {} : { data: projectDiagnosticData(event.data) },
+          ...event.message === void 0 ? {} : { message: "[REDACTED]" },
+          sequence: ++this.sequence
+        };
+        this.events.push(debugEvent);
+        if (this.events.length > this.maxEvents) {
+          this.events.splice(0, this.events.length - this.maxEvents);
+        }
+        try {
+          globalThis.console?.debug?.("[TinyCloud]", debugEvent.event, debugEvent);
+        } catch {
+        }
+        return debugEvent;
+      }
+    };
+    tinyCloudDebugLogger = new TinyCloudDebugLogger();
+    installTinyCloudDebugGlobals();
+    ServiceErrorSchema = external_exports.object({
+      /** Error code for programmatic handling (e.g., 'KV_NOT_FOUND', 'AUTH_EXPIRED') */
+      code: external_exports.string(),
+      /** Human-readable error message */
+      message: external_exports.string(),
+      /** Service that produced the error (e.g., 'kv', 'sql') */
+      service: external_exports.string(),
+      /** Original error if this wraps another error - not validated since Error is a class */
+      cause: external_exports.unknown().optional(),
+      /** Additional metadata about the error - passthrough allows any object properties */
+      meta: external_exports.object({}).passthrough().optional()
+    });
+    GenericResultSchema = createResultSchema(external_exports.unknown(), ServiceErrorSchema);
+    KVResponseHeadersSchema = external_exports.object({
+      /** ETag for conditional requests */
+      etag: external_exports.string().optional(),
+      /** Content type of the stored value */
+      contentType: external_exports.string().optional(),
+      /** Last modification timestamp */
+      lastModified: external_exports.string().optional(),
+      /** Content length in bytes */
+      contentLength: external_exports.number().optional()
+    });
+    GenericKVResponseSchema = createKVResponseSchema(external_exports.unknown());
+    KVListResponseSchema = external_exports.object({
+      /** Array of keys matching the list criteria */
+      keys: external_exports.array(external_exports.string()),
+      truncated: external_exports.boolean().optional(),
+      nextCursor: external_exports.string().optional()
+    });
+    KVListResultSchema = createResultSchema(KVListResponseSchema);
+    ServiceRequestEventSchema = external_exports.object({
+      service: external_exports.string(),
+      action: external_exports.string(),
+      span: external_exports.string().optional(),
+      key: external_exports.string().optional(),
+      timestamp: external_exports.number()
+    });
+    ServiceResponseEventSchema = external_exports.object({
+      service: external_exports.string(),
+      action: external_exports.string(),
+      span: external_exports.string().optional(),
+      ok: external_exports.boolean(),
+      duration: external_exports.number(),
+      durationMs: external_exports.number().optional(),
+      status: external_exports.number().optional()
+    });
+    ServiceErrorEventSchema = external_exports.object({
+      service: external_exports.string(),
+      span: external_exports.string().optional(),
+      error: ServiceErrorSchema
+    });
+    ServiceRetryEventSchema = external_exports.object({
+      service: external_exports.string(),
+      attempt: external_exports.number().int().positive(),
+      maxAttempts: external_exports.number().int().positive(),
+      error: ServiceErrorSchema
+    });
+    TelemetrySpanEventSchema = external_exports.object({
+      span: external_exports.string(),
+      ok: external_exports.boolean(),
+      durationMs: external_exports.number(),
+      service: external_exports.string().optional(),
+      action: external_exports.string().optional(),
+      status: external_exports.number().optional(),
+      error: ServiceErrorSchema.optional()
+    });
+    RetryPolicySchema = external_exports.object({
+      /** Maximum number of attempts (including initial) */
+      maxAttempts: external_exports.number().int().positive(),
+      /** Backoff strategy between retries */
+      backoff: external_exports.enum(["none", "linear", "exponential"]),
+      /** Base delay in milliseconds for backoff calculation */
+      baseDelayMs: external_exports.number().nonnegative(),
+      /** Maximum delay in milliseconds between retries */
+      maxDelayMs: external_exports.number().nonnegative(),
+      /** Error codes that should trigger a retry */
+      retryableErrors: external_exports.array(external_exports.string())
+    });
+    ServiceSessionSchema = external_exports.object({
+      /** The delegation header containing the UCAN */
+      delegationHeader: external_exports.object({
+        Authorization: external_exports.string()
+      }),
+      /** The delegation CID */
+      delegationCid: external_exports.string(),
+      /** The space ID for this session */
+      spaceId: external_exports.string(),
+      /** The verification method DID */
+      verificationMethod: external_exports.string(),
+      /** The session key JWK (required for invoke) */
+      jwk: external_exports.object({}).passthrough()
+    });
+    URN_PREFIX = "urn:tinycloud:encryption:";
+    NETWORK_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+    PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
+    NetworkIdError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "NetworkIdError";
+      }
+    };
+    RequestTimeoutError = class extends Error {
+      constructor(timeoutMs) {
+        super(`Request timed out after ${timeoutMs}ms.`);
+        this.name = "TimeoutError";
+        this.timeoutMs = timeoutMs;
+      }
+    };
+    grantableActions = new Set(
+      CAPABILITY_REGISTRY.map(({ urn }) => urn).filter((urn) => !urn.endsWith("/*"))
+    );
+    capabilityServices = new Set(
+      CAPABILITY_REGISTRY.map(({ service }) => service.slice("tinycloud.".length))
+    );
+    MAX_CAUSE_DEPTH2 = 8;
+    STORAGE_FULL_MESSAGE = "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again.";
+    STORAGE_WRITE_TOO_LARGE_MESSAGE = "This change is larger than the TinyCloud storage you have left, so it was not saved. Reading still works. Free up space or upgrade your plan to save it.";
+    MAX_TIMER_DELAY_MS = 2147483647;
+    BaseService = class {
+      constructor() {
+        this.abortController = new AbortController();
+        this._config = {};
+      }
+      /**
+       * Get the service configuration.
+       */
+      get config() {
+        return this._config;
+      }
+      /**
+       * Initialize the service with context.
+       * Called by the SDK after instantiation.
+       *
+       * @param context - The service context
+       */
+      initialize(context) {
+        this.context = context;
+      }
+      /**
+       * Called when session changes (sign-in, sign-out, refresh).
+       * Override in subclasses to handle session changes.
+       *
+       * @param session - The new session, or null if signed out
+       */
+      onSessionChange(session) {
+      }
+      /**
+       * Called when SDK signs out.
+       * Aborts all pending operations.
+       */
+      onSignOut() {
+        this.abortController.abort();
+        this.abortController = new AbortController();
+      }
+      /**
+       * Get the abort signal for this service.
+       * Combines the service-level abort with context-level abort.
+       */
+      get abortSignal() {
+        return this.combineSignals();
+      }
+      /**
+       * Check if the service is authenticated.
+       */
+      get isAuthenticated() {
+        return this.context?.isAuthenticated ?? false;
+      }
+      /**
+       * Get the current session.
+       * Throws if not authenticated.
+       */
+      get session() {
+        if (!this.context?.session) {
+          throw new Error("Not authenticated");
+        }
+        return this.context.session;
+      }
+      /**
+       * Check authentication and return error result if not authenticated.
+       * Use this at the start of methods that require authentication.
+       *
+       * @returns true if authenticated, false otherwise
+       */
+      requireAuth() {
+        return this.isAuthenticated;
+      }
+      /**
+       * Emit a telemetry event.
+       *
+       * @param event - Event name
+       * @param data - Event data
+       */
+      emit(event, data) {
+        this.context?.emit(event, data);
+      }
+      /**
+       * Emit a service request event.
+       *
+       * @param action - The action being performed
+       * @param key - Optional key/path being accessed
+       */
+      emitRequest(action, key) {
+        const service = this.getServiceName();
+        this.emit(TelemetryEvents.SERVICE_REQUEST, {
+          service,
+          action,
+          span: this.spanName(action),
+          key,
+          timestamp: Date.now()
+        });
+      }
+      /**
+       * Emit a service response event.
+       *
+       * @param action - The action that was performed
+       * @param ok - Whether the request was successful
+       * @param startTime - Start time for duration calculation
+       * @param status - Optional HTTP status code
+       */
+      emitResponse(action, ok2, startTime, status) {
+        const service = this.getServiceName();
+        const durationMs = Date.now() - startTime;
+        const span = this.spanName(action);
+        this.emit(TelemetryEvents.SERVICE_RESPONSE, {
+          service,
+          action,
+          span,
+          ok: ok2,
+          duration: durationMs,
+          durationMs,
+          status
+        });
+        this.emit(TelemetryEvents.SPAN, {
+          span,
+          service,
+          action,
+          ok: ok2,
+          durationMs,
+          status
+        });
+      }
+      /**
+       * Emit a service error event.
+       *
+       * @param error - The service error
+       */
+      emitError(error, action) {
+        const span = action ? this.spanName(action) : void 0;
+        this.emit(TelemetryEvents.SERVICE_ERROR, {
+          service: this.getServiceName(),
+          ...span ? { span } : {},
+          error
+        });
+      }
+      /**
+       * Get the service name from the static property.
+       * Subclasses must define static serviceName.
+       */
+      getServiceName() {
+        return this.constructor.serviceName;
+      }
+      /**
+       * Stable span name used by SDK telemetry sinks.
+       */
+      spanName(action) {
+        return `sdk.${this.getServiceName()}.${action}`;
+      }
+      /**
+       * Create a combined abort signal from multiple sources.
+       *
+       * @param signals - Additional abort signals to combine
+       * @returns A combined abort signal
+       */
+      combineSignals(...signals) {
+        const controller = new AbortController();
+        const allSignals = [
+          this.abortController.signal,
+          this.context?.abortSignal,
+          ...signals.filter(Boolean)
+        ].filter(Boolean);
+        for (const signal of allSignals) {
+          if (signal.aborted) {
+            controller.abort(signal.reason);
+            return controller.signal;
+          }
+          signal.addEventListener("abort", () => controller.abort(signal.reason), {
+            once: true
+          });
+        }
+        return controller.signal;
+      }
+      /**
+       * Create the abort signal for one request, bounded by the request timeout.
+       *
+       * The signal aborts when the service signs out, the context aborts, the
+       * caller's `signal` aborts, or the timeout elapses, whichever comes first.
+       * A timeout aborts with a {@link RequestTimeoutError} (`TimeoutError`), which
+       * `wrapError` maps to `ErrorCodes.TIMEOUT`; the other sources keep their own
+       * reason (normally `AbortError`, mapped to `ErrorCodes.ABORTED`).
+       *
+       * The timeout is `timeoutMs` when given, otherwise `config.timeout`. Only a
+       * positive, finite value (at most 2^31-1 ms) applies; `undefined`, `0`, and
+       * `Infinity` mean no timeout, so a per-call `0` opts out of a configured one.
+       *
+       * Callers must call `dispose()` once the response body has been consumed,
+       * which clears the timer and removes the listeners this adds to the
+       * long-lived service and context signals.
+       *
+       * @param signal - The caller's abort signal for this request
+       * @param timeoutMs - Per-request timeout override in milliseconds
+       */
+      createRequestSignal(signal, timeoutMs) {
+        const controller = new AbortController();
+        const detachers = [];
+        let timer;
+        const dispose = () => {
+          if (timer !== void 0) {
+            clearTimeout(timer);
+            timer = void 0;
+          }
+          for (const detach of detachers.splice(0)) {
+            detach();
+          }
+        };
+        const abort = (reason) => {
+          dispose();
+          controller.abort(reason);
+        };
+        const requestSignal = { signal: controller.signal, dispose };
+        const parents = [
+          this.abortController.signal,
+          this.context?.abortSignal,
+          signal
+        ].filter((parent) => parent !== void 0);
+        for (const parent of parents) {
+          if (parent.aborted) {
+            abort(parent.reason);
+            return requestSignal;
+          }
+          const onAbort = () => abort(parent.reason);
+          parent.addEventListener("abort", onAbort, { once: true });
+          detachers.push(() => parent.removeEventListener("abort", onAbort));
+        }
+        const timeout = timeoutMs ?? this._config.timeout;
+        if (typeof timeout === "number" && timeout > 0 && timeout <= MAX_TIMER_DELAY_MS) {
+          timer = setTimeout(() => abort(new RequestTimeoutError(timeout)), timeout);
+        }
+        return requestSignal;
+      }
+      /**
+       * Wrap an operation with error handling and telemetry.
+       *
+       * @param action - The action name for telemetry
+       * @param key - Optional key for telemetry
+       * @param operation - The operation to execute
+       * @returns Result of the operation
+       */
+      async withTelemetry(action, key, operation) {
+        const startTime = Date.now();
+        this.emitRequest(action, key);
+        try {
+          const result = await operation();
+          if (result.ok) {
+            this.emitResponse(action, true, startTime);
+          } else {
+            this.emitResponse(action, false, startTime);
+            this.emitError(result.error, action);
+          }
+          return result;
+        } catch (error) {
+          const serviceError3 = wrapError2(this.getServiceName(), error);
+          this.emitResponse(action, false, startTime);
+          this.emitError(serviceError3, action);
+          return err(serviceError3);
+        }
+      }
+    };
+    PrefixedKVService = class _PrefixedKVService {
+      /**
+       * Create a new PrefixedKVService.
+       *
+       * @param kv - The underlying KV service to delegate to
+       * @param prefix - The prefix to apply to all operations
+       */
+      constructor(kv, prefix) {
+        this._kv = kv;
+        this._prefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+      }
+      /**
+       * The current prefix for this scoped view.
+       */
+      get prefix() {
+        return this._prefix;
+      }
+      /**
+       * Compute the full key path by combining prefix and key.
+       *
+       * @param key - The key to prefix
+       * @returns The full path including prefix
+       */
+      getFullKey(key) {
+        const normalizedKey = key.startsWith("/") ? key : `/${key}`;
+        return `${this._prefix}${normalizedKey}`;
+      }
+      /**
+       * Get a value by key.
+       */
+      async get(key, options) {
+        const fullKey = this.getFullKey(key);
+        return this._kv.get(fullKey, { ...options, prefix: "" });
+      }
+      async batchGet(keys, options) {
+        const response = await this._kv.batchGet(
+          keys.map((key) => this.getFullKey(key)),
+          { ...options, prefix: "" }
+        );
+        if (!response.ok) return response;
+        return ok({
+          ...response.data,
+          results: response.data.results.map((item, index) => ({
+            ...item,
+            key: keys[index]
+          }))
+        });
+      }
+      /**
+       * Store a value at a key.
+       */
+      async put(key, value, options) {
+        const fullKey = this.getFullKey(key);
+        return this._kv.put(fullKey, value, { ...options, prefix: "" });
+      }
+      /**
+       * Store multiple values within this prefix in one TinyCloud KV invocation.
+       */
+      async batchPut(items, options) {
+        return this._kv.batchPut(
+          items.map((item) => ({
+            ...item,
+            key: this.getFullKey(item.key)
+          })),
+          { ...options, prefix: "" }
+        );
+      }
+      /**
+       * List keys within this prefix.
+       */
+      async list(options) {
+        const removePrefix = options?.removePrefix ?? true;
+        return this._kv.list({
+          ...options,
+          prefix: this._prefix,
+          removePrefix
+        });
+      }
+      /**
+       * Read the change feed for everything under this prefix. A view with an
+       * empty prefix (`""` or `"/"`) is refused: the node does not serve a
+       * whole-space feed.
+       */
+      async changes(options) {
+        if (this._prefix.replace(/\/+$/, "") === "") {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV changes needs a non-empty prefix; this view has none",
+            "kv"
+          ));
+        }
+        const syncPrefix = `${this._prefix}/`;
+        const response = await this._kv.changes({ ...options, prefix: syncPrefix });
+        if (!response.ok) return response;
+        return ok({
+          ...response.data,
+          changes: response.data.changes.map((change) => ({
+            ...change,
+            key: change.key.startsWith(syncPrefix) ? change.key.slice(syncPrefix.length) : change.key
+          }))
+        });
+      }
+      /**
+       * Delete a key.
+       */
+      async delete(key, options) {
+        const fullKey = this.getFullKey(key);
+        return this._kv.delete(fullKey, { ...options, prefix: "" });
+      }
+      /**
+       * Get metadata for a key without retrieving the value.
+       */
+      async head(key, options) {
+        const fullKey = this.getFullKey(key);
+        return this._kv.head(fullKey, { ...options, prefix: "" });
+      }
+      async batchHead(keys, options) {
+        const response = await this._kv.batchHead(
+          keys.map((key) => this.getFullKey(key)),
+          { ...options, prefix: "" }
+        );
+        if (!response.ok) return response;
+        return ok({
+          ...response.data,
+          results: response.data.results.map((item, index) => ({
+            ...item,
+            key: keys[index]
+          }))
+        });
+      }
+      /**
+       * Create a short-lived signed URL for reading a KV object.
+       */
+      async createSignedReadUrl(key, options) {
+        const fullKey = this.getFullKey(key);
+        return this._kv.createSignedReadUrl(fullKey, { ...options, prefix: "" });
+      }
+      /**
+       * Create a nested prefix-scoped view.
+       */
+      withPrefix(subPrefix) {
+        const normalizedSubPrefix = subPrefix.startsWith("/") ? subPrefix : `/${subPrefix}`;
+        const combinedPrefix = `${this._prefix}${normalizedSubPrefix}`;
+        return new _PrefixedKVService(this._kv, combinedPrefix);
+      }
+    };
+    DEFAULT_SIGNED_READ_URL_EXPIRY_MS = 5 * 60 * 1e3;
+    KVAction = {
+      GET: "tinycloud.kv/get",
+      PUT: "tinycloud.kv/put",
+      LIST: "tinycloud.kv/list",
+      DELETE: "tinycloud.kv/del",
+      HEAD: "tinycloud.kv/metadata",
+      /** The change feed; never implied by `*` or `tinycloud.kv/*`. */
+      SYNC: "tinycloud.kv/sync",
+      /** Retention attestation; presented through `retentionGrant`, never invoked or implied. */
+      RETAIN: "tinycloud.kv/retain"
+    };
+    MAX_KV_BATCH_READ_ITEMS = 100;
+    pathByteEncoder = new TextEncoder();
+    REVOKED_BODY = /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
+    KVService = class extends BaseService {
+      /**
+       * Create a new KVService instance.
+       *
+       * @param config - Service configuration
+       */
+      constructor(config = {}) {
+        super();
+        this._config = config;
+      }
+      /**
+       * Get the service configuration.
+       */
+      get config() {
+        return this._config;
+      }
+      handleQuotaErrorResponse(response, errorText, key) {
+        if (response.status !== 402 && response.status !== 413) {
+          return void 0;
+        }
+        if (response.status === 413 && !parseStorageQuotaBytes(errorText)) {
+          return void 0;
+        }
+        return err(
+          storageRejectionError(
+            "kv",
+            response.status,
+            { status: response.status, statusText: response.statusText, key },
+            errorText
+          )
+        );
+      }
+      /**
+       * Classify a KV 404 by reading the response body once.
+       *
+       * The server returns 404 both for a genuinely missing key AND for an
+       * un-hosted space (body "Space not found"). Previously get/head/delete
+       * collapsed every 404 to KV_NOT_FOUND before reading the body, so an
+       * un-hosted-space read was indistinguishable from a missing key. We now
+       * preserve status + the "Space not found" body for the un-hosted case (so the
+       * CLI/SDK can normalize it to SPACE_NOT_HOSTED, matching put/list/sql), and
+       * fall through to KV_NOT_FOUND for a real missing key.
+       */
+      async classifyNotFound(response, key) {
+        const errorText = await response.text();
+        if (/space not found/i.test(errorText)) {
+          return err(
+            serviceError(
+              ErrorCodes.KV_NOT_FOUND,
+              `KV ${response.status} - ${errorText}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
             )
           );
         }
-        return encErr(
-          encryptionError({
-            code: "TRANSPORT_ERROR",
-            cause: toError2(error)
-          })
+        return err(serviceError(ErrorCodes.KV_NOT_FOUND, `Key not found: ${key}`, "kv"));
+      }
+      /**
+       * Get the full path with optional prefix.
+       *
+       * @param key - The key
+       * @param prefixOverride - Optional prefix override
+       * @returns The full path
+       */
+      getFullPath(key, prefixOverride) {
+        const prefix = prefixOverride ?? this._config.prefix ?? "";
+        return prefix ? key === "" ? prefix : `${prefix}/${key}` : key;
+      }
+      /**
+       * Get the host URL.
+       */
+      get host() {
+        return this.context.hosts[0];
+      }
+      withJsonContentType(headers) {
+        if (Array.isArray(headers)) {
+          return [...headers, ["content-type", "application/json"]];
+        }
+        return {
+          ...headers,
+          "content-type": "application/json"
+        };
+      }
+      /**
+       * Execute an invoke operation.
+       *
+       * @param path - Resource path
+       * @param action - KV action
+       * @param body - Optional request body
+       * @param signal - Request signal from createRequestSignal()
+       * @returns Fetch response
+       */
+      async invokeOperation(path, action, body, signal, extraHeaders) {
+        const session = this.context.session;
+        const headers = this.context.invoke(
+          session,
+          "kv",
+          path,
+          action
+        );
+        const requestHeaders = Array.isArray(headers) ? [...headers, ...Object.entries(extraHeaders ?? {})] : { ...headers, ...extraHeaders };
+        return this.context.fetch(`${this.host}/invoke`, {
+          method: "POST",
+          headers: requestHeaders,
+          body,
+          signal
+        });
+      }
+      /**
+       * Serialize a single put value into a fetch body.
+       *
+       * Binary values (Blob/ArrayBuffer/typed-array, incl. Node Buffer) are sent as
+       * raw bytes (as a Blob) so they round-trip byte-identically — without this a
+       * Buffer would be JSON.stringify'd into `{"type":"Buffer","data":[...]}`.
+       * Strings are returned unchanged (preserving prior behavior); other values are
+       * JSON-encoded. `contentType` overrides the inferred type for binary values.
+       */
+      serializePutValue(value, contentType) {
+        if (value instanceof Blob) {
+          if (!contentType || value.type === contentType) {
+            return value;
+          }
+          return new Blob([value], { type: contentType });
+        }
+        if (value instanceof ArrayBuffer) {
+          return new Blob([value], {
+            type: contentType ?? "application/octet-stream"
+          });
+        }
+        if (ArrayBuffer.isView(value)) {
+          const view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+          return new Blob([view], {
+            type: contentType ?? "application/octet-stream"
+          });
+        }
+        if (typeof value === "string") {
+          return contentType ? new Blob([value], { type: contentType }) : value;
+        }
+        return JSON.stringify(value);
+      }
+      serializeBatchPutValue(item) {
+        const contentType = item.contentType;
+        if (item.value instanceof Blob) {
+          if (!contentType || item.value.type === contentType) {
+            return item.value;
+          }
+          return new Blob([item.value], { type: contentType });
+        }
+        if (item.value instanceof ArrayBuffer) {
+          return new Blob([item.value], {
+            type: contentType ?? "application/octet-stream"
+          });
+        }
+        if (ArrayBuffer.isView(item.value)) {
+          const value = item.value;
+          const bytes = new Uint8Array(value.byteLength);
+          bytes.set(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+          return new Blob([bytes], {
+            type: contentType ?? "application/octet-stream"
+          });
+        }
+        if (typeof item.value === "string") {
+          return new Blob([item.value], {
+            type: contentType ?? "text/plain;charset=UTF-8"
+          });
+        }
+        const json = JSON.stringify(item.value);
+        if (json === void 0) {
+          throw new Error(`Cannot JSON serialize KV batch value for key "${item.key}"`);
+        }
+        return new Blob([json], {
+          type: contentType ?? "application/json"
+        });
+      }
+      normalizeBatchPutResponse(data) {
+        if (!data || typeof data !== "object") {
+          return void 0;
+        }
+        const response = data;
+        if (!Array.isArray(response.written) || !response.written.every((key) => typeof key === "string") || typeof response.count !== "number") {
+          return void 0;
+        }
+        return {
+          written: response.written,
+          count: response.count
+        };
+      }
+      /**
+       * Create KVResponseHeaders from fetch response headers.
+       *
+       * @param headers - Fetch response headers
+       * @returns KVResponseHeaders object
+       */
+      createResponseHeaders(headers) {
+        return {
+          etag: headers.get("etag") ?? void 0,
+          contentType: headers.get("content-type") ?? void 0,
+          lastModified: headers.get("last-modified") ?? void 0,
+          contentLength: headers.get("content-length") ? parseInt(headers.get("content-length"), 10) : void 0,
+          get: (name) => headers.get(name)
+        };
+      }
+      createBatchResponseHeaders(values) {
+        const normalized = new Map(
+          Object.entries(values).map(([name, value]) => [name.toLowerCase(), value])
+        );
+        return this.createResponseHeaders({
+          get: (name) => normalized.get(name.toLowerCase()) ?? null
+        });
+      }
+      parseBatchValue(dataBase64, headers, raw = false, binary = false) {
+        const encoded = globalThis.atob(dataBase64);
+        const bytes = Uint8Array.from(encoded, (character) => character.charCodeAt(0));
+        if (binary) return bytes;
+        const text = new TextDecoder().decode(bytes);
+        if (raw) return text;
+        const contentType = Object.entries(headers).find(
+          ([name]) => name.toLowerCase() === "content-type"
+        )?.[1];
+        return contentType?.includes("application/json") ? JSON.parse(text) : text;
+      }
+      /**
+       * Validate a batch read response and return its items in the caller's
+       * request order. The node flattens invocation abilities from a `BTreeMap`,
+       * so results arrive sorted by UTF-8 byte order of the path, not in request
+       * order. Items that carry their path in `key` are matched by path; if no
+       * item carries a key, items are assumed to be in the node's byte-sorted
+       * order and the request is aligned the same way. Any mix of keyed and
+       * keyless items, a missing requested path, an unrequested path, or a
+       * malformed item fails closed (returns undefined).
+       */
+      normalizeBatchReadResponse(data, paths, requireData) {
+        if (!data || typeof data !== "object") return void 0;
+        const response = data;
+        const items = response.results;
+        if (!Array.isArray(items) || items.length !== paths.length) {
+          return void 0;
+        }
+        for (const item of items) {
+          if (!item || typeof item !== "object" || typeof item.ok !== "boolean") {
+            return void 0;
+          }
+          if (item.ok && (!item.headers || typeof item.headers !== "object" || Object.values(item.headers).some((value) => typeof value !== "string") || requireData && typeof item.dataBase64 !== "string")) {
+            return void 0;
+          }
+          if (!item.ok && (!item.error || typeof item.error.code !== "string" || typeof item.error.message !== "string")) {
+            return void 0;
+          }
+        }
+        if (items.every((item) => typeof item.key === "string")) {
+          const byPath = new Map(items.map((item) => [item.key, item]));
+          if (byPath.size !== items.length) return void 0;
+          const aligned2 = [];
+          for (const path of paths) {
+            const item = byPath.get(path);
+            if (!item) return void 0;
+            aligned2.push(item);
+          }
+          return aligned2;
+        }
+        if (items.some((item) => item.key !== void 0)) return void 0;
+        const requestOrder = paths.map((_, index) => index).sort((a, b) => comparePathsByBytes(paths[a], paths[b]));
+        const aligned = new Array(items.length);
+        for (let position = 0; position < requestOrder.length; position++) {
+          aligned[requestOrder[position]] = items[position];
+        }
+        return aligned;
+      }
+      async batchRead(keys, action, options) {
+        if (!this.requireAuth()) return err(authRequiredError("kv"));
+        if (keys.length === 0) return ok({ results: [], count: 0 });
+        if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            `KV batch reads accept at most ${MAX_KV_BATCH_READ_ITEMS} keys`,
+            "kv"
+          ));
+        }
+        if (keys.length === 1) {
+          const key = keys[0];
+          const result = action === KVAction.GET ? await this.get(key, options) : await this.head(key, options);
+          return ok({
+            results: [{ key, result }],
+            count: 1
+          });
+        }
+        if (!this.context.invokeAny) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV batch reads require SDK runtime support for multi-resource invocations",
+            "kv"
+          ));
+        }
+        const getOptions = action === KVAction.GET ? options : void 0;
+        if (getOptions?.maxResponseBytes !== void 0 && (!Number.isSafeInteger(getOptions.maxResponseBytes) || getOptions.maxResponseBytes <= 0)) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV maxResponseBytes must be a positive safe integer",
+            "kv"
+          ));
+        }
+        const paths = keys.map((key) => this.getFullPath(key, options?.prefix));
+        if (new Set(paths).size !== paths.length) {
+          return err(serviceError(
+            ErrorCodes.INVALID_INPUT,
+            "KV batch read received duplicate keys after prefix resolution",
+            "kv"
+          ));
+        }
+        const request = this.createRequestSignal(options?.signal, options?.timeout);
+        try {
+          const session = this.context.session;
+          const invocationHeaders = this.context.invokeAny(
+            session,
+            paths.map((path) => ({
+              spaceId: session.spaceId,
+              service: "kv",
+              path,
+              action
+            }))
+          );
+          const limitHeaders = {};
+          if (getOptions?.maxResponseBytes !== void 0) {
+            limitHeaders["x-tinycloud-max-response-bytes"] = String(
+              getOptions.maxResponseBytes
+            );
+          }
+          const headers = Array.isArray(invocationHeaders) ? [...invocationHeaders, ...Object.entries(limitHeaders)] : { ...invocationHeaders, ...limitHeaders };
+          const response = await this.context.fetch(`${this.host}/invoke`, {
+            method: "POST",
+            headers,
+            signal: request.signal
+          });
+          if (!response.ok) {
+            const errorText = response.status === 401 || response.status === 403 ? await this.readAuthorizationText(response) : await response.text();
+            if (response.status === 401 || response.status === 403) {
+              return this.authorizationFailure(
+                `Failed to batch read ${keys.length} key(s)`,
+                response,
+                errorText,
+                paths,
+                action
+              );
+            }
+            if (response.status === 413) {
+              return err(serviceError(
+                ErrorCodes.KV_RESPONSE_TOO_LARGE,
+                "A KV batch value exceeds the requested response limit",
+                "kv",
+                { meta: { status: response.status, statusText: response.statusText } }
+              ));
+            }
+            return err(serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          const items = this.normalizeBatchReadResponse(
+            await response.json(),
+            paths,
+            action === KVAction.GET
+          );
+          if (!items) {
+            return err(serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              "KV batch read response did not match the requested keys",
+              "kv"
+            ));
+          }
+          const results = items.map((item, index) => {
+            if (!item.ok) {
+              return {
+                key: keys[index],
+                result: err(serviceError(item.error.code, item.error.message, "kv"))
+              };
+            }
+            const headers2 = item.headers;
+            const data = action === KVAction.HEAD ? void 0 : this.parseBatchValue(
+              item.dataBase64,
+              headers2,
+              getOptions?.raw,
+              getOptions?.binary
+            );
+            return {
+              key: keys[index],
+              result: ok({
+                data,
+                headers: this.createBatchResponseHeaders(headers2)
+              })
+            };
+          });
+          return ok({ results, count: results.length });
+        } catch (error) {
+          return err(wrapError2("kv", error));
+        } finally {
+          request.dispose();
+        }
+      }
+      /**
+       * Parse response body based on content type.
+       *
+       * @param response - Fetch response
+       * @param raw - Whether to return raw text
+       * @returns Parsed data
+       */
+      async parseResponse(response, raw = false, binary = false) {
+        if (!response.ok) {
+          return void 0;
+        }
+        if (binary) {
+          return new Uint8Array(await response.arrayBuffer());
+        }
+        if (raw) {
+          return await response.text();
+        }
+        const contentType = response.headers.get("content-type");
+        if (contentType?.includes("application/json")) {
+          return await response.json();
+        } else if (contentType?.startsWith("text/")) {
+          return await response.text();
+        }
+        const text = await response.text();
+        if (!text) {
+          return void 0;
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      }
+      async createSignedReadUrlError(response, key, path) {
+        let errorText = response.statusText;
+        try {
+          const text = await response.text();
+          if (text) {
+            errorText = text;
+          }
+        } catch {
+        }
+        if (response.status === 401 || response.status === 403) {
+          return this.authorizationFailure(
+            `Failed to create signed read URL for key ${JSON.stringify(key)}`,
+            response,
+            errorText,
+            [path],
+            KVAction.GET
+          );
+        }
+        const code3 = response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR;
+        return err(
+          serviceError(
+            code3,
+            `Failed to create signed read URL for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          )
         );
       }
-      const verified = verifyDecryptResponse({
-        crypto: this.crypto,
-        request: body,
-        facts,
-        invocationCid: built.data.invocationCid,
-        requestBodyHash: facts.bodyHash,
-        response
-      });
-      if (!verified.ok) return verified;
-      const symmetricKey = openWrappedKey(
-        this.crypto,
-        receiverKey.privateKey,
-        verified.data
-      );
-      const plaintext = decryptEnvelopeWithKey(
-        this.crypto,
-        envelope,
-        symmetricKey
-      );
-      return encOk(plaintext);
-    } catch (error) {
-      return encErr(
-        encryptionError({
-          code: "INVALID_RESPONSE",
-          message: "Local decryption failed"
-        })
-      );
-    }
+      /** A known 401/403 keeps its typed status even if reading its body fails. */
+      async readAuthorizationText(response) {
+        try {
+          return await response.text();
+        } catch {
+          return "";
+        }
+      }
+      /**
+       * AUTH_UNAUTHORIZED for a 401/403 response. The message keeps the HTTP
+       * status and the server text (`<context>: <status> - <text>`, the same
+       * shape as every other KV failure) so callers that rethrow only the message
+       * still see the status; `meta.status` carries it for typed callers.
+       * Server hints must match the requested path/action (whether the node sends
+       * a relative path or full resource); metadata uses only the request-derived
+       * canonical resource under the authenticated session's space.
+       */
+      authorizationFailure(context, response, errorText, paths, expectedAction, extraMeta = {}) {
+        const { resource, action } = parseAuthError(errorText);
+        const requestedPath = paths.find(
+          (path) => resource === path || resource === `${this.context.session.spaceId}/kv/${path}`
+        );
+        const capability = requestedPath !== void 0 && action === expectedAction ? validatedCapabilityOf2({
+          service: "kv",
+          code: ErrorCodes.AUTH_UNAUTHORIZED,
+          meta: {
+            status: response.status,
+            resource: `${this.context.session.spaceId}/kv/${requestedPath}`,
+            requiredAction: action
+          }
+        }) : void 0;
+        const detail = errorText.trim().length > 0 ? errorText : response.statusText || "authorization failed";
+        return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
+          status: response.status,
+          ...extraMeta,
+          ...capability
+        }));
+      }
+      normalizeSignedReadUrlResponse(data) {
+        if (!data || typeof data !== "object") {
+          return void 0;
+        }
+        const response = data;
+        if (typeof response.url !== "string" || typeof response.ticketId !== "string" || typeof response.expiresAt !== "string") {
+          return void 0;
+        }
+        return {
+          url: new URL(response.url, this.host).toString(),
+          relativeUrl: response.url,
+          ticketId: response.ticketId,
+          expiresAt: response.expiresAt
+        };
+      }
+      /**
+       * Get a value by key.
+       */
+      async get(key, options) {
+        return this.withTelemetry("get", key, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          if (options?.maxResponseBytes !== void 0 && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes <= 0)) {
+            return err(serviceError(
+              ErrorCodes.INVALID_INPUT,
+              "KV maxResponseBytes must be a positive safe integer",
+              "kv"
+            ));
+          }
+          const path = this.getFullPath(key, options?.prefix);
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const response = await this.invokeOperation(
+              path,
+              KVAction.GET,
+              void 0,
+              request.signal,
+              options?.maxResponseBytes === void 0 ? void 0 : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
+            );
+            if (!response.ok) {
+              if (response.status === 401 || response.status === 403) {
+                const errorText2 = await this.readAuthorizationText(response);
+                const permissionHint = parsePermissionHintFromErrorText(errorText2);
+                const structuredCapability = permissionHint?.service === "tinycloud.kv" && permissionHint.space === this.context.session.spaceId && permissionHint.path === path ? validatedCapabilityOf2({
+                  service: "kv",
+                  code: ErrorCodes.AUTH_UNAUTHORIZED,
+                  meta: {
+                    status: response.status,
+                    resource: `${this.context.session.spaceId}/kv/${path}`,
+                    requiredAction: KVAction.GET
+                  }
+                }) : void 0;
+                return this.authorizationFailure(
+                  `Failed to get key ${JSON.stringify(key)}`,
+                  response,
+                  errorText2,
+                  [path],
+                  KVAction.GET,
+                  structuredCapability ? { permissionHint, ...structuredCapability } : {}
+                );
+              }
+              if (response.status === 404) {
+                return this.classifyNotFound(response, key);
+              }
+              const errorText = await response.text();
+              if (response.status === 413) {
+                return err(serviceError(
+                  ErrorCodes.KV_RESPONSE_TOO_LARGE,
+                  `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                ));
+              }
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+            const data = await this.parseResponse(
+              response,
+              options?.raw,
+              options?.binary
+            );
+            return ok({
+              data,
+              headers: this.createResponseHeaders(response.headers)
+            });
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async batchGet(keys, options) {
+        return this.withTelemetry(
+          "batchGet",
+          String(keys.length),
+          () => this.batchRead(keys, KVAction.GET, options)
+        );
+      }
+      /**
+       * Store a value at a key.
+       */
+      async put(key, value, options) {
+        return this.withTelemetry("put", key, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          if (options?.ifMatch !== void 0 && options.ifNoneMatch !== void 0) {
+            return err(serviceError(
+              ErrorCodes.INVALID_INPUT,
+              "KV put cannot combine ifMatch and ifNoneMatch",
+              "kv"
+            ));
+          }
+          const path = this.getFullPath(key, options?.prefix);
+          const body = this.serializePutValue(value, options?.contentType);
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const response = await this.invokeOperation(
+              path,
+              KVAction.PUT,
+              body,
+              request.signal,
+              {
+                ...options?.ifMatch === void 0 ? {} : { "if-match": options.ifMatch },
+                ...options?.ifNoneMatch === void 0 ? {} : { "if-none-match": options.ifNoneMatch }
+              }
+            );
+            if (response.status === 401 || response.status === 403) {
+              return this.authorizationFailure(
+                `Failed to put key ${JSON.stringify(key)}`,
+                response,
+                await this.readAuthorizationText(response),
+                [path],
+                KVAction.PUT
+              );
+            }
+            if (!response.ok) {
+              const errorText = await response.text();
+              if (response.status === 412) {
+                return err(serviceError(
+                  ErrorCodes.KV_PRECONDITION_FAILED,
+                  `KV precondition failed for key ${JSON.stringify(key)}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                ));
+              }
+              if (response.status === 503 && (options?.ifMatch !== void 0 || options?.ifNoneMatch !== void 0)) {
+                return err(serviceError(
+                  ErrorCodes.KV_CONFLICT,
+                  `Concurrent KV update conflicted for key ${JSON.stringify(key)}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                ));
+              }
+              const quotaError = this.handleQuotaErrorResponse(
+                response,
+                errorText,
+                key
+              );
+              if (quotaError) {
+                return quotaError;
+              }
+              return err(
+                serviceError(
+                  ErrorCodes.KV_WRITE_FAILED,
+                  `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+            return ok({
+              data: void 0,
+              headers: this.createResponseHeaders(response.headers)
+            });
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      /**
+       * Store multiple values in one TinyCloud KV invocation.
+       */
+      async batchPut(items, options) {
+        return this.withTelemetry("batchPut", String(items.length), async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          if (items.length === 0) {
+            return ok({ written: [], count: 0 });
+          }
+          if (!this.context.invokeAny) {
+            return err(
+              serviceError(
+                ErrorCodes.INVALID_INPUT,
+                "KV batchPut requires SDK runtime support for multi-resource invocations",
+                "kv"
+              )
+            );
+          }
+          const session = this.context.session;
+          const paths = items.map((item) => this.getFullPath(item.key, options?.prefix));
+          const seen = /* @__PURE__ */ new Set();
+          for (const path of paths) {
+            if (seen.has(path)) {
+              return err(
+                serviceError(
+                  ErrorCodes.INVALID_INPUT,
+                  `KV batchPut received duplicate key after prefix resolution: ${path}`,
+                  "kv"
+                )
+              );
+            }
+            seen.add(path);
+          }
+          let requestMayHaveDispatched = false;
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const body = new FormData();
+            for (let index = 0; index < items.length; index++) {
+              body.append(
+                encodeKvBatchPartName(paths[index]),
+                this.serializeBatchPutValue(items[index])
+              );
+            }
+            const headers = this.context.invokeAny(
+              session,
+              paths.map((path) => ({
+                spaceId: session.spaceId,
+                service: "kv",
+                path,
+                action: KVAction.PUT
+              }))
+            );
+            const url = `${this.host}/invoke`;
+            const init = {
+              method: "POST",
+              headers,
+              body,
+              signal: request.signal
+            };
+            const fetchFn = this.context.fetch;
+            requestMayHaveDispatched = true;
+            const response = await fetchFn(url, init);
+            if (!response.ok) {
+              let errorText;
+              try {
+                errorText = await response.text();
+              } catch (textError) {
+                const cause = textError instanceof Error ? textError : new Error(String(textError));
+                return err(
+                  serviceError(
+                    ErrorCodes.KV_WRITE_FAILED,
+                    `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
+                    "kv",
+                    { cause, meta: { status: response.status, statusText: response.statusText } }
+                  )
+                );
+              }
+              if (response.status === 401 || response.status === 403) {
+                return this.authorizationFailure(
+                  `Failed to batch put ${items.length} key(s)`,
+                  response,
+                  errorText,
+                  paths,
+                  KVAction.PUT
+                );
+              }
+              const quotaError = this.handleQuotaErrorResponse(
+                response,
+                errorText,
+                "batch"
+              );
+              if (quotaError) {
+                return quotaError;
+              }
+              return err(
+                serviceError(
+                  ErrorCodes.KV_WRITE_FAILED,
+                  `Failed to batch put ${items.length} key(s): ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+            let rawBody;
+            try {
+              rawBody = await response.json();
+            } catch (jsonError) {
+              const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+              const timedOut = isRequestTimeoutError(cause);
+              return err(
+                serviceError(
+                  timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
+                  timedOut ? `KV batchPut response body did not arrive in time: ${cause.message}` : `KV batchPut response was not valid JSON: ${cause.message}`,
+                  "kv",
+                  {
+                    cause,
+                    meta: {
+                      ...timedOut ? { timeoutMs: cause.timeoutMs } : {},
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed"
+                    }
+                  }
+                )
+              );
+            }
+            const batchResponse = this.normalizeBatchPutResponse(rawBody);
+            if (!batchResponse) {
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  "KV batchPut response did not include matching written keys and count",
+                  "kv",
+                  {
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed"
+                    }
+                  }
+                )
+              );
+            }
+            const requestedPaths = new Set(paths);
+            const writtenPaths = new Set(batchResponse.written);
+            const matchesRequest = batchResponse.count === paths.length && batchResponse.written.length === paths.length && writtenPaths.size === paths.length && batchResponse.written.every((key) => requestedPaths.has(key));
+            if (!matchesRequest) {
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
+                  "kv",
+                  {
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed"
+                    }
+                  }
+                )
+              );
+            }
+            return ok(batchResponse);
+          } catch (error) {
+            const wrapped = wrapError2("kv", error);
+            return err({
+              ...wrapped,
+              meta: { ...wrapped.meta, requestMayHaveDispatched }
+            });
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      /**
+       * List keys with optional prefix filtering.
+       */
+      async list(options) {
+        return this.withTelemetry("list", options?.prefix, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          if (options?.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
+            return err(serviceError(
+              ErrorCodes.INVALID_INPUT,
+              "KV list limit must be an integer from 1 through 1000",
+              "kv"
+            ));
+          }
+          let listPath = options?.prefix ?? this._config.prefix ?? "";
+          if (options?.path) {
+            listPath = listPath ? `${listPath}/${options.path}` : options.path;
+          }
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const response = await this.invokeOperation(
+              listPath,
+              KVAction.LIST,
+              void 0,
+              request.signal,
+              options?.limit === void 0 && options?.cursor === void 0 ? void 0 : {
+                ...options?.limit === void 0 ? {} : { "x-tinycloud-limit": String(options.limit) },
+                ...options?.cursor === void 0 ? {} : { "x-tinycloud-cursor": options.cursor }
+              }
+            );
+            if (!response.ok) {
+              if (response.status === 401 || response.status === 403) {
+                return this.authorizationFailure(
+                  "Failed to list keys",
+                  response,
+                  await this.readAuthorizationText(response),
+                  [listPath],
+                  KVAction.LIST
+                );
+              }
+              const errorText = await response.text();
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `Failed to list keys: ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+            let keys = await this.parseResponse(response, options?.raw);
+            keys = keys ?? [];
+            if (options?.removePrefix && listPath) {
+              const prefixWithSlash = listPath.endsWith("/") ? listPath : `${listPath}/`;
+              keys = keys.map(
+                (key) => key.startsWith(prefixWithSlash) ? key.slice(prefixWithSlash.length) : key
+              );
+            }
+            return ok({
+              keys,
+              ...response.headers.get("x-tinycloud-truncated") === null ? {} : { truncated: response.headers.get("x-tinycloud-truncated") === "true" },
+              ...response.headers.get("x-tinycloud-next-cursor") === null ? {} : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? void 0 }
+            });
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      /**
+       * Read one page of the `tinycloud.kv/sync` change feed for a prefix.
+       */
+      async changes(options) {
+        return this.withTelemetry("changes", options?.prefix, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          if (typeof options?.prefix !== "string" || options.prefix.length === 0) {
+            return err(serviceError(
+              ErrorCodes.INVALID_INPUT,
+              "KV changes prefix must be a non-empty string",
+              "kv"
+            ));
+          }
+          if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1e3)) {
+            return err(serviceError(
+              ErrorCodes.INVALID_INPUT,
+              "KV changes limit must be an integer from 1 through 1000",
+              "kv"
+            ));
+          }
+          const headers = {};
+          if (options.limit !== void 0) headers["x-tinycloud-limit"] = String(options.limit);
+          if (options.cursor !== void 0) headers["x-tinycloud-cursor"] = options.cursor;
+          if (options.retentionGrant !== void 0) {
+            headers["x-tinycloud-retention-grant"] = options.retentionGrant;
+          }
+          const request = this.createRequestSignal(options.signal, options.timeout);
+          try {
+            const response = await this.invokeOperation(
+              options.prefix,
+              KVAction.SYNC,
+              void 0,
+              request.signal,
+              headers
+            );
+            if (!response.ok) {
+              return await this.changesFailure(response, options.prefix, request.signal);
+            }
+            const text = await response.text();
+            let body;
+            try {
+              body = JSON.parse(text);
+            } catch {
+              body = void 0;
+            }
+            const page = this.normalizeChangesResponse(body);
+            if (!page) {
+              return err(serviceError(
+                ErrorCodes.NETWORK_ERROR,
+                "KV changes response was not a tinycloud.kv/sync page",
+                "kv",
+                { meta: { status: response.status, statusText: response.statusText } }
+              ));
+            }
+            return ok(page);
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      /**
+       * Map a failed `kv/sync` response. 410 and the retention 403 carry
+       * `{"error":{"code","reason"}}`; a revoked grant is a 401 whose whole body
+       * is the node's revocation error (see REVOKED_BODY). A body read that
+       * fails because the request was cancelled or timed out rethrows, so the
+       * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
+       */
+      async changesFailure(response, prefix, signal) {
+        if (response.status === 404) {
+          return this.classifyNotFound(response, prefix);
+        }
+        let errorText;
+        try {
+          errorText = await response.text();
+        } catch (error) {
+          if (signal.aborted) throw error;
+          errorText = "";
+        }
+        const meta = { status: response.status, statusText: response.statusText };
+        let reason;
+        let bodyCode;
+        try {
+          const body = JSON.parse(errorText);
+          const error = isJsonObject(body) ? body.error : void 0;
+          if (isJsonObject(error)) {
+            if (typeof error.code === "string") bodyCode = error.code;
+            if (typeof error.reason === "string") reason = error.reason;
+          }
+        } catch {
+        }
+        const context = `Failed to read KV changes for ${JSON.stringify(prefix)}`;
+        if (response.status === 410) {
+          return err(serviceError(
+            ErrorCodes.KV_SYNC_RESET_REQUIRED,
+            `${context}: the node requires a reset (${reason ?? "reason not given"}); discard sync state and restart without a cursor`,
+            "kv",
+            { meta: { ...meta, reason } }
+          ));
+        }
+        if (response.status === 403 && bodyCode === "RETENTION_GRANT_REFUSED") {
+          return err(serviceError(
+            ErrorCodes.KV_RETENTION_GRANT_REFUSED,
+            `${context}: the retention grant was refused (${reason ?? "reason not given"})`,
+            "kv",
+            { meta: { ...meta, reason } }
+          ));
+        }
+        if (response.status === 401) {
+          const revoked = revocationCodeOf(errorText);
+          if (revoked !== void 0) {
+            return err(serviceError(revoked, `${context}: 401 - ${errorText}`, "kv", { meta }));
+          }
+        }
+        if (response.status === 401 || response.status === 403) {
+          return this.authorizationFailure(context, response, errorText, [prefix], KVAction.SYNC);
+        }
+        return err(serviceError(
+          response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR,
+          `${context}: ${response.status} - ${errorText}`,
+          "kv",
+          { meta }
+        ));
+      }
+      normalizeChangesResponse(data) {
+        if (!isJsonObject(data)) return void 0;
+        const { changes, more, cursor, source, authority } = data;
+        if (!Array.isArray(changes) || typeof more !== "boolean" || typeof cursor !== "string" || !isJsonObject(source) || typeof source.nodeDid !== "string" || typeof source.space !== "string" || typeof source.prefix !== "string" || !isJsonObject(authority)) {
+          return void 0;
+        }
+        const { notBefore, expiresAt, retainUntil } = authority;
+        if (notBefore !== null && typeof notBefore !== "string" || expiresAt !== null && typeof expiresAt !== "string" || retainUntil !== null && typeof retainUntil !== "string") {
+          return void 0;
+        }
+        const parsed = [];
+        for (const change of changes) {
+          if (!isJsonObject(change) || typeof change.key !== "string") return void 0;
+          if (change.deleted === true) {
+            parsed.push({ key: change.key, deleted: true });
+            continue;
+          }
+          const { metadata } = change;
+          if (change.deleted !== false || typeof change.etag !== "string" || !isJsonObject(metadata) || !Object.values(metadata).every((value) => typeof value === "string")) {
+            return void 0;
+          }
+          parsed.push({
+            key: change.key,
+            deleted: false,
+            etag: change.etag,
+            metadata
+          });
+        }
+        return {
+          changes: parsed,
+          more,
+          cursor,
+          source: { nodeDid: source.nodeDid, space: source.space, prefix: source.prefix },
+          authority: { notBefore, expiresAt, retainUntil }
+        };
+      }
+      /**
+       * Delete a key.
+       */
+      async delete(key, options) {
+        return this.withTelemetry("delete", key, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          const path = this.getFullPath(key, options?.prefix);
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const response = await this.invokeOperation(
+              path,
+              KVAction.DELETE,
+              void 0,
+              request.signal,
+              options?.ifMatch === void 0 ? void 0 : { "if-match": options.ifMatch }
+            );
+            if (!response.ok) {
+              if (response.status === 401 || response.status === 403) {
+                return this.authorizationFailure(
+                  `Failed to delete key ${JSON.stringify(key)}`,
+                  response,
+                  await this.readAuthorizationText(response),
+                  [path],
+                  KVAction.DELETE
+                );
+              }
+              if (response.status === 404) {
+                return this.classifyNotFound(response, key);
+              }
+              const errorText = await response.text();
+              if (response.status === 412) {
+                return err(serviceError(
+                  ErrorCodes.KV_PRECONDITION_FAILED,
+                  `KV precondition failed for key ${JSON.stringify(key)}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                ));
+              }
+              if (response.status === 503 && options?.ifMatch !== void 0) {
+                return err(serviceError(
+                  ErrorCodes.KV_CONFLICT,
+                  `Concurrent KV delete conflicted for key ${JSON.stringify(key)}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                ));
+              }
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+            return ok({
+              data: void 0,
+              headers: this.createResponseHeaders(response.headers)
+            });
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      /**
+       * Get metadata for a key without retrieving the value.
+       */
+      async head(key, options) {
+        return this.withTelemetry("head", key, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          const path = this.getFullPath(key, options?.prefix);
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const response = await this.invokeOperation(
+              path,
+              KVAction.HEAD,
+              void 0,
+              request.signal
+            );
+            if (!response.ok) {
+              if (response.status === 401 || response.status === 403) {
+                return this.authorizationFailure(
+                  `Failed to get metadata for key ${JSON.stringify(key)}`,
+                  response,
+                  await this.readAuthorizationText(response),
+                  [path],
+                  KVAction.HEAD
+                );
+              }
+              if (response.status === 404) {
+                return this.classifyNotFound(response, key);
+              }
+              const errorText = await response.text();
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+            return ok({
+              data: void 0,
+              headers: this.createResponseHeaders(response.headers)
+            });
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async batchHead(keys, options) {
+        return this.withTelemetry(
+          "batchHead",
+          String(keys.length),
+          () => this.batchRead(keys, KVAction.HEAD, options)
+        );
+      }
+      /**
+       * Create a short-lived signed URL for reading a KV object.
+       */
+      async createSignedReadUrl(key, options) {
+        return this.withTelemetry("createSignedReadUrl", key, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("kv"));
+          }
+          const path = this.getFullPath(key, options?.prefix);
+          const session = this.context.session;
+          const headers = this.context.invoke(
+            session,
+            "kv",
+            path,
+            KVAction.GET
+          );
+          const body = {
+            space: session.spaceId,
+            path,
+            ttl_seconds: options?.expiresInSeconds ?? Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1e3)
+          };
+          if (options?.contentHash !== void 0) {
+            body.content_hash = options.contentHash;
+          }
+          if (options?.etag !== void 0) {
+            body.etag = options.etag;
+          }
+          const request = this.createRequestSignal(options?.signal, options?.timeout);
+          try {
+            const response = await this.context.fetch(`${this.host}/signed/kv`, {
+              method: "POST",
+              headers: this.withJsonContentType(headers),
+              body: JSON.stringify(body),
+              signal: request.signal
+            });
+            if (!response.ok) {
+              return this.createSignedReadUrlError(response, key, path);
+            }
+            const signedUrl = this.normalizeSignedReadUrlResponse(
+              await response.json()
+            );
+            if (!signedUrl) {
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  "Signed read URL response did not include url, ticketId, and expiresAt",
+                  "kv"
+                )
+              );
+            }
+            return ok(signedUrl);
+          } catch (error) {
+            return err(wrapError2("kv", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      /**
+       * Create a prefix-scoped view of this KV service.
+       *
+       * Returns a PrefixedKVService that automatically prefixes all
+       * key operations with the specified prefix. This enables apps
+       * to isolate their data within a shared space.
+       *
+       * @param prefix - The prefix to apply to all operations
+       * @returns A PrefixedKVService scoped to the prefix
+       *
+       * ## Prefix Conventions
+       *
+       * | Pattern | Use Case | Example |
+       * | -- | -- | -- |
+       * | `/app.{domain}/` | App-private data | `/app.photos.xyz/settings.json` |
+       * | `/{type}/` | Shared data type | `/photos/vacation.jpg` |
+       * | `/.{name}/` | Hidden/system data | `/.cache/thumbnails/` |
+       * | `/public/` | Explicitly shareable | `/public/profile.json` |
+       *
+       * @example
+       * ```typescript
+       * const space = sdk.space('default');
+       *
+       * // Create prefix-scoped views
+       * const myApp = space.kv.withPrefix('/app.myapp.com');
+       * const sharedPhotos = space.kv.withPrefix('/photos');
+       *
+       * // Operations are automatically prefixed
+       * await myApp.put('settings.json', { theme: 'dark' });
+       * // -> Actually writes to: /app.myapp.com/settings.json
+       *
+       * await myApp.get('settings.json');
+       * // -> Actually reads from: /app.myapp.com/settings.json
+       *
+       * await sharedPhotos.list();
+       * // -> Lists: /photos/*
+       *
+       * // Nested prefixes
+       * const settings = myApp.withPrefix('/settings');
+       * await settings.get('theme.json');  // -> /app.myapp.com/settings/theme.json
+       * ```
+       */
+      withPrefix(prefix) {
+        return new PrefixedKVService(this, prefix);
+      }
+    };
+    KVService.serviceName = "kv";
+    SQLMigrations = class {
+      constructor(service, dbName) {
+        this.service = service;
+        this.dbName = dbName;
+      }
+      apply(options) {
+        return this.service.applyMigrationsOnDb(this.dbName, options);
+      }
+    };
+    DatabaseHandle = class {
+      constructor(service, name) {
+        this.service = service;
+        this.name = name;
+        this.migrations = new SQLMigrations(service, name);
+      }
+      async query(sql, params, options) {
+        return this.service.queryOnDb(this.name, sql, params, options);
+      }
+      async execute(sql, params, options) {
+        return this.service.executeOnDb(this.name, sql, params, options);
+      }
+      async batch(statements, options) {
+        return this.service.batchOnDb(this.name, statements, options);
+      }
+      async executeStatement(name, params, options) {
+        return this.service.executeStatementOnDb(this.name, name, params, options);
+      }
+      async export(options) {
+        return this.service.exportDb(this.name, options);
+      }
+    };
+    SQLAction = {
+      READ: SQL.READ,
+      WRITE: SQL.WRITE,
+      SCHEMA: SQL.SCHEMA,
+      ADMIN: SQL.ADMIN,
+      SELECT: SQL.SELECT,
+      EXECUTE: SQL.EXECUTE,
+      EXPORT: SQL.EXPORT,
+      ALL: SQL.ALL
+    };
+    DDL_TOKENS = /* @__PURE__ */ new Set(["alter", "create", "drop"]);
+    MIGRATIONS_TABLE = "__tinycloud_sql_migrations";
+    MIGRATIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
+  key TEXT PRIMARY KEY,
+  namespace TEXT NOT NULL,
+  id TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  statement_count INTEGER NOT NULL
+)`;
+    MIGRATIONS_META_NAMESPACE = "tinycloud.sql.migrations";
+    MIGRATIONS_META_ID = "000_metadata";
+    SQLService = class extends BaseService {
+      constructor(config = {}) {
+        super();
+        this.migrationLocks = /* @__PURE__ */ new Map();
+        this._config = config;
+      }
+      get config() {
+        return this._config;
+      }
+      get defaultDbName() {
+        return this._config.defaultDatabase ?? "default";
+      }
+      get host() {
+        return this.context.hosts[0];
+      }
+      /**
+       * Get a handle to a named database.
+       */
+      db(name) {
+        return new DatabaseHandle(this, name ?? this.defaultDbName);
+      }
+      /**
+       * Shortcut: query the default database.
+       */
+      async query(sql, params, options) {
+        return this.queryOnDb(this.defaultDbName, sql, params, options);
+      }
+      /**
+       * Shortcut: execute on the default database.
+       */
+      async execute(sql, params, options) {
+        return this.executeOnDb(this.defaultDbName, sql, params, options);
+      }
+      /**
+       * Shortcut: batch on the default database.
+       */
+      async batch(statements, options) {
+        return this.batchOnDb(this.defaultDbName, statements, options);
+      }
+      async applyMigrationsOnDb(dbName, options) {
+        const validationError = validateMigrationOptions(options);
+        if (validationError) {
+          return err(serviceError(ErrorCodes.INVALID_INPUT, validationError, "sql"));
+        }
+        const lockKey = `${dbName}\0${options.namespace}`;
+        const existing = this.migrationLocks.get(lockKey);
+        if (existing) {
+          return existing;
+        }
+        const promise = this.applyMigrationsOnDbUnlocked(dbName, options);
+        this.migrationLocks.set(lockKey, promise);
+        try {
+          return await promise;
+        } finally {
+          this.migrationLocks.delete(lockKey);
+        }
+      }
+      // === Internal methods called by DatabaseHandle ===
+      async queryOnDb(dbName, sql, params, options) {
+        return this.withTelemetry("query", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("sql"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const body = {
+              action: "query",
+              sql,
+              params: serializeSqlValues(params ?? [])
+            };
+            if (options?.maxRows !== void 0) body.maxRows = options.maxRows;
+            if (options?.maxBytes !== void 0) body.maxBytes = options.maxBytes;
+            const action = this.actionForSql(sql, SQLAction.READ);
+            const response = await this.invokeSQL(
+              dbName,
+              action,
+              body,
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "query", dbName, [action]);
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("sql", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async executeOnDb(dbName, sql, params, options) {
+        return this.withTelemetry("execute", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("sql"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const body = {
+              action: "execute",
+              sql,
+              params: serializeSqlValues(params ?? [])
+            };
+            if (options?.schema) {
+              body.schema = options.schema;
+            }
+            const actions = [
+              this.actionForSql(sql, SQLAction.WRITE),
+              ...(options?.schema ?? []).map(
+                (statement) => this.actionForSql(statement, SQLAction.SCHEMA)
+              )
+            ];
+            const requestedActions2 = this.dedupeActions(actions);
+            const response = await this.invokeSQL(
+              dbName,
+              requestedActions2,
+              body,
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "execute", dbName, requestedActions2);
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("sql", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async batchOnDb(dbName, statements, options) {
+        return this.withTelemetry("batch", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("sql"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const requestedActions2 = this.actionsForSqlBatch(statements);
+            const response = await this.invokeSQL(
+              dbName,
+              requestedActions2,
+              { action: "batch", statements },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "batch", dbName, requestedActions2);
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("sql", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async executeStatementOnDb(dbName, name, params, options) {
+        return this.withTelemetry("executeStatement", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("sql"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeSQL(
+              dbName,
+              SQLAction.WRITE,
+              { action: "execute_statement", name, params: params ?? [] },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("sql", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async exportDb(dbName, options) {
+        return this.withTelemetry("export", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("sql"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeSQL(
+              dbName,
+              SQLAction.READ,
+              { action: "export" },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
+            }
+            const resp = response;
+            if (typeof resp.blob === "function") {
+              const blob = await resp.blob();
+              return ok(blob);
+            }
+            const text = await response.text();
+            return ok(text);
+          } catch (error) {
+            return err(wrapError2("sql", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async applyMigrationsOnDbUnlocked(dbName, options) {
+        return this.withTelemetry("migrations.apply", dbName, async () => {
+          const listed = await this.queryOnDb(
+            dbName,
+            `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
+            [options.namespace],
+            { signal: options.signal }
+          );
+          const tableMissing = !listed.ok && (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND || isMissingTableError(listed.error.message));
+          if (!listed.ok && !tableMissing) return listed;
+          const appliedIds = new Set(
+            (listed.ok ? listed.data.rows : []).map((row) => rowValue(row, 0)).filter((id) => typeof id === "string")
+          );
+          const skipped = options.migrations.filter((migration) => appliedIds.has(migration.id)).map((migration) => migration.id);
+          const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
+          const applied = [];
+          if (pending.length > 0 && tableMissing) {
+            const created = await this.ensureMigrationsTable(dbName, options.signal);
+            if (!created.ok) return created;
+          }
+          for (const migration of pending) {
+            const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
+            if (!result.ok) return result;
+            applied.push(migration.id);
+          }
+          return ok({
+            database: dbName,
+            namespace: options.namespace,
+            status: applied.length > 0 ? "applied" : "already_current",
+            applied,
+            skipped
+          });
+        });
+      }
+      async applyOneMigration(dbName, namespace, migration, signal) {
+        const statements = [
+          ...migration.sql.map(
+            (statement) => typeof statement === "string" ? { sql: statement } : statement
+          ),
+          {
+            sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
+            params: [
+              migrationKey(namespace, migration.id),
+              namespace,
+              migration.id,
+              (/* @__PURE__ */ new Date()).toISOString(),
+              migration.sql.length
+            ]
+          }
+        ];
+        const result = await this.batchOnDb(dbName, statements, { signal });
+        if (!result.ok) return result;
+        return ok(void 0);
+      }
+      async ensureMigrationsTable(dbName, signal) {
+        const result = await this.batchOnDb(
+          dbName,
+          [
+            { sql: MIGRATIONS_SCHEMA },
+            {
+              sql: `INSERT OR REPLACE INTO ${MIGRATIONS_TABLE} (key, namespace, id, applied_at, statement_count) VALUES (?, ?, ?, ?, ?)`,
+              params: [
+                migrationKey(MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID),
+                MIGRATIONS_META_NAMESPACE,
+                MIGRATIONS_META_ID,
+                (/* @__PURE__ */ new Date()).toISOString(),
+                1
+              ]
+            }
+          ],
+          { signal }
+        );
+        if (!result.ok) return result;
+        return ok(void 0);
+      }
+      // === Private helpers ===
+      async invokeSQL(dbName, actions, body, signal) {
+        const session = this.context.session;
+        const actionList = Array.isArray(actions) ? actions : [actions];
+        const headers = actionList.length === 1 ? this.context.invoke(session, "sql", dbName, actionList[0]) : this.invokeSQLAny(session, dbName, actionList);
+        return this.context.fetch(`${this.host}/invoke`, {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(body),
+          signal
+        });
+      }
+      actionForSql(sql, fallback) {
+        const token = firstSqlToken(sql);
+        if (token === "pragma") return SQLAction.ADMIN;
+        if (token !== void 0 && DDL_TOKENS.has(token)) return SQLAction.SCHEMA;
+        return fallback;
+      }
+      actionsForSqlBatch(statements) {
+        return this.dedupeActions(
+          statements.map((statement) => this.actionForSql(statement.sql, SQLAction.WRITE))
+        );
+      }
+      dedupeActions(actions) {
+        return [...new Set(actions)];
+      }
+      invokeSQLAny(session, dbName, actions) {
+        if (!this.context.invokeAny) {
+          throw new Error(
+            `SQL operation requires multiple permissions (${actions.join(", ")}) but this SDK runtime does not support multi-resource invocations`
+          );
+        }
+        return this.context.invokeAny(
+          session,
+          actions.map((action) => ({
+            spaceId: session.spaceId,
+            service: "sql",
+            path: dbName,
+            action
+          }))
+        );
+      }
+      async handleErrorResponse(response, operation, dbName, requestedActions2) {
+        const errorText = await response.text();
+        const meta = responseErrorMeta(response.status, response.statusText, errorText);
+        if (response.status === 402) {
+          return err(storageRejectionError("sql", 402, meta, errorText));
+        }
+        const errorBody = parseServiceErrorBody(errorText);
+        const errorCode2 = this.mapHttpStatusToErrorCode(
+          response.status,
+          errorBody.error
+        );
+        const message = formatServiceResponseError(
+          "SQL",
+          operation,
+          response.status,
+          errorText,
+          errorBody
+        );
+        if (response.status === 401) {
+          const { action } = parseAuthError(errorText);
+          if (action && requestedActions2.includes(action)) {
+            meta.requiredAction = action;
+            meta.resource = `${this.context.session.spaceId}/sql/${dbName}`;
+          }
+        }
+        return err(
+          serviceError(errorCode2, message, "sql", { meta })
+        );
+      }
+      mapHttpStatusToErrorCode(status, serverError) {
+        switch (status) {
+          case 400:
+            return ErrorCodes.SQL_ERROR;
+          case 401:
+            return ErrorCodes.AUTH_UNAUTHORIZED;
+          case 403:
+            if (serverError === "sql_readonly_violation") {
+              return ErrorCodes.SQL_READONLY_VIOLATION;
+            }
+            return ErrorCodes.SQL_PERMISSION_DENIED;
+          case 404:
+            return ErrorCodes.SQL_DATABASE_NOT_FOUND;
+          case 413:
+            return ErrorCodes.SQL_RESPONSE_TOO_LARGE;
+          case 429:
+            return ErrorCodes.SQL_QUOTA_EXCEEDED;
+          default:
+            return ErrorCodes.NETWORK_ERROR;
+        }
+      }
+    };
+    SQLService.serviceName = "sql";
+    DuckDbDatabaseHandle = class {
+      constructor(service, name) {
+        this.service = service;
+        this.name = name;
+      }
+      async query(sql, params, options) {
+        return this.service.queryOnDb(this.name, sql, params, options);
+      }
+      async queryArrow(sql, params, options) {
+        return this.service.queryArrowOnDb(this.name, sql, params, options);
+      }
+      async execute(sql, params, options) {
+        return this.service.executeOnDb(this.name, sql, params, options);
+      }
+      async batch(statements, options) {
+        return this.service.batchOnDb(this.name, statements, options);
+      }
+      async executeStatement(name, params, options) {
+        return this.service.executeStatementOnDb(this.name, name, params, options);
+      }
+      async describe(options) {
+        return this.service.describeDb(this.name, options);
+      }
+      async export(options) {
+        return this.service.exportOnDb(this.name, options);
+      }
+      async import(data, options) {
+        return this.service.importOnDb(this.name, data, options);
+      }
+    };
+    DuckDbAction = {
+      READ: DUCKDB.READ,
+      WRITE: DUCKDB.WRITE,
+      ADMIN: DUCKDB.ADMIN,
+      DESCRIBE: DUCKDB.DESCRIBE,
+      EXPORT: DUCKDB.EXPORT,
+      IMPORT: DUCKDB.IMPORT,
+      EXECUTE: DUCKDB.EXECUTE,
+      ALL: DUCKDB.ALL
+    };
+    DuckDbService = class extends BaseService {
+      constructor(config = {}) {
+        super();
+        this._config = config;
+      }
+      get config() {
+        return this._config;
+      }
+      get defaultDbName() {
+        return this._config.defaultDatabase ?? "default";
+      }
+      get host() {
+        return this.context.hosts[0];
+      }
+      /**
+       * Get a handle to a named database.
+       */
+      db(name) {
+        return new DuckDbDatabaseHandle(this, name ?? this.defaultDbName);
+      }
+      /**
+       * Shortcut: query the default database (JSON format).
+       */
+      async query(sql, params, options) {
+        return this.queryOnDb(this.defaultDbName, sql, params, options);
+      }
+      /**
+       * Shortcut: query the default database (Arrow IPC format).
+       */
+      async queryArrow(sql, params, options) {
+        return this.queryArrowOnDb(this.defaultDbName, sql, params, options);
+      }
+      /**
+       * Shortcut: execute on the default database.
+       */
+      async execute(sql, params, options) {
+        return this.executeOnDb(this.defaultDbName, sql, params, options);
+      }
+      /**
+       * Shortcut: batch on the default database.
+       */
+      async batch(statements, options) {
+        return this.batchOnDb(this.defaultDbName, statements, options);
+      }
+      // === Internal methods called by DuckDbDatabaseHandle ===
+      async queryOnDb(dbName, sql, params, options) {
+        return this.withTelemetry("query", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.READ,
+              { action: "query", sql, params: params ?? [] },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "query");
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async queryArrowOnDb(dbName, sql, params, options) {
+        return this.withTelemetry("queryArrow", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.READ,
+              { action: "query", sql, params: params ?? [] },
+              request.signal,
+              { Accept: "application/vnd.apache.arrow.stream" }
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "queryArrow");
+            }
+            const buffer = await response.arrayBuffer();
+            return ok(buffer);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async executeOnDb(dbName, sql, params, options) {
+        return this.withTelemetry("execute", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const body = {
+              action: "execute",
+              sql,
+              params: params ?? []
+            };
+            if (options?.schema) {
+              body.schema = options.schema;
+            }
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.WRITE,
+              body,
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "execute");
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async batchOnDb(dbName, statements, options) {
+        return this.withTelemetry("batch", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const body = {
+              action: "batch",
+              statements
+            };
+            if (options?.transactional !== void 0) {
+              body.transactional = options.transactional;
+            }
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.WRITE,
+              body,
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "batch");
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async executeStatementOnDb(dbName, name, params, options) {
+        return this.withTelemetry("executeStatement", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.WRITE,
+              { action: "executeStatement", name, params: params ?? [] },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "executeStatement");
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async describeDb(dbName, options) {
+        return this.withTelemetry("describe", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.READ,
+              { action: "describe" },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "describe");
+            }
+            const data = await response.json();
+            return ok(data);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async exportOnDb(dbName, options) {
+        return this.withTelemetry("export", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const response = await this.invokeDuckDb(
+              dbName,
+              DuckDbAction.EXPORT,
+              { action: "export" },
+              request.signal
+            );
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "export");
+            }
+            const blob = await response.blob();
+            return ok(blob);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      async importOnDb(dbName, data, options) {
+        return this.withTelemetry("import", dbName, async () => {
+          if (!this.requireAuth()) {
+            return err(authRequiredError("duckdb"));
+          }
+          const request = this.createRequestSignal(options?.signal);
+          try {
+            const session = this.context.session;
+            const headers = this.context.invoke(
+              session,
+              "duckdb",
+              dbName,
+              DuckDbAction.IMPORT
+            );
+            const response = await this.context.fetch(`${this.host}/invoke`, {
+              method: "POST",
+              headers: {
+                ...headers,
+                "Content-Type": "application/x-duckdb"
+              },
+              body: new Blob([data]),
+              signal: request.signal
+            });
+            if (!response.ok) {
+              return this.handleErrorResponse(response, "import");
+            }
+            return ok(void 0);
+          } catch (error) {
+            return err(wrapError2("duckdb", error));
+          } finally {
+            request.dispose();
+          }
+        });
+      }
+      // === Private helpers ===
+      async invokeDuckDb(dbName, action, body, signal, extraHeaders) {
+        const session = this.context.session;
+        const headers = this.context.invoke(session, "duckdb", dbName, action);
+        return this.context.fetch(`${this.host}/invoke`, {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": "application/json",
+            ...extraHeaders
+          },
+          body: JSON.stringify(body),
+          signal
+        });
+      }
+      async handleErrorResponse(response, operation) {
+        const errorText = await response.text();
+        const meta = responseErrorMeta(response.status, response.statusText, errorText);
+        if (response.status === 402) {
+          return err(storageRejectionError("duckdb", 402, meta, errorText));
+        }
+        const errorBody = parseServiceErrorBody(errorText);
+        const errorCode2 = this.mapHttpStatusToErrorCode(
+          response.status,
+          errorBody.error
+        );
+        const message = formatServiceResponseError(
+          "DuckDB",
+          operation,
+          response.status,
+          errorText,
+          errorBody
+        );
+        if (response.status === 401) {
+          const { resource, action } = parseAuthError(errorText);
+          if (action) meta.requiredAction = action;
+          if (resource) meta.resource = resource;
+        }
+        return err(
+          serviceError(errorCode2, message, "duckdb", { meta })
+        );
+      }
+      mapHttpStatusToErrorCode(status, serverError) {
+        switch (status) {
+          case 400:
+            return ErrorCodes.DUCKDB_ERROR;
+          case 401:
+            return ErrorCodes.AUTH_UNAUTHORIZED;
+          case 403:
+            if (serverError === "duckdb_readonly_violation") {
+              return ErrorCodes.DUCKDB_READONLY_VIOLATION;
+            }
+            return ErrorCodes.DUCKDB_PERMISSION_DENIED;
+          case 404:
+            return ErrorCodes.DUCKDB_DATABASE_NOT_FOUND;
+          case 413:
+            return ErrorCodes.DUCKDB_RESPONSE_TOO_LARGE;
+          case 429:
+            return ErrorCodes.DUCKDB_QUOTA_EXCEEDED;
+          default:
+            return ErrorCodes.NETWORK_ERROR;
+        }
+      }
+    };
+    DuckDbService.serviceName = "duckdb";
+    AsyncQueue = class {
+      constructor() {
+        this.values = [];
+        this.waiters = [];
+        this.closed = false;
+      }
+      [Symbol.asyncIterator]() {
+        return this;
+      }
+      push(value) {
+        if (this.closed) {
+          return;
+        }
+        const waiter = this.waiters.shift();
+        if (waiter) {
+          waiter.resolve({ value, done: false });
+          return;
+        }
+        this.values.push(value);
+      }
+      close() {
+        if (this.closed) {
+          return;
+        }
+        this.closed = true;
+        while (this.waiters.length > 0) {
+          const waiter = this.waiters.shift();
+          waiter?.resolve({ value: void 0, done: true });
+        }
+      }
+      /**
+       * Fail the queue: pending and future `next()` calls reject with `error`,
+       * so a `for await` consumer sees the iterator throw.
+       */
+      fail(error) {
+        if (this.closed) {
+          return;
+        }
+        this.closed = true;
+        this.failure = error;
+        while (this.waiters.length > 0) {
+          const waiter = this.waiters.shift();
+          waiter?.reject(error);
+        }
+      }
+      next() {
+        if (this.values.length > 0) {
+          const value = this.values.shift();
+          return Promise.resolve({ value, done: false });
+        }
+        if (this.failure !== void 0) {
+          return Promise.reject(this.failure);
+        }
+        if (this.closed) {
+          return Promise.resolve({ value: void 0, done: true });
+        }
+        return new Promise((resolve5, reject) => {
+          this.waiters.push({ resolve: resolve5, reject });
+        });
+      }
+    };
+    HOOK_STREAM_RETRY_BASE_DELAY_MS = 250;
+    HOOK_STREAM_RETRY_MAX_DELAY_MS = 3e4;
+    HOOK_STREAM_HEALTHY_MS = 5e3;
+    HooksService = class extends BaseService {
+      constructor(config = {}) {
+        super();
+        this._subscribers = /* @__PURE__ */ new Set();
+        this._supervising = false;
+        this._sessionGeneration = 0;
+        this._config = config;
+      }
+      get config() {
+        return this._config;
+      }
+      get host() {
+        return this._config.host ?? this.context.hosts[0];
+      }
+      async *subscribe(subscriptions, options = {}) {
+        if (!this.requireAuth()) {
+          throw new Error("Authentication required for hooks subscription");
+        }
+        if (subscriptions.length === 0) {
+          throw new Error("At least one hook subscription is required");
+        }
+        const requested = subscriptions.map(normalizeSubscription);
+        const subscriber = {
+          requested,
+          signatures: requested.map(subscriptionSignature),
+          ttlSeconds: options.ttlSeconds,
+          queue: new AsyncQueue()
+        };
+        const leave = () => {
+          this._subscribers.delete(subscriber);
+          subscriber.queue.close();
+          this.wake();
+        };
+        const { signal } = options;
+        if (signal?.aborted) {
+          return;
+        }
+        signal?.addEventListener("abort", leave, { once: true });
+        this._subscribers.add(subscriber);
+        this.wake();
+        try {
+          for await (const event of subscriber.queue) {
+            yield event;
+          }
+        } finally {
+          signal?.removeEventListener("abort", leave);
+          leave();
+        }
+      }
+      async register(webhook) {
+        if (!this.requireAuth()) {
+          return err(authRequiredError("hooks"));
+        }
+        if (typeof webhook.secret !== "string" || webhook.secret.trim().length === 0) {
+          return err(
+            serviceError(
+              ErrorCodes.INVALID_INPUT,
+              "Webhook secret is required",
+              "hooks",
+              { meta: { field: "secret" } }
+            )
+          );
+        }
+        try {
+          const response = await this.context.fetch(`${this.host}/hooks/webhooks`, {
+            method: "POST",
+            headers: {
+              ...serviceHeadersToRecord(
+                this.createHookHeaders(
+                  "tinycloud.hooks/register",
+                  buildScopePath(webhook.service, webhook.pathPrefix)
+                )
+              ),
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              space: webhook.space,
+              service: webhook.service,
+              pathPrefix: normalizePathPrefix(webhook.pathPrefix),
+              abilities: webhook.abilities ?? [],
+              callbackUrl: webhook.callbackUrl,
+              secret: webhook.secret
+            })
+          });
+          if (!response.ok) {
+            return err(
+              await responseError("hooks", "failed to register webhook", response)
+            );
+          }
+          const data = normalizeWebhookRecord(await response.json());
+          if (!data) {
+            return err(
+              wrapError2(
+                "hooks",
+                new Error("Webhook registration response did not include a record")
+              )
+            );
+          }
+          return ok(data);
+        } catch (error) {
+          return err(wrapError2("hooks", error));
+        }
+      }
+      async list(options = {}) {
+        if (!this.requireAuth()) {
+          return err(authRequiredError("hooks"));
+        }
+        try {
+          const query = new URLSearchParams();
+          if (options.space) {
+            query.set("space", options.space);
+          }
+          if (options.service) {
+            query.set("service", options.service);
+          }
+          if (options.pathPrefix) {
+            const normalizedPrefix = normalizePathPrefix(options.pathPrefix);
+            if (normalizedPrefix) {
+              query.set("prefix", normalizedPrefix);
+            }
+          }
+          const response = await this.context.fetch(
+            `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
+            {
+              method: "GET",
+              headers: serviceHeadersToRecord(
+                this.createHookHeaders(
+                  "tinycloud.hooks/list",
+                  options.service ? buildScopePath(options.service, options.pathPrefix) : "webhooks"
+                )
+              )
+            }
+          );
+          if (!response.ok) {
+            return err(
+              await responseError("hooks", "failed to list webhooks", response)
+            );
+          }
+          const payload = await response.json();
+          const records = normalizeWebhookRecordList(payload);
+          if (!records) {
+            return err(
+              wrapError2(
+                "hooks",
+                new Error("Webhook list response did not include records")
+              )
+            );
+          }
+          return ok(records);
+        } catch (error) {
+          return err(wrapError2("hooks", error));
+        }
+      }
+      async unregister(id, options = {}) {
+        if (!this.requireAuth()) {
+          return err(authRequiredError("hooks"));
+        }
+        try {
+          const response = await this.context.fetch(
+            `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
+            {
+              method: "DELETE",
+              headers: serviceHeadersToRecord(
+                this.createHookHeaders(
+                  "tinycloud.hooks/unregister",
+                  options.target ? buildScopePath(
+                    options.target.service,
+                    options.target.pathPrefix
+                  ) : `webhooks/${id}`
+                )
+              )
+            }
+          );
+          if (!response.ok) {
+            return err(
+              await responseError(
+                "hooks",
+                "failed to unregister webhook",
+                response
+              )
+            );
+          }
+          return ok(void 0);
+        } catch (error) {
+          return err(wrapError2("hooks", error));
+        }
+      }
+      /**
+       * Called after anything that may change what the supervisor should do:
+       * subscribe, unsubscribe, session change, sign-out. Interrupts the running
+       * step if the plan moved away from it, and starts the supervisor if none
+       * runs. Touches only SDK-owned state, so it never throws into callers such
+       * as `ServiceContext.setSession`.
+       */
+      wake() {
+        const phase = this._phase;
+        if (phase && phase.key !== this.plan()?.key) {
+          phase.interrupt.abort();
+        }
+        if (this._supervising || this._subscribers.size === 0) {
+          return;
+        }
+        this._supervising = true;
+        this.supervise().catch(() => this.collapse());
+      }
+      /**
+       * The only owner of the shared stream. Each iteration is one attempt
+       * (mint → open → drain), then a classification and, unless the attempt was
+       * superseded or released its subscribers, a backoff. Every await is a
+       * `phase` that wake() can interrupt; an interrupted phase yields
+       * `undefined`, so a superseded mint can never act. Outside `attempt` and
+       * `pause`, which each own one catch, the loop touches only SDK state.
+       */
+      async supervise() {
+        let streak = 0;
+        for (; ; ) {
+          const plan = this.plan();
+          if (!plan) {
+            this._supervising = false;
+            return;
+          }
+          const health = { openedAt: 0, delivered: false };
+          const outcome = await this.phase(
+            plan.key,
+            (signal) => this.attempt(plan, signal, health)
+          );
+          if (health.delivered || health.openedAt > 0 && performance.now() - health.openedAt >= HOOK_STREAM_HEALTHY_MS) {
+            streak = 0;
+          }
+          if (!outcome) {
+            continue;
+          }
+          if (this.plan()?.key !== plan.key) {
+            continue;
+          }
+          if (outcome.kind === "stopped") {
+            this.release();
+            continue;
+          }
+          if (outcome.kind === "refused" && outcome.terminal) {
+            this.release(outcome.error);
+            this.report(outcome.error);
+            continue;
+          }
+          if (outcome.kind !== "ended") {
+            this.report(outcome.error);
+          }
+          streak += 1;
+          await this.phase(
+            plan.key,
+            (signal) => this.pause(streak, signal)
+          );
+        }
+      }
+      /**
+       * Run one step under an interrupt that wake() fires when the plan key moves
+       * on. An interrupted step's result is discarded. The interrupt is also
+       * fired when the step returns, which releases whatever it left open: the
+       * request signal and its listeners, an unread response body, a timer.
+       */
+      async phase(key, step) {
+        const interrupt = new AbortController();
+        this._phase = { key, interrupt };
+        try {
+          if (this.plan()?.key !== key) {
+            interrupt.abort();
+          }
+          const result = await step(interrupt.signal);
+          return interrupt.signal.aborted ? void 0 : result;
+        } finally {
+          this._phase = void 0;
+          interrupt.abort();
+        }
+      }
+      /**
+       * One mint → open → drain. The single catch site for everything the
+       * attempt touches that the SDK does not own: context accessors, invoke,
+       * fetch, response bodies, the SSE parser. Never rejects.
+       */
+      async attempt(plan, signal, health) {
+        let phase = "mint";
+        let request;
+        const owns = () => !signal.aborted && !request?.signal.aborted && this.plan()?.key === plan.key;
+        try {
+          const context = this.context;
+          const contextSignal = context.abortSignal;
+          this._lastContextSignal = contextSignal;
+          if (!context.isAuthenticated || contextSignal?.aborted) {
+            return { kind: "stopped" };
+          }
+          request = this.createRequestSignal(signal, 0);
+          const host = this.host;
+          const minted = await awaitOwned(
+            request.signal,
+            () => context.fetch(`${host}/hooks/tickets`, {
+              method: "POST",
+              headers: {
+                ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+                "content-type": "application/json"
+              },
+              body: JSON.stringify({
+                subscriptions: plan.subscriptions,
+                ttlSeconds: plan.ttlSeconds
+              }),
+              signal: request.signal
+            })
+          );
+          if (!owns()) return { kind: "stopped" };
+          if (!minted.ok) {
+            const status = minted.status;
+            const error = await awaitOwned(
+              request.signal,
+              () => responseError("hooks", "failed to mint hook ticket", minted)
+            );
+            if (!owns()) return { kind: "stopped" };
+            return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
+          }
+          const body = await awaitOwned(request.signal, () => minted.json());
+          if (!owns()) return { kind: "stopped" };
+          const ticket = body !== null && typeof body === "object" && "ticket" in body ? body.ticket : void 0;
+          if (typeof ticket !== "string" || ticket.length === 0) {
+            throw new Error("Hook ticket response did not include a ticket");
+          }
+          phase = "open";
+          if (!owns()) return { kind: "stopped" };
+          const stream = await awaitOwned(
+            request.signal,
+            () => context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`, {
+              method: "GET",
+              headers: { accept: "text/event-stream" },
+              signal: request.signal
+            })
+          );
+          if (!owns()) return { kind: "stopped" };
+          if (!stream.ok) {
+            return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) };
+          }
+          health.openedAt = performance.now();
+          const iterator = parseSseStream(stream.body, request.signal)[Symbol.asyncIterator]();
+          try {
+            for (; ; ) {
+              const next = await awaitOwned(request.signal, () => iterator.next());
+              if (!owns()) return { kind: "stopped" };
+              if (next.done) break;
+              const message = next.value;
+              if (!message.data) continue;
+              const event = parseHookEvent(message);
+              if (!owns()) return { kind: "stopped" };
+              this.dispatch(event);
+              health.delivered = true;
+            }
+          } finally {
+            const closing = iterator.return?.();
+            if (closing) void Promise.resolve(closing).then(() => void 0, () => void 0);
+          }
+          return owns() ? { kind: "ended" } : { kind: "stopped" };
+        } catch (thrown) {
+          return request?.signal.aborted || thrown === SUPERSEDED ? { kind: "stopped" } : { kind: "failed", error: hookStreamFailure(phase, thrown) };
+        }
+      }
+      /**
+       * Back off before the next attempt. `config.streamRetry` overrides the
+       * delay and the clock; whatever they do, the pause ends by the delay or the
+       * interrupt, then yields one timer turn so an instant clock cannot starve
+       * due timers or the process.
+       */
+      async pause(attempt, signal) {
+        try {
+          this._lastContextSignal = this.context.abortSignal;
+        } catch {
+        }
+        const contextSignal = this._lastContextSignal;
+        const waits = [];
+        const aborts = [];
+        try {
+          const retry = this._config.streamRetry;
+          const delayMs = retry?.delay?.(attempt) ?? hookStreamRetryDelay(attempt);
+          waits.push((retry?.wait ?? sleep)(delayMs, attempt, signal));
+        } catch {
+          waits.push(Promise.resolve());
+        }
+        aborts.push(abortPromise(signal));
+        if (contextSignal) aborts.push(abortPromise(contextSignal));
+        try {
+          await Promise.race([...waits, ...aborts.map(({ promise }) => promise)]);
+        } catch {
+        } finally {
+          for (const abort of aborts) abort.dispose();
+        }
+        await new Promise((resolve5) => setTimeout(resolve5, 0));
+      }
+      /** The stream the current subscribers need, or undefined when none remain. */
+      plan() {
+        if (this._subscribers.size === 0) {
+          return void 0;
+        }
+        const merged = /* @__PURE__ */ new Map();
+        let ttlSeconds;
+        for (const subscriber of this._subscribers) {
+          subscriber.requested.forEach(
+            (subscription, index) => merged.set(subscriber.signatures[index], subscription)
+          );
+          if (typeof subscriber.ttlSeconds === "number") {
+            ttlSeconds = Math.min(subscriber.ttlSeconds, ttlSeconds ?? Infinity);
+          }
+        }
+        const signatures = [...merged.keys()].sort();
+        return {
+          key: JSON.stringify([this._sessionGeneration, signatures, ttlSeconds ?? null]),
+          subscriptions: signatures.map((signature) => merged.get(signature)),
+          ttlSeconds
+        };
+      }
+      dispatch(event) {
+        for (const subscriber of this._subscribers) {
+          if (matchesAnySubscription(event, subscriber.requested)) {
+            subscriber.queue.push(event);
+          }
+        }
+      }
+      /**
+       * Detach every subscriber. With `error`, their iterators throw it after
+       * draining buffered events; without, they complete.
+       */
+      release(error) {
+        const subscribers = [...this._subscribers];
+        this._subscribers.clear();
+        for (const { queue } of subscribers) {
+          if (error) {
+            queue.fail(error);
+          } else {
+            queue.close();
+          }
+        }
+      }
+      report(error) {
+        if (error.meta && typeof error.meta === "object") {
+          Object.freeze(error.meta);
+        }
+        Object.freeze(error);
+        try {
+          this.emitError(error, "stream");
+        } catch {
+        }
+      }
+      /**
+       * Unreachable by construction. If the loop ever rejects anyway, fail its
+       * subscribers visibly instead of stranding them or crashing the process.
+       */
+      collapse() {
+        this._supervising = false;
+        this._phase?.interrupt.abort();
+        this._phase = void 0;
+        const error = serviceError(
+          ErrorCodes.NETWORK_ERROR,
+          "hook stream supervisor stopped unexpectedly",
+          "hooks"
+        );
+        this.report(error);
+        this.release(error);
+      }
+      onSessionChange(session) {
+        super.onSessionChange(session);
+        this._sessionGeneration += 1;
+        this.wake();
+      }
+      onSignOut() {
+        super.onSignOut();
+        this.release();
+        this.wake();
+      }
+      createHookHeaders(action, path) {
+        return this.context.invoke(this.session, "hooks", path, action);
+      }
+      createInvokeHeaders(subscriptions) {
+        const entries = subscriptions.map((subscription) => ({
+          spaceId: subscription.space,
+          service: "hooks",
+          path: subscription.pathPrefix ? `${subscription.service}/${subscription.pathPrefix}` : subscription.service,
+          action: "tinycloud.hooks/subscribe"
+        }));
+        if (this.context.invokeAny) {
+          return this.context.invokeAny(this.session, entries);
+        }
+        if (entries.length === 1) {
+          const entry = entries[0];
+          return this.context.invoke(
+            this.session,
+            entry.service,
+            entry.path,
+            entry.action
+          );
+        }
+        throw new Error(
+          "This SDK runtime does not support multi-scope hook invocations"
+        );
+      }
+    };
+    HooksService.serviceName = "hooks";
+    SUPERSEDED = /* @__PURE__ */ Symbol("hooks attempt superseded");
+    STREAM_ERROR_NAMES = /* @__PURE__ */ new Set([
+      "Error",
+      "TypeError",
+      "AbortError",
+      "TimeoutError",
+      "SyntaxError",
+      "RangeError",
+      "NetworkError"
+    ]);
+    STREAM_ERROR_CODES = /* @__PURE__ */ new Set([
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ECONNABORTED",
+      "ETIMEDOUT",
+      "EPIPE",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENETDOWN",
+      "EADDRNOTAVAIL",
+      "UND_ERR_SOCKET",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_HEADERS_TIMEOUT",
+      "UND_ERR_BODY_TIMEOUT",
+      "UND_ERR_CLOSED",
+      "UND_ERR_ABORTED",
+      "UND_ERR_RESPONSE_STATUS_CODE",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+      "CERT_HAS_EXPIRED",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+      "SELF_SIGNED_CERT_IN_CHAIN",
+      "ERR_SSL_WRONG_VERSION_NUMBER"
+    ]);
+    VaultVersionConfig = {
+      "1": {
+        masterMessage: (spaceId) => `tinycloud-vault-master-v1:${spaceId}`,
+        identityMessage: "tinycloud-encryption-identity-v1"
+      }
+    };
+    CURRENT_VAULT_VERSION = "1";
+    VaultHeaders = {
+      VERSION: "x-vault-version",
+      CIPHER: "x-vault-cipher",
+      KEY_ID: "x-vault-key-id",
+      CONTENT_TYPE: "x-vault-content-type",
+      KDF: "x-vault-kdf",
+      KEY_ROTATION: "x-vault-key-rotation",
+      GRANT_VERSION: "x-vault-grant-version",
+      GRANTOR: "x-vault-grantor"
+    };
+    DB_NAME = "tinycloud-vault-cache";
+    DB_VERSION = 1;
+    STORE_NAME = "signatures";
+    WRAP_KEY_ID = "__wrap_key__";
+    DataVaultService = class extends BaseService {
+      /**
+       * Create a new DataVaultService instance.
+       *
+       * @param config - Service configuration including crypto and tc references
+       */
+      constructor(config) {
+        super();
+        this.masterKey = null;
+        this.encryptionIdentity = null;
+        this._isUnlocked = false;
+        this.unlockInFlight = null;
+        this.vaultConfig = config;
+        this._config = config;
+      }
+      /**
+       * Get the service configuration.
+       */
+      get config() {
+        return this._config;
+      }
+      /**
+       * Whether the vault is currently unlocked.
+       */
+      get isUnlocked() {
+        return this.usesNetworkEncryption || this._isUnlocked;
+      }
+      /**
+       * The vault's public encryption key (X25519).
+       * Throws if vault is locked.
+       */
+      get publicKey() {
+        if (this.usesNetworkEncryption) {
+          throw new Error("Network-encrypted vaults do not expose a local public key");
+        }
+        if (!this.encryptionIdentity) {
+          throw new Error("Vault is locked");
+        }
+        return this.encryptionIdentity.publicKey;
+      }
+      /**
+       * Convenience accessor for crypto operations.
+       */
+      get crypto() {
+        return this.vaultConfig.crypto;
+      }
+      /**
+       * Convenience accessor for TinyCloud instance.
+       */
+      get tc() {
+        return this.vaultConfig.tc;
+      }
+      get networkEncryption() {
+        return this.vaultConfig.encryption;
+      }
+      get usesNetworkEncryption() {
+        return this.networkEncryption !== void 0;
+      }
+      /**
+       * Get the host URL.
+       */
+      get host() {
+        return this.tc.hosts[0];
+      }
+      async decryptCapabilityProof() {
+        const proof = this.networkEncryption?.decryptCapabilityProof;
+        if (typeof proof === "function") {
+          return await proof();
+        }
+        return proof ?? { proofs: [] };
+      }
+      serializeValue(value, options) {
+        let plaintext;
+        if (value instanceof Uint8Array) {
+          plaintext = value;
+        } else if (options?.serialize) {
+          plaintext = options.serialize(value);
+        } else if (typeof value === "string") {
+          plaintext = toBytes2(value);
+        } else {
+          plaintext = toBytes2(JSON.stringify(value));
+        }
+        const contentType = options?.contentType ?? (value instanceof Uint8Array ? "application/octet-stream" : "application/json");
+        return { plaintext, contentType };
+      }
+      deserializeValue(plaintext, contentType, options) {
+        if (options?.raw) {
+          return plaintext;
+        }
+        if (options?.deserialize) {
+          return options.deserialize(plaintext);
+        }
+        if (contentType === "application/json") {
+          return JSON.parse(fromBytes(plaintext));
+        }
+        return plaintext;
+      }
+      // =========================================================================
+      // Phase 1: Core Operations
+      // =========================================================================
+      /**
+       * Unlock the vault. Derives keys from two wallet signatures:
+       * 1. Master signature (per-space) — used to derive the master encryption key
+       * 2. Identity signature (per-address) — used to derive X25519 encryption identity
+       *
+       * If the identity public key already exists in the public space, the identity
+       * signature is skipped entirely (no wallet popup). The identity private key is
+       * only needed for sharing operations.
+       *
+       * @param signer - Object with signMessage method. Optional when cached
+       *                 signatures exist (browser only).
+       */
+      async unlock(signer) {
+        if (this.usesNetworkEncryption) {
+          this._isUnlocked = true;
+          return { ok: true, data: void 0 };
+        }
+        const unlockSigner = isUnlockSigner(signer) ? signer : void 0;
+        if (this._isUnlocked && this.masterKey && (this.encryptionIdentity || !unlockSigner)) {
+          return { ok: true, data: void 0 };
+        }
+        if (this.unlockInFlight) {
+          return this.unlockInFlight;
+        }
+        this.unlockInFlight = this.withTelemetry("unlock", void 0, async () => {
+          const spaceId = this.vaultConfig.spaceId;
+          const versionConfig = VaultVersionConfig[CURRENT_VAULT_VERSION];
+          const masterCacheKey = `vault-master:${spaceId}`;
+          const identityCacheKey = `vault-identity:${this.tc.address}`;
+          try {
+            if (!this.masterKey) {
+              let masterSigBytes = await loadCachedSignature(masterCacheKey);
+              if (!masterSigBytes) {
+                if (!unlockSigner) {
+                  return vaultError({
+                    code: "VAULT_LOCKED",
+                    message: "Signer is required when no cached master signature exists"
+                  });
+                }
+                const sig = await unlockSigner.signMessage(
+                  versionConfig.masterMessage(spaceId)
+                );
+                masterSigBytes = toBytes2(sig);
+                await cacheSignature(masterCacheKey, masterSigBytes);
+              }
+              this.masterKey = this.crypto.deriveKey(
+                masterSigBytes,
+                this.crypto.sha256(toBytes2(spaceId)),
+                toBytes2("vault-master")
+              );
+            }
+            const publicSpaceId = this.tc.makePublicSpaceId(this.tc.address, this.tc.chainId);
+            let existingPubKey = null;
+            try {
+              const existing = await this.tc.readPublicSpace(
+                this.host,
+                publicSpaceId,
+                ".well-known/vault-pubkey"
+              );
+              if (existing.ok && existing.data) {
+                existingPubKey = existing.data;
+              }
+            } catch {
+            }
+            if (existingPubKey) {
+              this.encryptionIdentity = {
+                publicKey: base64Decode(existingPubKey),
+                privateKey: new Uint8Array(0)
+                // private key not available without signing
+              };
+            } else {
+              let identitySigBytes = await loadCachedSignature(identityCacheKey);
+              if (!identitySigBytes) {
+                if (!unlockSigner) {
+                  this.encryptionIdentity = null;
+                  this._isUnlocked = true;
+                  return ok(void 0);
+                }
+                const sig = await unlockSigner.signMessage(
+                  versionConfig.identityMessage
+                );
+                identitySigBytes = toBytes2(sig);
+                await cacheSignature(identityCacheKey, identitySigBytes);
+              }
+              const seed = this.crypto.deriveKey(
+                identitySigBytes,
+                toBytes2("tinycloud-x25519"),
+                toBytes2("encryption-identity")
+              );
+              this.encryptionIdentity = this.crypto.x25519FromSeed(seed);
+              try {
+                const pubKeyB64 = base64Encode(this.encryptionIdentity.publicKey);
+                await this.tc.ensurePublicSpace();
+                await this.tc.publicKV.put(".well-known/vault-pubkey", pubKeyB64);
+                await this.tc.publicKV.put(".well-known/vault-version", CURRENT_VAULT_VERSION);
+                await this.tc.publicKV.put(".well-known/vault-space", this.vaultConfig.spaceId);
+              } catch {
+              }
+            }
+            this._isUnlocked = true;
+            return ok(void 0);
+          } catch (error) {
+            this.masterKey = null;
+            this.encryptionIdentity = null;
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+        try {
+          return await this.unlockInFlight;
+        } finally {
+          this.unlockInFlight = null;
+        }
+      }
+      /**
+       * Clear the cached vault signatures.
+       *
+       * @param spaceId - Clear only this space's master cache. If omitted, clears all.
+       */
+      async clearCache(spaceId) {
+        if (spaceId) {
+          await clearSignatureCache(`vault-master:${spaceId}`);
+        } else {
+          await clearSignatureCache();
+        }
+      }
+      /**
+       * Lock the vault, clearing all key material from memory.
+       */
+      lock() {
+        this.masterKey = null;
+        this.encryptionIdentity = null;
+        this._isUnlocked = false;
+      }
+      /**
+       * Called when SDK signs out. Locks the vault and aborts operations.
+       */
+      onSignOut() {
+        this.lock();
+        super.onSignOut();
+      }
+      async putNetworkEncrypted(key, value, options) {
+        const config = this.networkEncryption;
+        if (!config) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Network encryption is not configured"
+          });
+        }
+        if (!this.requireAuth()) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Authentication required"
+          });
+        }
+        try {
+          const { plaintext, contentType } = this.serializeValue(value, options);
+          const metadata = {
+            [VaultHeaders.VERSION]: "2",
+            [VaultHeaders.CIPHER]: "tinycloud-network-envelope",
+            [VaultHeaders.CONTENT_TYPE]: contentType,
+            ...options?.metadata ?? {}
+          };
+          const aad = toBytes2(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
+          const envelopeResult = await config.service.encryptToNetwork(
+            config.networkId,
+            plaintext,
+            { aad, metadata }
+          );
+          if (!envelopeResult.ok) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: new Error(envelopeResult.error.message)
+            });
+          }
+          const valuePutResult = await this.tc.kv.put(
+            `vault/${key}`,
+            JSON.stringify(envelopeResult.data)
+          );
+          if (!valuePutResult.ok) {
+            return kvWriteError("Failed to store encrypted value", valuePutResult.error);
+          }
+          return { ok: true, data: void 0 };
+        } catch (error) {
+          return vaultError({
+            code: "STORAGE_ERROR",
+            cause: toError(error)
+          });
+        }
+      }
+      async getNetworkEncrypted(key, options) {
+        const config = this.networkEncryption;
+        if (!config) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Network encryption is not configured"
+          });
+        }
+        if (!this.requireAuth()) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Authentication required"
+          });
+        }
+        try {
+          const valueResult = await this.tc.kv.get(`vault/${key}`, {
+            raw: true
+          });
+          if (!valueResult.ok) {
+            return vaultError({ code: "KEY_NOT_FOUND", key });
+          }
+          const rawEnvelope = unwrapKVData(valueResult.data);
+          const envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
+          const proof = await this.decryptCapabilityProof();
+          const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+          if (!plaintextResult.ok) {
+            return vaultError({
+              code: "DECRYPTION_FAILED",
+              message: plaintextResult.error.message
+            });
+          }
+          const metadata = envelope.metadata ?? {};
+          const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+          const keyId = metadata[VaultHeaders.KEY_ID] ?? envelope.encryptedSymmetricKeyHash.slice(0, 16);
+          const value = this.deserializeValue(
+            plaintextResult.data,
+            contentType,
+            options
+          );
+          return { ok: true, data: { value, metadata, keyId } };
+        } catch (error) {
+          return vaultError({
+            code: "STORAGE_ERROR",
+            cause: toError(error)
+          });
+        }
+      }
+      /**
+       * Read a network-encrypted entry while preserving safe failure phases.
+       *
+       * Unlike {@link getNetworkEncrypted}, this is intentionally message-free so
+       * an operation layer can distinguish an authorized absence from a failed
+       * read without receiving node, envelope, plaintext, or key material.
+       */
+      async readNetworkEncrypted(key, options) {
+        const config = this.networkEncryption;
+        if (!config || !this.requireAuth()) {
+          return { status: "read_failed" };
+        }
+        let valueResult;
+        try {
+          valueResult = await this.tc.kv.get(`vault/${key}`, { raw: true });
+        } catch {
+          return { status: "node_unreachable" };
+        }
+        if (!valueResult.ok) {
+          const permissionHint = parsePermissionHint(valueResult.error.meta?.permissionHint);
+          if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== void 0) {
+            return { status: "permission_required", hint: permissionHint };
+          }
+          if ((valueResult.error.code === "NOT_FOUND" || valueResult.error.code === "KV_NOT_FOUND") && !hasHttpResponse(valueResult.error)) {
+            return { status: "not_found" };
+          }
+          if (valueResult.error.code === "NETWORK_ERROR" || valueResult.error.code === "TIMEOUT" || valueResult.error.code === "ABORTED") {
+            return hasHttpResponse(valueResult.error) ? { status: "read_failed" } : { status: "node_unreachable" };
+          }
+          return { status: "read_failed" };
+        }
+        let envelope;
+        try {
+          const rawEnvelope = unwrapKVData(valueResult.data);
+          envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
+        } catch {
+          return { status: "corrupt_envelope" };
+        }
+        let plaintextResult;
+        try {
+          const proof = await this.decryptCapabilityProof();
+          plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+        } catch {
+          return { status: "decrypt_failed" };
+        }
+        if (!plaintextResult.ok) {
+          const permissionHint = parsePermissionHint(
+            plaintextResult.error.permissionHint
+          );
+          if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== void 0) {
+            return { status: "permission_required", hint: permissionHint };
+          }
+          if (plaintextResult.error.code === "INVALID_ENVELOPE") {
+            return { status: "corrupt_envelope" };
+          }
+          if (plaintextResult.error.code === "TRANSPORT_ERROR") {
+            return { status: "node_unreachable" };
+          }
+          return { status: "decrypt_failed" };
+        }
+        try {
+          const metadata = envelope.metadata ?? {};
+          const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+          const keyId = metadata[VaultHeaders.KEY_ID] ?? envelope.encryptedSymmetricKeyHash.slice(0, 16);
+          const value = this.deserializeValue(
+            plaintextResult.data,
+            contentType,
+            options
+          );
+          return { status: "ok", entry: { value, metadata, keyId } };
+        } catch {
+          return { status: "invalid_payload" };
+        }
+      }
+      async headNetworkEncrypted(key) {
+        if (!this.requireAuth()) {
+          return vaultError({
+            code: "VAULT_LOCKED",
+            message: "Authentication required"
+          });
+        }
+        try {
+          const valueResult = await this.tc.kv.get(`vault/${key}`, {
+            raw: true
+          });
+          if (!valueResult.ok) {
+            return vaultError({ code: "KEY_NOT_FOUND", key });
+          }
+          const rawEnvelope = unwrapKVData(valueResult.data);
+          const envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
+          return { ok: true, data: envelope.metadata ?? {} };
+        } catch (error) {
+          return vaultError({
+            code: "STORAGE_ERROR",
+            cause: toError(error)
+          });
+        }
+      }
+      /**
+       * Encrypt and store a value at the given key.
+       *
+       * @param key - The key to store under
+       * @param value - The value to encrypt and store
+       * @param options - Optional put configuration
+       */
+      async put(key, value, options) {
+        return this.withTelemetry("put", key, async () => {
+          if (this.usesNetworkEncryption) {
+            return this.putNetworkEncrypted(key, value, options);
+          }
+          if (!this._isUnlocked || !this.masterKey) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before storing data"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            let plaintext;
+            if (value instanceof Uint8Array) {
+              plaintext = value;
+            } else if (options?.serialize) {
+              plaintext = options.serialize(value);
+            } else if (typeof value === "string") {
+              plaintext = toBytes2(value);
+            } else {
+              plaintext = toBytes2(JSON.stringify(value));
+            }
+            const contentType = options?.contentType ?? (value instanceof Uint8Array ? "application/octet-stream" : "application/json");
+            const entryKey = this.crypto.randomBytes(32);
+            const keyId = hexEncode(this.crypto.sha256(entryKey)).slice(0, 16);
+            const encrypted = this.crypto.encrypt(entryKey, plaintext);
+            const keyBlob = this.crypto.encrypt(this.masterKey, entryKey);
+            const metadata = {
+              [VaultHeaders.VERSION]: "1",
+              [VaultHeaders.CIPHER]: "aes-256-gcm",
+              [VaultHeaders.KEY_ID]: keyId,
+              [VaultHeaders.CONTENT_TYPE]: contentType,
+              [VaultHeaders.KDF]: "hkdf-sha256",
+              [VaultHeaders.KEY_ROTATION]: this.vaultConfig.keyRotation ?? "per-write",
+              ...options?.metadata ?? {}
+            };
+            const keyMetadata = JSON.stringify({
+              keyId,
+              contentType,
+              ...metadata
+            });
+            const keyPayload = JSON.stringify({
+              key: base64Encode(keyBlob),
+              metadata: keyMetadata
+            });
+            const keyPutResult = await this.tc.kv.put(
+              `keys/${key}`,
+              keyPayload
+            );
+            if (!keyPutResult.ok) {
+              return kvWriteError("Failed to store key blob", keyPutResult.error);
+            }
+            const valuePayload = JSON.stringify({
+              data: base64Encode(encrypted),
+              metadata
+            });
+            const valuePutResult = await this.tc.kv.put(
+              `vault/${key}`,
+              valuePayload
+            );
+            if (!valuePutResult.ok) {
+              return kvWriteError("Failed to store encrypted value", valuePutResult.error);
+            }
+            return ok(void 0);
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      /**
+       * Retrieve and decrypt a value by key.
+       *
+       * @param key - The key to retrieve
+       * @param options - Optional get configuration
+       * @returns Result with the decrypted entry
+       */
+      async get(key, options) {
+        return this.withTelemetry("get", key, async () => {
+          if (this.usesNetworkEncryption) {
+            return this.getNetworkEncrypted(key, options);
+          }
+          if (!this._isUnlocked || !this.masterKey) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before reading data"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const keyResult = await this.tc.kv.get(`keys/${key}`, {
+              raw: true
+            });
+            if (!keyResult.ok) {
+              return vaultError({ code: "KEY_NOT_FOUND", key });
+            }
+            const keyEnvelope = JSON.parse(keyResult.data.data);
+            const keyBlobBytes = base64Decode(keyEnvelope.key);
+            const entryKey = this.crypto.decrypt(this.masterKey, keyBlobBytes);
+            const valueResult = await this.tc.kv.get(`vault/${key}`, {
+              raw: true
+            });
+            if (!valueResult.ok) {
+              return vaultError({ code: "KEY_NOT_FOUND", key });
+            }
+            const valueEnvelope = JSON.parse(valueResult.data.data);
+            const encryptedBytes = base64Decode(valueEnvelope.data);
+            const plaintext = this.crypto.decrypt(entryKey, encryptedBytes);
+            const metadata = valueEnvelope.metadata ?? {};
+            const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+            const keyId = metadata[VaultHeaders.KEY_ID] ?? "";
+            let value;
+            if (options?.raw) {
+              value = plaintext;
+            } else if (options?.deserialize) {
+              value = options.deserialize(plaintext);
+            } else if (contentType === "application/json") {
+              value = JSON.parse(fromBytes(plaintext));
+            } else {
+              value = plaintext;
+            }
+            return ok({ value, metadata, keyId });
+          } catch (error) {
+            if (error instanceof Error && error.message.includes("decryption")) {
+              return vaultError({
+                code: "DECRYPTION_FAILED",
+                message: error.message
+              });
+            }
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      /**
+       * Delete an encrypted key.
+       * Removes both the encrypted value and the key blob.
+       *
+       * @param key - The key to delete
+       */
+      async delete(key) {
+        return this.withTelemetry("delete", key, async () => {
+          if (!this.isUnlocked) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before deleting data"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            if (this.usesNetworkEncryption) {
+              const valueDelResult2 = await this.tc.kv.delete(`vault/${key}`);
+              if (!valueDelResult2.ok) {
+                return vaultError({ code: "KEY_NOT_FOUND", key });
+              }
+              return ok(void 0);
+            }
+            const [keyDelResult, valueDelResult] = await Promise.all([
+              this.tc.kv.delete(`keys/${key}`),
+              this.tc.kv.delete(`vault/${key}`)
+            ]);
+            if (!keyDelResult.ok && !valueDelResult.ok) {
+              return vaultError({ code: "KEY_NOT_FOUND", key });
+            }
+            return ok(void 0);
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      /**
+       * List vault keys with optional prefix filtering.
+       *
+       * @param options - Optional list configuration
+       * @returns Result with array of key names (vault/ prefix stripped)
+       */
+      async list(options) {
+        const page = await this.listPage(options);
+        return page.ok ? { ok: true, data: page.data.keys } : page;
+      }
+      async listPage(options) {
+        return this.withTelemetry("list", options?.prefix, async () => {
+          if (!this.isUnlocked) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before listing data"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const listPrefix = options?.prefix ? `vault/${options.prefix}` : "vault/";
+            const listResult = await this.tc.kv.list({
+              prefix: listPrefix,
+              removePrefix: true,
+              ...options?.limit === void 0 ? {} : { limit: options.limit },
+              ...options?.cursor === void 0 ? {} : { cursor: options.cursor }
+            });
+            if (!listResult.ok) {
+              return vaultError({
+                code: "STORAGE_ERROR",
+                cause: new Error(
+                  `Failed to list vault keys: ${listResult.error.message}`
+                )
+              });
+            }
+            let keys = listResult.data.keys;
+            if (options?.removePrefix && options.prefix) {
+              const userPrefix = options.prefix.endsWith("/") ? options.prefix : `${options.prefix}/`;
+              keys = keys.map(
+                (k) => k.startsWith(userPrefix) ? k.slice(userPrefix.length) : k
+              );
+            }
+            return ok({
+              keys,
+              truncated: listResult.data.truncated === true,
+              ...listResult.data.nextCursor === void 0 ? {} : { nextCursor: listResult.data.nextCursor }
+            });
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      /**
+       * Get envelope metadata for a key without decrypting the value.
+       *
+       * @param key - The key to inspect
+       * @returns Result with metadata headers
+       */
+      async head(key) {
+        return this.withTelemetry("head", key, async () => {
+          if (this.usesNetworkEncryption) {
+            return this.headNetworkEncrypted(key);
+          }
+          if (!this._isUnlocked) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before reading metadata"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const valueResult = await this.tc.kv.get(`vault/${key}`, {
+              raw: true
+            });
+            if (!valueResult.ok) {
+              return vaultError({ code: "KEY_NOT_FOUND", key });
+            }
+            const valueEnvelope = JSON.parse(valueResult.data.data);
+            const metadata = valueEnvelope.metadata ?? {};
+            return ok(metadata);
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      // =========================================================================
+      // Batch Operations
+      // =========================================================================
+      /**
+       * Encrypt and store multiple entries.
+       *
+       * @param entries - Array of key/value pairs with optional per-entry options
+       * @returns Array of results, one per entry
+       */
+      async putMany(entries) {
+        return Promise.all(
+          entries.map((entry) => this.put(entry.key, entry.value, entry.options))
+        );
+      }
+      /**
+       * Retrieve and decrypt multiple keys.
+       *
+       * @param keys - Array of keys to retrieve
+       * @param options - Optional get configuration applied to all entries
+       * @returns Array of results, one per key
+       */
+      async getMany(keys, options) {
+        return Promise.all(keys.map((key) => this.get(key, options)));
+      }
+      // =========================================================================
+      // Phase 2: Sharing
+      // =========================================================================
+      /**
+       * Re-encrypt a vault key for another user (renamed from grant).
+       * Re-encrypts the data key to the recipient's public key via X25519 DH.
+       *
+       * @param key - The key to share
+       * @param recipientDID - The recipient's primary DID (did:pkh:...)
+       * @param options - Optional grant configuration
+       */
+      async reencrypt(key, recipientDID, options) {
+        return this.withTelemetry("reencrypt", key, async () => {
+          if (this.usesNetworkEncryption) {
+            void recipientDID;
+            void options;
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: new Error(
+                "Vault key grants are deprecated for network-encrypted vaults; grant tinycloud.encryption/decrypt on the network plus KV access to vault data."
+              )
+            });
+          }
+          if (!this._isUnlocked || !this.masterKey) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before granting access"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const pubKeyResult = await this.resolvePublicKey(recipientDID);
+            if (!pubKeyResult.ok) {
+              return pubKeyResult;
+            }
+            const bobPubKey = pubKeyResult.data;
+            const keyResult = await this.tc.kv.get(`keys/${key}`, {
+              raw: true
+            });
+            if (!keyResult.ok) {
+              return vaultError({ code: "KEY_NOT_FOUND", key });
+            }
+            const keyEnvelope = JSON.parse(keyResult.data.data);
+            const keyBlobBytes = base64Decode(keyEnvelope.key);
+            const entryKey = this.crypto.decrypt(this.masterKey, keyBlobBytes);
+            const ephemeralSeed = this.crypto.randomBytes(32);
+            const ephemeralKeyPair = this.crypto.x25519FromSeed(ephemeralSeed);
+            const sharedSecret = this.crypto.x25519Dh(
+              ephemeralKeyPair.privateKey,
+              bobPubKey
+            );
+            const encryptionKey = this.crypto.deriveKey(
+              sharedSecret,
+              toBytes2("tinycloud-x25519"),
+              toBytes2("vault-grant")
+            );
+            const encryptedGrant = this.crypto.encrypt(encryptionKey, entryKey);
+            const grantBlob = concatBytes2(
+              ephemeralKeyPair.publicKey,
+              encryptedGrant
+            );
+            const grantPayload = JSON.stringify({
+              grant: base64Encode(grantBlob),
+              spaceId: this.vaultConfig.spaceId,
+              metadata: {
+                [VaultHeaders.GRANT_VERSION]: "1",
+                [VaultHeaders.GRANTOR]: this.tc.did,
+                ...options?.metadata ?? {}
+              }
+            });
+            const grantPutResult = await this.tc.kv.put(
+              `grants/${recipientDID}/${key}`,
+              grantPayload
+            );
+            if (!grantPutResult.ok) {
+              return kvWriteError("Failed to store grant", grantPutResult.error);
+            }
+            return ok(void 0);
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      /**
+       * @deprecated Use reencrypt() instead.
+       */
+      async grant(key, recipientDID, options) {
+        return this.reencrypt(key, recipientDID, options);
+      }
+      /**
+       * Retrieve and decrypt a value shared by another user.
+       *
+       * @param grantorDID - The DID of the user who shared the data
+       * @param key - The key that was shared
+       * @param options - Optional get configuration
+       * @returns Result with the decrypted entry
+       */
+      async getShared(grantorDID, key, options) {
+        return this.withTelemetry("getShared", key, async () => {
+          if (this.usesNetworkEncryption) {
+            const grantorKV = options?.kv;
+            if (!grantorKV) {
+              return vaultError({
+                code: "STORAGE_ERROR",
+                cause: new Error(
+                  "getShared requires a delegated KV service via options.kv."
+                )
+              });
+            }
+            const config = this.networkEncryption;
+            if (!config) {
+              return vaultError({
+                code: "VAULT_LOCKED",
+                message: "Network encryption is not configured"
+              });
+            }
+            if (!this.requireAuth()) {
+              return vaultError({
+                code: "VAULT_LOCKED",
+                message: "Authentication required"
+              });
+            }
+            try {
+              const valueResult = await grantorKV.get(`vault/${key}`, {
+                raw: true
+              });
+              if (!valueResult.ok) {
+                return vaultError({ code: "KEY_NOT_FOUND", key });
+              }
+              const rawEnvelope = unwrapKVData(valueResult.data);
+              const envelope = typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope;
+              const proof = await this.decryptCapabilityProof();
+              const plaintextResult = await config.service.decryptEnvelope(
+                envelope,
+                proof
+              );
+              if (!plaintextResult.ok) {
+                return vaultError({
+                  code: "DECRYPTION_FAILED",
+                  message: plaintextResult.error.message
+                });
+              }
+              const metadata = envelope.metadata ?? {};
+              const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+              const keyId = metadata[VaultHeaders.KEY_ID] ?? envelope.encryptedSymmetricKeyHash.slice(0, 16);
+              const value = this.deserializeValue(
+                plaintextResult.data,
+                contentType,
+                options
+              );
+              void grantorDID;
+              return { ok: true, data: { value, metadata, keyId } };
+            } catch (error) {
+              return vaultError({
+                code: "STORAGE_ERROR",
+                cause: toError(error)
+              });
+            }
+          }
+          if (!this._isUnlocked || !this.masterKey || !this.encryptionIdentity) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before reading shared data"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const myDID = this.tc.did;
+            const grantorKV = options?.kv;
+            if (!grantorKV) {
+              return vaultError({
+                code: "STORAGE_ERROR",
+                cause: new Error(
+                  "getShared requires a delegated KV service via options.kv. Use useDelegation() to get delegated access, then pass { kv: access.kv }."
+                )
+              });
+            }
+            const grantResult = await grantorKV.get(`grants/${myDID}/${key}`, {
+              raw: true
+            });
+            if (!grantResult.ok) {
+              return vaultError({
+                code: "GRANT_NOT_FOUND",
+                grantor: grantorDID,
+                key
+              });
+            }
+            const grantEnvelope = typeof grantResult.data?.data === "string" ? JSON.parse(grantResult.data.data) : grantResult.data?.data;
+            const grantBlobBytes = base64Decode(grantEnvelope.grant);
+            const ephemeralPubKey = grantBlobBytes.slice(0, 32);
+            const encryptedGrant = grantBlobBytes.slice(32);
+            const sharedSecret = this.crypto.x25519Dh(
+              this.encryptionIdentity.privateKey,
+              ephemeralPubKey
+            );
+            const encryptionKey = this.crypto.deriveKey(
+              sharedSecret,
+              toBytes2("tinycloud-x25519"),
+              toBytes2("vault-grant")
+            );
+            const entryKey = this.crypto.decrypt(encryptionKey, encryptedGrant);
+            const valueResult = await grantorKV.get(`vault/${key}`, {
+              raw: true
+            });
+            if (!valueResult.ok) {
+              return vaultError({
+                code: "KEY_NOT_FOUND",
+                key
+              });
+            }
+            const valueEnvelope = typeof valueResult.data?.data === "string" ? JSON.parse(valueResult.data.data) : valueResult.data?.data;
+            const encryptedBytes = base64Decode(valueEnvelope.data);
+            const plaintext = this.crypto.decrypt(entryKey, encryptedBytes);
+            const metadata = valueEnvelope.metadata ?? {};
+            const contentType = metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+            const keyId = metadata[VaultHeaders.KEY_ID] ?? "";
+            let value;
+            if (options?.raw) {
+              value = plaintext;
+            } else if (options?.deserialize) {
+              value = options.deserialize(plaintext);
+            } else if (contentType === "application/json") {
+              value = JSON.parse(fromBytes(plaintext));
+            } else {
+              value = plaintext;
+            }
+            return ok({ value, metadata, keyId });
+          } catch (error) {
+            if (error instanceof Error && error.message.includes("decryption")) {
+              return vaultError({
+                code: "DECRYPTION_FAILED",
+                message: error.message
+              });
+            }
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      /**
+       * Resolve another user's public encryption key from their DID.
+       *
+       * @param did - The DID to resolve (did:pkh:eip155:{chainId}:{address})
+       * @returns Result with the public key bytes
+       */
+      async resolvePublicKey(did) {
+        try {
+          const parts = this.parseDID(did);
+          if (!parts) {
+            return vaultError({ code: "PUBLIC_KEY_NOT_FOUND", did });
+          }
+          const spaceId = this.tc.makePublicSpaceId(
+            parts.address,
+            parts.chainId
+          );
+          const result = await this.tc.readPublicSpace(
+            this.host,
+            spaceId,
+            ".well-known/vault-pubkey"
+          );
+          if (!result.ok) {
+            return vaultError({ code: "PUBLIC_KEY_NOT_FOUND", did });
+          }
+          const pubKeyBytes = base64Decode(result.data);
+          return { ok: true, data: pubKeyBytes };
+        } catch (error) {
+          return vaultError({ code: "PUBLIC_KEY_NOT_FOUND", did });
+        }
+      }
+      /**
+       * List DIDs that have been granted access to a key.
+       *
+       * @param key - The key to list grants for
+       * @returns Result with array of recipient DIDs
+       */
+      async listGrants(key) {
+        return this.withTelemetry("listGrants", key, async () => {
+          if (this.usesNetworkEncryption) {
+            void key;
+            return { ok: true, data: [] };
+          }
+          if (!this._isUnlocked) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before listing grants"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const listResult = await this.tc.kv.list({
+              prefix: "grants/",
+              removePrefix: true
+            });
+            if (!listResult.ok) {
+              return vaultError({
+                code: "STORAGE_ERROR",
+                cause: new Error(
+                  `Failed to list grants: ${listResult.error.message}`
+                )
+              });
+            }
+            const dids = [];
+            for (const grantPath of listResult.data.keys) {
+              if (grantPath.endsWith(`/${key}`)) {
+                const did = grantPath.slice(
+                  0,
+                  grantPath.length - key.length - 1
+                );
+                if (did) {
+                  dids.push(did);
+                }
+              }
+            }
+            return ok(dids);
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      // =========================================================================
+      // Phase 3: Key Rotation / Revocation
+      // =========================================================================
+      /**
+       * Revoke a previously issued grant.
+       *
+       * This performs a full key rotation:
+       * 1. Lists current grantees
+       * 2. Removes the revoked recipient
+       * 3. Re-encrypts the value with a new entry key
+       * 4. Re-issues grants to remaining recipients
+       *
+       * @param key - The key to revoke access to
+       * @param recipientDID - The recipient whose access to revoke
+       */
+      async revoke(key, recipientDID) {
+        return this.withTelemetry("revoke", key, async () => {
+          if (this.usesNetworkEncryption) {
+            void recipientDID;
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: new Error(
+                "Vault key grants are deprecated for network-encrypted vaults; revoke KV and tinycloud.encryption/decrypt grants instead."
+              )
+            });
+          }
+          if (!this._isUnlocked || !this.masterKey) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Vault must be unlocked before revoking access"
+            });
+          }
+          if (!this.requireAuth()) {
+            return vaultError({
+              code: "VAULT_LOCKED",
+              message: "Authentication required"
+            });
+          }
+          try {
+            const granteesResult = await this.listGrants(key);
+            if (!granteesResult.ok) {
+              return granteesResult;
+            }
+            const remainingGrantees = granteesResult.data.filter(
+              (did) => did !== recipientDID
+            );
+            const deleteGrantResult = await this.tc.kv.delete(
+              `grants/${recipientDID}/${key}`
+            );
+            const getResult = await this.get(key);
+            if (!getResult.ok) {
+              return getResult;
+            }
+            const currentEntry = getResult.data;
+            const newEntryKey = this.crypto.randomBytes(32);
+            const newKeyId = hexEncode(this.crypto.sha256(newEntryKey)).slice(
+              0,
+              16
+            );
+            let plaintext;
+            if (currentEntry.value instanceof Uint8Array) {
+              plaintext = currentEntry.value;
+            } else {
+              plaintext = toBytes2(JSON.stringify(currentEntry.value));
+            }
+            const encrypted = this.crypto.encrypt(newEntryKey, plaintext);
+            const newKeyBlob = this.crypto.encrypt(this.masterKey, newEntryKey);
+            const metadata = {
+              ...currentEntry.metadata,
+              [VaultHeaders.KEY_ID]: newKeyId
+            };
+            const keyPayload = JSON.stringify({
+              key: base64Encode(newKeyBlob),
+              metadata: JSON.stringify({
+                keyId: newKeyId,
+                ...metadata
+              })
+            });
+            const keyPutResult = await this.tc.kv.put(
+              `keys/${key}`,
+              keyPayload
+            );
+            if (!keyPutResult.ok) {
+              return kvWriteError("Failed to store rotated key blob", keyPutResult.error);
+            }
+            const valuePayload = JSON.stringify({
+              data: base64Encode(encrypted),
+              metadata
+            });
+            const valuePutResult = await this.tc.kv.put(
+              `vault/${key}`,
+              valuePayload
+            );
+            if (!valuePutResult.ok) {
+              return kvWriteError("Failed to store re-encrypted value", valuePutResult.error);
+            }
+            for (const did of remainingGrantees) {
+              const grantResult = await this.reencrypt(key, did);
+              if (!grantResult.ok) {
+              }
+            }
+            return ok(void 0);
+          } catch (error) {
+            return vaultError({
+              code: "STORAGE_ERROR",
+              cause: toError(error)
+            });
+          }
+        });
+      }
+      // =========================================================================
+      // Internal Helpers
+      // =========================================================================
+      /**
+       * Parse a DID string to extract address and chainId.
+       * Expected format: did:pkh:eip155:{chainId}:{address}
+       *
+       * @param did - The DID to parse
+       * @returns Parsed address and chainId, or null if invalid
+       */
+      parseDID(did) {
+        const parts = did.split(":");
+        if (parts.length !== 5 || parts[0] !== "did" || parts[1] !== "pkh" || parts[2] !== "eip155") {
+          return null;
+        }
+        const chainId = parseInt(parts[3], 10);
+        const address = parts[4];
+        if (isNaN(chainId) || !address) {
+          return null;
+        }
+        return { address, chainId };
+      }
+    };
+    DataVaultService.serviceName = "vault";
+    SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+    SECRET_PREFIX = "secrets/";
+    SCOPED_SECRET_PREFIX = "secrets/scoped/";
+    RESERVED_SECRET_SCOPES = /* @__PURE__ */ new Set(["default", "global"]);
+    HEX = "0123456789abcdef";
+    DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1";
+    ENVELOPE_VERSION = 1;
+    DEFAULT_KEY_VERSION = 1;
+    DECRYPT_FACT_TYPE = "tinycloud.encryption.decrypt/v1";
+    DECRYPT_RESULT_TYPE = "tinycloud.encryption.decrypt-result/v1";
+    EncryptionService = class extends BaseService {
+      constructor(config) {
+        super();
+        this._config = config;
+      }
+      get config() {
+        return this._config;
+      }
+      get crypto() {
+        return this._config.crypto;
+      }
+      async discoverNetwork(identifier2, ownerDid) {
+        this.assertActive();
+        const result = await discoverNetwork({
+          identifier: identifier2,
+          ...ownerDid !== void 0 ? { ownerDid } : {},
+          ...this._config.node !== void 0 ? { node: this._config.node } : {},
+          ...this._config.wellKnown !== void 0 ? { wellKnown: this._config.wellKnown } : {}
+        });
+        this.assertActive();
+        if (!result.ok) return result;
+        return encOk(result.data.descriptor);
+      }
+      async encryptToNetwork(networkId, plaintext, options) {
+        try {
+          this.assertActive();
+          const discovered = await this.discoverNetwork(networkId);
+          if (!discovered.ok) return discovered;
+          const usable = ensureNetworkUsableForDecrypt(discovered.data);
+          if (!usable.ok) return usable;
+          const descriptor = usable.data;
+          const networkPublicKey = base64Decode2(descriptor.publicEncryptionKey);
+          const result = encryptToNetwork(this.crypto, {
+            // Discovery returns the node's canonical network identifier. Persist
+            // that spelling in the envelope so a later response can be compared
+            // byte-for-byte (notably for checksummed did:pkh principals).
+            networkId: descriptor.networkId,
+            networkPublicKey,
+            plaintext,
+            ...options?.aad !== void 0 ? { aad: options.aad } : {},
+            alg: options?.alg ?? descriptor.alg,
+            keyVersion: options?.keyVersion ?? descriptor.keyVersion,
+            ...options?.metadata !== void 0 ? { metadata: options.metadata } : {}
+          });
+          return encOk(result.envelope);
+        } catch (error) {
+          return encErr(
+            encryptionError({
+              code: "TRANSPORT_ERROR",
+              cause: toError2(error)
+            })
+          );
+        }
+      }
+      async decryptEnvelope(envelope, capabilityProof, options) {
+        try {
+          this.assertActive();
+          const validated = validateEnvelope(this.crypto, envelope);
+          if (!validated.ok) return validated;
+          if (options?.aad !== void 0 && validated.data.aad !== base64Encode2(options.aad)) {
+            return encErr(
+              encryptionError({
+                code: "INVALID_INPUT",
+                message: "decryptEnvelope aad does not match the envelope"
+              })
+            );
+          }
+          let descriptor;
+          if (options?.descriptor !== void 0) {
+            descriptor = options.descriptor;
+          } else {
+            const discovered = await this.discoverNetwork(envelope.networkId);
+            if (!discovered.ok) return discovered;
+            descriptor = discovered.data;
+          }
+          const usable = ensureNetworkUsableForDecrypt(descriptor);
+          if (!usable.ok) return usable;
+          const targetNode = options?.targetNode ?? descriptor.members[0]?.nodeId;
+          if (targetNode === void 0) {
+            return encErr(
+              encryptionError({
+                code: "INVALID_INPUT",
+                message: "no target node available from descriptor"
+              })
+            );
+          }
+          const receiverKey = generateRandomReceiverKey({ crypto: this.crypto });
+          const receiverPublicKey = base64Encode2(receiverKey.publicKey);
+          const receiverPublicKeyHash = canonicalHashHex(
+            this.crypto.sha256,
+            receiverPublicKey
+          );
+          const body = {
+            type: DECRYPT_FACT_TYPE,
+            targetNode,
+            networkId: envelope.networkId,
+            alg: envelope.alg,
+            keyVersion: envelope.keyVersion,
+            encryptedSymmetricKey: envelope.encryptedSymmetricKey,
+            encryptedSymmetricKeyHash: envelope.encryptedSymmetricKeyHash,
+            receiverPublicKey,
+            receiverPublicKeyHash
+          };
+          const canonicalRequest = buildCanonicalDecryptRequest({
+            crypto: this.crypto,
+            body,
+            receiverPublicKey: receiverKey.publicKey
+          });
+          const facts = buildDecryptFacts({
+            crypto: this.crypto,
+            body,
+            encryptedSymmetricKeyHash: envelope.encryptedSymmetricKeyHash,
+            receiverPublicKey: receiverKey.publicKey,
+            canonicalBody: canonicalRequest.canonicalBody
+          });
+          const built = await buildDecryptInvocation(this.crypto, this._config.signer, {
+            targetNode,
+            networkId: envelope.networkId,
+            body,
+            facts,
+            proof: capabilityProof
+          });
+          this.assertActive();
+          if (!built.ok) {
+            if (built.error.code !== "TRANSPORT_ERROR") return built;
+            return encErr(
+              encryptionError({
+                code: "INVALID_INPUT",
+                message: "Unable to build decrypt request"
+              })
+            );
+          }
+          let response;
+          try {
+            response = await this._config.transport.postDecrypt({
+              targetNode,
+              networkId: envelope.networkId,
+              authorization: built.data.authorization,
+              canonicalBody: built.data.canonicalBody,
+              signal: this.abortSignal
+            });
+            this.assertActive();
+          } catch (error) {
+            if (error instanceof import_decrypt_transport_response_error.DecryptTransportResponseError) {
+              return encErr(
+                encryptionError(
+                  error.status === 401 || error.status === 403 ? {
+                    code: "DECRYPT_DENIED",
+                    message: "Node denied decrypt request",
+                    ...error.permissionHint === void 0 ? {} : { permissionHint: error.permissionHint }
+                  } : { code: "INVALID_RESPONSE", message: "Node decrypt request failed" }
+                )
+              );
+            }
+            return encErr(
+              encryptionError({
+                code: "TRANSPORT_ERROR",
+                cause: toError2(error)
+              })
+            );
+          }
+          const verified = verifyDecryptResponse({
+            crypto: this.crypto,
+            request: body,
+            facts,
+            invocationCid: built.data.invocationCid,
+            requestBodyHash: facts.bodyHash,
+            response
+          });
+          if (!verified.ok) return verified;
+          const symmetricKey = openWrappedKey(
+            this.crypto,
+            receiverKey.privateKey,
+            verified.data
+          );
+          const plaintext = decryptEnvelopeWithKey(
+            this.crypto,
+            envelope,
+            symmetricKey
+          );
+          return encOk(plaintext);
+        } catch (error) {
+          return encErr(
+            encryptionError({
+              code: "INVALID_RESPONSE",
+              message: "Local decryption failed"
+            })
+          );
+        }
+      }
+      assertActive() {
+        this._config.assertActive?.();
+      }
+    };
+    EncryptionService.serviceName = "encryption";
   }
-  assertActive() {
-    this._config.assertActive?.();
-  }
-};
-EncryptionService.serviceName = "encryption";
+});
 
 // ../sdk-core/src/manifest.ts
-var DEFAULT_KNOWLEDGE_ROOT = "knowledge/index.md";
-var ManifestValidationError = class extends Error {
-  constructor(message) {
-    super(`Manifest validation failed: ${message}`);
-    this.name = "ManifestValidationError";
-  }
-};
-var DEFAULT_EXPIRY = "30d";
-var DEFAULT_DEFAULTS = true;
-var DEFAULT_MANIFEST_VERSION = 1;
-var DEFAULT_MANIFEST_SPACE2 = "applications";
-var SECRETS_SPACE2 = "secrets";
-var VAULT_PERMISSION_SERVICE2 = "tinycloud.vault";
-var SERVICE_SHORT_TO_LONG = Object.freeze({
-  kv: "tinycloud.kv",
-  sql: "tinycloud.sql",
-  duckdb: "tinycloud.duckdb",
-  capabilities: "tinycloud.capabilities",
-  hooks: "tinycloud.hooks",
-  encryption: "tinycloud.encryption",
-  delegation: "tinycloud.delegation"
-});
-var ENCRYPTION_PERMISSION_SERVICE2 = "tinycloud.encryption";
-var ENCRYPTION_MANIFEST_SPACE2 = "encryption";
-var SERVICE_LONG_TO_SHORT2 = Object.freeze(
-  Object.fromEntries(
-    Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
-  )
-);
-var DEFAULT_STANDARD_ENTRIES = [
-  {
-    service: "tinycloud.kv",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["get", "put", "del", "list", "metadata"]
-  },
-  {
-    service: "tinycloud.sql",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["read", "write"]
-  }
-];
-var DEFAULT_ADMIN_ENTRIES = [
-  {
-    service: "tinycloud.kv",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["get", "put", "del", "list", "metadata"]
-  },
-  {
-    service: "tinycloud.sql",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["read", "write", "schema"]
-  }
-];
-var DEFAULT_ALL_ENTRIES = [
-  {
-    service: "tinycloud.kv",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["get", "put", "del", "list", "metadata"]
-  },
-  {
-    service: "tinycloud.sql",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["read", "write", "schema"]
-  },
-  {
-    service: "tinycloud.duckdb",
-    space: DEFAULT_MANIFEST_SPACE2,
-    path: "/",
-    actions: ["read", "write"]
-  }
-];
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
@@ -14130,14 +13725,91 @@ function withCapabilitiesReadForSpaces2(resources) {
     ...[...spaces].map(capabilitiesReadPermission)
   ]);
 }
-
-// src/lib/permissions.ts
-init_constants();
-init_storage();
-init_profiles();
-init_errors();
-init_constants();
-init_space();
+var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE2, SECRETS_SPACE2, VAULT_PERMISSION_SERVICE2, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE2, ENCRYPTION_MANIFEST_SPACE2, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES;
+var init_manifest = __esm({
+  "../sdk-core/src/manifest.ts"() {
+    "use strict";
+    import_ms = __toESM(require_ms(), 1);
+    init_dist2();
+    DEFAULT_KNOWLEDGE_ROOT = "knowledge/index.md";
+    ManifestValidationError = class extends Error {
+      constructor(message) {
+        super(`Manifest validation failed: ${message}`);
+        this.name = "ManifestValidationError";
+      }
+    };
+    DEFAULT_EXPIRY = "30d";
+    DEFAULT_DEFAULTS = true;
+    DEFAULT_MANIFEST_VERSION = 1;
+    DEFAULT_MANIFEST_SPACE2 = "applications";
+    SECRETS_SPACE2 = "secrets";
+    VAULT_PERMISSION_SERVICE2 = "tinycloud.vault";
+    SERVICE_SHORT_TO_LONG = Object.freeze({
+      kv: "tinycloud.kv",
+      sql: "tinycloud.sql",
+      duckdb: "tinycloud.duckdb",
+      capabilities: "tinycloud.capabilities",
+      hooks: "tinycloud.hooks",
+      encryption: "tinycloud.encryption",
+      delegation: "tinycloud.delegation"
+    });
+    ENCRYPTION_PERMISSION_SERVICE2 = "tinycloud.encryption";
+    ENCRYPTION_MANIFEST_SPACE2 = "encryption";
+    SERVICE_LONG_TO_SHORT2 = Object.freeze(
+      Object.fromEntries(
+        Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
+      )
+    );
+    DEFAULT_STANDARD_ENTRIES = [
+      {
+        service: "tinycloud.kv",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["get", "put", "del", "list", "metadata"]
+      },
+      {
+        service: "tinycloud.sql",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["read", "write"]
+      }
+    ];
+    DEFAULT_ADMIN_ENTRIES = [
+      {
+        service: "tinycloud.kv",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["get", "put", "del", "list", "metadata"]
+      },
+      {
+        service: "tinycloud.sql",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["read", "write", "schema"]
+      }
+    ];
+    DEFAULT_ALL_ENTRIES = [
+      {
+        service: "tinycloud.kv",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["get", "put", "del", "list", "metadata"]
+      },
+      {
+        service: "tinycloud.sql",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["read", "write", "schema"]
+      },
+      {
+        service: "tinycloud.duckdb",
+        space: DEFAULT_MANIFEST_SPACE2,
+        path: "/",
+        actions: ["read", "write"]
+      }
+    ];
+  }
+});
 
 // src/lib/raw-encryption.ts
 function isRawEncryptionPermission(permission) {
@@ -14146,10 +13818,14 @@ function isRawEncryptionPermission(permission) {
 function isVerifiedRawEncryptionPermission(permission) {
   return isRawEncryptionPermission(permission) && (permission.space === void 0 || permission.space === "encryption");
 }
+var init_raw_encryption = __esm({
+  "src/lib/raw-encryption.ts"() {
+    "use strict";
+    init_manifest();
+  }
+});
 
 // src/lib/owner-did.ts
-init_constants();
-init_errors();
 import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
 function canonicalOwnerDid(did, label = "--owner") {
   const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did);
@@ -14171,34 +13847,15 @@ function rawEncryptionOwnerMatches(path, ownerDid) {
     return false;
   }
 }
+var init_owner_did = __esm({
+  "src/lib/owner-did.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+  }
+});
 
 // src/share/publishing-manifest.ts
-var SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
-var SHARE_PUBLISHING_MANIFEST = {
-  app_id: "xyz.tinycloud.share",
-  name: "TinyCloud Share publishing",
-  space: "default",
-  permissions: [
-    {
-      service: "tinycloud.capabilities",
-      path: "",
-      skipPrefix: true,
-      actions: ["tinycloud.capabilities/read"]
-    },
-    {
-      service: "tinycloud.kv",
-      path: "xyz.tinycloud.share/shares/",
-      skipPrefix: true,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/put"]
-    },
-    {
-      service: "tinycloud.kv",
-      path: "shares/",
-      skipPrefix: true,
-      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"]
-    }
-  ]
-};
 function sharePublishingPermissions() {
   return SHARE_PUBLISHING_MANIFEST.permissions.map((permission) => ({
     service: permission.service,
@@ -14207,9 +13864,57 @@ function sharePublishingPermissions() {
     actions: [...permission.actions]
   }));
 }
+var SHARE_PUBLISHING_MANIFEST_REF, SHARE_PUBLISHING_MANIFEST;
+var init_publishing_manifest = __esm({
+  "src/share/publishing-manifest.ts"() {
+    "use strict";
+    SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
+    SHARE_PUBLISHING_MANIFEST = {
+      app_id: "xyz.tinycloud.share",
+      name: "TinyCloud Share publishing",
+      space: "default",
+      permissions: [
+        {
+          service: "tinycloud.capabilities",
+          path: "",
+          skipPrefix: true,
+          actions: ["tinycloud.capabilities/read"]
+        },
+        {
+          service: "tinycloud.kv",
+          path: "xyz.tinycloud.share/shares/",
+          skipPrefix: true,
+          actions: ["tinycloud.kv/get", "tinycloud.kv/put"]
+        },
+        {
+          service: "tinycloud.kv",
+          path: "shares/",
+          skipPrefix: true,
+          actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"]
+        }
+      ]
+    };
+  }
+});
 
 // src/lib/permissions.ts
-init_types();
+import { appendFile, chmod, readFile as readFile2 } from "fs/promises";
+import { join as join3 } from "path";
+import {
+  buildPermissionRequestArtifact,
+  isPermissionRequestArtifact
+} from "@tinycloud/operations/artifacts";
+import {
+  additionalDelegationsPath as sharedAdditionalDelegationsPath,
+  authRequestsPath as sharedAuthRequestsPath,
+  profileStoreMetadataPath,
+  readAdditionalDelegations,
+  readAuthRequests,
+  refuseWriteToDeletedProfile,
+  updateProfileStore,
+  withProfileLock,
+  writeJsonAtomic
+} from "@tinycloud/operations/state";
 function isCompatiblePermissionRequestArtifact(value) {
   return isPermissionRequestArtifact(value) || isNodeSdkAuthRequestArtifact(value);
 }
@@ -14225,10 +13930,10 @@ function permissionRequestsPath(profile) {
   return sharedAuthRequestsPath(profile);
 }
 function grantHistoryPath(profile) {
-  return join4(PROFILES_DIR, profile, "auth-grants.jsonl");
+  return join3(PROFILES_DIR, profile, "auth-grants.jsonl");
 }
 function localGrantArtifactsPath(profile) {
-  return join4(PROFILES_DIR, profile, "auth-grant-artifacts.json");
+  return join3(PROFILES_DIR, profile, "auth-grant-artifacts.json");
 }
 function createPermissionRequestArtifact(params) {
   return buildPermissionRequestArtifact({
@@ -14270,8 +13975,8 @@ async function loadLocalGrantArtifacts(profile) {
 }
 async function appendLocalGrantArtifact(profile, delegation) {
   await ProfileManager.ensureProfileDir(profile);
-  await withProfileLock2(profile, async () => {
-    await refuseWriteToDeletedProfile2(profile);
+  await withProfileLock(profile, async () => {
+    await refuseWriteToDeletedProfile(profile);
     const records = await loadLocalGrantArtifacts(profile);
     if (records.some((record2) => record2.delegationCid === delegation.cid)) return;
     await writeJsonAtomic(localGrantArtifactsPath(profile), [
@@ -14289,6 +13994,18 @@ async function appendAdditionalDelegations(profile, entries) {
 }
 async function appendAdditionalDelegation(profile, entry) {
   await appendAdditionalDelegations(profile, [entry]);
+}
+async function appendAdditionalDelegationIfUnexpired(profile, entry, expiresAt) {
+  let accepted = true;
+  await withProfileLock(profile, async () => {
+    const before = await loadAdditionalDelegations(profile);
+    await appendAdditionalDelegation(profile, entry);
+    if (expiresAt !== void 0 && expiresAt.getTime() <= Date.now()) {
+      await writeSharedRecords(profile, "additional-delegations", before);
+      accepted = false;
+    }
+  });
+  return accepted;
 }
 async function removeStoredDelegations(profile, cid) {
   return updateProfileStore(profile, "additional-delegations", (records) => {
@@ -14309,7 +14026,7 @@ async function loadPermissionRequestArtifacts(profile) {
   return raw.filter(isCompatiblePermissionRequestArtifact);
 }
 async function appendPermissionRequestArtifact(profile, artifact) {
-  await withProfileLock2(profile, async () => {
+  await withProfileLock(profile, async () => {
     const existing = (await readAuthRequests(profile)).filter(isCompatiblePermissionRequestArtifact);
     const next = existing.filter((item) => item.requestId !== artifact.requestId);
     next.push(artifact);
@@ -14317,7 +14034,7 @@ async function appendPermissionRequestArtifact(profile, artifact) {
   });
 }
 async function writeSharedRecords(profile, store, entries) {
-  await refuseWriteToDeletedProfile2(profile);
+  await refuseWriteToDeletedProfile(profile);
   const path = store === "additional-delegations" ? additionalDelegationsPath(profile) : permissionRequestsPath(profile);
   await writeJsonAtomic(path, entries);
   await writeJsonAtomic(profileStoreMetadataPath(profile, store), { formatVersion: 1 });
@@ -14359,7 +14076,7 @@ async function appendGrantHistory(profile, entry) {
   }) + "\n";
   const path = grantHistoryPath(profile);
   await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-  await chmod2(path, PRIVATE_FILE_MODE);
+  await chmod(path, PRIVATE_FILE_MODE);
 }
 async function readGrantHistory(profile) {
   const path = grantHistoryPath(profile);
@@ -14600,11 +14317,24 @@ function serviceFromActions(actions) {
   const first = actions[0] ?? "tinycloud.unknown/read";
   return first.includes("/") ? first.slice(0, first.indexOf("/")) : "tinycloud.unknown";
 }
+var init_permissions = __esm({
+  "src/lib/permissions.ts"() {
+    "use strict";
+    init_manifest();
+    init_constants();
+    init_storage();
+    init_profiles();
+    init_errors();
+    init_constants();
+    init_space();
+    init_raw_encryption();
+    init_owner_did();
+    init_publishing_manifest();
+    init_types();
+  }
+});
 
 // src/auth/session-expired.ts
-init_constants();
-init_errors();
-var SESSION_EXPIRED_REASON = "session_expired";
 function signInAgainHint(profileName2, posture) {
   if (posture === "local-owner-key") {
     return `Sign in again with: tc --profile ${profileName2} auth login --method local`;
@@ -14629,9 +14359,43 @@ function withSignInHint(error, profileName2, posture) {
     hint: signInAgainHint(profileName2, posture)
   });
 }
+var SESSION_EXPIRED_REASON;
+var init_session_expired = __esm({
+  "src/auth/session-expired.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    SESSION_EXPIRED_REASON = "session_expired";
+  }
+});
+
+// src/auth/delegation-expiry.ts
+function delegationExpiredError() {
+  return new CLIError("DELEGATION_EXPIRED", "The delegation has expired.", ExitCode.ERROR);
+}
+function isActivationExpiry(error) {
+  return typeof error === "object" && error !== null && "reason" in error && error.reason === "expired";
+}
+var init_delegation_expiry = __esm({
+  "src/auth/delegation-expiry.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+  }
+});
 
 // src/lib/sdk.ts
-init_warnings();
+var sdk_exports = {};
+__export(sdk_exports, {
+  bootstrapDelegatedSession: () => bootstrapDelegatedSession,
+  createSDKInstance: () => createSDKInstance,
+  ensureAuthenticated: () => ensureAuthenticated,
+  jwkHasPrivateParameter: () => jwkHasPrivateParameter,
+  restoreProfileSessionNode: () => restoreProfileSessionNode,
+  selectSignerJwk: () => selectSignerJwk,
+  storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
+});
+import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -14656,6 +14420,11 @@ function signerJwkForProfile(profileName2, sessionJwk, key) {
       hint: `Sign in again with: tc --profile ${profileName2} auth login --method openkey`
     }
   );
+}
+function signedLifetimePassed(delegation) {
+  const authorization = delegation.delegationHeader?.Authorization;
+  const expiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : void 0;
+  return expiry !== void 0 && expiry.getTime() <= Date.now();
 }
 async function restoreProfileSession(node, profileName2, profile, sessionData) {
   try {
@@ -14703,6 +14472,24 @@ async function restoreProfileSessionNode(ctx) {
       return { unavailable: "session_expired" };
     }
     return { unavailable: "session_invalid" };
+  }
+}
+async function storedSessionVerifiesLocally(profileName2) {
+  const profile = await ProfileManager.getProfile(profileName2).catch(() => null);
+  if (profile === null) return true;
+  const local = profile.authMethod === "local" && typeof profile.privateKey === "string";
+  try {
+    const session = await ProfileManager.getSession(profileName2);
+    if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
+    const key = await ProfileManager.getKey(profileName2);
+    const node = new TinyCloudNode({
+      host: profile.host ?? DEFAULT_HOST,
+      ...local ? { privateKey: profile.privateKey } : {}
+    });
+    await restoreProfileSession(node, profileName2, profile, persistedSessionData(profileName2, profile, session, key));
+    return true;
+  } catch {
+    return false;
   }
 }
 async function createSDKInstance(ctx, options) {
@@ -14753,7 +14540,6 @@ async function createSDKInstance(ctx, options) {
   }
   return node;
 }
-var BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
 async function bootstrapDelegatedSession(ctx, delegation) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
@@ -14779,6 +14565,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
         ExitCode.ERROR
       );
     }
+    if (signedLifetimePassed(delegation)) throw delegationExpiredError();
     const jwk = signerJwkForProfile(ctx.profile, void 0, await ProfileManager.getKey(ctx.profile));
     const session = {
       delegationHeader: delegation.delegationHeader,
@@ -14797,6 +14584,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
     return { previousProfile, profile, session };
   });
   const abandon = async (cause) => {
+    const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation) ? delegationExpiredError() : cause;
     const note = await ProfileManager.withLock(ctx.profile, async () => {
       const profile = await ProfileManager.getProfile(ctx.profile).catch((error) => {
         if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
@@ -14811,7 +14599,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`
     ));
-    throw annotate(cause, note);
+    throw annotate(reported, note);
   };
   let node;
   try {
@@ -14869,11 +14657,435 @@ async function ensureAuthenticated(ctx, options) {
   }
   return createSDKInstance(ctx, options);
 }
+var BOOTSTRAP_PROFILE_FIELDS;
+var init_sdk = __esm({
+  "src/lib/sdk.ts"() {
+    "use strict";
+    init_profiles();
+    init_types();
+    init_errors();
+    init_constants();
+    init_permissions();
+    init_session_expired();
+    init_warnings();
+    init_delegation_expiry();
+    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
+  }
+});
+
+// src/lib/host.ts
+var host_exports = {};
+__export(host_exports, {
+  completeDeferredLocalDiscovery: () => completeDeferredLocalDiscovery,
+  discoverLocalNodeHost: () => discoverLocalNodeHost,
+  isRootAuthority: () => isRootAuthority,
+  ownerDidFromSpaceUri: () => ownerDidFromSpaceUri,
+  profileLocalNodeIdentityStore: () => profileLocalNodeIdentityStore,
+  resolveHostSpace: () => resolveHostSpace,
+  spaceNameFromUri: () => spaceNameFromUri,
+  unhostedSpaceError: () => unhostedSpaceError
+});
+import {
+  discoverLocalTinyCloudNode
+} from "@tinycloud/sdk-core";
+function profileLocalNodeIdentityStore(profileName2) {
+  return {
+    get: async (url) => {
+      const profile = await ProfileManager.getProfile(profileName2).catch(
+        () => null
+      );
+      return profile?.pinnedLocalNodeDids?.[url];
+    },
+    set: async (url, nodeDid) => {
+      if (!await ProfileManager.profileExists(profileName2)) return;
+      await ProfileManager.updateProfile(profileName2, (profile) => ({
+        ...profile,
+        pinnedLocalNodeDids: {
+          ...profile.pinnedLocalNodeDids,
+          [url]: nodeDid
+        }
+      }));
+    }
+  };
+}
+async function discoverLocalNodeHost(profileName2, options) {
+  const profile = await ProfileManager.getProfile(profileName2).catch(() => null);
+  if (profile?.autoDiscoverLocalNode === false) return { host: null, deferred: false };
+  if (!profile?.localNodeUrl && !profile?.localLinkName) return { host: null, deferred: false };
+  if (options.awaitStoredSession) {
+    const { storedSessionVerifiesLocally: storedSessionVerifiesLocally2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
+    if (!await storedSessionVerifiesLocally2(profileName2)) return { host: null, deferred: true };
+  }
+  const discovered = await discoverLocalTinyCloudNode({
+    localNodeUrl: profile?.localNodeUrl,
+    localLinkName: profile?.localLinkName,
+    expectedNodeDid: profile?.expectedNodeDid,
+    identityStore: profileLocalNodeIdentityStore(profileName2)
+  });
+  return { host: discovered?.url ?? null, deferred: false };
+}
+async function completeDeferredLocalDiscovery(ctx) {
+  const deferred = ctx.localDiscovery;
+  if (deferred === void 0) return;
+  delete ctx.localDiscovery;
+  if (ctx.host !== deferred.deferredFrom) return;
+  const discovered = await discoverLocalNodeHost(ctx.profile, { awaitStoredSession: false });
+  if (discovered.host !== null) ctx.host = discovered.host;
+}
+function canonicalizeAddress2(address) {
+  const trimmed = address.trim();
+  return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
+}
+async function resolveLocalAddress(profile, profileName2) {
+  const session = await ProfileManager.getSession(profileName2);
+  const sessAddr = session?.address;
+  if (typeof sessAddr === "string" && sessAddr.length > 0) {
+    return canonicalizeAddress2(sessAddr);
+  }
+  if (profile.address) return canonicalizeAddress2(profile.address);
+  if (profile.ownerDid) {
+    const match = profile.ownerDid.match(/^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/);
+    if (match) return canonicalizeAddress2(match[1]);
+  }
+  return null;
+}
+function ownerAddressFromSpaceUri(spaceUri) {
+  const match = spaceUri.match(/^tinycloud:pkh:eip155:\d+:(0x[a-fA-F0-9]{40}):/);
+  return match ? canonicalizeAddress2(match[1]) : null;
+}
+function ownerDidFromSpaceUri(spaceUri) {
+  const match = spaceUri.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
+  if (!match) return null;
+  return `did:pkh:eip155:${match[1]}:${canonicalizeAddress2(match[2])}`;
+}
+async function isRootAuthority(spaceUri, profileName2) {
+  const profile = await ProfileManager.getProfile(profileName2);
+  if (resolveProfilePosture(profile) === "delegate-session") return false;
+  const ownerAddr = ownerAddressFromSpaceUri(spaceUri);
+  if (!ownerAddr) return false;
+  const selfAddr = await resolveLocalAddress(profile, profileName2);
+  return selfAddr !== null && selfAddr === ownerAddr;
+}
+function spaceNameFromUri(spaceUri) {
+  return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
+}
+async function unhostedSpaceError(error, spaceUri, profileName2) {
+  if (!spaceUri) return null;
+  const status = error.meta?.status;
+  const isUnhosted = status === 404 && /space not found/i.test(error.message);
+  if (!isUnhosted) return null;
+  const spaceName = spaceNameFromUri(spaceUri);
+  const owner = await isRootAuthority(spaceUri, profileName2);
+  const hint = owner ? [
+    "You are the owner. Host it once:",
+    `  tc space host ${spaceName}`,
+    "Then retry."
+  ].join("\n") : [
+    "You are a delegate and CANNOT host this space \u2014 only its owner can.",
+    "Emit a host request:",
+    `  tc space host-request ${spaceName} --emit ./host-request.json`,
+    "Send it to the owner; they run `tc space host` and confirm. Then retry."
+  ].join("\n");
+  const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
+  return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
+}
+async function resolveHostSpace(name, profileName2) {
+  const resolved = await resolveSpaceUri(name, profileName2);
+  if (!resolved) {
+    throw new Error(`Could not resolve a space for "${name}".`);
+  }
+  return resolved;
+}
+var init_host = __esm({
+  "src/lib/host.ts"() {
+    "use strict";
+    init_profiles();
+    init_constants();
+    init_types();
+    init_errors();
+    init_space();
+  }
+});
+
+// src/config/profiles.ts
+import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
+import { join as join4 } from "path";
+import {
+  profilePath,
+  readSession,
+  recordProfileDeletion,
+  refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
+  removeSession,
+  withProfileLock as withProfileLock2,
+  writeSession
+} from "@tinycloud/operations/state";
+var ProfileManager;
+var init_profiles = __esm({
+  "src/config/profiles.ts"() {
+    "use strict";
+    init_constants();
+    init_storage();
+    init_errors();
+    ProfileManager = class _ProfileManager {
+      // ── Initialization ──────────────────────────────────────────────────
+      /**
+       * Runs `action` holding the profile's store lock (shared with operations
+       * and MCP). Reentrant, so the writers below can be called inside it; hold
+       * it around a whole read-modify-write, not just each write.
+       */
+      static async withLock(name, action, options) {
+        return withProfileLock2(name, action, options);
+      }
+      /**
+       * Read-modify-write of profile.json under the profile lock, so concurrent
+       * updates (another command, a login commit) are never erased.
+       */
+      static async updateProfile(name, update) {
+        return _ProfileManager.withLock(name, async () => {
+          const next = update(await _ProfileManager.getProfile(name));
+          await _ProfileManager.setProfile(name, next);
+          return next;
+        });
+      }
+      /**
+       * Creates ~/.tinycloud/ and ~/.tinycloud/profiles/ if they don't exist and
+       * (re)sets both to 0700: older releases created them 0775.
+       */
+      static async ensureConfigDir() {
+        for (const directory of [CONFIG_DIR, PROFILES_DIR]) {
+          await ensureDir(directory);
+          await chmod2(directory, PRIVATE_DIR_MODE);
+        }
+      }
+      /** Owner-only profile directory (0700), created or tightened before any write into it. */
+      static async ensureProfileDir(name) {
+        await _ProfileManager.ensureConfigDir();
+        const profileDir = join4(PROFILES_DIR, name);
+        await ensureDir(profileDir);
+        await chmod2(profileDir, PRIVATE_DIR_MODE);
+        return profileDir;
+      }
+      // ── Global config ───────────────────────────────────────────────────
+      /**
+       * Reads config.json. Returns a default config if the file is missing.
+       */
+      static async getConfig() {
+        const config = await readJson(CONFIG_FILE);
+        if (!config) {
+          return { defaultProfile: DEFAULT_PROFILE, version: 1 };
+        }
+        return config;
+      }
+      /**
+       * Writes the global config to config.json.
+       */
+      static async setConfig(config) {
+        await _ProfileManager.ensureConfigDir();
+        await writeJson(CONFIG_FILE, config);
+      }
+      // ── Profile CRUD ────────────────────────────────────────────────────
+      /**
+       * Returns the profile config for the given name.
+       * Throws CLIError if the profile doesn't exist.
+       */
+      static async getProfile(name) {
+        const profilePath4 = join4(PROFILES_DIR, name, "profile.json");
+        const profile = await readJson(profilePath4);
+        if (!profile) {
+          throw new CLIError(
+            "PROFILE_NOT_FOUND",
+            `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`
+          );
+        }
+        return profile;
+      }
+      /**
+       * Saves a profile config under the profile lock, creating the profile
+       * directory if needed. Use `updateProfile` to change an existing profile.
+       */
+      static async setProfile(name, data) {
+        await _ProfileManager.withLock(name, async () => {
+          await writeJson(join4(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+        });
+      }
+      /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
+      static async removeProfileConfig(name) {
+        await _ProfileManager.withLock(name, () => rm2(join4(PROFILES_DIR, name, "profile.json"), { force: true }));
+      }
+      /**
+       * Returns true if a profile directory exists.
+       */
+      static async profileExists(name) {
+        return fileExists(join4(PROFILES_DIR, name, "profile.json"));
+      }
+      /**
+       * Returns an array of profile directory names.
+       */
+      static async listProfiles() {
+        return listDirs(PROFILES_DIR);
+      }
+      /**
+       * Deletes a profile. Its key, session, settings, stores and cache are
+       * removed while holding the profile lock, so another writer's critical
+       * section never sees them vanish midway: session and key first, settings
+       * last, so a crash midway never leaves a session or key without its
+       * profile. The deletion is then recorded, so a store write that waited for
+       * the lock meanwhile refuses rather than recreating a profile with only a
+       * session in it. `.lock` itself is left to the lock's release; the
+       * then-empty directory is removed afterwards unless another writer took
+       * the lock (or wrote) meanwhile. A profile directory that is a symlink is
+       * unlinked, its target left alone.
+       * Throws if the name is not one path segment or names the default profile.
+       */
+      static async deleteProfile(name) {
+        let profileDir;
+        try {
+          profileDir = profilePath(name);
+        } catch {
+          throw new CLIError(
+            "INVALID_PROFILE_NAME",
+            `Invalid profile name "${name}": a profile name is one path segment (no "/", "\\", "." or "..").`,
+            ExitCode.USAGE_ERROR
+          );
+        }
+        const config = await _ProfileManager.getConfig();
+        if (config.defaultProfile === name) {
+          throw new CLIError(
+            "PROFILE_DELETE_DEFAULT",
+            `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`
+          );
+        }
+        const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
+          if (error.code === "ENOENT") return "missing";
+          throw error;
+        });
+        if (kind === "missing") return;
+        if (kind === "link") {
+          await rm2(profileDir, { force: true });
+          return;
+        }
+        await _ProfileManager.withLock(name, async () => {
+          for (const file of ["session.json", "key.json"]) await rm2(join4(profileDir, file), { force: true });
+          for (const entry of await readdir2(profileDir)) {
+            if (entry !== ".lock" && entry !== "profile.json") await rm2(join4(profileDir, entry), { recursive: true, force: true });
+          }
+          await rm2(join4(profileDir, "profile.json"), { force: true });
+          await recordProfileDeletion(name);
+        });
+        await rmdir(profileDir).catch((error) => {
+          if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
+        });
+      }
+      // ── Key management ──────────────────────────────────────────────────
+      /**
+       * Returns the parsed JWK for a profile, or null if no key exists.
+       */
+      static async getKey(name) {
+        return readJson(join4(PROFILES_DIR, name, "key.json"));
+      }
+      /**
+       * Saves a JWK key under the profile lock (0600, in an owner-only profile
+       * directory). Refused (PROFILE_NOT_FOUND) if the profile was deleted while
+       * this waited for the lock, rather than leaving a key-only profile.
+       */
+      static async setKey(name, jwk) {
+        await _ProfileManager.withLock(name, async () => {
+          await refuseWriteToDeletedProfile2(name);
+          await writeJson(join4(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+        });
+      }
+      /** Removes key.json under the profile lock (rollback of a key a failed login created). */
+      static async removeKey(name) {
+        await _ProfileManager.withLock(name, () => rm2(join4(PROFILES_DIR, name, "key.json"), { force: true }));
+      }
+      // ── Session management ──────────────────────────────────────────────
+      /**
+       * Returns the parsed session for a profile, or null if none exists.
+       */
+      static async getSession(name) {
+        return readSession(name);
+      }
+      /**
+       * Saves session data for a profile.
+       */
+      static async setSession(name, session) {
+        await writeSession(name, session);
+      }
+      /**
+       * Removes the session file for a profile.
+       */
+      static async clearSession(name) {
+        await removeSession(name);
+      }
+      // ── Cache management ────────────────────────────────────────────────
+      /**
+       * Returns the profile's cache directory (share history lives here),
+       * created or tightened to 0700.
+       */
+      static async getCacheDir(name) {
+        const cacheDir = join4(await _ProfileManager.ensureProfileDir(name), "cache");
+        await ensureDir(cacheDir);
+        await chmod2(cacheDir, PRIVATE_DIR_MODE);
+        return cacheDir;
+      }
+      // ── Resolution helpers ──────────────────────────────────────────────
+      /**
+       * Resolves the full CLI context from flags, env vars, and config.
+       *
+       * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
+       * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+       *
+       * Local-node discovery (TC-106) only runs when no explicit host was given
+       * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
+       * after DID verification against the profile's pinned identity, prefers one
+       * over the stored/default host. For session-using commands, it verifies the
+       * stored session locally before probing. Loopback requires an explicit
+       * `localNodeUrl`; disable discovery with `autoDiscoverLocalNode: false`.
+       */
+      static async resolveContext(options, settings = {}) {
+        const config = await _ProfileManager.getConfig();
+        const profile = options.profile ?? process.env.TC_PROFILE ?? config.defaultProfile ?? DEFAULT_PROFILE;
+        let profileHost;
+        try {
+          const profileConfig = await _ProfileManager.getProfile(profile);
+          profileHost = profileConfig.host;
+        } catch {
+        }
+        const explicitHost = options.host ?? process.env.TC_HOST;
+        let host = explicitHost ?? profileHost ?? DEFAULT_HOST;
+        let localDiscovery;
+        if (explicitHost === void 0) {
+          const { discoverLocalNodeHost: discoverLocalNodeHost2 } = await Promise.resolve().then(() => (init_host(), host_exports));
+          const explicitKey = Boolean(options.privateKey || process.env.TC_PRIVATE_KEY);
+          const discovered = await discoverLocalNodeHost2(profile, {
+            awaitStoredSession: settings.storedSession !== "unused" && !explicitKey
+          });
+          if (discovered.host !== null) host = discovered.host;
+          if (discovered.deferred) localDiscovery = { deferredFrom: host };
+        }
+        setActiveProfileName(profile);
+        return {
+          profile,
+          host,
+          verbose: options.verbose ?? false,
+          noCache: options.noCache ?? false,
+          quiet: options.quiet ?? false,
+          ...localDiscovery === void 0 ? {} : { localDiscovery }
+        };
+      }
+    };
+  }
+});
 
 // src/commands/account.ts
+init_profiles();
+init_constants();
+init_sdk();
 init_errors();
 init_formatter();
 init_theme();
+import open from "open";
+import { readFile as readFile3 } from "fs/promises";
 var ACCOUNT_BILLING_URL = "https://account.tinycloud.xyz/billing";
 function registerAccountCommand(program) {
   const account = program.command("account").description("Account applications, spaces, delegations, and billing");
@@ -15192,7 +15404,7 @@ import { spawn } from "child_process";
 import { mkdir as mkdir3, readFile as readFile5, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname2 } from "path";
 import { createInterface as createInterface2 } from "readline";
-import { grantAuthRequest, principalDidEquals } from "@tinycloud/node-sdk";
+import { grantAuthRequest, principalDidEquals, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 
 // src/lib/profile-replicas.ts
@@ -19382,7 +19594,7 @@ async function localKeySignIn(options) {
 init_errors();
 init_constants();
 init_types();
-import { NodeWasmBindings } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 
 // src/lib/duration.ts
 function parseDuration(input) {
@@ -19414,6 +19626,9 @@ function parseExpiry2(input) {
 
 // src/auth/scoped-login.ts
 init_space();
+init_manifest();
+init_raw_encryption();
+init_owner_did();
 var CAPABILITIES_READ = "tinycloud.capabilities/read";
 var CLOCK_SKEW_MS = 3e4;
 var SIGNED_RECAP = "signed-recap";
@@ -19467,6 +19682,13 @@ function expectedOwnerFor(profileName2, profile, requested) {
 }
 function sessionExpiresAt(session) {
   if (session === null) return null;
+  const hasProof = ["siwe", "signature", "address", "chainId"].some((field) => session[field] !== void 0);
+  const header = session.delegationHeader;
+  const hasDelegationHeader = typeof header === "object" && header !== null;
+  const authorization = hasDelegationHeader ? header.Authorization : void 0;
+  if (!hasProof && hasDelegationHeader) {
+    return typeof authorization === "string" ? signedCompactUcanExpiry2(authorization)?.toISOString() ?? null : null;
+  }
   const candidates = [
     session.expiresAt,
     session.expiry,
@@ -19474,7 +19696,8 @@ function sessionExpiresAt(session) {
     typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : void 0
   ];
   const value = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
-  return typeof value === "string" ? new Date(value).toISOString() : null;
+  if (typeof value === "string") return new Date(value).toISOString();
+  return null;
 }
 function ownerSpaceId(space, ownerDid) {
   return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;
@@ -20236,12 +20459,17 @@ async function loginWithDeviceAuthorization(input) {
 }
 
 // src/commands/auth.ts
+init_raw_encryption();
+init_owner_did();
+init_publishing_manifest();
 init_theme();
 
 // src/commands/auth-grants.ts
 init_profiles();
 init_types();
 init_constants();
+init_permissions();
+init_sdk();
 import { TinyCloudNode as TinyCloudNode2 } from "@tinycloud/node-sdk";
 import { DelegationRequestBindingSchema, PermissionEntrySchema } from "@tinycloud/operations/artifacts";
 import {
@@ -20258,6 +20486,7 @@ init_constants();
 init_errors();
 import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer } from "@tinycloud/operations/delegation-binding";
+init_permissions();
 function normalizeDid(input) {
   const trimmed = input.trim();
   const fragment = trimmed.indexOf("#");
@@ -20658,7 +20887,11 @@ function registerAuthGrantsCommand(auth, options = {}) {
 }
 
 // src/commands/auth.ts
+init_sdk();
+init_session_expired();
+init_delegation_expiry();
 init_space();
+init_permissions();
 function resolveOpenKeyHost(profile) {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
@@ -20708,7 +20941,7 @@ function registerAuthCommand(program, options) {
         );
       }
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const owner = options2.owner === void 0 ? void 0 : canonicalOwnerDid(options2.owner);
       const permissions = options2.manifest ? await loadManifestPermissions(options2.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options2.device === true }) : void 0;
       const persistHost = globalOpts.host !== void 0;
@@ -20781,7 +21014,7 @@ function registerAuthCommand(program, options) {
   auth.command("logout").description("Clear the local session and remove local replicas. Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.").option("--keep-replicas", "Keep this profile's local replicas").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       await ProfileManager.getProfile(ctx.profile);
       await ProfileManager.clearSession(ctx.profile);
       const replicasRemoved = options2.keepReplicas ? [] : await removeProfileReplicas(ctx.profile);
@@ -20799,7 +21032,7 @@ function registerAuthCommand(program, options) {
   auth.command("rotate").description("Rotate the active profile session key").option("--paste", "Use manual paste mode instead of browser callback").option("--no-popup", "Print the OpenKey URL without opening a browser").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       await rotateAuthKey(ctx.profile, ctx.host, {
         paste: options2.paste,
         noPopup: options2.popup === false
@@ -20811,7 +21044,7 @@ function registerAuthCommand(program, options) {
   auth.command("status").description("Show current authentication state").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const hasKey = await ProfileManager.getKey(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
       let profile;
@@ -20870,7 +21103,7 @@ function registerAuthCommand(program, options) {
   ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
       const profile = await ProfileManager.getProfile(ctx.profile);
       if (options2.device && (!options2.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
@@ -21082,6 +21315,20 @@ function registerAuthCommand(program, options) {
         throw refusal;
       }
       const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals(signedAudience, node.sessionDid);
+      let importExpiry = imported.delegation.expiry;
+      let signedExpiry;
+      if (!targetsSessionKey && kind === "compact") {
+        signedExpiry = signedCompactUcanExpiry3(imported.delegation.delegationHeader.Authorization);
+        if (signedExpiry === void 0 || importExpiry.getTime() !== signedExpiry.getTime()) {
+          throw new CLIError(
+            "DELEGATION_REJECTED",
+            "Imported delegation was rejected (authority_invalid). No grant was stored.",
+            ExitCode.ERROR
+          );
+        }
+        if (signedExpiry.getTime() <= Date.now()) throw delegationExpiredError();
+        importExpiry = signedExpiry;
+      }
       let activated = false;
       let permissions = imported.permissions;
       if (targetsSessionKey) {
@@ -21095,7 +21342,7 @@ function registerAuthCommand(program, options) {
         } catch (error) {
           const candidate = error !== null && typeof error === "object" && "reason" in error ? error.reason : void 0;
           const reason = typeof candidate === "string" && STORED_GRANT_SKIP_REASONS.includes(candidate) ? candidate : "invalid";
-          const refusal = new CLIError(
+          const refusal = isActivationExpiry(error) ? delegationExpiredError() : new CLIError(
             "DELEGATION_REJECTED",
             `Imported delegation was rejected (${reason}). No grant was stored.`,
             ExitCode.ERROR
@@ -21104,19 +21351,27 @@ function registerAuthCommand(program, options) {
           throw refusal;
         }
         await appendAdditionalDelegation(ctx.profile, record2);
+        importExpiry = record2.delegation.expiry;
         permissions = record2.permissions;
         activated = true;
       } else {
-        await appendAdditionalDelegation(ctx.profile, storedAdditionalDelegation(
-          imported.delegation,
+        const record2 = storedAdditionalDelegation(
+          { ...imported.delegation, expiry: importExpiry },
           imported.permissions
-        ));
+        );
+        if (!targetsSessionKey && kind === "compact") {
+          if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record2, signedExpiry)) {
+            throw delegationExpiredError();
+          }
+        } else {
+          await appendAdditionalDelegation(ctx.profile, record2);
+        }
       }
       await appendGrantHistory(ctx.profile, {
         addedCaps: permissions,
         source: "cli",
         delegationCid: imported.delegation.cid,
-        expiry: imported.delegation.expiry.toISOString()
+        expiry: importExpiry.toISOString()
       });
       outputJson({
         imported: true,
@@ -21125,7 +21380,7 @@ function registerAuthCommand(program, options) {
         requestId: imported.requestId ?? null,
         delegationCid: imported.delegation.cid,
         permissions,
-        expiry: imported.delegation.expiry.toISOString()
+        expiry: importExpiry.toISOString()
       });
     } catch (error) {
       handleError(error);
@@ -21276,7 +21531,7 @@ function registerAuthCommand(program, options) {
   auth.command("whoami").description("Show identity information").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
       const authenticated = session !== null;
@@ -22190,7 +22445,7 @@ init_errors();
 function registerContextCommand(program) {
   program.command("context").description("Report selected identity, host, space and local session state as JSON (does not test access)").option("--space <name|uri>", "Resolve this space in the selected profile").action(async (options, cmd) => {
     try {
-      const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
+      const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals(), { storedSession: "unused" });
       const profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
       const spaceId = await resolveSpaceUri(options.space, ctx.profile) ?? (typeof session?.spaceId === "string" ? session.spaceId : profile.spaceId ?? null);
@@ -22223,6 +22478,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
+init_sdk();
 function normalizeDid2(input) {
   const normalized = input.trim();
   const fragmentIndex = normalized.indexOf("#");
@@ -22446,9 +22702,10 @@ function registerDoctorCommand(program) {
 init_profiles();
 init_formatter();
 init_errors();
+init_sdk();
+init_theme();
 import { readFile as readFile6, writeFile as writeFile3 } from "fs/promises";
 import { resolve } from "path";
-init_theme();
 function registerDuckdbCommand(program) {
   const duckdb = program.command("duckdb").description("DuckDB database operations");
   duckdb.command("query <sql>").description("Run a SELECT query").option("--db <name>", "Database name", "default").option("--params <json>", "Bind parameters as JSON array").action(async (sqlStr, options, cmd) => {
@@ -22602,12 +22859,13 @@ init_constants();
 init_profiles();
 init_errors();
 init_formatter();
+init_publishing_manifest();
 function registerEnableCommand(program) {
   const enable = program.command("enable").description("Enable a narrowly scoped TinyCloud service");
   enable.command("share").description("Approve Share publishing scope through OpenKey device authorization (same as `tc auth login --device --manifest builtin:share-publishing`). Use a dedicated profile, e.g. `tc init --name publisher --key-only && tc --profile publisher enable share`; keep existing profiles for their apps.").option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, command) => {
     try {
       const globalOptions = command.optsWithGlobals();
-      const context = await ProfileManager.resolveContext(globalOptions);
+      const context = await ProfileManager.resolveContext(globalOptions, { storedSession: "unused" });
       const { profile, result } = await loginWithDeviceAuthorization({
         profileName: context.profile,
         nodeOrigin: context.host,
@@ -22772,6 +23030,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
+init_sdk();
 init_space();
 init_host();
 init_theme();
@@ -22964,13 +23223,14 @@ function registerKvCommand(program) {
 
 // src/commands/manifest.ts
 init_profiles();
-import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
-import { readFile as readFile8 } from "fs/promises";
+init_sdk();
 init_space();
 init_formatter();
 init_errors();
 init_constants();
 init_theme();
+import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
+import { readFile as readFile8 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
   const manifest = program.command("manifest").description("Inspect TinyCloud app manifests");
@@ -23114,7 +23374,7 @@ function registerNodeCommand(program) {
   node.command("health").description("Check node health").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const start = Date.now();
       const response = await fetch(`${ctx.host}/healthz`);
       const latencyMs = Date.now() - start;
@@ -23125,7 +23385,7 @@ function registerNodeCommand(program) {
       });
     } catch (error) {
       if (error instanceof TypeError && error.message.includes("fetch")) {
-        outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals())).host, error: "Connection refused" });
+        outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals(), { storedSession: "unused" })).host, error: "Connection refused" });
       } else {
         handleError(error);
       }
@@ -23134,7 +23394,7 @@ function registerNodeCommand(program) {
   node.command("version").description("Get node version").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const response = await fetch(`${ctx.host}/info`);
       if (!response.ok) {
         throw new CLIError("NODE_ERROR", `Node returned ${response.status}`, ExitCode.NODE_ERROR);
@@ -23148,7 +23408,7 @@ function registerNodeCommand(program) {
   node.command("status").description("Combined health and version info").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const start = Date.now();
       const [healthRes, versionRes] = await Promise.allSettled([
         fetch(`${ctx.host}/healthz`),
@@ -23267,7 +23527,7 @@ function registerProfileCommand(program) {
   profile.command("show [name]").description("Show profile details").action(async (name, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const profileName2 = name ?? ctx.profile;
       const p = await ProfileManager.getProfile(profileName2);
       const hasKey = await ProfileManager.getKey(profileName2) !== null;
@@ -23331,7 +23591,7 @@ Examples:
       const ctx = await ProfileManager.resolveContext({
         ...globalOpts,
         profile: options.profile ?? globalOpts.profile
-      });
+      }, { storedSession: "unused" });
       const profileName2 = ctx.profile;
       if (!options.unset && (name === void 0 || name === "")) {
         throw new CLIError(
@@ -23907,6 +24167,8 @@ import {
   secretCapabilityAction
 } from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
+init_sdk();
+init_session_expired();
 init_space();
 init_types();
 var SECRETS_SPACE3 = "secrets";
@@ -24010,6 +24272,8 @@ async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfi
           { hint: scopedSecretLoginHint(ctx.profile) }
         );
       }
+      const { completeDeferredLocalDiscovery: completeDeferredLocalDiscovery2 } = await Promise.resolve().then(() => (init_host(), host_exports));
+      await completeDeferredLocalDiscovery2(ctx);
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
         () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition })
@@ -24104,10 +24368,16 @@ async function canonicalSecretGet(params, collect) {
   let ownerNode;
   if (!auth?.privateKey) {
     const profile2 = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile2?.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+    if (profile2) {
+      const posture = resolveProfilePosture(profile2);
       const session = await ProfileManager.getSession(params.ctx.profile);
-      if (!session || isStoredSessionExpired(session)) {
-        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+      if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
+        throw sessionExpiredError(params.ctx.profile, posture);
+      }
+      if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+        if (!session || isStoredSessionExpired(session)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+        }
       }
     }
   }
@@ -24533,10 +24803,8 @@ function isStoredSessionExpired(session) {
   const record2 = session;
   const direct = parseDate(record2.expiresAt ?? record2.expiry ?? record2.expirationTime);
   if (direct) return direct.getTime() <= Date.now();
-  if (typeof record2.siwe !== "string") return false;
-  const match = record2.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  const expiry = match ? parseDate(match[1].trim()) : null;
-  return expiry !== null && expiry.getTime() <= Date.now();
+  const signedOrSiweExpiry = sessionExpiresAt(record2);
+  return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
 }
 function parseDate(value) {
   if (value instanceof Date) {
@@ -24947,6 +25215,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // ../share-sdk/dist/index.js
 init_sha2();
+init_sha256();
 var __defProp2 = Object.defineProperty;
 var __export2 = (target, all) => {
   for (var name in all)
@@ -31895,6 +32164,7 @@ function parseNativeShareUrl(value) {
 }
 
 // ../share-envelope/dist/index.js
+init_zod();
 var empty3 = new Uint8Array(0);
 function equals5(aa, bb) {
   if (aa === bb) {
@@ -33782,11 +34052,12 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
+init_sdk();
+init_host();
+init_theme();
 import { randomBytes as randomBytes7 } from "crypto";
 import { mkdir as mkdir5, writeFile as writeFile4 } from "fs/promises";
 import { dirname as dirname5 } from "path";
-init_host();
-init_theme();
 function didWithoutFragment2(did) {
   const fragment = did.indexOf("#");
   return fragment === -1 ? did : did.slice(0, fragment);
@@ -33842,7 +34113,7 @@ it directly with \`tc space host <name>\` (no request needed).
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const profile = await ProfileManager.getProfile(ctx.profile);
       const spaceId = await resolveHostSpace(name, ctx.profile);
       const spaceName = spaceNameFromUri(spaceId);
@@ -33901,7 +34172,7 @@ it directly with \`tc space host <name>\` (no request needed).
   space.command("switch <name>").description("Switch active space").action(async (name, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       await ProfileManager.updateProfile(ctx.profile, (profile) => ({ ...profile, spaceName: name }));
       outputJson({ profile: ctx.profile, spaceName: name, switched: true });
     } catch (error) {
@@ -33931,11 +34202,12 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
-import { writeFile as writeFile5 } from "fs/promises";
-import { resolve as resolve4 } from "path";
+init_sdk();
 init_space();
 init_host();
 init_theme();
+import { writeFile as writeFile5 } from "fs/promises";
+import { resolve as resolve4 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
   const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
@@ -34202,6 +34474,7 @@ init_types();
 init_errors();
 init_formatter();
 init_theme();
+init_permissions();
 import {
   NodeWasmBindings as NodeWasmBindings2
 } from "@tinycloud/node-sdk";
@@ -34210,7 +34483,7 @@ function registerStatusCommand(program) {
   program.command("status").description("Show local TinyCloud profile, session, delegation, and permission state").action(async (_options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const config = await ProfileManager.getConfig();
       const names = (await ProfileManager.listProfiles()).sort(
         (a, b) => a.localeCompare(b)
@@ -34635,6 +34908,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
+init_sdk();
 import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
 async function readStdin4() {
   const chunks = [];
@@ -34811,6 +35085,7 @@ init_profiles();
 init_formatter();
 init_errors();
 init_constants();
+init_sdk();
 var VARIABLES_PREFIX = "variables/";
 async function readStdin5() {
   const chunks = [];

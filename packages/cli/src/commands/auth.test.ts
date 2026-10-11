@@ -313,8 +313,8 @@ mock.module("@tinycloud/node-sdk", () => ({
       };
     }
   },
+  signedCompactUcanExpiry: () => undefined,
 }));
-
 const operationRecorded = {
   calls: [] as Array<{
     operationId: string;
@@ -397,6 +397,13 @@ mock.module("../lib/permissions.js", () => ({
     entry: { delegation: { cid: string }; permissions: unknown[] },
   ) => {
     importRecorded.appendedDelegations.push(entry);
+  },
+  appendAdditionalDelegationIfUnexpired: async (
+    _profile: string,
+    entry: { delegation: { cid: string }; permissions: unknown[] },
+  ) => {
+    importRecorded.appendedDelegations.push(entry);
+    return true;
   },
   appendAdditionalDelegations: async (
     _profile: string,

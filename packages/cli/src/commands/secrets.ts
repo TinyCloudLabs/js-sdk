@@ -29,7 +29,8 @@ import { mergeWarnings } from "../output/warnings.js";
 import { ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { withSignInHint } from "../auth/session-expired.js";
+import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
+import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
@@ -237,6 +238,9 @@ async function ensureSecretsNode(
           { hint: scopedSecretLoginHint(ctx.profile) },
         );
       }
+      // The refresh replaces the refused session; it targets the node discovery picks.
+      const { completeDeferredLocalDiscovery } = await import("../lib/host.js");
+      await completeDeferredLocalDiscovery(ctx);
       await withSpinner(
         session ? "Refreshing TinyCloud session..." : "Creating TinyCloud session...",
         () => refreshOpenKeySession(ctx.profile, ctx.host, { openKeyAcquisition }),
@@ -392,10 +396,16 @@ async function canonicalSecretGet(
   let ownerNode: TinyCloudNode | undefined;
   if (!auth?.privateKey) {
     const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+    if (profile) {
+      const posture = resolveProfilePosture(profile);
       const session = await ProfileManager.getSession(params.ctx.profile);
-      if (!session || isStoredSessionExpired(session)) {
-        ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+      if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
+        throw sessionExpiredError(params.ctx.profile, posture);
+      }
+      if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+        if (!session || isStoredSessionExpired(session)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
+        }
       }
     }
   }
@@ -971,10 +981,8 @@ function isStoredSessionExpired(session: object): boolean {
   const record = session as Record<string, unknown>;
   const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
   if (direct) return direct.getTime() <= Date.now();
-  if (typeof record.siwe !== "string") return false;
-  const match = record.siwe.match(/^Expiration Time:\s*(.+)$/im);
-  const expiry = match ? parseDate(match[1].trim()) : null;
-  return expiry !== null && expiry.getTime() <= Date.now();
+  const signedOrSiweExpiry = sessionExpiresAt(record);
+  return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
 }
 
 function parseDate(value: unknown): Date | null {

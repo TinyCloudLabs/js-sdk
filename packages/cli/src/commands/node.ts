@@ -13,7 +13,7 @@ export function registerNodeCommand(program: Command): void {
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const start = Date.now();
         const response = await fetch(`${ctx.host}/healthz`);
@@ -26,7 +26,7 @@ export function registerNodeCommand(program: Command): void {
         });
       } catch (error) {
         if (error instanceof TypeError && (error as Error).message.includes("fetch")) {
-          outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals())).host, error: "Connection refused" });
+          outputJson({ healthy: false, host: (await ProfileManager.resolveContext(cmd.optsWithGlobals(), { storedSession: "unused" })).host, error: "Connection refused" });
         } else {
           handleError(error);
         }
@@ -39,7 +39,7 @@ export function registerNodeCommand(program: Command): void {
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const response = await fetch(`${ctx.host}/info`);
         if (!response.ok) {
@@ -59,7 +59,7 @@ export function registerNodeCommand(program: Command): void {
     .action(async (_options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
-        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const start = Date.now();
 
