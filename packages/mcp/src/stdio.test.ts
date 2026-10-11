@@ -55,8 +55,9 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       "tinycloud_sql_query",
       "tinycloud_sql_execute",
       "tinycloud_secrets_get",
+      "tinycloud_secrets_status",
     ]);
-    expect(listed.tools).toHaveLength(16);
+    expect(listed.tools).toHaveLength(17);
 
     const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown; result: unknown }> }).operations
       .map((operation) => [`${operation.id}@${operation.version}`, operation]));
@@ -77,6 +78,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       tinycloud_sql_query: "tinycloud.sql.query@1",
       tinycloud_sql_execute: "tinycloud.sql.execute@1",
       tinycloud_secrets_get: "tinycloud.secrets.get@1",
+      tinycloud_secrets_status: "tinycloud.secrets.status@1",
     };
     for (const tool of listed.tools) {
       expect(tool.inputSchema).toEqual(
@@ -108,6 +110,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
           "tinycloud_sql_query",
           "tinycloud_sql_execute",
           "tinycloud_secrets_get",
+          "tinycloud_secrets_status",
         ].includes(tool.name),
       });
     }
@@ -139,6 +142,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       ["tinycloud_sql_query", { space: "applications", database: "notes", sql: "SELECT 1" }, { status: "error", operation: { operationId: "tinycloud.sql.query", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_execute", { space: "applications", database: "notes", sql: "DELETE FROM notes WHERE id = ?", params: [1], acknowledgeDatabaseWideAuthority: true }, { status: "error", operation: { operationId: "tinycloud.sql.execute", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_secrets_get", { name: "MCP_TEST_SECRET" }, { status: "error", operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_secrets_status", { names: ["MCP_TEST_SECRET"] }, { status: "error", operation: { operationId: "tinycloud.secrets.status", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
     ] as const;
     for (const [name, arguments_, expected] of expectedToolResults) {
       const result = await client.callTool({ name, arguments: arguments_ });
@@ -212,7 +216,8 @@ test("owner data requires opt-in and explicit opt-in passes the gate for both ow
       await rm(home, { recursive: true, force: true });
     }
   }
-});
+  // Three MCP server processes; 4.8 s on master CI already sat at bun's 5 s default.
+}, 15_000);
 
 test("an explicitly pinned missing profile never falls back to config.defaultProfile", async () => {
   const home = await fixtureHome();
@@ -580,6 +585,126 @@ test("an authorized missing secret returns only the value-free setup action", as
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("secrets status on an unreadable name is ok consent_required and saves no request", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-status-consent-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  let client: ConnectedClient | undefined;
+  try {
+    // A granted session whose read the node refuses (403): the name is unreadable.
+    await writeFile(
+      join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"),
+      JSON.stringify([{
+        delegation: await fixture.hermetic.mintDelegation(),
+        permissions: [],
+        authorityRequest: { requestId: "req_status_fixture", requested: fixture.hermetic.permissions },
+      }]),
+    );
+    fixture.hermetic.denyKvReads(["vault/secrets/HERMETIC_DELEGATION_CANARY"]);
+    const requestsPath = join(home, ".tinycloud/profiles", fixture.profile, "auth-requests.json");
+    const requestsBefore = await readFile(requestsPath, "utf8").catch(() => undefined);
+    client = await connectClient(home, ["--profile", fixture.profile]);
+    const result = await timedTool(client.client, {
+      name: "tinycloud_secrets_status",
+      arguments: { names: ["HERMETIC_DELEGATION_CANARY"] },
+    });
+    expect(contentOf(result)).toMatchObject({
+      status: "ok",
+      operation: { operationId: "tinycloud.secrets.status", operationVersion: 1 },
+      output: { status: "consent_required", present: [], pending: [], denied: ["HERMETIC_DELEGATION_CANARY"] },
+    });
+    expect(contentOf(result)).not.toHaveProperty("request");
+    expect(await readFile(requestsPath, "utf8").catch(() => undefined)).toEqual(requestsBefore);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}; MCP stderr: ${client?.stderr() ?? ""}`);
+  } finally {
+    await closeWithinDeadline(client?.client);
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("secrets status never signs in a local owner without a stored session", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-status-nosession-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  let client: ConnectedClient | undefined;
+  try {
+    const sessionFile = join(home, ".tinycloud/profiles", fixture.ownerProfile, "session.json");
+    await rm(sessionFile);
+    const requestStart = fixture.hermetic.requests().length;
+    client = await connectClient(home, ["--profile", fixture.ownerProfile, "--allow-owner-profile"]);
+    const result = await timedTool(client.client, {
+      name: "tinycloud_secrets_status",
+      arguments: { names: ["HERMETIC_DELEGATION_CANARY"] },
+    });
+    expect(contentOf(result)).toMatchObject({
+      status: "error",
+      operation: { operationId: "tinycloud.secrets.status", operationVersion: 1 },
+      error: { code: "SESSION_NOT_FOUND" },
+    });
+    expect(contentOf(result)!.error.details).toEqual({
+      recovery: { action: "sign_in", command: "tc --profile owner auth login --method local" },
+    });
+    expect(fixture.hermetic.requests().slice(requestStart)).toEqual([]);
+    expect(await Bun.file(sessionFile).exists()).toBe(false);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}; MCP stderr: ${client?.stderr() ?? ""}`);
+  } finally {
+    await closeWithinDeadline(client?.client);
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test("secrets status on an unmigrated profile names tinycloud_auth_capabilities, which unblocks it", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-status-migration-"));
+  const previousTcHome = process.env.TC_HOME;
+  process.env.TC_HOME = home;
+  const fixture = await hermeticFixture();
+  let client: ConnectedClient | undefined;
+  try {
+    const delegation = await fixture.hermetic.mintDelegation();
+    await writeFile(
+      join(home, ".tinycloud/profiles", fixture.profile, "additional-delegations.json"),
+      JSON.stringify([{ delegation, permissions: [] }]),
+    );
+    client = await connectClient(home, ["--profile", fixture.profile]);
+    const statusCall = { name: "tinycloud_secrets_status", arguments: { names: ["HERMETIC_DELEGATION_CANARY"] } };
+    const blocked = contentOf(await timedTool(client.client, statusCall));
+    expect(blocked).toMatchObject({ status: "error", error: { code: "PROFILE_MIGRATION_REQUIRED" } });
+    expect(blocked!.error.details).toEqual({
+      recovery: {
+        action: "complete_migration",
+        command: "tc --profile delegate auth caps",
+        operationId: "tinycloud.auth.capabilities",
+        tool: "tinycloud_auth_capabilities",
+      },
+    });
+
+    const tool = blocked!.error.details.recovery.tool as string;
+    expect(contentOf(await timedTool(client.client, { name: tool, arguments: {} }))).toMatchObject({ status: "ok" });
+    expect(contentOf(await timedTool(client.client, statusCall))).toMatchObject({
+      status: "ok",
+      output: { status: "ready", present: ["HERMETIC_DELEGATION_CANARY"] },
+    });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}; MCP stderr: ${client?.stderr() ?? ""}`);
+  } finally {
+    await closeWithinDeadline(client?.client);
+    fixture.hermetic.stop();
+    if (previousTcHome === undefined) delete process.env.TC_HOME;
+    else process.env.TC_HOME = previousTcHome;
+    await rm(home, { recursive: true, force: true });
+  }
+}, 300_000);
 
 test("an unbound `tc auth import` keeps serving `tc secrets get` and MCP across the binding migration", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-unbound-import-"));

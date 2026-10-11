@@ -16,7 +16,8 @@ TinyCloud capabilities and never silently fall back to owner authority.
 ### Hosted Streamable HTTP
 
 Remote clients connect to one HTTPS endpoint and authenticate through OpenKey
-OAuth. The hosted server adds `tinycloud_connect` to the 16 canonical tools.
+OAuth. The hosted server registers 17 tools: it adds `tinycloud_connect` and omits
+the local-only `tinycloud_secrets_status`.
 That tool returns a short-lived browser approval URL on first use. Later
 `authority_required` results include the same one-click approval flow for the
 exact requested operation.
@@ -69,7 +70,8 @@ to select another profile.
 
 ## Tools
 
-The local server exposes 16 tools; hosted mode adds `tinycloud_connect`:
+The local server exposes 17 tools. Hosted mode adds `tinycloud_connect` and
+does not register `tinycloud_secrets_status` (local/stdio only):
 
 - Local and authorization state: `tinycloud_status`,
   `tinycloud_auth_status`, `tinycloud_auth_capabilities`
@@ -80,7 +82,20 @@ The local server exposes 16 tools; hosted mode adds `tinycloud_connect`:
   `tinycloud_kv_head`, `tinycloud_kv_put`, `tinycloud_kv_delete`
 - Bounded SQLite: `tinycloud_sql_schema_inspect`, `tinycloud_sql_query`,
   `tinycloud_sql_execute`
-- Delegated secrets: `tinycloud_secrets_get`
+- Delegated secrets: `tinycloud_secrets_get`, `tinycloud_secrets_status`
+  (local/stdio only)
+
+`tinycloud_secrets_status` is read-only and never signs in. It uses only the
+profile's stored session and reports, without reading any value, whether each
+named secret is `ready`, `pending` (with a Secret Manager `/request` setup
+link), or `consent_required` (no permission request is saved). When it cannot
+proceed, `error.details.recovery` names the next step: `sign_in` carries the
+persistent `tc --profile <P> auth login ...` command to run in a terminal, and
+`complete_migration` carries `tool: "tinycloud_auth_capabilities"`, which you
+call once before retrying status.
+
+A missing secret's `setup` is the canonical Secret Manager `/request` link
+(`{url, names, scope?, owner, action: "add_secret"}`).
 
 Results use canonical structured envelopes with `ok`, `authority_required`,
 `setup_required`, or `error` status. Data operations plan authority for the

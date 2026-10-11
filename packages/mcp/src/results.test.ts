@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { KVService } from "@tinycloud/node-sdk";
 
 import { toMcpToolResult } from "./results.js";
+import { TOOL_BINDINGS } from "./tools.js";
 
 test("uses one structured envelope and never copies a successful value into text", () => {
   const canary = "mcp-secret-canary-results";
@@ -163,4 +164,57 @@ test("MCP classifies matching structured and textual KV permission hints identic
       error: { code: "PERMISSION_DENIED" },
     });
   }
+});
+
+function migrationError(operationId: string) {
+  return {
+    status: "error" as const,
+    operation: { operationId: "tinycloud.secrets.status", operationVersion: 1 },
+    context: { profile: "agent" },
+    error: {
+      code: "PROFILE_MIGRATION_REQUIRED",
+      message: "Profile migration is required.",
+      retryable: false,
+      details: {
+        recovery: { action: "complete_migration", command: "tc --profile agent auth caps", operationId },
+      },
+    },
+  };
+}
+
+test("complete_migration recovery names the bound tool from the binding table", () => {
+  const projected = toMcpToolResult(migrationError("tinycloud.auth.capabilities"), TOOL_BINDINGS);
+  expect(projected.structuredContent.error).toEqual({
+    code: "PROFILE_MIGRATION_REQUIRED",
+    message: "Profile migration is required.",
+    retryable: false,
+    details: {
+      recovery: {
+        action: "complete_migration",
+        command: "tc --profile agent auth caps",
+        operationId: "tinycloud.auth.capabilities",
+        tool: "tinycloud_auth_capabilities",
+      },
+    },
+  });
+});
+
+test("complete_migration recovery for an unbound operationId gets no tool", () => {
+  const input = migrationError("tinycloud.unknown.operation");
+  const projected = toMcpToolResult(input, TOOL_BINDINGS);
+  expect(projected.structuredContent).toEqual(input);
+  expect(JSON.stringify(projected)).not.toContain('"tool"');
+});
+
+test("sign_in recovery is never given a tool", () => {
+  const input = {
+    status: "error" as const,
+    operation: { operationId: "tinycloud.secrets.status", operationVersion: 1 },
+    context: { profile: "agent" },
+    error: {
+      code: "SESSION_NOT_FOUND",
+      details: { recovery: { action: "sign_in", command: "tc --profile agent auth login --method local" } },
+    },
+  };
+  expect(toMcpToolResult(input, TOOL_BINDINGS).structuredContent).toEqual(input);
 });

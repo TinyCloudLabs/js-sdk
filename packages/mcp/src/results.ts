@@ -12,9 +12,18 @@ export interface McpToolResult extends CallToolResult {
   readonly structuredContent: CanonicalOperationResult;
 }
 
-export function toMcpToolResult(result: unknown): McpToolResult {
+/** The binding fields needed to name the tool that runs an operation. */
+export interface RecoveryToolBinding {
+  readonly name: string;
+  readonly operationId: string;
+}
+
+export function toMcpToolResult(
+  result: unknown,
+  bindings: readonly RecoveryToolBinding[] = [],
+): McpToolResult {
   const canonical: CanonicalOperationResult = isCanonicalOperationResult(result)
-    ? result
+    ? withRecoveryTool(result, bindings)
     : {
       status: "error",
       operation: {},
@@ -25,6 +34,32 @@ export function toMcpToolResult(result: unknown): McpToolResult {
   return {
     content: [{ type: "text", text: resultSummary(canonical.status) }],
     structuredContent: canonical,
+  };
+}
+
+/**
+ * A redacted `complete_migration` recovery names an operation; MCP clients
+ * call tools, so name the bound tool. `tool` comes from the code-owned binding
+ * table only, never from operation data, and is added after redaction. An
+ * operationId with no binding gets no `tool`.
+ */
+function withRecoveryTool(
+  result: CanonicalOperationResult,
+  bindings: readonly RecoveryToolBinding[],
+): CanonicalOperationResult {
+  if (result.status !== "error") return result;
+  // The kernel's redaction already constrained `error.details.recovery` to a
+  // safe recovery object; only its discriminant and operationId are read here.
+  const error = result.error as
+    | { readonly details?: { readonly recovery?: { readonly action?: unknown; readonly operationId?: unknown } } }
+    | undefined;
+  const recovery = error?.details?.recovery;
+  if (recovery?.action !== "complete_migration") return result;
+  const binding = bindings.find((candidate) => candidate.operationId === recovery.operationId);
+  if (binding === undefined) return result;
+  return {
+    ...result,
+    error: { ...error, details: { ...error?.details, recovery: { ...recovery, tool: binding.name } } },
   };
 }
 

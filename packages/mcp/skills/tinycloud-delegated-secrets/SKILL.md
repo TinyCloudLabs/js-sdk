@@ -7,23 +7,23 @@ chat.
 <!-- BEGIN GENERATED TINYCloud operation facts -->
 The following facts are generated from `@tinycloud/operations/operations.json`:
 
-- `tinycloud_account_applications_list` -> `tinycloud.account.applications.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_account_spaces_list` -> `tinycloud.account.spaces.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_auth_capabilities` -> `tinycloud.auth.capabilities@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_auth_import` -> `tinycloud.auth.import@1`; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_auth_request` -> `tinycloud.auth.request@1`; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_auth_status` -> `tinycloud.auth.status@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
-- `tinycloud_kv_delete` -> `tinycloud.kv.delete@1`; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_kv_get` -> `tinycloud.kv.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_kv_head` -> `tinycloud.kv.head@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_kv_list` -> `tinycloud.kv.list@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_kv_put` -> `tinycloud.kv.put@1`; effects: write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_secrets_get` -> `tinycloud.secrets.get@1`; effects: read, local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud.secrets.status` -> `tinycloud.secrets.status@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
-- `tinycloud_sql_execute` -> `tinycloud.sql.execute@1`; effects: write, destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_sql_query` -> `tinycloud.sql.query@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_sql_schema_inspect` -> `tinycloud.sql.schema.inspect@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
-- `tinycloud_status` -> `tinycloud.status.get@1`; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
+- `tinycloud_account_applications_list` -> `tinycloud.account.applications.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_account_spaces_list` -> `tinycloud.account.spaces.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_auth_capabilities` -> `tinycloud.auth.capabilities@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_auth_import` -> `tinycloud.auth.import@1`; surfaces: local, hosted; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_auth_request` -> `tinycloud.auth.request@1`; surfaces: local, hosted; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_auth_status` -> `tinycloud.auth.status@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
+- `tinycloud_kv_delete` -> `tinycloud.kv.delete@1`; surfaces: local, hosted; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_kv_get` -> `tinycloud.kv.get@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_kv_head` -> `tinycloud.kv.head@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_kv_list` -> `tinycloud.kv.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_kv_put` -> `tinycloud.kv.put@1`; surfaces: local, hosted; effects: write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_secrets_get` -> `tinycloud.secrets.get@1`; surfaces: local, hosted; effects: read, local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_secrets_status` -> `tinycloud.secrets.status@1`; surfaces: local; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_sql_execute` -> `tinycloud.sql.execute@1`; surfaces: local, hosted; effects: write, destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_sql_query` -> `tinycloud.sql.query@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_sql_schema_inspect` -> `tinycloud.sql.schema.inspect@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_status` -> `tinycloud.status.get@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
 <!-- END GENERATED TINYCloud operation facts -->
 
 <!-- BEGIN GENERATED TINYCloud operations coverage -->
@@ -87,6 +87,12 @@ Coverage is generated from the Commander registration ledger; legacy commands ar
 6. If the result is `setup_required`, show the structured Secret Manager setup
    link. The link contains only the secret reference and target space; it never
    contains a secret value.
+7. After the owner opens the setup link, poll `tinycloud_secrets_status` for
+   the same names with backoff until they are `ready`, then retry
+   `tinycloud_secrets_get`. On `consent_required`, obtain approval through the
+   existing flow (`tinycloud_secrets_get`'s `authority_required` approval).
+
+`tinycloud_secrets_status` (local/stdio MCP only) never signs in. If it returns `details.recovery`, follow it exactly: `sign_in` → run its `command` in a terminal to create a stored session; `complete_migration` → call its `tool` (`tinycloud_auth_capabilities`) once. Then retry status. If there is no `command` (unusual profile name), sign in to that profile with the CLI.
 
 MCP hosts may retain tool arguments and successful results in their own
 transcripts, caches, or evaluation records. TinyCloud controls only its own
