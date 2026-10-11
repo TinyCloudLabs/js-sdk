@@ -21315,11 +21315,19 @@ function registerAuthCommand(program, options) {
         throw refusal;
       }
       const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals(signedAudience, node.sessionDid);
+      let importExpiry = imported.delegation.expiry;
+      let signedExpiry;
       if (!targetsSessionKey && kind === "compact") {
-        const signedExpiry = signedCompactUcanExpiry3(imported.delegation.delegationHeader.Authorization);
-        if (signedExpiry !== void 0 && signedExpiry.getTime() <= Date.now()) {
-          throw delegationExpiredError();
+        signedExpiry = signedCompactUcanExpiry3(imported.delegation.delegationHeader.Authorization);
+        if (signedExpiry === void 0 || importExpiry.getTime() !== signedExpiry.getTime()) {
+          throw new CLIError(
+            "DELEGATION_REJECTED",
+            "Imported delegation was rejected (authority_invalid). No grant was stored.",
+            ExitCode.ERROR
+          );
         }
+        if (signedExpiry.getTime() <= Date.now()) throw delegationExpiredError();
+        importExpiry = signedExpiry;
       }
       let activated = false;
       let permissions = imported.permissions;
@@ -21343,15 +21351,15 @@ function registerAuthCommand(program, options) {
           throw refusal;
         }
         await appendAdditionalDelegation(ctx.profile, record2);
+        importExpiry = record2.delegation.expiry;
         permissions = record2.permissions;
         activated = true;
       } else {
         const record2 = storedAdditionalDelegation(
-          imported.delegation,
+          { ...imported.delegation, expiry: importExpiry },
           imported.permissions
         );
         if (!targetsSessionKey && kind === "compact") {
-          const signedExpiry = signedCompactUcanExpiry3(imported.delegation.delegationHeader.Authorization);
           if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record2, signedExpiry)) {
             throw delegationExpiredError();
           }
@@ -21363,7 +21371,7 @@ function registerAuthCommand(program, options) {
         addedCaps: permissions,
         source: "cli",
         delegationCid: imported.delegation.cid,
-        expiry: imported.delegation.expiry.toISOString()
+        expiry: importExpiry.toISOString()
       });
       outputJson({
         imported: true,
@@ -21372,7 +21380,7 @@ function registerAuthCommand(program, options) {
         requestId: imported.requestId ?? null,
         delegationCid: imported.delegation.cid,
         permissions,
-        expiry: imported.delegation.expiry.toISOString()
+        expiry: importExpiry.toISOString()
       });
     } catch (error) {
       handleError(error);

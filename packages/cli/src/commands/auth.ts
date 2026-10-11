@@ -636,11 +636,19 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const targetsSessionKey = kind === "signed-login" || (
           signedAudience !== undefined && principalDidEquals(signedAudience, node.sessionDid)
         );
+        let importExpiry = imported.delegation.expiry;
+        let signedExpiry: Date | undefined;
         if (!targetsSessionKey && kind === "compact") {
-          const signedExpiry = signedCompactUcanExpiry(imported.delegation.delegationHeader.Authorization);
-          if (signedExpiry !== undefined && signedExpiry.getTime() <= Date.now()) {
-            throw delegationExpiredError();
+          signedExpiry = signedCompactUcanExpiry(imported.delegation.delegationHeader.Authorization);
+          if (signedExpiry === undefined || importExpiry.getTime() !== signedExpiry.getTime()) {
+            throw new CLIError(
+              "DELEGATION_REJECTED",
+              "Imported delegation was rejected (authority_invalid). No grant was stored.",
+              ExitCode.ERROR,
+            );
           }
+          if (signedExpiry.getTime() <= Date.now()) throw delegationExpiredError();
+          importExpiry = signedExpiry;
         }
         let activated = false;
         let permissions = imported.permissions;
@@ -670,15 +678,15 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             throw refusal;
           }
           await appendAdditionalDelegation(ctx.profile, record);
+          importExpiry = record.delegation.expiry;
           permissions = record.permissions;
           activated = true;
         } else {
           const record = storedAdditionalDelegation(
-            imported.delegation,
+            { ...imported.delegation, expiry: importExpiry },
             imported.permissions,
           );
           if (!targetsSessionKey && kind === "compact") {
-            const signedExpiry = signedCompactUcanExpiry(imported.delegation.delegationHeader.Authorization);
             if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record, signedExpiry)) {
               throw delegationExpiredError();
             }
@@ -690,7 +698,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           addedCaps: permissions,
           source: "cli",
           delegationCid: imported.delegation.cid,
-          expiry: imported.delegation.expiry.toISOString(),
+          expiry: importExpiry.toISOString(),
         });
 
         outputJson({
@@ -700,7 +708,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           requestId: imported.requestId ?? null,
           delegationCid: imported.delegation.cid,
           permissions,
-          expiry: imported.delegation.expiry.toISOString(),
+          expiry: importExpiry.toISOString(),
         });
       } catch (error) {
         handleError(error);

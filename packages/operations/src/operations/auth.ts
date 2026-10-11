@@ -35,9 +35,11 @@ import type {
 import { operationError } from "../errors.js";
 import { lookupOperation } from "../registry.js";
 import {
+  readAdditionalDelegations,
   readSession,
   readProfile,
   updateProfileStore,
+  withProfileLock,
 } from "../state.js";
 import { operationSpaceResolver } from "../secrets.js";
 
@@ -382,7 +384,9 @@ async function importRequestBoundDelegation(
     }
 
     try {
-      return await updateProfileStore<Record<string, unknown>, OperationExecutionOutcome<AuthImportOutput>>(
+      return await withProfileLock(context.summary.profile, async () => {
+        const previousRecords = await readAdditionalDelegations<unknown>(context.summary.profile);
+        const result = await updateProfileStore<Record<string, unknown>, OperationExecutionOutcome<AuthImportOutput>>(
         context.summary.profile,
         "additional-delegations",
         async (records) => {
@@ -442,6 +446,16 @@ async function importRequestBoundDelegation(
           };
         },
       );
+        if (activated.expiry.getTime() <= Date.now()) {
+          await updateProfileStore<unknown, void>(
+            context.summary.profile,
+            "additional-delegations",
+            () => ({ records: previousRecords, result: undefined }),
+          );
+          return expiredDelegation();
+        }
+        return result;
+      });
     } catch {
       return internalImportFailure();
     }
