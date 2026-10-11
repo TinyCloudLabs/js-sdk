@@ -31,10 +31,10 @@ export function cursorRestart() {
 }
 export function localList(handle: { list(o: { prefix: string; after?: string; limit?: number }): Promise<LocalListResult> }, space: string, path: string, limit: number | undefined, cursor: string | undefined, validateMeta: (meta: LocalReadMeta) => void): Promise<KVListPage> {
   const after = cursor ? decodeTcr1(cursor)?.last : undefined;
-  const exact = !path.endsWith("/") && (after === undefined || utf8Compare(path, after) > 0)
+  const exact = path !== "" && !path.endsWith("/") && (after === undefined || utf8Compare(path, after) > 0)
     ? awaitExact(handle, path, after, validateMeta) : Promise.resolve(false);
   return exact.then(async (hasExact) => {
-    const child = path.endsWith("/") ? path : `${path}/`;
+    const child = path === "" ? "" : path.endsWith("/") ? path : `${path}/`;
     const want = limit === undefined ? undefined : limit + 1 - (hasExact ? 1 : 0);
     const children = await handle.list({ prefix: child, after, limit: want });
     validateMeta(children.meta);
@@ -53,7 +53,5 @@ async function awaitExact(handle: { list(o: { prefix: string; after?: string; li
 }
 
 export function listPathCovered(prefixes: readonly string[], path: string): string | undefined {
-  const descendant = path.endsWith("/") ? path : `${path}/`;
-  const covering = prefixes.filter((prefix) => kvPrefixCovers(prefix, path) && kvPrefixCovers(prefix, descendant));
-  return covering.length === 1 ? covering[0] : undefined;
+  return prefixes.find((prefix) => kvPrefixCovers(prefix, path));
 }

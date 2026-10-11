@@ -20,7 +20,7 @@ import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const DATABASE_URL = process.env.TC_REPLICA_E2E_DATABASE_URL || undefined;
-const CLI = resolve(import.meta.dir, "../dist/index.js");
+const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/index.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");
 
@@ -180,6 +180,26 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     expect(first.sync).toMatchObject({ changes: 3, fetched: 3, coverage: "complete", promotedGrant: true });
     expect(first.status.counts).toEqual({ keys: 3, contentMissing: 0, tombstones: 0 });
     expect(first.status.source).toMatchObject({ host, space, prefix: "notes/" });
+
+    // Saved read-through settings are validated before a KV read starts.
+    const deviceProfilePath = join(home, ".tinycloud", "profiles", "device", "profile.json");
+    const originalDeviceProfile = await readFile(deviceProfilePath);
+    const deviceProfile = JSON.parse(originalDeviceProfile.toString()) as {
+      replication?: { prefixes: string[]; allowSecrets?: boolean };
+    };
+    deviceProfile.replication = { prefixes: ["notes/"] };
+    await writeFile(deviceProfilePath, JSON.stringify(deviceProfile));
+    try {
+      deviceProfile.replication = { prefixes: ["notes"] };
+      await writeFile(deviceProfilePath, JSON.stringify(deviceProfile));
+      const invalidSavedPrefix = await tc(["--replication", "kv", "get", "notes/a.txt"], { profile: "device" });
+      expect(invalidSavedPrefix.code).toBe(2);
+      expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
+      expect(invalidSavedPrefix.stderr).toContain("saved replication prefix");
+      expect(invalidSavedPrefix.stderr).toContain("purging a replica alone");
+    } finally {
+      await writeFile(deviceProfilePath, originalDeviceProfile);
+    }
 
     // 3. Stop the node; a new CLI process reads blake3-identical bytes with the network disabled.
     await stopNode();

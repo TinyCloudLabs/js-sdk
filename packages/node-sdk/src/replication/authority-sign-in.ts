@@ -1,5 +1,4 @@
 import {
-  grantPathsForSelector,
   KV,
   isCapabilitySubset,
   type PermissionEntry,
@@ -7,6 +6,7 @@ import {
 } from "@tinycloud/sdk-core";
 import { requiresSecretsOptIn } from "@tinycloud/sdk-services";
 
+import { assertFolderPrefix } from "@tinycloud/replica";
 const KV_GET = KV.GET;
 const KV_SYNC = KV.SYNC;
 const KV_SERVICE = "tinycloud.kv";
@@ -16,9 +16,8 @@ export function hasUnrestrictedGetCoverage(
   spaceId: string,
   prefix: string,
 ): boolean {
-  const requiredPaths = grantPathsForSelector(prefix);
   return isCapabilitySubset(
-    requiredPaths.map((path) => ({ service: KV_SERVICE, space: spaceId, path, actions: [KV_GET] })),
+    [{ service: KV_SERVICE, space: spaceId, path: prefix, actions: [KV_GET] }],
     [...entries],
   ).subset;
 }
@@ -32,23 +31,23 @@ export function augmentSignInEntriesWithReplication(input: {
   const replication = input.replication;
   if (replication === undefined) return out;
   for (const prefix of replication.prefixes) {
+    assertFolderPrefix(prefix);
+    const path = prefix === "/" ? "" : prefix;
     if (
       requiresSecretsOptIn(input.primarySpaceId, prefix) &&
       replication.allowSecrets !== true
     ) {
       continue;
     }
-    if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, prefix)) {
+    if (!hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, path)) {
       continue;
     }
-    for (const path of grantPathsForSelector(prefix)) {
-      out.push({
-        service: KV_SERVICE,
-        space: input.primarySpaceId,
-        path,
-        actions: [KV_GET, KV_SYNC],
-      });
-    }
+    out.push({
+      service: KV_SERVICE,
+      space: input.primarySpaceId,
+      path,
+      actions: [KV_GET, KV_SYNC],
+    });
   }
   return out;
 }

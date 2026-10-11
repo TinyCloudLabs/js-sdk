@@ -1,4 +1,5 @@
-import { kvPrefixCovers, type ReplicationOptions } from "@tinycloud/sdk-services";
+import { assertFolderPrefix, kvPrefixCovers } from "@tinycloud/replica";
+import type { ReplicationOptions } from "@tinycloud/sdk-core";
 
 /** Constructor-time validation; the space-dependent secrets check runs at sign-in and open. */
 export function assertValidReplicationConfig(
@@ -12,8 +13,10 @@ export function assertValidReplicationConfig(
     throw new TypeError("replication.prefixes must be a non-empty array");
   }
   for (const prefix of replication.prefixes) {
-    if (typeof prefix !== "string" || prefix === "") {
-      throw new TypeError("replication.prefixes must not contain an empty prefix");
+    try {
+      assertFolderPrefix(prefix);
+    } catch (error) {
+      throw new TypeError(error instanceof Error ? error.message : String(error));
     }
   }
   for (const [index, prefix] of replication.prefixes.entries()) {
@@ -24,7 +27,7 @@ export function assertValidReplicationConfig(
         );
       }
     }
-    if (prefix.split("/", 1)[0] === "vault" && replication.allowSecrets !== true) {
+    if ((prefix === "/" || prefix.split("/", 1)[0] === "vault") && replication.allowSecrets !== true) {
       throw new TypeError(
         `replication prefix ${JSON.stringify(prefix)} overlaps the vault namespace; pass allowSecrets to opt in`,
       );

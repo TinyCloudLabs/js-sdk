@@ -78,22 +78,21 @@ describe("signed recap probes (review: real WASM)", () => {
       replication: {
         enabled: true,
         storage: {} as never,
-        prefixes: ["notes"],
+        prefixes: ["notes/"],
         allowSecrets: true,
       },
     });
     const recap = await signedRecap(node, wasm);
-    const notes = kvEntriesAt(recap, "notes");
+    const notes = kvEntriesAt(recap, "notes/");
     expect(notes).toEqual([]);
     expect(
       recap.every((entry) => !entry.actions.includes("tinycloud.kv/sync")),
     ).toBe(true);
   });
 
-  test("an exact-path get(notes) signs no notes/private augmentation", async () => {
-    // The request holds an EXACT `get` on `notes`. The signed-capability
-    // subset check never lets that cover `notes/private`, so the flag must
-    // not sign one — `kvPrefixCovers` wrongly said it did (review).
+  test("an exact-path get(notes) signs no notes/private folder augmentation", async () => {
+    // The request holds an EXACT `get` on `notes`; sdk-core containment does
+    // not let it cover the `notes/private/` replica prefix.
     const wasm = new NodeWasmBindings();
     const capabilityRequest: ComposedManifestRequest = {
       manifests: [],
@@ -119,14 +118,14 @@ describe("signed recap probes (review: real WASM)", () => {
       replication: {
         enabled: true,
         storage: {} as never,
-        prefixes: ["notes/private"],
+        prefixes: ["notes/private/"],
       },
     });
     const recap = await signedRecap(uncovered, wasm);
-    expect(kvEntriesAt(recap, "notes/private")).toEqual([]);
+    expect(kvEntriesAt(recap, "notes/private/")).toEqual([]);
 
-    // Positive control: a trailing-slash `get(notes/)` DOES cover
-    // `notes/private` under the same subset semantics, and the flag signs it.
+    // Positive control: a trailing-slash `get(notes/)` covers
+    // `notes/private/` under sdk-core containment, and the flag signs it.
     const covered = new TinyCloudNode({
       wasmBindings: wasm,
       signer: new PrivateKeySigner(PRIVATE_KEY),
@@ -139,11 +138,11 @@ describe("signed recap probes (review: real WASM)", () => {
       replication: {
         enabled: true,
         storage: {} as never,
-        prefixes: ["notes/private"],
+        prefixes: ["notes/private/"],
       },
     });
     const coveredRecap = await signedRecap(covered, wasm);
-    const entries = kvEntriesAt(coveredRecap, "notes/private");
+    const entries = kvEntriesAt(coveredRecap, "notes/private/");
     expect(entries.length).toBe(1);
     expect(entries[0]!.actions).toEqual(
       expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
