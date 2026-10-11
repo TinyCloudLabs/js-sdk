@@ -1,0 +1,5 @@
+---
+"@tinycloud/operations": patch
+---
+
+A process that finds its own PID in a profile-lock record it did not write — a restarted container's PID 1 meeting its crashed predecessor's turn and `.lock` — no longer waits forever once that predecessor is provably gone. Turn and `.lock` owner records gain JSON fields only (`instanceId`; on Linux `bootId`, `pidNamespace`, `processStartTime`, `liveness`), and each Linux acquisition listens on a UNIX socket `profile-locks/<profile>/.live-<uuid>` until it releases. Such a record is abandoned only on the same boot with either a different start time in the same PID namespace, or, from another PID namespace, a socket that is gone or refuses connections; a live or paused same-PID holder is waited for whatever its hostname. Records from older releases or other boots, holders without a socket, macOS, Windows and Bun contenders keep waiting (manual remedy in the tc-cli reference). Staging directories of a dead same-PID predecessor are now collected. Records of other PIDs are judged as before: the lock still does not protect processes with different PIDs in different PID namespaces.
