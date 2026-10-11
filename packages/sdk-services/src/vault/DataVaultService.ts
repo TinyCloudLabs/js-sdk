@@ -22,7 +22,7 @@ import {
   ServiceSession,
   ServiceError,
 } from "../types";
-import { parsePermissionHint, wrapError } from "../errors";
+import { authorizationVerdictOf, parsePermissionHint, wrapError } from "../errors";
 import type { IKVService } from "../kv/IKVService";
 import type { KVService } from "../kv/KVService";
 import type {
@@ -192,6 +192,7 @@ function defaultVaultMessage(input: VaultErrorInput): string {
     case "STORAGE_ERROR": return input.message ?? input.cause.message;
     case "ALREADY_EXISTS": return input.message ?? `A value already exists at ${input.key}`;
     case "AUTH_UNAUTHORIZED": return input.message;
+    case "PERMISSION_DENIED": return input.message;
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
@@ -225,8 +226,10 @@ function typedKvCause(error: ServiceError): ServiceError & Error {
 /**
  * Wrap a failed KV write. A storage rejection keeps its code, message and
  * byte counts so callers can tell "storage full" from other failures. An
- * authorization refusal stays `AUTH_UNAUTHORIZED` with the KV `meta` and the
- * typed KV error as `cause`, so capability hints survive the vault layer.
+ * authorization refusal is split by the SDK's own verdict: a 401 stays
+ * `AUTH_UNAUTHORIZED` (sign in again); a 403, or a refusal without a status,
+ * becomes `PERMISSION_DENIED`. Both keep the KV `meta` and the typed KV error
+ * as `cause`, so capability hints survive the vault layer.
  */
 function kvWriteError(
   context: string,
@@ -240,8 +243,9 @@ function kvWriteError(
   }
   const message = `${context}: ${error.message}`;
   if (error.code === ErrorCodes.AUTH_UNAUTHORIZED) {
+    const code = authorizationVerdictOf(error) === "unauthenticated" ? "AUTH_UNAUTHORIZED" : "PERMISSION_DENIED";
     return vaultError({
-      code: "AUTH_UNAUTHORIZED",
+      code,
       message,
       ...(error.meta !== undefined ? { meta: error.meta } : {}),
       cause: typedKvCause(error),

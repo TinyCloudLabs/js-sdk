@@ -44,6 +44,8 @@ describe("refused secrets put classification (real consumer)", () => {
     const { exitCode, error } = await run("403");
     expect(exitCode).toBe(5);
     expect(error.code).toBe("PERMISSION_DENIED");
+    // The capability is still found through the vault error's typed KV cause.
+    expect(error.meta).toMatchObject({ resource: RESOURCE, requiredAction: "tinycloud.kv/put" });
   });
 
   test("a 500 stays STORAGE_ERROR (exit 1)", async () => {

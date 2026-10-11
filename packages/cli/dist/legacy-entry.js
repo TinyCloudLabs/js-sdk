@@ -7541,6 +7541,8 @@ function defaultVaultMessage(input) {
       return input.message ?? `A value already exists at ${input.key}`;
     case "AUTH_UNAUTHORIZED":
       return input.message;
+    case "PERMISSION_DENIED":
+      return input.message;
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
@@ -7569,8 +7571,9 @@ function kvWriteError(context, error) {
   }
   const message = `${context}: ${error.message}`;
   if (error.code === ErrorCodes.AUTH_UNAUTHORIZED) {
+    const code3 = authorizationVerdictOf2(error) === "unauthenticated" ? "AUTH_UNAUTHORIZED" : "PERMISSION_DENIED";
     return vaultError({
-      code: "AUTH_UNAUTHORIZED",
+      code: code3,
       message,
       ...error.meta !== void 0 ? { meta: error.meta } : {},
       cause: typedKvCause(error)

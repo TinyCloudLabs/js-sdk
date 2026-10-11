@@ -144,7 +144,16 @@ export type VaultErrorInput =
       cause: ServiceError & Error;
     }
   | {
+      /** HTTP 401 only: the session must sign in again. */
       code: "AUTH_UNAUTHORIZED";
+      message: string;
+      meta?: Record<string, unknown>;
+      /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */
+      cause: ServiceError & Error;
+    }
+  | {
+      /** A 403, or an authorization refusal without a status: signing in again does not help. */
+      code: "PERMISSION_DENIED";
       message: string;
       meta?: Record<string, unknown>;
       /** The typed KV error that refused the write (an `Error` carrying its `code`, `service` and `meta`). */

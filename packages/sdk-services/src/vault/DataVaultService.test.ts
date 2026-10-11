@@ -380,7 +380,7 @@ describe("DataVaultService write errors (TC-834)", () => {
     expect(validatedCapabilityOf(put.error)).toEqual({ resource, requiredAction: "tinycloud.kv/put" });
   });
 
-  test("a 403 is classified as forbidden", async () => {
+  test("a 403 is PERMISSION_DENIED, never the expiry code, and keeps status and the typed cause", async () => {
     const { vault, kv } = createNetworkVault();
     rejectPut(kv, {
       code: "AUTH_UNAUTHORIZED",
@@ -392,8 +392,24 @@ describe("DataVaultService write errors (TC-834)", () => {
 
     expect(put.ok).toBe(false);
     if (put.ok) return;
-    expect(put.error.code).toBe("AUTH_UNAUTHORIZED");
+    expect(put.error).toMatchObject({ code: "PERMISSION_DENIED", service: "vault", meta: { status: 403 } });
+    if (put.error.code !== "PERMISSION_DENIED") return;
+    expect(put.error.cause.code).toBe("AUTH_UNAUTHORIZED");
     expect(authorizationVerdictOf(put.error)).toBe("forbidden");
+  });
+
+  test("a status-less AUTH_UNAUTHORIZED becomes PERMISSION_DENIED (only a definite 401 means sign in)", async () => {
+    const { vault, kv } = createNetworkVault();
+    rejectPut(kv, { code: "AUTH_UNAUTHORIZED", message: "Failed to put: Unauthorized" });
+
+    const put = await vault.put("secrets/API_KEY", { value: "secret" });
+
+    expect(put.ok).toBe(false);
+    if (put.ok) return;
+    expect(put.error.code).toBe("PERMISSION_DENIED");
+    expect(put.error).not.toHaveProperty("meta");
+    if (put.error.code !== "PERMISSION_DENIED") return;
+    expect(put.error.cause.code).toBe("AUTH_UNAUTHORIZED");
   });
 
   test("a 500 stays STORAGE_ERROR with meta and a chained cause", async () => {
