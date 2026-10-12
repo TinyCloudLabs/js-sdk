@@ -67,6 +67,13 @@ export type {
   TinyCloudDebugLevel,
   TinyCloudDebugEnableOptions,
   TinyCloudDebugTimer,
+  StorageAccountUsage,
+  StorageFullEvent,
+  StorageStatus,
+  StorageStatusOptions,
+  StorageUsage,
+  StorageUsageState,
+  IStorageService,
 } from "@tinycloud/sdk-core";
 export type {
   AuthorityRefusal,
@@ -134,6 +141,8 @@ export {
   isStorageFullError,
   STORAGE_FULL_MESSAGE,
   STORAGE_WRITE_TOO_LARGE_MESSAGE,
+  STORAGE_MANAGE_URL,
+  storageUsageState,
 } from "@tinycloud/sdk-core";
 
 // Signers
@@ -276,6 +285,7 @@ export {
   grantAuthRequest,
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
+  siweRuntimeDelegation,
   signedCompactUcanExpiry,
   RUNTIME_DELEGATION_REJECTIONS,
   RuntimeDelegationRejectedError,

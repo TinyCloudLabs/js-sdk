@@ -6877,8 +6877,39 @@ function parseStorageQuotaBytes(responseText) {
     limitBytes: parseInt(match[2], 10)
   };
 }
+function isByteCount2(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function byteCountsOf(value) {
+  if (typeof value !== "object" || value === null) return void 0;
+  const { usedBytes, limitBytes } = value;
+  return isByteCount2(usedBytes) && isByteCount2(limitBytes) ? { usedBytes, limitBytes } : void 0;
+}
+function parseStorageRejection(responseText) {
+  let body;
+  try {
+    body = JSON.parse(responseText);
+  } catch {
+    return parseStorageQuotaBytes(responseText);
+  }
+  if (typeof body !== "object" || body === null) return void 0;
+  const record2 = body;
+  const message = typeof record2.message === "string" ? record2.message : "";
+  const space = byteCountsOf(record2.space) ?? parseStorageQuotaBytes(message);
+  const isStorageBody = typeof record2.error === "string" && STORAGE_REJECTION_BODY_ERRORS[record2.error] === true;
+  if (!space && !isStorageBody) {
+    return void 0;
+  }
+  const details = { ...space };
+  const account = byteCountsOf(record2.account);
+  if (account) {
+    const plan = record2.account.plan;
+    details.account = typeof plan === "string" && plan !== "" ? { ...account, plan } : account;
+  }
+  return details;
+}
 function storageRejectionError(service, status, meta, responseText) {
-  const quotaMeta = { ...meta, ...parseStorageQuotaBytes(responseText) };
+  const quotaMeta = { ...meta, ...parseStorageRejection(responseText) };
   return status === 402 ? storageQuotaExceededError(service, STORAGE_FULL_MESSAGE, quotaMeta) : storageLimitReachedError(service, STORAGE_WRITE_TOO_LARGE_MESSAGE, quotaMeta);
 }
 function wrapError2(service, error, defaultCode = ErrorCodes.NETWORK_ERROR) {
@@ -8438,7 +8469,7 @@ function encOk(data) {
 function encErr(error) {
   return { ok: false, error };
 }
-var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, SAFE_REPLICATION_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, TC832_RESERVED_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
+var import_decrypt_transport_response_error, ErrorCodes, defaultRetryPolicy, TelemetryEvents, REDACTED, SAFE_NUMBER_FIELDS, SAFE_BOOLEAN_FIELDS, SAFE_REPLICATION_FIELDS, DEBUG_FLAG, MAX_EVENTS, TinyCloudDebugLogger, tinyCloudDebugLogger, ServiceErrorSchema, GenericResultSchema, KVResponseHeadersSchema, GenericKVResponseSchema, KVListResponseSchema, KVListResultSchema, ServiceRequestEventSchema, ServiceResponseEventSchema, ServiceErrorEventSchema, ServiceRetryEventSchema, TelemetrySpanEventSchema, RetryPolicySchema, ServiceSessionSchema, URN_PREFIX, NETWORK_NAME_RE, PKH_EIP155_DID_RE, NetworkIdError, RequestTimeoutError, grantableActions, capabilityServices, MAX_CAUSE_DEPTH2, STORAGE_FULL_MESSAGE, STORAGE_WRITE_TOO_LARGE_MESSAGE, STORAGE_REJECTION_BODY_ERRORS, MAX_TIMER_DELAY_MS, BaseService, PrefixedKVService, DEFAULT_SIGNED_READ_URL_EXPIRY_MS, KVAction, MAX_KV_BATCH_READ_ITEMS, pathByteEncoder, REVOKED_BODY, KVService, SQLMigrations, DatabaseHandle, SQLAction, DDL_TOKENS, MIGRATIONS_TABLE, MIGRATIONS_SCHEMA, MIGRATIONS_META_NAMESPACE, MIGRATIONS_META_ID, SQLService, DuckDbDatabaseHandle, DuckDbAction, DuckDbService, AsyncQueue, HOOK_STREAM_RETRY_BASE_DELAY_MS, HOOK_STREAM_RETRY_MAX_DELAY_MS, HOOK_STREAM_HEALTHY_MS, HooksService, SUPERSEDED, STREAM_ERROR_NAMES, STREAM_ERROR_CODES, VaultVersionConfig, CURRENT_VAULT_VERSION, VaultHeaders, DB_NAME, DB_VERSION, STORE_NAME, WRAP_KEY_ID, DataVaultService, SECRET_NAME_RE, SECRET_PREFIX, SCOPED_SECRET_PREFIX, RESERVED_SECRET_SCOPES, TC832_RESERVED_SCOPES, HEX, DEFAULT_ENCRYPTION_ALG, ENVELOPE_VERSION, DEFAULT_KEY_VERSION, DECRYPT_FACT_TYPE, DECRYPT_RESULT_TYPE, EncryptionService;
 var init_dist2 = __esm({
   "../sdk-services/dist/index.js"() {
     "use strict";
@@ -8484,6 +8515,8 @@ var init_dist2 = __esm({
       // Storage quota errors
       STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
       STORAGE_LIMIT_REACHED: "STORAGE_LIMIT_REACHED",
+      /** The node answered the usage read without usage numbers (it predates the read). */
+      STORAGE_STATUS_UNAVAILABLE: "STORAGE_STATUS_UNAVAILABLE",
       // DuckDB-specific errors
       DUCKDB_ERROR: "DUCKDB_ERROR",
       DUCKDB_PERMISSION_DENIED: "DUCKDB_PERMISSION_DENIED",
@@ -8513,7 +8546,9 @@ var init_dist2 = __esm({
       REPLICATION_WRITE: "replication.write",
       REPLICATION_SYNC: "replication.sync",
       REPLICATION_STATE: "replication.state",
-      REPLICATION_DIVERGENCE: "replication.divergence"
+      REPLICATION_DIVERGENCE: "replication.divergence",
+      /** Emitted once, on the first write rejected because storage is full. */
+      STORAGE_FULL: "storage.full"
     };
     REDACTED = "[REDACTED]";
     SAFE_NUMBER_FIELDS = /* @__PURE__ */ new Set([
@@ -8785,6 +8820,10 @@ var init_dist2 = __esm({
     MAX_CAUSE_DEPTH2 = 8;
     STORAGE_FULL_MESSAGE = "TinyCloud storage is full, so this change was not saved. Reading still works. Free up space or upgrade your plan to save again.";
     STORAGE_WRITE_TOO_LARGE_MESSAGE = "This change is larger than the TinyCloud storage you have left, so it was not saved. Reading still works. Free up space or upgrade your plan to save it.";
+    STORAGE_REJECTION_BODY_ERRORS = {
+      storage_quota_exceeded: true,
+      storage_limit_reached: true
+    };
     MAX_TIMER_DELAY_MS = 2147483647;
     BaseService = class {
       constructor() {
@@ -9241,7 +9280,7 @@ var init_dist2 = __esm({
         if (response.status !== 402 && response.status !== 413) {
           return void 0;
         }
-        if (response.status === 413 && !parseStorageQuotaBytes(errorText)) {
+        if (response.status === 413 && !parseStorageRejection(errorText)) {
           return void 0;
         }
         return err(
@@ -11057,6 +11096,9 @@ var init_dist2 = __esm({
         if (response.status === 402) {
           return err(storageRejectionError("sql", 402, meta, errorText));
         }
+        if (response.status === 413 && parseStorageRejection(errorText)) {
+          return err(storageRejectionError("sql", 413, meta, errorText));
+        }
         const errorBody = parseServiceErrorBody(errorText);
         const errorCode2 = this.mapHttpStatusToErrorCode(
           response.status,
@@ -11433,6 +11475,9 @@ var init_dist2 = __esm({
         const meta = responseErrorMeta(response.status, response.statusText, errorText);
         if (response.status === 402) {
           return err(storageRejectionError("duckdb", 402, meta, errorText));
+        }
+        if (response.status === 413 && parseStorageRejection(errorText)) {
+          return err(storageRejectionError("duckdb", 413, meta, errorText));
         }
         const errorBody = parseServiceErrorBody(errorText);
         const errorCode2 = this.mapHttpStatusToErrorCode(

@@ -1,5 +1,28 @@
 # @tinycloud/operations
 
+## 0.5.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [26f86bd]
+  - @tinycloud/sdk-services@3.2.0-beta.7
+  - @tinycloud/sdk-core@3.2.0-beta.7
+  - @tinycloud/node-sdk@3.2.0-beta.7
+
+## 0.5.0-beta.7
+
+### Patch Changes
+
+- 33efc8c: Operation authority checks now judge each required capability against every grant in its owner-exact space together. A session restored from an OpenKey signed login reports one grant per signed action, so an operation needing `tinycloud.kv/get` and `tinycloud.kv/list` on one path was reported as `authority_required` even though both actions were signed.
+- Updated dependencies [33efc8c]
+  - @tinycloud/node-sdk@3.2.0-beta.6
+
+## 0.5.0-beta.6
+
+### Patch Changes
+
+- 9836159: A process that finds its own PID in a profile-lock record it did not write — a restarted container's PID 1 meeting its crashed predecessor's turn and `.lock` — no longer waits forever once that predecessor is provably gone. Turn and `.lock` owner records gain JSON fields only (`instanceId`; on Linux `bootId`, `pidNamespace`, `processStartTime`, `liveness`), and each Linux acquisition listens on a UNIX socket `profile-locks/<profile>/.live-<dir dev>-<dir ino>-<uuid>`, named after the turn directory it is bound in, until it releases. Such a record from the same boot is abandoned when it comes from the same PID namespace with a different process start time (no socket needed, Bun included), or from another PID namespace when its socket was bound in the checking process's own turn directory (same device and inode) and is either gone or refused by the kernel; a refusal counts only under Node, and only if the checking process can then connect to its own socket in that directory, which catches sandboxes that refuse every connect, while sandboxes that fabricate refusals selectively are unsupported, as for the PID check. A live or paused same-PID holder is waited for whatever its hostname. Records from older releases or other boots, holders without a socket, sockets bound in another turn directory (`profile-locks/` not shared, or recreated), checking processes without a working socket of their own, macOS and Windows keep waiting (manual remedy in the tc-cli reference). Staging directories of a dead same-PID predecessor are now collected, and each release under Node removes liveness sockets the kernel refuses, including ones no record names. Records of other PIDs are judged as before: the lock still does not protect processes with different PIDs in different PID namespaces.
+
 ## 0.5.0-beta.5
 
 ### Patch Changes

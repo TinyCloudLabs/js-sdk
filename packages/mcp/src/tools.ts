@@ -151,6 +151,9 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     idempotentHint: true,
     destructiveHint: false,
     openWorldHint: false,
+    // Hosted delegations must arrive through the owner/request-bound OpenKey callback,
+    // not a caller-supplied import artifact.
+    surfaces: ["local"],
   },
   {
     name: "tinycloud_account_spaces_list",

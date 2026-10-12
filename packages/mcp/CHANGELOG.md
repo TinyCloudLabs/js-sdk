@@ -1,5 +1,34 @@
 # @tinycloud/mcp
 
+## 0.5.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [26f86bd]
+  - @tinycloud/node-sdk@3.2.0-beta.7
+  - @tinycloud/operations@0.5.0-beta.8
+
+## 0.5.0-beta.7
+
+### Patch Changes
+
+- 33efc8c: The hosted MCP connect flow now completes. `tinycloud_connect` accepts a correctly signed OpenKey bootstrap: its account access is checked with the SDK subset check, which considers every signed action together instead of requiring one grant to carry them all. An approved operation delegation is imported as a full `tinycloud.auth.delegation` v1 artifact, and OpenKey's signed-login (CACAO) delegation is verified from its SIWE and accepted, so the retried tool call uses it.
+
+  Hosted mode no longer exposes `tinycloud_auth_import`: delegations reach a hosted tenant only through the OpenKey approval callback, which binds them to the requesting account and the stored request. Approval callbacks must carry the SIWE, signature, address and chain ID. Access tokens are refused unless every owner DID claim is exactly `did:pkh:eip155:<chain>:0x<40 hex>`; owner DIDs are canonicalised before they are compared or shown.
+
+- Updated dependencies [33efc8c]
+- Updated dependencies [33efc8c]
+  - @tinycloud/node-sdk@3.2.0-beta.6
+  - @tinycloud/operations@0.5.0-beta.7
+
+## 0.5.0-beta.6
+
+### Patch Changes
+
+- 9836159: A restarted `tinycloud-mcp-http` container (PID 1, same host boot, state volume kept) recovers the profile turn and `.lock` its crashed predecessor held (`.lock` once 30 s old) instead of waiting forever; a live MCP sharing the volume from another container is still waited for. After a host or VM reboot, a volume moved to another machine, a predecessor from an older release, or a container whose seccomp profile fails UNIX-socket connects, the wait remains: with no MCP or `tc` process using the profile, remove `$TC_MCP_STATE_DIR/tenants/<tenant>/.tinycloud/profile-locks/agent` and `$TC_MCP_STATE_DIR/tenants/<tenant>/.tinycloud/profiles/agent/.lock`.
+- Updated dependencies [9836159]
+  - @tinycloud/operations@0.5.0-beta.6
+
 ## 0.5.0-beta.5
 
 ### Patch Changes

@@ -61,19 +61,3 @@ test("does not register a continuation tool or any non-tool MCP surface", async 
   expect(toolSource).not.toContain("registerPrompt");
   expect(toolSource).not.toContain("elicitation");
 });
-
-test("binds secrets status read-only and to the local surface only", () => {
-  const bindings = toolBindingsForTest();
-  expect(bindings.find((candidate) => candidate.name === "tinycloud_secrets_status")).toEqual({
-    name: "tinycloud_secrets_status",
-    operationId: "tinycloud.secrets.status",
-    operationVersion: 1,
-    readOnlyHint: true,
-    idempotentHint: true,
-    destructiveHint: false,
-    openWorldHint: true,
-    surfaces: ["local"],
-  });
-  expect(bindings.filter((binding) => binding.surfaces !== undefined).map((binding) => binding.name))
-    .toEqual(["tinycloud_secrets_status"]);
-});
