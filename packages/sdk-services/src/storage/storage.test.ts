@@ -65,7 +65,7 @@ describe("parseStorageRejection", () => {
  * A fake node whose space is full: every KV put is refused with the node's
  * structured 402, every read succeeds. `free()` models the owner freeing space.
  */
-function fullSpaceNode() {
+function fullSpaceNode(spaceId = "tinycloud:pkh:eip155:1:0xabc:secrets") {
   let full = true;
   let puts = 0;
   let gets = 0;
@@ -88,7 +88,7 @@ function fullSpaceNode() {
     session: {
       delegationHeader: { Authorization: "Bearer session" },
       delegationCid: "bafy",
-      spaceId: "tinycloud:pkh:eip155:1:0xabc:secrets",
+      spaceId,
       verificationMethod: "did:key:test",
       jwk: {},
     },
@@ -187,6 +187,49 @@ describe("StorageFullMonitor on a full space", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("records each owner apart from the event; the episode ends when no owner is full", async () => {
+    const delegated = fullSpaceNode("tinycloud:pkh:eip155:1:0xbbb:shared");
+    const own = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor((spaceId) => spaceId.split(":").slice(0, 5).join(":"));
+    monitor.observe(delegated.context);
+    monitor.observe(own.context);
+    const events: StorageFullEvent[] = [];
+    monitor.on((event) => events.push(event));
+
+    await delegated.kv.put("x", "1");
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(false);
+    await own.kv.put("y", "1");
+    // Same owner, another space: one budget.
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(true);
+    expect(events.map((event) => event.spaceId)).toEqual(["tinycloud:pkh:eip155:1:0xbbb:shared"]);
+
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:default")).toBe(true);
+    await delegated.kv.put("x", "2");
+    expect(events).toHaveLength(1);
+
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xaaa:default");
+    expect(monitor.isFull).toBe(false);
+    await own.kv.put("y", "2");
+    expect(events).toHaveLength(2);
+  });
+
+  test("a rejection whose space is unknown counts for every owner", async () => {
+    const node = fullSpaceNode();
+    node.context.setSession(null);
+    const monitor = new StorageFullMonitor();
+    monitor.observe(node.context);
+    node.context.emit(TelemetryEvents.SERVICE_ERROR, {
+      service: "kv",
+      error: { code: ErrorCodes.STORAGE_QUOTA_EXCEEDED, message: "full", service: "kv" },
+    });
+
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:default")).toBe(true);
+    monitor.clearFor(undefined);
+    expect(monitor.isFull).toBe(false);
   });
 });
 

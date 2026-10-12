@@ -16,6 +16,7 @@ import {
 } from "@tinycloud/sdk-core";
 
 import { NodeWasmBindings } from "./NodeWasmBindings";
+import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
@@ -49,6 +50,8 @@ interface NodeInternals {
   writeManifestRegistryRecords(): Promise<void>;
   scheduleAccountRegistrySync(): void;
   pendingAccountRegistrySync?: { promise: Promise<void> };
+  ownStorageFull: boolean;
+  confirmedHostedSpaceIds: Set<string>;
 }
 
 function makeWasm(recap: Array<{ service: string; space: string; path: string; actions: string[] }>): IWasmBindings {
@@ -367,9 +370,122 @@ describe("TC-628: a full account", () => {
     expect(await internals.bootstrapAccountIfNeeded()).toBe(true);
     expect(runAccountBootstrap).toHaveBeenCalledTimes(1);
   });
+
+  test("a full delegated space does not hide that the account's own storage is full", async () => {
+    const { internals, kv, events } = fullAccount();
+    internals.config.privateKey = "0x" + "11".repeat(32);
+    internals.resolveBootstrapDecision = async () => ({ action: "run", mode: "repair" });
+    const runAccountBootstrap = mock(async () => []);
+    internals.runAccountBootstrap = runAccountBootstrap;
+    internals.writeBootstrapCompletionMarker = async () => {};
+
+    // Another owner's space (B) is full first, then the account's own (A).
+    await rejectWriteOn(internals, OTHER_SPACE);
+    expect(internals.ownStorageFull).toBe(false);
+    const own = await kv.put("API_KEY", "v1");
+    expect(own.ok).toBe(false);
+
+    expect(internals.ownStorageFull).toBe(true);
+    expect(await internals.bootstrapAccountIfNeeded()).toBe(false);
+    expect(runAccountBootstrap).not.toHaveBeenCalled();
+    // Still one episode: the banner was already shown for B.
+    expect(events).toHaveLength(1);
+  });
+
+  test("room on the account's own space clears only the account; a full delegated space stays full", async () => {
+    const { node, internals, kv, host } = fullAccount();
+    await rejectWriteOn(internals, OTHER_SPACE);
+    await kv.put("API_KEY", "v1");
+
+    host.full = false;
+    const status = await node.storage.status();
+    expect(status.ok && status.data.state).toBe("ok");
+
+    expect(internals.ownStorageFull).toBe(false);
+    expect(internals.storageFull.isFull).toBe(true);
+  });
+
+  test("a registry sync through the real account services stops at the first SQL write the full storage refuses", async () => {
+    const { internals } = fullAccount();
+    const accountSpace = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
+    internals.confirmedHostedSpaceIds.add(accountSpace);
+    const sqlRequests: Array<{ action: string; space: string | undefined }> = [];
+    const shared = internals._serviceContext!;
+    // The registry's scoped SQL context hits a node whose storage is full.
+    internals._serviceContext = internals._serviceGraph.track(new ServiceContext({
+      hosts: shared.hosts,
+      session: shared.session!,
+      invoke: (session, _service, _path, action) => ({ "x-action": action, "x-space": session.spaceId }),
+      fetch: async (_url, init) => {
+        const headers = init?.headers as Record<string, string>;
+        sqlRequests.push({ action: headers["x-action"]!, space: headers["x-space"] });
+        return new Response(REJECTION, { status: 413, statusText: "Payload Too Large" });
+      },
+    }));
+    const writeRecords = mock(async () => {});
+    internals.writeManifestRegistryRecords = writeRecords;
+
+    internals.scheduleAccountRegistrySync();
+    await internals.pendingAccountRegistrySync?.promise.catch(() => {});
+
+    expect(sqlRequests).toHaveLength(1);
+    expect(sqlRequests[0]!.action.startsWith("tinycloud.sql/")).toBe(true);
+    expect(sqlRequests[0]!.space).toBe(accountSpace);
+    expect(internals.ownStorageFull).toBe(true);
+    expect(writeRecords).not.toHaveBeenCalled();
+  });
 });
 
-describe("TC-628: restoring another account", () => {
+describe("TC-628: restoring a session", () => {
+  /** A restore payload the real bindings verify: SIWE signed by ADDRESS's key, plus the light fields. */
+  async function signedSession(wasm: NodeWasmBindings) {
+    const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
+    const manager = wasm.createSessionManager();
+    const jwk = JSON.parse(manager.jwk("default")!);
+    const address = await signer.getAddress();
+    const chainId = await signer.getChainId();
+    const spaceId = wasm.makeSpaceId(address, chainId, "default");
+    const now = Date.now();
+    const prepared = wasm.prepareSession({
+      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put"] } },
+      address,
+      chainId,
+      domain: "restore.test",
+      issuedAt: new Date(now).toISOString(),
+      expirationTime: new Date(now + 60 * 60_000).toISOString(),
+      spaceId,
+      jwk,
+    });
+    const signature = await signer.signMessage(prepared.siwe);
+    const session = wasm.completeSessionSetup({ ...prepared, signature });
+    const light = {
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId,
+      jwk,
+      verificationMethod: manager.getDID("default"),
+      tinycloudHosts: ["https://tinycloud.test"],
+    };
+    return { light, full: { ...light, address, chainId, siwe: prepared.siwe, signature } };
+  }
+
+  test("restoring the same owner without the optional metadata keeps the storage-full episode", async () => {
+    const wasm = new NodeWasmBindings();
+    const { light, full } = await signedSession(wasm);
+    const node = new TinyCloudNode({ host: "https://tinycloud.test", wasmBindings: wasm });
+    const internals = node as unknown as NodeInternals;
+
+    await node.restoreSession(full);
+    expect(node.address).toBeDefined();
+    await rejectWriteOn(internals, full.spaceId);
+    expect(internals.ownStorageFull).toBe(true);
+
+    await node.restoreSession(light);
+    expect(node.address).toBeUndefined();
+    expect(internals.storageFull.isFull).toBe(true);
+    expect(internals.ownStorageFull).toBe(true);
+  });
+
   test("a metadata-light restore of a different account starts a new storage-full episode", async () => {
     const wasm = new NodeWasmBindings();
     const manager = wasm.createSessionManager();

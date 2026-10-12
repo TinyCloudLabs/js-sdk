@@ -1249,18 +1249,18 @@ export class TinyCloudNode {
 
   /**
    * Turns every service's storage rejections into one `storage.full` event,
-   * and remembers that storage is full so sign-in and listing skip their
+   * and remembers whose storage is full so sign-in and listing skip their
    * best-effort writes. Lives as long as this instance, across sign-ins.
    */
-  private readonly storageFull = new StorageFullMonitor();
+  private readonly storageFull = new StorageFullMonitor((spaceId) => spaceOwnerKey(spaceId) ?? spaceId);
 
   /**
    * Subscribe to `storage.full`. It fires once, on the first write any
    * service had rejected because the owner's TinyCloud storage is full
    * (`STORAGE_QUOTA_EXCEEDED` or `STORAGE_LIMIT_REACHED`), so an app can show
    * one read-only banner. Reads keep working. It fires again only after
-   * `storage.status()` has reported space again. Returns the unsubscribe
-   * function.
+   * `storage.status()` has reported space again for every owner whose write
+   * was rejected. Returns the unsubscribe function.
    */
   on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void {
     if (event !== "storage.full") {
@@ -1280,10 +1280,7 @@ export class TinyCloudNode {
    * this account's read-path maintenance writes.
    */
   private get ownStorageFull(): boolean {
-    const rejection = this.storageFull.rejection;
-    if (!rejection) return false;
-    const owner = spaceOwnerKey(rejection.spaceId);
-    return owner === undefined || owner === this.currentStorageOwner();
+    return this.storageFull.isFullFor(this._serviceContext?.session?.spaceId ?? this.currentTinyCloudSession()?.spaceId);
   }
 
   /**
@@ -1357,16 +1354,12 @@ export class TinyCloudNode {
           { meta: { status: response.status } },
         ));
       }
-      // Room again on the account whose write was rejected: let read paths
-      // register and repair, and let the next rejection announce itself. A
-      // status for another owner's space says nothing about that account.
-      const rejection = this.storageFull.rejection;
-      if (
-        status.state !== "full" &&
-        rejection &&
-        spaceOwnerKey(spaceId) === (spaceOwnerKey(rejection.spaceId) ?? this.currentStorageOwner())
-      ) {
-        this.storageFull.clear();
+      // Room again on this space's owner: let read paths register and repair,
+      // and let the next rejection announce itself. Other owners stay full.
+      if (status.state !== "full") {
+        this.storageFull.clearFor(spaceId);
+        // A rejection whose space was unknown counted against the signed-in account.
+        if (spaceOwnerKey(spaceId) === this.currentStorageOwner()) this.storageFull.clearFor(undefined);
       }
       return ok(status);
     } catch (error) {
@@ -3468,12 +3461,10 @@ export class TinyCloudNode {
     this.sessionKeyId = stagedKeyId;
     this.sessionKeyJwk = stagedJwk;
     if (resolvedHost) this.config.host = resolvedHost;
-    // A metadata-light restore has no address, so compare the owner of the
-    // primary space too: another account starts with no known rejection.
-    if (
-      stagedAddress !== this._address ||
-      spaceOwnerKey(serviceSession.spaceId) !== this.currentStorageOwner()
-    ) {
+    // Another account starts with no known rejection. Decide that from the
+    // primary space's owner alone: restore metadata (address, SIWE) is
+    // optional, so its appearing or disappearing says nothing about the owner.
+    if (spaceOwnerKey(serviceSession.spaceId) !== this.currentStorageOwner()) {
       this.storageFull.clear();
     }
     this._address = stagedAddress;
