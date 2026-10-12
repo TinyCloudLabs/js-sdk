@@ -23,6 +23,11 @@ type Baseline = {
  * and packages/web-sdk/src/** paths containing "replica" or "replication".
  * Build noise tolerance is 64 gzip bytes: an entry may be up to 64 bytes below
  * the measured positive delta; always record the exact observed delta when possible.
+ *
+ * The ledger allowance (388 B ESM / 861 B CJS) is the replica headroom left after
+ * TC-858 Phase 1: Sam's 6,144 B gzip budget minus Phase 1's measured growth of
+ * 5,756 B ESM / 5,283 B CJS against cbfe21ee (#484, #495). Raising it is a budget
+ * decision, made by editing `allowance` in a reviewed PR.
  */
 const replicaOwnedPath = (path: string) =>
   path.startsWith("packages/replica/") ||
