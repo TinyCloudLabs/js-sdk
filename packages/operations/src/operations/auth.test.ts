@@ -269,7 +269,6 @@ test("import rejects malformed, host, audience, expiry, session-rotation, and CI
 });
 test("request-bound import rejects signed expiry during node activation", async () => {
   const fixture = await createAuthRuntimeFixture();
-  const previousTime = Date.now();
   try {
     const runtime = await runtimeContext(fixture.profile);
     const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
@@ -290,7 +289,7 @@ test("request-bound import rejects signed expiry during node activation", async 
     });
     expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
   } finally {
-    setSystemTime(previousTime);
+    setSystemTime();
     fixture.hermetic.stop();
   }
 });
@@ -562,7 +561,6 @@ test("imports only delegation authority contained by the exact stored request, i
 
 test("expired signed-login import is refused before contacting the node", async () => {
   const fixture = ownerAuthFixture(await createAuthRuntimeFixture());
-  const now = Date.now();
   try {
     const runtime = await runtimeContext(fixture.profile);
     const delegation = await signedLoginDelegation(fixture, runtime);
@@ -583,7 +581,7 @@ test("expired signed-login import is refused before contacting the node", async 
       install.mockRestore();
     }
   } finally {
-    setSystemTime(now);
+    setSystemTime();
     fixture.hermetic.stop();
   }
 });

@@ -497,7 +497,6 @@ describe("activateValidatedRuntimeDelegation", () => {
 
   test("refuses a signed-login delegation after its signed expiry", async () => {
     const fixture = await createHermeticEncryptedNode();
-    const now = Date.now();
     try {
       const signed = await signedLoginDelegation(
         fixture.ownerPrivateKey,
@@ -513,7 +512,7 @@ describe("activateValidatedRuntimeDelegation", () => {
         .rejects.toMatchObject({ reason: "expired" });
       expect(fixture.owner.getRuntimePermissionDelegations()).toEqual([]);
     } finally {
-      setSystemTime(now);
+      setSystemTime();
       fixture.stop();
     }
   });
