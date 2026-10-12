@@ -30,6 +30,7 @@ import {
   principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
+  type ResourceCapability,
   resolveTinyCloudHosts,
   type LocalNodeIdentityStore,
   EXPIRY,
@@ -61,6 +62,15 @@ import {
   defaultSignStrategy,
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+
+/**
+ * A PKH space id with its EIP-155 address lowercased: the address is
+ * case-insensitive, the space name and every other segment are not.
+ */
+function pkhSpaceIdentity(spaceId: string): string {
+  const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(spaceId);
+  return match === null ? spaceId : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
+}
 
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 
@@ -1260,11 +1270,38 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const jwk = JSON.parse(jwkString);
     const now = new Date();
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
-    const abilities = resourceCapabilitiesToAbilitiesMap(
-      options.capabilityRequest.resources,
-    );
+    // Sign every requested permission onto its own space. The widened
+    // default request carries account-space entries; flattening them under
+    // `options.spaceId` signed `…:default/sql/account`, which the node
+    // rightly refuses for `…:account/sql/account` (TC-957). Entries are
+    // grouped by resolved space id, so a short name and its full URI merge
+    // rather than overwrite each other. Only the address segment is
+    // case-insensitive (`makePkhSpaceId` checksums it; callers may not), and
+    // the step's own space is keyed exactly as the caller spelled it.
+    const primaryIdentity = pkhSpaceIdentity(options.spaceId);
+    const resourcesBySpace = new Map<
+      string,
+      { spaceId: string; resources: ResourceCapability[] }
+    >();
+    for (const resource of options.capabilityRequest.resources) {
+      const resolved = this.resolveSpaceName(resource.space, address, chainId);
+      const identity = pkhSpaceIdentity(resolved);
+      const group = resourcesBySpace.get(identity) ?? {
+        spaceId: identity === primaryIdentity ? options.spaceId : resolved,
+        resources: [],
+      };
+      group.resources.push(resource);
+      resourcesBySpace.set(identity, group);
+    }
+    const spaceAbilities: Record<string, AbilitiesMap> = {};
+    for (const { spaceId, resources } of resourcesBySpace.values()) {
+      spaceAbilities[spaceId] = resourceCapabilitiesToAbilitiesMap(resources);
+    }
+    const abilities =
+      spaceAbilities[options.spaceId] ?? resourceCapabilitiesToAbilitiesMap([]);
     const prepared = this.wasm.prepareSession({
       abilities,
+      spaceAbilities,
       ...(options.rawAbilities !== undefined
         ? { rawAbilities: options.rawAbilities }
         : {}),

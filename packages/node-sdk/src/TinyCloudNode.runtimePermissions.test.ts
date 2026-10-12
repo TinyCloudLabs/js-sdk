@@ -2678,4 +2678,81 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
       "scoped-token",
     );
   });
+
+  test("a multi-space bootstrap grant invokes against the target space (TC-957)", () => {
+    const invoke = mock((session: any) => ({
+      Authorization: session.delegationHeader.Authorization,
+    })) as any;
+    const node = makeNode(invoke);
+    const defaultSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
+    const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
+
+    // The widened default bootstrap session: minted for the default space but
+    // its recap also covers the account-index database on the account space.
+    (node as any).runtimePermissionGrants.push({
+      session: {
+        delegationHeader: { Authorization: "bootstrap-token" },
+        delegationCid: "bootstrap-cid",
+        spaceId: defaultSpaceId,
+        verificationMethod: "did:key:bootstrap",
+        jwk: { kty: "OKP" },
+      },
+      delegation: {
+        cid: "bootstrap-cid",
+        delegationHeader: { Authorization: "bootstrap-token" },
+        delegateDID: "did:key:bootstrap",
+        delegatorDID: node.did,
+        spaceId: defaultSpaceId,
+        path: "",
+        actions: ["tinycloud.sql/schema"],
+        expiry: new Date(Date.now() + 3600_000),
+        allowSubDelegation: true,
+        ownerAddress: ADDRESS,
+        chainId: 1,
+        host: "https://tinycloud.test",
+      },
+      operations: [
+        { spaceId: defaultSpaceId, service: "sql", path: "", action: "tinycloud.sql/read" },
+        { spaceId: accountSpaceId, service: "sql", path: "account", action: "tinycloud.sql/schema" },
+      ],
+      expiresAt: new Date(Date.now() + 3600_000),
+      provenance: "bootstrap",
+    });
+
+    const accountFallback = {
+      delegationHeader: { Authorization: "base-token" },
+      delegationCid: "base-cid",
+      spaceId: accountSpaceId,
+      verificationMethod: "did:key:default",
+      jwk: { kty: "OKP" },
+    };
+
+    (node as any).invokeWithRuntimePermissions(
+      accountFallback,
+      "sql",
+      "account",
+      "tinycloud.sql/schema",
+    );
+
+    // The bootstrap grant's key and proof, but the account space as target:
+    // minting against the grant's own (default) space would address
+    // `…:default/sql/account` instead.
+    expect(invoke.mock.calls[0][0].delegationHeader.Authorization).toBe(
+      "bootstrap-token",
+    );
+    expect(invoke.mock.calls[0][0].spaceId).toBe(accountSpaceId);
+
+    // An op on the grant's own space keeps the grant's session untouched,
+    // including its spelling of the space id (callers may lowercase it).
+    (node as any).invokeWithRuntimePermissions(
+      { ...accountFallback, spaceId: defaultSpaceId.toLowerCase() },
+      "sql",
+      "",
+      "tinycloud.sql/read",
+    );
+    expect(invoke.mock.calls[1][0].delegationHeader.Authorization).toBe(
+      "bootstrap-token",
+    );
+    expect(invoke.mock.calls[1][0].spaceId).toBe(defaultSpaceId);
+  });
 });
