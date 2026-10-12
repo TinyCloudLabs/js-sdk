@@ -1433,7 +1433,7 @@ export class TinyCloudNode {
     );
     const invocationSession = !grant || grant.provenance === "primary"
       ? session
-      : grant.session;
+      : this.grantSessionForSpace(grant, session.spaceId);
 
     // The legacy single-capability binding has no caveat parameter.  Calling
     // it for a restored caveated grant would silently broaden the authority,
@@ -7429,7 +7429,26 @@ export class TinyCloudNode {
     // target `spaceId`. Returning `grant.session` there would mint the invocation
     // against the wrong space (TC-111 follow-up). Non-primary grants keep their
     // own session.
-    return grant.provenance === "primary" ? fallback : grant.session;
+    return grant.provenance === "primary"
+      ? fallback
+      : this.grantSessionForSpace(grant, fallback.spaceId);
+  }
+
+  /**
+   * A non-primary grant's session, aimed at `spaceId`. The grant's delegation
+   * may span spaces (the widened default bootstrap session also carries
+   * account-space entries, TC-957); its session's own `spaceId` is the space
+   * it was minted for, so an op on another covered space must keep the grant's
+   * key and proof but target that space. A grant on the target space itself is
+   * returned unchanged, keeping its own spelling of the space id.
+   */
+  private grantSessionForSpace(
+    grant: RuntimePermissionGrant,
+    spaceId: string,
+  ): ServiceSession {
+    return this.spaceIdsEqual(grant.session.spaceId, spaceId)
+      ? grant.session
+      : { ...grant.session, spaceId };
   }
 
   private findGrantForOperations(

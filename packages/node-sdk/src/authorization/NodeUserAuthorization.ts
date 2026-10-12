@@ -1260,11 +1260,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const jwk = JSON.parse(jwkString);
     const now = new Date();
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
-    const abilities = resourceCapabilitiesToAbilitiesMap(
-      options.capabilityRequest.resources,
+    // Sign every requested permission onto its own space. The widened
+    // default request carries account-space entries; flattening them under
+    // `options.spaceId` signed `…:default/sql/account`, which the node
+    // rightly refuses for `…:account/sql/account` (TC-957).
+    const spaceAbilities: Record<string, AbilitiesMap> = {};
+    for (const [space, abilities] of Object.entries(
+      resourceCapabilitiesToSpaceAbilitiesMap(options.capabilityRequest.resources),
+    )) {
+      spaceAbilities[this.resolveSpaceName(space, address, chainId)] = abilities;
+    }
+    // `makePkhSpaceId` checksums the address; callers may pass any casing.
+    const primaryKey = Object.keys(spaceAbilities).find(
+      (space) => space.toLowerCase() === options.spaceId.toLowerCase(),
     );
+    if (primaryKey !== undefined && primaryKey !== options.spaceId) {
+      spaceAbilities[options.spaceId] = spaceAbilities[primaryKey];
+      delete spaceAbilities[primaryKey];
+    }
+    const abilities =
+      spaceAbilities[options.spaceId] ?? resourceCapabilitiesToAbilitiesMap([]);
     const prepared = this.wasm.prepareSession({
       abilities,
+      spaceAbilities,
       ...(options.rawAbilities !== undefined
         ? { rawAbilities: options.rawAbilities }
         : {}),
