@@ -4,9 +4,10 @@ import { dirname, join } from "node:path";
 
 import {
   TinyCloudNode,
+  isCapabilitySubset,
   principalDidEquals,
+  siweRuntimeDelegation,
   type PermissionEntry,
-  type PortableDelegation,
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
@@ -70,10 +71,10 @@ interface CallbackSession {
   readonly spaceId: string;
   readonly jwk: Record<string, unknown>;
   readonly verificationMethod: string;
-  readonly address?: string;
-  readonly chainId?: number;
-  readonly siwe?: string;
-  readonly signature?: string;
+  readonly address: string;
+  readonly chainId: number;
+  readonly siwe: string;
+  readonly signature: string;
 }
 
 /**
@@ -198,8 +199,9 @@ export class RemoteTenantStore {
     if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
       throw new ApprovalOwnerMismatchError();
     }
-    const granted = [...node.getVerifiedSessionCapabilities()];
-    if (!permissionsCover(pending.permissions, granted)) {
+    // The verifier reports one entry per signed action; the SDK subset check
+    // judges each requested entry against every matching grant together.
+    if (!isCapabilitySubset(pending.permissions, node.getVerifiedSessionCapabilities()).subset) {
       throw new Error("The approved delegation does not cover the requested account access.");
     }
     const profile = await readJson<Record<string, unknown>>(this.#profilePath(tenant.stateRoot));
@@ -222,14 +224,28 @@ export class RemoteTenantStore {
     if (pending.requestId === undefined) throw new Error("Authority request is missing.");
     // Unlike bootstrap there is no empty-list exemption: a delegation is only
     // imported when its verified signer is the OAuth principal that asked.
-    const { node } = await this.#restoreApproval(tenant, data);
+    const { node, session } = await this.#restoreApproval(tenant, data);
     if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) throw new ApprovalOwnerMismatchError();
-    const delegation = portableFromCallback(data, pending.permissions, this.#config.nodeHost);
+    // OpenKey returns a signed-login (CACAO) delegation. Every field is
+    // projected from the verified SIWE; `tinycloud.auth.import` verifies it
+    // again and checks it stays within the stored request.
+    const delegation = siweRuntimeDelegation(node, {
+      authorization: session.delegationHeader.Authorization,
+      cid: session.delegationCid,
+      spaceId: session.spaceId,
+      ownerAddress: session.address,
+      chainId: session.chainId,
+      siwe: session.siwe,
+      signature: session.signature,
+      host: this.#config.nodeHost,
+    });
     const result = await invokeOperation(
       "tinycloud.auth.import",
       1,
       { profile: PROFILE, stateRoot: tenant.stateRoot },
       {
+        kind: "tinycloud.auth.delegation",
+        version: 1,
         requestId: pending.requestId,
         delegationCid: delegation.cid,
         delegation,
@@ -240,8 +256,10 @@ export class RemoteTenantStore {
 
   /**
    * Verify the OpenKey callback as a SIWE session for this tenant's key. The
-   * WASM verifier binds the authorization bytes and CID to the signed SIWE, so
-   * `node.did` is the wallet that signed exactly the delegation being stored.
+   * callback must carry the full signed proof (SIWE, signature, address and
+   * chain), so the WASM verifier always runs: it binds the authorization bytes
+   * and CID to the signed SIWE, and `node.did` is the wallet that signed
+   * exactly the delegation being stored.
    */
   async #restoreApproval(
     tenant: TenantProfile,
@@ -451,11 +469,18 @@ function ensureWasm(): void {
   wasmInitialized = true;
 }
 
+/**
+ * Parse the OpenKey callback. Every signed-proof field is required: without
+ * them `restoreSession` verifies nothing and `node.did` would fall back to the
+ * tenant's own key.
+ */
 function sessionFromCallback(data: Record<string, unknown>, privateJwk: Record<string, unknown>): CallbackSession {
   const delegationHeader = data.delegationHeader;
   if (!isRecord(delegationHeader) || typeof delegationHeader.Authorization !== "string" ||
     typeof data.delegationCid !== "string" || typeof data.spaceId !== "string" ||
-    typeof data.verificationMethod !== "string") {
+    typeof data.verificationMethod !== "string" || typeof data.address !== "string" ||
+    typeof data.chainId !== "number" || typeof data.siwe !== "string" ||
+    typeof data.signature !== "string") {
     throw new Error("OpenKey returned an incomplete delegation.");
   }
   return {
@@ -464,80 +489,11 @@ function sessionFromCallback(data: Record<string, unknown>, privateJwk: Record<s
     spaceId: data.spaceId,
     jwk: privateJwk,
     verificationMethod: data.verificationMethod,
-    ...(typeof data.address === "string" ? { address: data.address } : {}),
-    ...(typeof data.chainId === "number" ? { chainId: data.chainId } : {}),
-    ...(typeof data.siwe === "string" ? { siwe: data.siwe } : {}),
-    ...(typeof data.signature === "string" ? { signature: data.signature } : {}),
+    address: data.address,
+    chainId: data.chainId,
+    siwe: data.siwe,
+    signature: data.signature,
   };
-}
-
-function portableFromCallback(
-  data: Record<string, unknown>,
-  permissions: PermissionEntry[],
-  host: string,
-): PortableDelegation {
-  const primary = permissions.find((permission) => permission.service !== "tinycloud.encryption") ?? permissions[0];
-  if (primary === undefined) throw new Error("The authority request has no permissions.");
-  const session = sessionFromCallback(data, {});
-  const expiry = delegationExpiry(data);
-  return {
-    cid: session.delegationCid,
-    delegationHeader: session.delegationHeader,
-    spaceId: session.spaceId,
-    path: primary.path,
-    actions: [...primary.actions],
-    resources: permissions.map((permission) => ({
-      service: permission.service.startsWith("tinycloud.")
-        ? permission.service.slice("tinycloud.".length)
-        : permission.service,
-      space: permission.service === "tinycloud.encryption"
-        ? requiredPermissionSpace(permission)
-        : session.spaceId,
-      path: permission.path,
-      actions: [...permission.actions],
-    })),
-    expiry,
-    delegateDID: session.verificationMethod,
-    ownerAddress: typeof data.address === "string" ? data.address : "",
-    chainId: typeof data.chainId === "number" ? data.chainId : 1,
-    host,
-  };
-}
-
-function delegationExpiry(data: Record<string, unknown>): Date {
-  for (const key of ["expiry", "expiresAt", "expirationTime"]) {
-    const parsed = parseDate(data[key]);
-    if (parsed !== undefined) return parsed;
-  }
-  if (typeof data.siwe === "string") {
-    const match = data.siwe.match(/^Expiration Time:\s*(.+)$/im);
-    const parsed = parseDate(match?.[1]?.trim());
-    if (parsed !== undefined) return parsed;
-  }
-  throw new Error("OpenKey did not return a delegation expiry.");
-}
-
-function permissionsCover(requested: PermissionEntry[], granted: PermissionEntry[]): boolean {
-  return requested.every((request) => granted.some((grant) =>
-    normalizeService(grant.service) === normalizeService(request.service) &&
-    typeof grant.space === "string" && typeof request.space === "string" &&
-    sameSpace(grant.space, request.space) &&
-    grant.path === request.path &&
-    request.actions.every((action) => grant.actions.includes(action))
-  ));
-}
-
-function sameSpace(granted: string, requested: string): boolean {
-  return granted === requested || granted.endsWith(`:${requested}`);
-}
-
-function normalizeService(service: string): string {
-  return service.startsWith("tinycloud.") ? service : `tinycloud.${service}`;
-}
-
-function requiredPermissionSpace(permission: PermissionEntry): string {
-  if (typeof permission.space !== "string") throw new Error("The authority request has no space.");
-  return permission.space;
 }
 
 function publicJwk(jwk: Record<string, unknown>): Record<string, unknown> {
@@ -567,12 +523,6 @@ function isPermissionEntry(value: unknown): value is PermissionEntry {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseDate(value: unknown): Date | undefined {
-  if (typeof value !== "string" && typeof value !== "number") return undefined;
-  const date = new Date(typeof value === "number" && value < 10_000_000_000 ? value * 1000 : value);
-  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 async function secureDirectory(path: string): Promise<void> {

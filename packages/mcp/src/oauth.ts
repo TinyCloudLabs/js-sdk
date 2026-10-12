@@ -5,6 +5,7 @@ import {
   type OAuthMetadata,
   type OAuthTokenVerifier,
 } from "@modelcontextprotocol/server";
+import { pkhDid } from "@tinycloud/node-sdk";
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
 
 const OWNER_DIDS_CLAIM = "https://tinycloud.xyz/owner_dids";
@@ -70,13 +71,11 @@ function authInfo(
     );
   }
   const clientId = firstString(payload.azp, payload.client_id) ?? "unknown";
-  const ownerDids = Array.isArray(payload[OWNER_DIDS_CLAIM])
-    ? payload[OWNER_DIDS_CLAIM].filter((value): value is string => typeof value === "string")
-    : [];
-  if (ownerDids.length === 0) {
+  const ownerDids = canonicalOwnerDids(payload[OWNER_DIDS_CLAIM]);
+  if (ownerDids === undefined) {
     throw new OAuthError(
       OAuthErrorCode.InvalidToken,
-      "The OpenKey access token has no TinyCloud owner identity.",
+      "The OpenKey access token has no valid TinyCloud owner identity.",
     );
   }
   return {
@@ -90,6 +89,29 @@ function authInfo(
       ownerDids,
     },
   };
+}
+
+/**
+ * OpenKey issues owner DIDs as `did:pkh:eip155:<chain>:<address>`. Only that
+ * exact syntax is accepted, canonicalised, and passed on to owner comparison
+ * and the approval text. One malformed value refuses the whole claim rather
+ * than being skipped.
+ */
+const OWNER_DID = /^did:pkh:eip155:([1-9][0-9]{0,15}):(0x[0-9a-fA-F]{40})$/;
+
+function canonicalOwnerDids(claim: unknown): string[] | undefined {
+  if (!Array.isArray(claim) || claim.length === 0) return undefined;
+  const ownerDids: string[] = [];
+  for (const value of claim) {
+    const match = typeof value === "string" ? OWNER_DID.exec(value) : null;
+    if (match === null) return undefined;
+    try {
+      ownerDids.push(pkhDid(match[2]!, Number(match[1])));
+    } catch {
+      return undefined;
+    }
+  }
+  return [...new Set(ownerDids)];
 }
 
 function firstString(...values: unknown[]): string | undefined {

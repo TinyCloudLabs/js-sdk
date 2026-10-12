@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import {
+  NodeWasmBindings,
+  PrivateKeySigner,
+  TinyCloudNode,
+  siweRuntimeDelegation,
+  type PortableDelegation,
+} from "@tinycloud/node-sdk";
 
 /** Wallets used as OpenKey principals in hosted MCP tests. */
 export const REQUESTER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
@@ -15,6 +21,51 @@ export async function ownerDid(privateKey: string): Promise<string> {
 export async function ownerSpace(privateKey: string, name: string): Promise<string> {
   const signer = new PrivateKeySigner(privateKey);
   return new NodeWasmBindings().makeSpaceId(await signer.getAddress(), await signer.getChainId(), name);
+}
+
+/**
+ * Project a callback body into the portable delegation an importer would
+ * build, verified against the tenant's key, without going through the store.
+ */
+export async function siweDelegationFromCallback(
+  body: Record<string, unknown>,
+  tenantStateRoot: string,
+  host: string,
+): Promise<PortableDelegation> {
+  const header = body.delegationHeader;
+  if (typeof header !== "object" || header === null || !("Authorization" in header) ||
+    typeof header.Authorization !== "string" || typeof body.delegationCid !== "string" ||
+    typeof body.spaceId !== "string" || typeof body.verificationMethod !== "string" ||
+    typeof body.address !== "string" || typeof body.chainId !== "number" ||
+    typeof body.siwe !== "string" || typeof body.signature !== "string") {
+    throw new Error("Callback body is incomplete.");
+  }
+  const jwk = JSON.parse(await readFile(
+    join(tenantStateRoot, ".tinycloud/profiles/agent/key.json"),
+    "utf8",
+  )) as Record<string, unknown>;
+  const node = new TinyCloudNode({ host });
+  await node.restoreSession({
+    delegationHeader: { Authorization: header.Authorization },
+    delegationCid: body.delegationCid,
+    spaceId: body.spaceId,
+    jwk,
+    verificationMethod: body.verificationMethod,
+    address: body.address,
+    chainId: body.chainId,
+    siwe: body.siwe,
+    signature: body.signature,
+  });
+  return siweRuntimeDelegation(node, {
+    authorization: header.Authorization,
+    cid: body.delegationCid,
+    spaceId: body.spaceId,
+    ownerAddress: body.address,
+    chainId: body.chainId,
+    siwe: body.siwe,
+    signature: body.signature,
+    host,
+  });
 }
 
 /**
@@ -60,6 +111,37 @@ export async function openKeyCallbackBody(options: {
     signature,
     expiry,
   };
+}
+
+/**
+ * Approve an OpenKey `/delegate` redirect the way OpenKey does: sign exactly
+ * the requested permissions, all in one space, which OpenKey re-derives from
+ * the signer's address and the space name.
+ */
+export async function openKeyApprovalBody(options: {
+  readonly redirect: URL;
+  readonly tenantStateRoot: string;
+  readonly privateKey: string;
+}): Promise<Record<string, unknown>> {
+  const encoded = options.redirect.searchParams.get("permissions");
+  if (encoded === null) throw new Error("OpenKey redirect has no permissions.");
+  const { permissions } = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+    permissions: Array<{ service: string; space: string; path: string; actions: string[] }>;
+  };
+  const spaces = new Set(permissions.map((permission) => permission.space.split(":").at(-1)!));
+  if (spaces.size !== 1) throw new Error("OpenKey signs one space per delegation.");
+  const abilities: Record<string, Record<string, string[]>> = {};
+  for (const permission of permissions) {
+    const service = permission.service.replace(/^tinycloud\./, "");
+    const paths = abilities[service] ??= {};
+    paths[permission.path] = [...new Set([...(paths[permission.path] ?? []), ...permission.actions])];
+  }
+  return openKeyCallbackBody({
+    tenantStateRoot: options.tenantStateRoot,
+    privateKey: options.privateKey,
+    space: [...spaces][0]!,
+    abilities,
+  });
 }
 
 export function callbackRequest(body: Record<string, unknown>): Request {

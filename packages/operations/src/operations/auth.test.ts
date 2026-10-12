@@ -1,6 +1,13 @@
 import { afterAll, afterEach, beforeEach, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import {
+  NodeWasmBindings,
+  PrivateKeySigner,
+  siweRuntimeDelegation,
+  type PortableDelegation,
+  type RuntimeDelegationActivator,
+} from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { z } from "zod";
 
@@ -25,6 +32,7 @@ import {
 } from "../state.js";
 import {
   createAuthRuntimeFixture,
+  type AuthRuntimeFixture,
   type StoredRuntimeDelegation,
 } from "../../test-support/auth-runtime.js";
 
@@ -261,7 +269,6 @@ test("import rejects malformed, host, audience, expiry, session-rotation, and CI
 });
 test("request-bound import rejects signed expiry during node activation", async () => {
   const fixture = await createAuthRuntimeFixture();
-  const previousTime = Date.now();
   try {
     const runtime = await runtimeContext(fixture.profile);
     const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
@@ -282,7 +289,7 @@ test("request-bound import rejects signed expiry during node activation", async 
     });
     expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
   } finally {
-    setSystemTime(previousTime);
+    setSystemTime();
     fixture.hermetic.stop();
   }
 });
@@ -552,6 +559,93 @@ test("imports only delegation authority contained by the exact stored request, i
   }
 });
 
+test("expired signed-login import is refused before contacting the node", async () => {
+  const fixture = ownerAuthFixture(await createAuthRuntimeFixture());
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const delegation = await signedLoginDelegation(fixture, runtime);
+    const requestId = await storeLegacyRequest(fixture, [{
+      service: "tinycloud.kv",
+      space: fixture.hermetic.ownerRestorableSession.spaceId,
+      path: "agents/demo/settings",
+      actions: ["tinycloud.kv/get"],
+    }]);
+    const install = spyOn(runtime.runtime.node as RuntimeDelegationActivator, "useRuntimeDelegation");
+    try {
+      setSystemTime(delegation.expiry.getTime() + 1);
+      const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+      expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_EXPIRED" } });
+      expect(install).not.toHaveBeenCalled();
+      expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+    } finally {
+      install.mockRestore();
+    }
+  } finally {
+    setSystemTime();
+    fixture.hermetic.stop();
+  }
+});
+
+test("a SIWE delegation replays under every request binding import accepts", async () => {
+  const source = await createAuthRuntimeFixture();
+  const fixture = ownerAuthFixture(source);
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const space = fixture.hermetic.ownerRestorableSession.spaceId;
+    const delegation = await signedLoginDelegation(fixture, runtime);
+    for (const requested of [
+      { path: "agents/", actions: ["tinycloud.kv/get"] },
+      { path: "agents/demo/settings", actions: ["tinycloud.kv/*"] },
+      { path: "agents/demo/settings", actions: ["tinycloud.kv/get"] },
+      { path: "agents/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+    ]) {
+      await writeJsonAtomic(additionalDelegationsPath(fixture.profile), []);
+      const requestId = await storeLegacyRequest(fixture, [{ service: "tinycloud.kv", space, ...requested }]);
+      expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+        status: "ok",
+        output: { alreadyPresent: false },
+      });
+      // What import persisted, the next runtime installs.
+      expect((await runtimeContext(fixture.profile)).runtime.granted).toContainEqual(SIGNED_LOGIN_GRANT);
+    }
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("a request-bound re-import binds a SIWE delegation stored without its request", async () => {
+  const source = await createAuthRuntimeFixture();
+  const fixture = ownerAuthFixture(source);
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const space = fixture.hermetic.ownerRestorableSession.spaceId;
+    const delegation = await signedLoginDelegation(fixture, runtime);
+    // As the legacy `tc auth import` route stores it: no request binding.
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), [{
+      delegation: JSON.parse(JSON.stringify(delegation)),
+      permissions: [SIGNED_LOGIN_GRANT],
+    }]);
+    expect((await runtimeContext(fixture.profile)).runtime.granted).not.toContainEqual(SIGNED_LOGIN_GRANT);
+
+    const requestId = await storeLegacyRequest(fixture, [{
+      service: "tinycloud.kv",
+      space,
+      path: "agents/demo/settings",
+      actions: ["tinycloud.kv/get"],
+    }]);
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "ok",
+      output: { cid: delegation.cid, alreadyPresent: true },
+    });
+    const records = await readAdditionalDelegations<Record<string, unknown>>(fixture.profile);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ authorityRequest: { requestId } });
+    expect((await runtimeContext(fixture.profile)).runtime.granted).toContainEqual(SIGNED_LOGIN_GRANT);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 test("rejects a stored request whose profile does not match the selected profile", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {
@@ -802,4 +896,68 @@ async function readAuthRequestRecords(profile: string): Promise<Record<string, u
   const records = await readJson<unknown>(authRequestsPath(profile));
   if (!Array.isArray(records)) throw new Error("expected authority request records");
   return records as Record<string, unknown>[];
+}
+
+const SIGNED_LOGIN_GRANT = expect.objectContaining({
+  service: "tinycloud.kv",
+  path: "agents/demo/settings",
+  actions: ["tinycloud.kv/get"],
+});
+
+/** Use the signer and session belonging to the same owner, as hosted approval does. */
+function ownerAuthFixture(fixture: AuthRuntimeFixture): AuthRuntimeFixture {
+  return {
+    ...fixture,
+    profile: fixture.ownerProfile,
+    sessionDid: fixture.hermetic.ownerRestorableSession.verificationMethod.split("#", 1)[0]!,
+  };
+}
+
+/** An OpenKey-style signed-login (CACAO) delegation of `get` on agents/demo/settings. */
+async function signedLoginDelegation(
+  fixture: AuthRuntimeFixture,
+  runtime: RuntimeOperationContext,
+): Promise<PortableDelegation> {
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+  const address = await signer.getAddress();
+  const issuedAt = new Date();
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { "agents/demo/settings": ["tinycloud.kv/get"] } },
+    address,
+    chainId: 1,
+    domain: "openkey.test",
+    issuedAt: issuedAt.toISOString(),
+    expirationTime: new Date(issuedAt.getTime() + 60 * 60_000).toISOString(),
+    spaceId: fixture.hermetic.ownerRestorableSession.spaceId,
+    jwk: fixture.hermetic.ownerRestorableSession.jwk as object,
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  return siweRuntimeDelegation(runtime.runtime.node as RuntimeDelegationActivator, {
+    authorization: session.delegationHeader.Authorization,
+    cid: session.delegationCid,
+    spaceId: prepared.spaceId,
+    ownerAddress: address,
+    chainId: 1,
+    siwe: prepared.siwe,
+    signature,
+    host: fixture.hermetic.host,
+  });
+}
+
+/** Store a request record in the minimal public shape import also accepts. */
+async function storeLegacyRequest(
+  fixture: AuthRuntimeFixture,
+  requested: PermissionEntry[],
+): Promise<string> {
+  const requestId = `req_${requested.map((entry) => entry.path + entry.actions.join("+")).join("_")}`;
+  await writeJsonAtomic(authRequestsPath(fixture.profile), [{
+    kind: "tinycloud.auth.request",
+    version: 1,
+    requestId,
+    sessionDid: fixture.sessionDid,
+    requested,
+  }]);
+  return requestId;
 }

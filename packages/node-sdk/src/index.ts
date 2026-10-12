@@ -276,6 +276,7 @@ export {
   grantAuthRequest,
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
+  siweRuntimeDelegation,
   signedCompactUcanExpiry,
   RUNTIME_DELEGATION_REJECTIONS,
   RuntimeDelegationRejectedError,
