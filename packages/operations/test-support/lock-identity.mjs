@@ -1,7 +1,7 @@
 // Simulated same-PID records exercise the built Node ESM without namespace privileges.
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import { profileLockMetadataPath, profileLockPath, profileTurnLockPath, withProfileLock } from "@tinycloud/operations/state";
@@ -28,9 +28,20 @@ const legacy = (record) => {
   const { instanceId, bootId, pidNamespace, processStartTime, liveness, ...rest } = record;
   return { ...rest, createdAt: new Date(Date.now() - 60_000).toISOString() };
 };
+// Liveness socket names carry their turn directory's dev and ino (hex); an
+// offset names a different directory.
+const socketName = async (inoOffset = 0n) => {
+  const { dev, ino } = await stat(turnPath, { bigint: true });
+  return `.live-${dev.toString(16)}-${(ino + inoOffset).toString(16)}-${crypto.randomUUID()}`;
+};
+const killed = async (socket) => {
+  socket.child.kill("SIGKILL");
+  await once(socket.child, "exit");
+};
 const listener = async (name) => {
   const path = join(turnPath, name);
-  const child = spawn(process.execPath, ["-e", `require('node:net').createServer(c => c.destroy()).listen(${JSON.stringify(path)}, () => console.log('ready'))`], { stdio: ["ignore", "pipe", "pipe"] });
+  // Bound relative to the turn directory: the full path can exceed sun_path.
+  const child = spawn(process.execPath, ["-e", `require('node:net').createServer(c => c.destroy()).listen(${JSON.stringify(name)}, () => console.log('ready'))`], { cwd: turnPath, stdio: ["ignore", "pipe", "pipe"] });
   try {
     await Promise.race([once(child.stdout, "data"), once(child, "exit").then(() => { throw new Error("Listener exited before ready"); })]);
     const stats = await lstat(path, { bigint: true });
@@ -63,6 +74,17 @@ try {
       finish();
       await holding;
     }
+  } else if (mode === "orphans") {
+    await withProfileLock(profile, async () => undefined);
+    const deadName = await socketName();
+    await killed(await listener(deadName));
+    const deadNew = `${await socketName()}.new`;
+    await killed(await listener(deadNew));
+    const live = await listener(await socketName());
+    child = live.child;
+    const entered = await outcome();
+    const names = await readdir(turnPath);
+    result = { outcome: entered, deadRemoved: !names.includes(deadName) && !names.includes(deadNew), liveKept: names.includes(live.record.socket) };
   } else {
     let ownLock;
     await withProfileLock(profile, async () => { ownLock = await readOwner(ownerPath); });
@@ -70,19 +92,22 @@ try {
     const turn = await readOwner(turnPathOwner);
     let liveness;
     if (["restart-refused", "restart-refused-turn", "restart-refused-lock", "foreign-other-inode", "wrong-boot", "stage", "foreign-paused"].includes(mode)) {
-      const socket = await listener(`.live-${crypto.randomUUID()}`);
+      const socket = await listener(await socketName());
       child = socket.child;
       liveness = socket.record;
       if (mode === "foreign-paused") child.kill("SIGSTOP");
       else {
-        child.kill("SIGKILL");
-        await once(child, "exit");
+        await killed(socket);
         child = undefined;
       }
     } else if (mode === "restart-gone") {
-      liveness = { socket: `.live-${crypto.randomUUID()}`, dev: "1", ino: "1" };
+      liveness = { socket: await socketName(), dev: "1", ino: "1" };
+    } else if (mode === "foreign-other-directory") {
+      // Bound in another directory: a separate turn lock sharing profiles/,
+      // or this one before it was removed and recreated.
+      liveness = { socket: await socketName(1n), dev: "1", ino: "1" };
     } else if (mode === "foreign-not-socket") {
-      const socket = `.live-${crypto.randomUUID()}`;
+      const socket = await socketName();
       await writeFile(join(turnPath, socket), "not a socket");
       const stats = await lstat(join(turnPath, socket), { bigint: true });
       liveness = { socket, dev: String(stats.dev), ino: String(stats.ino) };
@@ -100,7 +125,7 @@ try {
       const dead = join(turnPath, `.stage-${process.pid}-dead`);
       const live = join(turnPath, `.stage-${process.pid}-live`);
       const invalid = join(turnPath, `.stage-${process.pid}-invalid`);
-      const liveSocket = await listener(`.live-${crypto.randomUUID()}`);
+      const liveSocket = await listener(await socketName());
       try {
         for (const path of [dead, live, invalid]) await mkdir(path);
         await writeFile(join(dead, "owner.json"), JSON.stringify(abandoned(turn)));

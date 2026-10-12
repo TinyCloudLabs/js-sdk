@@ -39,6 +39,7 @@ const TEST_LOCK_MOVED_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_MOVED_BARRIER_DIR";
 const TEST_LOCK_TURN_PUBLISH_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_PUBLISH_BARRIER_DIR";
 const TEST_LOCK_TURN_SETTLE_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_SETTLE_BARRIER_DIR";
 const TEST_LOCK_TURN_COLLECT_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR";
+const TEST_LOCK_LIVENESS_BARRIER_DIR = "TC_TEST_PROFILE_LOCK_LIVENESS_BARRIER_DIR";
 /** One acquisition of a profile lock; `active` is cleared before release. */
 interface HeldProfileLock {
   readonly lockPath: string;
@@ -82,7 +83,10 @@ interface ProcessOrigin {
 
 /** A listening UNIX socket in the turn directory, held for one acquisition. */
 interface Liveness {
-  /** Name of the socket in the turn directory: `.live-<uuid>`. */
+  /**
+   * Name of the socket in the turn directory, `.live-<dev>-<ino>-<uuid>`:
+   * dev and ino (hex) identify the turn directory its holder bound it in.
+   */
   readonly socket: string;
   /** lstat dev and ino of the socket as its holder bound it, decimal. */
   readonly dev: string;
@@ -131,56 +135,98 @@ function processOwner(liveness: HeldLiveness | null): { instanceId: string; live
   return { instanceId: processInstanceId, ...processOrigin(), ...(liveness ? { liveness: liveness.record } : {}) };
 }
 
-const LIVENESS_SOCKET = /^\.live-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
-/** sun_path holds 108 bytes with its NUL; longer paths go through /proc/self/fd. */
-const SOCKET_PATH_LIMIT = 100;
+/**
+ * Liveness socket names (see Liveness), and the same name with `.new` while
+ * it is bound but not yet listening. A socket appears under its final name
+ * only once it accepts connections, so a refused connect to a final name
+ * means its listener is closed for good.
+ */
+const LIVENESS_SOCKET = /^\.live-([0-9a-f]+)-([0-9a-f]+)-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}(\.new)?$/;
 const LIVENESS_PROBE_TIMEOUT_MS = 1_000;
 
-/** An address for `name` in `directory` that fits in sun_path. */
-async function socketAddress(directory: string, name: string): Promise<{ path: string; close(): Promise<void> }> {
-  const direct = join(directory, name);
-  if (Buffer.byteLength(direct) <= SOCKET_PATH_LIMIT) return { path: direct, close: async () => undefined };
+/** The `dev-ino` (hex) a liveness socket name gives for its turn directory; null for other names. */
+function socketDirectory(name: string): string | null {
+  const match = LIVENESS_SOCKET.exec(name);
+  return match ? `${match[1]}-${match[2]}` : null;
+}
+
+/** A turn directory held open, so every lookup in it names the same directory. */
+interface PinnedDirectory {
+  /** `dev-ino` of the directory, hex, as in liveness socket names. */
+  readonly identity: string;
+  /** `name` in this directory, through /proc/self/fd: short enough for sun_path. */
+  path(name: string): string;
+  close(): Promise<void>;
+}
+
+async function pinDirectory(directory: string): Promise<PinnedDirectory> {
   const handle = await open(directory, "r");
-  return { path: `/proc/self/fd/${handle.fd}/${name}`, close: () => handle.close() };
+  try {
+    const { dev, ino } = await handle.stat({ bigint: true });
+    return {
+      identity: `${dev.toString(16)}-${ino.toString(16)}`,
+      path: (name) => `/proc/self/fd/${handle.fd}/${name}`,
+      close: () => handle.close(),
+    };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
 }
 
 /**
  * Binds this acquisition's liveness socket in the turn directory: Linux with
  * provenance only. Null if it cannot be bound (no /proc, a filesystem
  * without socket files, a sandbox without networking): records then carry
- * no liveness, and a same-PID process in another PID namespace waits.
+ * no liveness, and a same-PID process in another PID namespace waits. The
+ * socket is bound as `<name>.new` and renamed once listening; a sweep that
+ * removes the `.new` name in between (it refused) makes the rename, and so
+ * the bind, fail.
  */
 async function bindLiveness(directory: string): Promise<HeldLiveness | null> {
   if (!processOrigin()) return null;
-  const socket = `.live-${randomUUID()}`;
-  const path = join(directory, socket);
+  let pinned: PinnedDirectory;
+  try {
+    pinned = await pinDirectory(directory);
+  } catch {
+    return null;
+  }
+  const socket = `.live-${pinned.identity}-${randomUUID()}`;
   const server = createServer((connection) => connection.destroy());
   let bound = false;
   try {
-    const address = await socketAddress(directory, socket);
-    try {
-      // Node 20 has no Promise.withResolvers.
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        // exclusive: a cluster worker binds its own socket, not the primary's.
-        server.listen({ path: address.path, exclusive: true }, () => {
-          server.off("error", reject);
-          resolve();
-        });
+    // Node 20 has no Promise.withResolvers.
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      // exclusive: a cluster worker binds its own socket, not the primary's.
+      server.listen({ path: pinned.path(`${socket}.new`), exclusive: true }, () => {
+        server.off("error", reject);
+        resolve();
       });
-      bound = true;
-    } finally {
-      await address.close();
-    }
+    });
+    bound = true;
     server.on("error", () => undefined);
     server.unref();
-    const stats = await lstat(path, { bigint: true });
-    if (!stats.isSocket()) throw new Error(`${path} is not a socket`);
-    return { record: { socket, dev: String(stats.dev), ino: String(stats.ino) }, path, server };
+    await rename(pinned.path(`${socket}.new`), pinned.path(socket));
+    const stats = await lstat(pinned.path(socket), { bigint: true });
+    if (!stats.isSocket()) throw new Error(`${socket} is not a socket`);
+    await waitForTestBarrier(TEST_LOCK_LIVENESS_BARRIER_DIR, basename(directory));
+    return { record: { socket, dev: String(stats.dev), ino: String(stats.ino) }, path: join(directory, socket), server };
   } catch {
-    if (bound) await closeLiveness({ record: { socket, dev: "", ino: "" }, path, server });
+    if (bound) {
+      server.close();
+      for (const name of [`${socket}.new`, socket]) await unlink(pinned.path(name)).catch(() => undefined);
+    }
     return null;
+  } finally {
+    await pinned.close();
   }
+}
+
+/** This acquisition's liveness socket, bound in its turn directory on first need. */
+async function ensureLiveness(acquisition: AcquisitionLiveness): Promise<HeldLiveness | null> {
+  if (acquisition.held === undefined) acquisition.held = await bindLiveness(acquisition.directory);
+  return acquisition.held;
 }
 
 /**
@@ -196,58 +242,114 @@ async function closeLiveness(held: HeldLiveness): Promise<void> {
 function parseLiveness(value: unknown): Liveness | null {
   if (typeof value !== "object" || value === null) return null;
   const { socket, dev, ino } = value as Record<string, unknown>;
-  return typeof socket === "string" && LIVENESS_SOCKET.test(socket) &&
+  // Records name a final socket name, never a `.new` one.
+  const name = typeof socket === "string" ? LIVENESS_SOCKET.exec(socket) : null;
+  return name !== null && name[3] === undefined &&
       typeof dev === "string" && /^[0-9]+$/.test(dev) && typeof ino === "string" && /^[0-9]+$/.test(ino)
-    ? { socket, dev, ino }
+    ? { socket: name[0], dev, ino }
     : null;
 }
 
 /**
- * Whether a liveness socket's holder is gone: "gone" if the socket file was
- * removed (only its holder does that, after its critical section, or a
- * process that found it refused), "refused" if connecting to that very
- * inode is refused (the kernel closed the listener). Anything else, including
- * a paused holder's full backlog, is "unknown". Bun reports a refused UNIX
- * connect as ENOENT, so under Bun only "gone" is decided.
+ * This acquisition's own socket, as the control for judging others in
+ * `pinned`: bound (on first need) in that same directory, and found there
+ * as bound. Null if there is none.
  */
-async function probeLiveness(directory: string, liveness: Liveness): Promise<"gone" | "refused" | "unknown"> {
-  const path = join(directory, liveness.socket);
-  let stats;
+async function controlIn(pinned: PinnedDirectory, acquisition: AcquisitionLiveness): Promise<HeldLiveness | null> {
+  const own = await ensureLiveness(acquisition);
+  if (!own || socketDirectory(own.record.socket) !== pinned.identity) return null;
+  const stats = await lstat(pinned.path(own.record.socket), { bigint: true }).catch(() => null);
+  return stats?.isSocket() && String(stats.dev) === own.record.dev && String(stats.ino) === own.record.ino ? own : null;
+}
+
+/** Connects to a UNIX socket and disconnects: "connected", "refused" (ECONNREFUSED) or "other". */
+async function tryConnect(path: string): Promise<"connected" | "refused" | "other"> {
+  // Node 20 has no Promise.withResolvers.
+  return new Promise((resolve) => {
+    const probe = connect({ path });
+    const settle = (outcome: "connected" | "refused" | "other") => {
+      clearTimeout(timer);
+      probe.destroy();
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => settle("other"), LIVENESS_PROBE_TIMEOUT_MS);
+    probe.once("connect", () => settle("connected"));
+    probe.once("error", (error) => settle(isErrno(error, "ECONNREFUSED") ? "refused" : "other"));
+  });
+}
+
+/**
+ * Whether the kernel refuses connections to `name` in `pinned`. A refusal
+ * counts only if this process then connects to its own socket (`control`)
+ * in the same directory through the same kind of address: a sandbox that
+ * fails connect itself (a seccomp filter returning ECONNREFUSED; it cannot
+ * read the address, so it cannot tell the two apart) fails that too. Never
+ * under Bun, which reports a refused UNIX connect as ENOENT.
+ */
+async function kernelRefuses(pinned: PinnedDirectory, name: string, control: HeldLiveness): Promise<boolean> {
+  if (process.versions.bun !== undefined) return false;
+  return await tryConnect(pinned.path(name)) === "refused" &&
+    await tryConnect(pinned.path(control.record.socket)) === "connected";
+}
+
+/**
+ * Whether a liveness socket's holder is gone, judged in the turn directory
+ * of `acquisition` and only if the socket's name says it was bound in that
+ * very directory (not another one under that path: a separate turn lock, or
+ * one removed and recreated). "gone" if the socket file was removed (only
+ * its holder does that, after its critical section, or a process that found
+ * it refused), "refused" if the kernel refuses connections to that very
+ * inode (kernelRefuses). Both need this acquisition's own socket in that
+ * directory as a control. Anything else, including a paused holder's full
+ * backlog, is "unknown".
+ */
+async function probeLiveness(liveness: Liveness, acquisition: AcquisitionLiveness): Promise<"gone" | "refused" | "unknown"> {
+  let pinned: PinnedDirectory;
   try {
-    stats = await lstat(path, { bigint: true });
-  } catch (error) {
-    return isErrno(error, "ENOENT") ? "gone" : "unknown";
-  }
-  if (!stats.isSocket() || String(stats.dev) !== liveness.dev || String(stats.ino) !== liveness.ino) return "unknown";
-  if (process.versions.bun !== undefined) return "unknown";
-  let address: { path: string; close(): Promise<void> };
-  try {
-    address = await socketAddress(directory, liveness.socket);
+    pinned = await pinDirectory(acquisition.directory);
   } catch {
     return "unknown";
   }
   try {
-    return await new Promise((resolve) => {
-      const probe = connect({ path: address.path });
-      const settle = (verdict: "refused" | "unknown") => {
-        clearTimeout(timer);
-        probe.destroy();
-        resolve(verdict);
-      };
-      const timer = setTimeout(() => settle("unknown"), LIVENESS_PROBE_TIMEOUT_MS);
-      probe.once("connect", () => settle("unknown"));
-      probe.once("error", (error) => settle(isErrno(error, "ECONNREFUSED") ? "refused" : "unknown"));
-    });
+    if (socketDirectory(liveness.socket) !== pinned.identity) return "unknown";
+    const control = await controlIn(pinned, acquisition);
+    if (!control) return "unknown";
+    let stats;
+    try {
+      stats = await lstat(pinned.path(liveness.socket), { bigint: true });
+    } catch (error) {
+      return isErrno(error, "ENOENT") ? "gone" : "unknown";
+    }
+    if (!stats.isSocket() || String(stats.dev) !== liveness.dev || String(stats.ino) !== liveness.ino) return "unknown";
+    return await kernelRefuses(pinned, liveness.socket, control) ? "refused" : "unknown";
   } finally {
-    await address.close();
+    await pinned.close();
   }
 }
 
-/** Removes the liveness socket of a finished or abandoned record once it refuses connections. */
-async function collectLiveness(directory: string, owner: RecordedProcess): Promise<void> {
-  const liveness = parseLiveness(owner.liveness);
-  if (liveness && await probeLiveness(directory, liveness) === "refused") {
-    await unlink(join(directory, liveness.socket)).catch(() => undefined);
+/**
+ * Removes the liveness sockets in this acquisition's turn directory that the
+ * kernel refuses (kernelRefuses): those of acquisitions that are over,
+ * whether or not a record still names them (a crash before the first
+ * record, a turn removed by a Bun process, which cannot judge refusal). A
+ * socket that accepts or cannot be judged stays; nothing is removed by age.
+ * Not under Bun.
+ */
+async function sweepLiveness(acquisition: AcquisitionLiveness): Promise<void> {
+  if (process.versions.bun !== undefined || !acquisition.held) return;
+  const pinned = await pinDirectory(acquisition.directory);
+  try {
+    const control = await controlIn(pinned, acquisition);
+    if (!control) return;
+    for (const name of await readdir(pinned.path("."))) {
+      if (name === control.record.socket || socketDirectory(name) !== pinned.identity) continue;
+      const stats = await lstat(pinned.path(name)).catch(() => null);
+      if (stats?.isSocket() && await kernelRefuses(pinned, name, control)) {
+        await unlink(pinned.path(name)).catch(() => undefined);
+      }
+    }
+  } finally {
+    await pinned.close();
   }
 }
 
@@ -712,8 +814,9 @@ async function acquireProfileLock(
     });
   }
 
-  // Bound before this acquisition's first turn record, closed once it is over.
-  const liveness: AcquisitionLiveness = { held: undefined };
+  // Bound before this acquisition's first turn record (or first probe of
+  // another's socket), closed once the acquisition is over.
+  const liveness: AcquisitionLiveness = { directory: turnDirectory, held: undefined };
   const closeAcquisitionLiveness = async () => {
     if (liveness.held) await closeLiveness(liveness.held);
   };
@@ -747,25 +850,30 @@ async function acquireProfileLock(
             try {
               await releaseProfileLock(profile, lockPath, token);
             } finally {
-              await releaseTurn(profile, turn);
+              await releaseTurn(profile, turn, liveness);
               await closeAcquisitionLiveness();
             }
           },
         };
       }
       await signalTestLockContention(profile);
-      if (await recoverStaleLock(profile, lockPath, turnDirectory, staleAfterMs)) continue;
+      if (await recoverStaleLock(profile, lockPath, liveness, staleAfterMs)) continue;
       await waitOrTimeOut(profile, deadline);
     }
   } catch (error) {
-    await releaseTurn(profile, turn);
+    await releaseTurn(profile, turn, liveness);
     await closeAcquisitionLiveness();
     throw error;
   }
 }
 
-/** An acquisition's liveness socket: undefined until bound, null if it could not be. */
+/**
+ * An acquisition's liveness socket in its turn directory: undefined until
+ * bound, null if it could not be. Same-PID records are judged in that
+ * directory, with this socket as the control (probeLiveness).
+ */
 interface AcquisitionLiveness {
+  readonly directory: string;
   held: HeldLiveness | null | undefined;
 }
 
@@ -901,8 +1009,7 @@ async function acquireTurn(
     }
     firstWaitedTurn ??= latest.done ? latest.slot + 1 : latest.slot;
     if (latest.held && latest.done) {
-      if (liveness.held === undefined) liveness.held = await bindLiveness(directory);
-      const turn = await takeTurn(profile, directory, latest, liveness.held);
+      const turn = await takeTurn(profile, directory, latest, await ensureLiveness(liveness));
       if (turn !== null) return { turn, firstWaitedTurn };
       await waitOrTimeOut(profile, deadline);
     } else if (latest.done) {
@@ -910,7 +1017,7 @@ async function acquireTurn(
       await waitOrTimeOut(profile, deadline, problem);
     } else if (
       (latest.pid === process.pid && relinquishedTurns.has(latest.token)) ||
-      !await isRecordedProcessAlive(latest, directory)
+      !await isRecordedProcessAlive(latest, liveness)
     ) {
       await waitForTestBarrier(TEST_LOCK_TURN_SETTLE_BARRIER_DIR, profile);
       await settleAbandonedTurn(directory, latest);
@@ -1123,14 +1230,14 @@ async function publishDirectory(
  * retries, the critical section is still over and its writes stand: the turn
  * is handed to settleOwnTurn rather than failing the caller.
  */
-async function releaseTurn(profile: string, turn: Turn): Promise<void> {
+async function releaseTurn(profile: string, turn: Turn, liveness: AcquisitionLiveness): Promise<void> {
   try {
     await markTurn(join(turn.directory, String(turn.slot)), turn.token, "done");
   } catch {
     settleOwnTurn(turn.directory, turn.slot, turn.token);
     return;
   }
-  await collectTurns(profile, turn).catch(() => undefined);
+  await collectTurns(profile, turn, liveness).catch(() => undefined);
 }
 
 /**
@@ -1140,30 +1247,30 @@ async function releaseTurn(profile: string, turn: Turn): Promise<void> {
  * directory named after this process's PID is judged by the owner record
  * staged in it, which a predecessor with this PID may have left.
  */
-async function isAbandonedTurnEntry(directory: string, name: string): Promise<boolean> {
+async function isAbandonedTurnEntry(directory: string, name: string, liveness: AcquisitionLiveness): Promise<boolean> {
   if (name.startsWith(".trash-")) return true;
   const writer = /^\.(?:stage|deleted\.json)[-.]([0-9]+)[-.]/.exec(name)?.[1];
   if (writer === undefined) return false;
-  if (Number(writer) !== process.pid) return !await isRecordedProcessAlive({ pid: Number(writer) }, directory);
-  return name.startsWith(".stage-") && await isStagedOwnerGone(join(directory, name, "owner.json"), directory);
+  if (Number(writer) !== process.pid) return !await isRecordedProcessAlive({ pid: Number(writer) }, liveness);
+  return name.startsWith(".stage-") && await isStagedOwnerGone(join(directory, name, "owner.json"), liveness);
 }
 
 /** A turn directory's staging directory left beside it by a process that is gone. */
-async function isAbandonedTurnDirectoryStage(directory: string, name: string): Promise<boolean> {
-  const match = /^\.stage-(.+)-([0-9]+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(name);
-  if (!match) return false;
-  const writer = Number(match[2]);
-  if (writer !== process.pid) return !await isRecordedProcessAlive({ pid: writer }, directory);
-  return isStagedOwnerGone(join(directory, name, "0", "owner.json"), join(directory, match[1]!));
+async function isAbandonedTurnDirectoryStage(directory: string, name: string, liveness: AcquisitionLiveness): Promise<boolean> {
+  const writer = /^\.stage-.+-([0-9]+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(name)?.[1];
+  if (writer === undefined) return false;
+  if (Number(writer) !== process.pid) return !await isRecordedProcessAlive({ pid: Number(writer) }, liveness);
+  return isStagedOwnerGone(join(directory, name, "0", "owner.json"), liveness);
 }
 
-/** Whether a complete staged owner record of this PID belongs to a process that is gone. */
-async function isStagedOwnerGone(recordPath: string, turnDirectory: string): Promise<boolean> {
+/**
+ * Whether a complete staged owner record of this PID belongs to a process
+ * that is gone. Its socket, if any, goes with the next sweep (sweepLiveness).
+ */
+async function isStagedOwnerGone(recordPath: string, liveness: AcquisitionLiveness): Promise<boolean> {
   const owner = await readJson<RecordedProcess>(recordPath).catch(() => null);
-  if (typeof owner !== "object" || owner === null || owner.pid !== process.pid) return false;
-  if (await isRecordedProcessAlive(owner, turnDirectory)) return false;
-  await collectLiveness(turnDirectory, owner);
-  return true;
+  return typeof owner === "object" && owner !== null && owner.pid === process.pid &&
+    !await isRecordedProcessAlive(owner, liveness);
 }
 
 /**
@@ -1174,16 +1281,16 @@ async function isStagedOwnerGone(recordPath: string, turnDirectory: string): Pro
  * or cannot be read is left alone, and a read error stops the collection.
  * Leftovers of crashed processes go too, judged by PID (or, for this PID, by
  * the record they hold), never by age: removing a paused process's staging
- * directory could publish an incomplete turn. A removed turn's liveness
- * socket goes once it refuses connections.
+ * directory could publish an incomplete turn. Last, liveness sockets the
+ * kernel refuses are swept (sweepLiveness).
  */
-async function collectTurns(profile: string, turn: Turn): Promise<void> {
+async function collectTurns(profile: string, turn: Turn, liveness: AcquisitionLiveness): Promise<void> {
   for (const [directory, abandoned] of [
     [turn.directory, isAbandonedTurnEntry],
     [dirname(turn.directory), isAbandonedTurnDirectoryStage],
   ] as const) {
     for (const name of await readdir(directory)) {
-      if (await abandoned(directory, name)) await rm(join(directory, name), { recursive: true, force: true }).catch(() => undefined);
+      if (await abandoned(directory, name, liveness)) await rm(join(directory, name), { recursive: true, force: true }).catch(() => undefined);
     }
   }
   const older = (await readdir(turn.directory)).filter((name) => TURN.test(name)).map(Number)
@@ -1201,9 +1308,9 @@ async function collectTurns(profile: string, turn: Turn): Promise<void> {
     const trash = join(turn.directory, `.trash-${randomUUID()}`);
     if (await rename(join(turn.directory, String(slot)), trash).then(() => true, () => false)) {
       await rm(trash, { recursive: true, force: true }).catch(() => undefined);
-      await collectLiveness(turn.directory, candidate);
     }
   }
+  await sweepLiveness(liveness);
 }
 
 /**
@@ -1359,7 +1466,7 @@ async function signalTestLockContention(profile: string): Promise<void> {
  * longer than the stale threshold; recoveryFenced bounds how stale this
  * process's age check can be.
  */
-async function recoverOwnerlessLock(profile: string, lockPath: string, turnDirectory: string, staleAfterMs: number): Promise<boolean> {
+async function recoverOwnerlessLock(profile: string, lockPath: string, liveness: AcquisitionLiveness, staleAfterMs: number): Promise<boolean> {
   let aged: boolean;
   try {
     const { mtimeMs } = await stat(lockPath);
@@ -1376,7 +1483,7 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, turnDirec
     if (!onlyOrphanedClaims && (!aged || recoveryFenced(checkedAt, staleAfterMs))) return false;
     for (const name of entries.filter((entry) => RECOVERY_CLAIM.test(entry))) {
       const claimPath = join(lockPath, name);
-      if (await hasLiveRecoveryOwner(claimPath, turnDirectory)) {
+      if (await hasLiveRecoveryOwner(claimPath, liveness)) {
         // The claim keeps the directory in place. Only the original mkdir
         // owner could publish owner.json here; never overwrite that record.
         if (!await exists(join(lockPath, "owner.json"))) await rename(claimPath, join(lockPath, "owner.json"));
@@ -1396,7 +1503,7 @@ async function recoverOwnerlessLock(profile: string, lockPath: string, turnDirec
 }
 
 /** A no-hard-links claim may contain a live owner's record moved before a crash. */
-async function hasLiveRecoveryOwner(claimPath: string, turnDirectory: string): Promise<boolean> {
+async function hasLiveRecoveryOwner(claimPath: string, liveness: AcquisitionLiveness): Promise<boolean> {
   let contents: string;
   try {
     contents = await readFile(claimPath, "utf8");
@@ -1412,7 +1519,7 @@ async function hasLiveRecoveryOwner(claimPath: string, turnDirectory: string): P
   }
   const record = typeof owner === "object" && owner !== null && "pid" in owner ? owner as RecordedProcess : null;
   return typeof record?.pid === "number" && Number.isInteger(record.pid) && record.pid > 0 &&
-    await isRecordedProcessAlive(record, turnDirectory);
+    await isRecordedProcessAlive(record, liveness);
 }
 
 /**
@@ -1479,11 +1586,11 @@ async function removeAgedOwnerFiles(lockPath: string, staleAfterMs: number): Pro
  * between the two renames, the put-back restores a released record, and
  * `.lock` stays held until that PID is gone and the record is 30 s old.
  */
-async function recoverStaleLock(profile: string, lockPath: string, turnDirectory: string, staleAfterMs: number): Promise<boolean> {
+async function recoverStaleLock(profile: string, lockPath: string, liveness: AcquisitionLiveness, staleAfterMs: number): Promise<boolean> {
   const ownerPath = join(lockPath, "owner.json");
   const observed = await readFile(ownerPath, "utf8").catch(() => null);
-  if (observed === null) return recoverOwnerlessLock(profile, lockPath, turnDirectory, staleAfterMs);
-  if (!await isAbandonedOwner(observed, ownerPath, turnDirectory, staleAfterMs)) return false;
+  if (observed === null) return recoverOwnerlessLock(profile, lockPath, liveness, staleAfterMs);
+  if (!await isAbandonedOwner(observed, ownerPath, liveness, staleAfterMs)) return false;
 
   await waitForTestBarrier(TEST_LOCK_RECOVERY_BARRIER_DIR, profile);
   const claimPath = join(lockPath, `.recover-${randomUUID()}.json`);
@@ -1536,7 +1643,7 @@ async function recoverStaleLock(profile: string, lockPath: string, turnDirectory
  * one's no-hard-link fallback, which writes in place while holding a turn;
  * so an incomplete record seen while holding a turn was left by a crash.
  */
-async function isAbandonedOwner(observed: string, ownerPath: string, turnDirectory: string, staleAfterMs: number): Promise<boolean> {
+async function isAbandonedOwner(observed: string, ownerPath: string, liveness: AcquisitionLiveness, staleAfterMs: number): Promise<boolean> {
   let owner: unknown;
   try {
     owner = JSON.parse(observed);
@@ -1544,7 +1651,7 @@ async function isAbandonedOwner(observed: string, ownerPath: string, turnDirecto
     owner = null;
   }
   if (typeof owner === "object" && owner !== null && "pid" in owner) {
-    return isStaleOwner(owner as RecordedProcess & { createdAt?: unknown }, turnDirectory, staleAfterMs);
+    return isStaleOwner(owner as RecordedProcess & { createdAt?: unknown }, liveness, staleAfterMs);
   }
   const modifiedAt = await stat(ownerPath).then(({ mtimeMs }) => mtimeMs, () => Number.NaN);
   return Date.now() - modifiedAt >= staleAfterMs;
@@ -1571,7 +1678,7 @@ async function waitForTestBarrier(environmentName: string, profile: string): Pro
 
 async function isStaleOwner(
   owner: (RecordedProcess & { createdAt?: unknown }) | null,
-  turnDirectory: string,
+  liveness: AcquisitionLiveness,
   staleAfterMs: number,
 ): Promise<boolean> {
   const now = Date.now();
@@ -1586,7 +1693,7 @@ async function isStaleOwner(
   if (typeof owner?.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
     return false;
   }
-  return !await isRecordedProcessAlive(owner, turnDirectory);
+  return !await isRecordedProcessAlive(owner, liveness);
 }
 
 /** Whether `path` exists. Only ENOENT/ENOTDIR mean it does not; other errors are thrown. */
@@ -1606,12 +1713,11 @@ async function exists(path: string): Promise<boolean> {
  * (master's rule). A record of this PID but another instance is dead only on
  * authoritative evidence from the same kernel boot: in this PID namespace, a
  * different process start (the PID was reused); in another PID namespace,
- * its liveness socket gone, or refusing connections to the very inode its
- * holder bound (the kernel closes a listener only when its process exits or
- * releases it). A paused holder still accepts. Everything else waits.
- * `turnDirectory` holds the liveness sockets.
+ * its liveness socket, bound in this acquisition's turn directory, gone or
+ * refused by the kernel (probeLiveness). A paused holder still accepts.
+ * Everything else waits.
  */
-async function isRecordedProcessAlive(owner: RecordedProcess, turnDirectory: string): Promise<boolean> {
+async function isRecordedProcessAlive(owner: RecordedProcess, acquisition: AcquisitionLiveness): Promise<boolean> {
   const pid = owner.pid;
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return true;
   try {
@@ -1630,7 +1736,7 @@ async function isRecordedProcessAlive(owner: RecordedProcess, turnDirectory: str
       owner.processStartTime === origin.processStartTime;
   }
   const liveness = parseLiveness(owner.liveness);
-  return liveness === null || await probeLiveness(turnDirectory, liveness) === "unknown";
+  return liveness === null || await probeLiveness(liveness, acquisition) === "unknown";
 }
 
 function validateProfileName(profile: string): string {
