@@ -9,6 +9,12 @@ type Baseline = {
   "index.mjs": number;
   "index.cjs": number;
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
+  /**
+   * Gzip growth from shipped non-replica features since `baselineRef`, as
+   * measured by this check in CI on the feature's PR. It is subtracted so the
+   * 6144-byte limit keeps measuring replica Phase 1 alone.
+   */
+  nonReplicaGrowth: Array<{ ticket: string; reason: string; "index.mjs": number; "index.cjs": number }>;
 };
 const distDir = resolve(import.meta.dir, "../dist");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
@@ -36,8 +42,9 @@ for (const filename of ["index.mjs", "index.cjs"] as const) {
     }
   }
   const current = execFileSync("gzip", ["-9", "-c", resolve(distDir, filename)], { maxBuffer: 10 * 1024 * 1024 }).byteLength;
-  const delta = current - baseline[filename];
-  console.log(`${filename}: baseline=${baseline[filename]} gzip-bytes current=${current} delta=${delta} bytes`);
+  const exempt = baseline.nonReplicaGrowth.reduce((sum, entry) => sum + entry[filename], 0);
+  const delta = current - baseline[filename] - exempt;
+  console.log(`${filename}: baseline=${baseline[filename]} gzip-bytes current=${current} non-replica=${exempt} delta=${delta} bytes`);
   if (delta > 6 * 1024) {
     console.error(`${filename}: gzip delta ${delta} bytes exceeds the 6144-byte limit`);
     failed = true;
