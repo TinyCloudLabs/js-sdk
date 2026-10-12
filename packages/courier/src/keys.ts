@@ -1,0 +1,64 @@
+import type { PermissionEntry } from '@tinycloud/node-sdk';
+
+/** Courier KV layout and the single source of agent grant authority. */
+export const PREFIX = 'xyz.tinycloud.courier';
+export const EXT = 'https://tinycloud.xyz/ext/courier/v0';
+export const DEFAULT_HOST = 'https://tee.node.tinycloud.xyz';
+/** Must equal @tinycloud/bootstrap AGENTS_SPACE; created at TinyCloud onboarding, never by Courier. */
+export const COURIER_SPACE = 'agents';
+export const AGENT_GRANT_EXPIRY = '30d';
+
+const kv = (path: string, actions: string[]): PermissionEntry => ({
+  service: 'tinycloud.kv',
+  space: COURIER_SPACE,
+  path: `${PREFIX}/${path}`,
+  actions: actions.map((action) => `tinycloud.kv/${action}`),
+});
+
+export const AGENT_GRANT: PermissionEntry[] = [
+  kv('to/', ['get', 'put', 'list', 'del', 'metadata']),
+  kv('me/requests/', ['put']),
+  kv('me/mirror/', ['get', 'put', 'list', 'del']),
+  kv('me/state/', ['get', 'put', 'list', 'del']),
+  kv('me/peers/', ['get', 'put', 'list', 'del']),
+  kv('me/', ['get', 'list']),
+  {
+    service: 'tinycloud.hooks',
+    space: COURIER_SPACE,
+    path: `kv/${PREFIX}/`,
+    actions: ['tinycloud.hooks/subscribe'],
+  },
+];
+
+
+export const k = {
+  /** `to/<peer>/` — everything this side exposes to a peer. */
+  toPeer: (peer: string) => `${PREFIX}/to/${peer}/`,
+  threadRoot: (peer: string, threadId: string) => `${PREFIX}/to/${peer}/threads/${threadId}`,
+  threadMeta: (peer: string, threadId: string) => `${k.threadRoot(peer, threadId)}/meta.json`,
+  msgPrefix: (peer: string, threadId: string) => `${k.threadRoot(peer, threadId)}/msg/`,
+  msg: (peer: string, threadId: string, messageId: string) => `${k.msgPrefix(peer, threadId)}${messageId}.json`,
+  task: (peer: string, threadId: string, taskId: string) => `${k.threadRoot(peer, threadId)}/task/${taskId}.json`,
+  file: (peer: string, threadId: string, name: string) => `${k.threadRoot(peer, threadId)}/files/${name}`,
+  receipts: (peer: string) => `${k.toPeer(peer)}receipts.json`,
+  peerDelegation: (peer: string) => `${k.toPeer(peer)}pairing/delegation.json`,
+  peerRecord: (peer: string) => `${PREFIX}/me/peers/${peer}.json`,
+  orders: (peer: string) => `${PREFIX}/me/orders/${peer}.md`,
+  request: (id: string) => `${PREFIX}/me/requests/${id}.json`,
+  approval: (id: string) => `${PREFIX}/me/approvals/${id}.json`,
+  mirrorMsg: (peer: string, threadId: string, messageId: string) =>
+    `${PREFIX}/me/mirror/${peer}/threads/${threadId}/msg/${messageId}.json`,
+  peersPrefix: `${PREFIX}/me/peers/`,
+  mirrorPrefix: `${PREFIX}/me/mirror/`,
+  approvalsPrefix: `${PREFIX}/me/approvals/`,
+  ordersPrefix: `${PREFIX}/me/orders/`,
+  mePrefix: `${PREFIX}/me/`,
+};
+
+/** Peer-read capability entries for `delegateTo`, spec §3/§5 and TC-708. */
+export function peerReadPermissions(peer: string, space: string): PermissionEntry[] {
+  return [
+    { space, service: 'tinycloud.kv', path: k.toPeer(peer), actions: ['tinycloud.kv/get', 'tinycloud.kv/list'] },
+    { space, service: 'tinycloud.hooks', path: `kv/${PREFIX}/to/${peer}`, actions: ['tinycloud.hooks/subscribe'] },
+  ];
+}

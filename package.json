@@ -20,6 +20,7 @@
     "packages/operations",
     "packages/replica",
     "packages/mcp",
+    "packages/courier",
     "packages/cli",
     "apps/*",
     "tests/*"

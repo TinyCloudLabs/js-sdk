@@ -6568,6 +6568,9 @@ var init_profiles = __esm({
   }
 });
 
+// src/commands/courier.ts
+var TC_OPTIONS_BEFORE_COURIER = 'tc courier takes no tc options and does not use tc profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. tc courier init --host <url>.';
+
 // src/index.ts
 init_errors();
 import { readFileSync as readFileSync2 } from "fs";
@@ -18512,6 +18515,12 @@ async function selectedProfileName() {
   return process.env.TC_PROFILE ?? config.defaultProfile;
 }
 
+// src/lib/courier-loader.ts
+async function loadCourierEntry() {
+  const load = new Function("specifier", "return import(specifier)");
+  return load(new URL("./courier-entry.js", import.meta.url).href);
+}
+
 // src/index.ts
 var { version } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
@@ -18571,29 +18580,27 @@ configureShareCommandServices({
   nativeReader: shareAuthority.nativeReader
 });
 var argv = process.argv.slice(2);
-var globalOptionsWithValues = /* @__PURE__ */ new Set(["--profile", "-p", "--host", "-H"]);
+var globalLongOptionsWithValues = { "--profile": true, "--host": true };
+var globalShortOptionsWithValues = { p: true, H: true };
 function firstCommandToken(values) {
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     if (value === "--") return values[index + 1];
-    if (globalOptionsWithValues.has(value)) {
-      index += 1;
+    if (value.startsWith("--")) {
+      if (globalLongOptionsWithValues[value]) index += 1;
       continue;
     }
-    if (value.startsWith("--profile=") || value.startsWith("--host=")) continue;
-    if (value === "--verbose" || value === "--no-cache" || value === "-q" || value === "--quiet" || value === "--json" || value === "--replication" || value === "--no-replication" || value === "--replication-debug") continue;
-    if (value.startsWith("-")) continue;
+    if (value.length > 1 && value.startsWith("-")) {
+      for (let char = 1; char < value.length; char += 1) {
+        if (!globalShortOptionsWithValues[value[char]]) continue;
+        if (char === value.length - 1) index += 1;
+        break;
+      }
+      continue;
+    }
     return value;
   }
   return void 0;
-}
-var isShareInvocation = firstCommandToken(argv) === "share";
-if (isShareInvocation) {
-  registerShareCommand(program);
-} else {
-  const loadLegacy = new Function("specifier", "return import(specifier)");
-  const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
-  registerTinyCloudCommands(program);
 }
 program.addHelpText("before", () => `${theme.label("Version:")} ${theme.value(version)}
 `);
@@ -18614,20 +18621,37 @@ ${theme.muted("Docs:")} ${theme.accent("https://docs.tinycloud.xyz/cli")}
 ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk")}
 `;
 });
-try {
-  await program.parseAsync(process.argv);
-  if (await closeReplication()) {
-    process.exitCode = 0;
-    const stdoutFlushed = Promise.withResolvers();
-    process.stdout.write("", () => stdoutFlushed.resolve());
-    await stdoutFlushed.promise;
-    const stderrFlushed = Promise.withResolvers();
-    process.stderr.write("", () => stderrFlushed.resolve());
-    await stderrFlushed.promise;
-    process.exit();
+var commandToken = firstCommandToken(argv);
+if (argv[0] === "courier") {
+  const code3 = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  if (code3 !== 0) process.exit(code3);
+} else if (commandToken === "courier") {
+  process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}
+`);
+  process.exit(2);
+} else {
+  if (commandToken === "share") {
+    registerShareCommand(program);
+  } else {
+    const loadLegacy = new Function("specifier", "return import(specifier)");
+    const { registerTinyCloudCommands } = await loadLegacy(new URL("./legacy-entry.js", import.meta.url).href);
+    registerTinyCloudCommands(program);
   }
-} catch (error) {
-  await handleError(error);
+  try {
+    await program.parseAsync(process.argv);
+    if (await closeReplication()) {
+      process.exitCode = 0;
+      const stdoutFlushed = Promise.withResolvers();
+      process.stdout.write("", () => stdoutFlushed.resolve());
+      await stdoutFlushed.promise;
+      const stderrFlushed = Promise.withResolvers();
+      process.stderr.write("", () => stderrFlushed.resolve());
+      await stderrFlushed.promise;
+      process.exit();
+    }
+  } catch (error) {
+    await handleError(error);
+  }
 }
 /*! Bundled license information:
 

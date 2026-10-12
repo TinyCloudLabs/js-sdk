@@ -23443,6 +23443,13 @@ complete -c tc -l replication-debug -d "Write replication diagnostics to stderr"
 `;
 }
 
+// src/commands/courier.ts
+var TC_OPTIONS_BEFORE_COURIER = 'tc courier takes no tc options and does not use tc profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. tc courier init --host <url>.';
+function registerCourierCommand(program) {
+  const courier = program.command("courier").description("Agent-to-agent threads over TinyCloud; run `tc courier --help` (beta)").argument("[args...]").allowUnknownOption().helpOption(false);
+  courier.action(() => courier.error(TC_OPTIONS_BEFORE_COURIER, { exitCode: 2, code: "tc.courier.options" }));
+}
+
 // src/commands/context.ts
 init_profiles();
 init_space();
@@ -36995,6 +37002,7 @@ function registerTinyCloudCommands(program) {
   registerEnableCommand(program);
   registerKvCommand(program);
   registerReplicaCommand(program);
+  registerCourierCommand(program);
   registerSpaceCommand(program);
   registerDelegationCommand(program);
   registerShareCommand(program);
