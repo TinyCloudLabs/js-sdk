@@ -81,53 +81,52 @@ if (prBaseSha) {
   const mergeBase = command("git", ["merge-base", prBaseSha, "HEAD"]);
   const changedPaths = command("git", ["diff", "--name-only", `${mergeBase}...HEAD`]).split("\n").filter(Boolean);
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
-  const rustChanged = changedPaths.some((path) => path.startsWith("packages/sdk-rs/"));
-  const tempDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-merge-base-"));
-  const worktree = join(tempDir, "worktree");
-  try {
-    command("git", ["worktree", "add", "--detach", worktree, mergeBase]);
-    execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: worktree, stdio: "inherit" });
-    if (!rustChanged) {
-      for (const directory of ["web-sdk-wasm", "node-sdk-wasm"]) {
-        await cp(resolve(repoRoot, "packages/sdk-rs", directory), resolve(worktree, "packages/sdk-rs", directory), { recursive: true });
+  if (replicaPaths.length === 0) {
+    console.log("Replica size budget: non-replica PR; no ledger charge or merge-base rebuild.");
+  } else {
+    const rustChanged = changedPaths.some((path) => path.startsWith("packages/sdk-rs/"));
+    const tempDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-merge-base-"));
+    const worktree = join(tempDir, "worktree");
+    try {
+      command("git", ["worktree", "add", "--detach", worktree, mergeBase]);
+      execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: worktree, stdio: "inherit" });
+      if (!rustChanged) {
+        for (const directory of ["web-sdk-wasm", "node-sdk-wasm"]) {
+          await cp(resolve(repoRoot, "packages/sdk-rs", directory), resolve(worktree, "packages/sdk-rs", directory), { recursive: true });
+        }
+        console.log("Merge-base build: reusing HEAD WASM outputs (packages/sdk-rs unchanged)");
       }
-      console.log("Merge-base build: reusing HEAD WASM outputs (packages/sdk-rs unchanged)");
-    }
-    const buildCommands: [string, string[]][] = [];
-    if (rustChanged) buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs", "build:wasm:node"]]);
-    buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs/packages/node", "build"]]);
-    if (rustChanged) buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs", "build:wasm:web"]]);
-    buildCommands.push(
-      ["bun", ["run", "--cwd", "packages/sdk-rs/packages/web", "build"]],
-      ["bun", ["run", "--cwd", "packages/bootstrap", "build"]],
-      ["bun", ["run", "--cwd", "packages/sdk-services", "build"]],
-      ["bun", ["run", "--cwd", "packages/share-envelope", "build"]],
-      ["bun", ["run", "--cwd", "packages/share-sdk", "build"]],
-      ["bun", ["run", "--cwd", "packages/sdk-core", "build"]],
-      ["bun", ["run", "--cwd", "packages/node-sdk", "build"]],
-      ["bun", ["run", "--cwd", "packages/operations", "build"]],
-      ["bun", ["run", "--cwd", "packages/replica", "build"]],
-      ["bun", ["run", "--cwd", "packages/courier", "build"]],
-      ["bun", ["run", "--cwd", "packages/node-sdk", "typecheck:replica-contract"]],
-      ["bun", ["run", "--cwd", "packages/cli", "build"]],
-      ["bun", ["run", "--cwd", "packages/web-sdk", "build"]],
-    );
-    for (const [program, args] of buildCommands) {
-      execFileSync(program, args, { cwd: worktree, stdio: "inherit" });
-    }
-    const baseSizes = await gzipSizes(resolve(worktree, "packages/web-sdk/dist"));
-    for (const format of formats) {
-      const delta = currentSizes[format] - baseSizes[format];
-      console.log(`${format}: merge-base=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${delta} bytes`);
-    }
-    if (replicaPaths.length === 0) {
-      console.log("Replica size budget: non-replica PR; no ledger charge.");
-    } else {
+      const buildCommands: [string, string[]][] = [];
+      if (rustChanged) buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs", "build:wasm:node"]]);
+      buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs/packages/node", "build"]]);
+      if (rustChanged) buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs", "build:wasm:web"]]);
+      buildCommands.push(
+        ["bun", ["run", "--cwd", "packages/sdk-rs/packages/web", "build"]],
+        ["bun", ["run", "--cwd", "packages/bootstrap", "build"]],
+        ["bun", ["run", "--cwd", "packages/sdk-services", "build"]],
+        ["bun", ["run", "--cwd", "packages/share-envelope", "build"]],
+        ["bun", ["run", "--cwd", "packages/share-sdk", "build"]],
+        ["bun", ["run", "--cwd", "packages/sdk-core", "build"]],
+        ["bun", ["run", "--cwd", "packages/node-sdk", "build"]],
+        ["bun", ["run", "--cwd", "packages/operations", "build"]],
+        ["bun", ["run", "--cwd", "packages/replica", "build"]],
+        ["bun", ["run", "--cwd", "packages/courier", "build"]],
+        ["bun", ["run", "--cwd", "packages/node-sdk", "typecheck:replica-contract"]],
+        ["bun", ["run", "--cwd", "packages/cli", "build"]],
+        ["bun", ["run", "--cwd", "packages/web-sdk", "build"]],
+      );
+      for (const [program, args] of buildCommands) {
+        execFileSync(program, args, { cwd: worktree, stdio: "inherit" });
+      }
+      const baseSizes = await gzipSizes(resolve(worktree, "packages/web-sdk/dist"));
+      const deltas = Object.fromEntries(formats.map((format) => [format, currentSizes[format] - baseSizes[format]])) as GzipSizes;
+      for (const format of formats) {
+        console.log(`${format}: merge-base=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
+      }
       const baseLedger = JSON.parse(await readFile(resolve(worktree, "packages/web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Ledger;
       validateLedger(baseLedger);
       const appended = ledger.entries.slice(baseLedger.entries.length);
       const prefixMatches = JSON.stringify(ledger.entries.slice(0, baseLedger.entries.length)) === JSON.stringify(baseLedger.entries);
-      const deltas = Object.fromEntries(formats.map((format) => [format, currentSizes[format] - baseSizes[format]])) as GzipSizes;
       if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
@@ -154,13 +153,13 @@ if (prBaseSha) {
           failed = true;
         }
       }
-      if (replicaPaths.length > 0) console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
-    }
-  } finally {
-    try {
-      command("git", ["worktree", "remove", "--force", worktree]);
+      console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      try {
+        command("git", ["worktree", "remove", "--force", worktree]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     }
   }
 } else {
