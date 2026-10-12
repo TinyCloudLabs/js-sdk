@@ -36,6 +36,21 @@ const plugins = [
     /@noble\/hashes\/crypto$/,
     path.resolve(__dirname, "src/polyfills/noble-crypto-browser.mjs")
   ),
+  {
+    apply(compiler) {
+      compiler.hooks.compilation.tap("NoReplica", (compilation) =>
+        compilation.hooks.finishModules.tap("NoReplica", (modules) => {
+          for (const module of modules) {
+            if (/[\\/](packages[\\/]replica|@tinycloud[\\/]replica)[\\/]/.test(module.resource ?? "")) {
+              compilation.errors.push(
+                new compiler.webpack.WebpackError(`web-sdk must not bundle replica code: ${module.resource}`)
+              );
+            }
+          }
+        })
+      );
+    },
+  },
 ];
 
 const resolveConfig = {
