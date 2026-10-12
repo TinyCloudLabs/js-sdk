@@ -5,6 +5,7 @@ import {
   type IWasmBindings,
   type ISessionManager,
   type ISigner,
+  type ResourceCapability,
 } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
@@ -88,6 +89,7 @@ function createSigner(): ISigner {
 
 async function prepareBootstrapSession(
   space: "default" | "account",
+  options: { spaceId?: string; resources?: ResourceCapability[] } = {},
 ): Promise<Record<string, unknown>> {
   const captured: Array<Record<string, unknown>> = [];
   const auth = new NodeUserAuthorization({
@@ -103,8 +105,10 @@ async function prepareBootstrapSession(
   Reflect.set(auth, "_address", ADDRESS);
   Reflect.set(auth, "_chainId", CHAIN_ID);
   await auth.createBootstrapSession({
-    spaceId: bootstrapSpaceId(ADDRESS, CHAIN_ID, space),
-    capabilityRequest: BOOTSTRAP_SESSION_REQUESTS[space],
+    spaceId: options.spaceId ?? bootstrapSpaceId(ADDRESS, CHAIN_ID, space),
+    capabilityRequest: options.resources
+      ? { ...BOOTSTRAP_SESSION_REQUESTS[space], resources: options.resources }
+      : BOOTSTRAP_SESSION_REQUESTS[space],
   });
   expect(captured).toHaveLength(1);
   return captured[0]!;
@@ -154,4 +158,68 @@ test("a single-space bootstrap session request is unchanged (account space)", as
   if (spaceAbilities !== undefined) {
     expect(Object.keys(spaceAbilities)).toEqual([accountSpaceId]);
   }
+});
+
+type SpaceAbilities = Record<string, Record<string, Record<string, string[]>>>;
+
+test("only the address is case-insensitive when keying the step's own space", async () => {
+  const lowercased = bootstrapSpaceId(ADDRESS.toLowerCase(), CHAIN_ID, "default");
+  const params = await prepareBootstrapSession("default", { spaceId: lowercased });
+  const spaceAbilities = params.spaceAbilities as SpaceAbilities;
+  // The checksummed resolution of "default" is keyed as the caller spelled it.
+  expect(params.spaceId).toBe(lowercased);
+  expect(Object.keys(spaceAbilities).sort()).toEqual(
+    [lowercased, bootstrapSpaceId(ADDRESS, CHAIN_ID, "account")].sort(),
+  );
+  expect(params.abilities).toEqual(spaceAbilities[lowercased]);
+  expect(spaceAbilities[lowercased]?.kv?.[""]).toEqual(
+    expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/put"]),
+  );
+});
+
+for (const order of ["default first", "Default first"] as const) {
+  test(`space names stay case-sensitive: default and Default are distinct (${order})`, async () => {
+    const lower: ResourceCapability = {
+      service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/put"],
+    };
+    const upper: ResourceCapability = {
+      service: "tinycloud.kv", space: "Default", path: "public/", actions: ["tinycloud.kv/get"],
+    };
+    const upperSpaceId = bootstrapSpaceId(ADDRESS, CHAIN_ID, "Default" as "default");
+    const params = await prepareBootstrapSession("default", {
+      spaceId: upperSpaceId,
+      resources: order === "default first" ? [lower, upper] : [upper, lower],
+    });
+    const spaceAbilities = params.spaceAbilities as SpaceAbilities;
+    const lowerSpaceId = bootstrapSpaceId(ADDRESS, CHAIN_ID, "default");
+    expect(spaceAbilities[upperSpaceId]).toEqual({ kv: { "public/": ["tinycloud.kv/get"] } });
+    expect(spaceAbilities[lowerSpaceId]).toEqual({ kv: { "": ["tinycloud.kv/put"] } });
+    expect(params.abilities).toEqual(spaceAbilities[upperSpaceId]);
+  });
+}
+
+test("a short space name and its full URI merge instead of overwriting", async () => {
+  const accountSpaceId = bootstrapSpaceId(ADDRESS, CHAIN_ID, "account");
+  const params = await prepareBootstrapSession("default", {
+    resources: [
+      { service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.kv", space: "account", path: "spaces/", actions: ["tinycloud.kv/put"] },
+      {
+        service: "tinycloud.kv",
+        space: `tinycloud:pkh:eip155:${CHAIN_ID}:${ADDRESS.toLowerCase()}:account`,
+        path: "applications/",
+        actions: ["tinycloud.kv/get"],
+      },
+      { service: "tinycloud.kv", space: accountSpaceId, path: "spaces/", actions: ["tinycloud.kv/list"] },
+    ],
+  });
+  const spaceAbilities = params.spaceAbilities as SpaceAbilities;
+  const accountKeys = Object.keys(spaceAbilities).filter((key) => key.endsWith(":account"));
+  expect(accountKeys).toEqual([accountSpaceId]);
+  expect(spaceAbilities[accountSpaceId]).toEqual({
+    kv: {
+      "spaces/": ["tinycloud.kv/put", "tinycloud.kv/list"],
+      "applications/": ["tinycloud.kv/get"],
+    },
+  });
 });
