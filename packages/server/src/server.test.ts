@@ -13,6 +13,7 @@ import {
   createServerDelegateClient,
   deriveDstackPrivateKey,
   issueSessionToken,
+  isTinyCloudSessionError,
   parseSecretPayload,
   serverDidForPrivateKey,
   verifySessionToken,
@@ -20,6 +21,9 @@ import {
   withSessionRefresh,
 } from ".";
 import type { PortableDelegation, TinyCloudNode } from "@tinycloud/node-sdk";
+import { stripQuotedNames } from "./identity.js";
+
+const REFERENCE_PATTERN = /"(?:[^"\\]|\\.)*"|(?<![\p{L}\p{N}\p{M}_])'(?:[^'\\]|\\.|'(?=[\p{L}\p{N}\p{M}_]))*'(?![\p{L}\p{N}\p{M}_])/gu;
 const PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const ACCOUNT = privateKeyToAccount(PRIVATE_KEY);
 
@@ -208,6 +212,38 @@ describe("@tinycloud/server sharing session refresh", () => {
     expect(signInCalls).toBe(status === 401 ? 1 : 0);
   });
 
+  test.each([401, 403] as const)("kv.put long quoted key %i keeps the actual status", async (status) => {
+    const key = "HTTP 401 " + "x".repeat(2191);
+    let fetchCalls = 0;
+    let signInCalls = 0;
+    let signedIn = false;
+    const kv = new KVService({});
+    kv.initialize(new ServiceContext({
+      hosts: ["https://node.example"],
+      session: {
+        delegationHeader: { Authorization: "Bearer session" },
+        delegationCid: "bafy-session",
+        spaceId: "tinycloud:test-space",
+        verificationMethod: "did:key:zSession#zSession",
+        jwk: {},
+      },
+      invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+      fetch: async () => {
+        fetchCalls += 1;
+        return signedIn ? new Response(null, { status: 200 }) : new Response("Forbidden", { status });
+      },
+    }));
+    const node = { signIn: async () => { signInCalls += 1; signedIn = true; } } as unknown as TinyCloudNode;
+    const failure = await rejectionOf(withSessionRefresh(node, async () => {
+      const result = await kv.put(key, "value");
+      if (!result.ok) throw new Error(result.error.message);
+    }));
+    expect(failure === undefined).toBe(status === 401);
+    if (status === 403) expect(String(failure?.message).endsWith(": 403 - Forbidden")).toBe(true);
+    expect(signInCalls).toBe(status === 401 ? 1 : 0);
+    expect(fetchCalls).toBe(status === 401 ? 2 : 1);
+  });
+
   /** Run `failure` through `withSessionRefresh`; report whether it signed in and retried. */
   async function refreshed(failure: unknown): Promise<boolean> {
     let calls = 0;
@@ -255,6 +291,9 @@ describe("@tinycloud/server sharing session refresh", () => {
     'Failed to put key "report(401)": {s} - Forbidden',
     'Failed to put key "report\\"": {s} - upstream said "session expired"',
     'Failed to put key "report\\"HTTP 401\\"x": {s} - Forbidden',
+    "Failed to put key 'report HTTP 401': {s} - Forbidden",
+    "Failed to put key 'report \\'HTTP 401': {s} - Forbidden",
+    "Failed to put key 'it's HTTP 401': {s} - Forbidden",
   ];
   const MESSAGE_TABLE: Array<[message: string, refreshes: boolean]> = [
     ...STATUS_FORMATS.flatMap((format): Array<[string, boolean]> => [
@@ -271,6 +310,20 @@ describe("@tinycloud/server sharing session refresh", () => {
     ["403 records processed; session expired", true],
     ["200 rows fetched; session expired", true],
     ['request failed {"error":"session expired"}', true],
+    ["Owner's request failed: 403 - user's session expired", false],
+    ["Owner's request failed: 401 - user's request was refused", true],
+    ["André's request failed: 403 - 'session expired'", false],
+    ["André's request failed: 401 - 'request refused'", true],
+    ["José's request failed: 502 - 'session expired'", false],
+    ["𠀀's request failed: 403 - 'x'", false],
+    ["𝟏's request failed: 401 - 'x'", true],
+    ["Failed to put key 'HTTP 401'𠀀: 403 - Forbidden", true],
+    ["Failed to put key 'HTTP 401'𝟏: 403 - Forbidden", true],
+    ["😀'HTTP 401': 403 - Forbidden", false],
+    ['Failed to put key "bad\\\n "HTTP 401": 403 - Forbidden', false],
+    ["Failed to read the node's info: HTTP 401 - didn't accept", true],
+    ["Couldn't reach node: HTTP 401 - the server's gateway refused", true],
+    ["it's HTTP 401 isn't it", true],
     // Neither a diagnostic status nor session wording, or a status that wins.
     ["Owner delegation import failed: 403 Unauthorized Action", false],
     ["failed to list webhooks: 502 Unauthorized Action", false],
@@ -287,6 +340,62 @@ describe("@tinycloud/server sharing session refresh", () => {
 
   test.each(MESSAGE_TABLE)("withSessionRefresh message %j refreshes=%p", async (message, refreshes) => {
     expect(await refreshed(new Error(message))).toBe(refreshes);
+  });
+
+  test("withSessionRefresh honors an untyped status beyond 2 KiB", async () => {
+    expect(await refreshed(new Error(`${"x".repeat(2048)} HTTP 401 - Forbidden`))).toBe(true);
+  });
+
+  test("linear quoted-name scanner matches the prior pattern on 50,000 seeded strings", () => {
+    const alphabet = [
+      "'", '"', "\\", "a", "é", "1", " ", ":", "_", "東", "\u0301",
+      "\n", "\r", "\u2028", "\u2029", "𠀀", "𝟏", "😀",
+    ];
+    // Bun's /u lookbehind sees a low surrogate before a quote where Node sees
+    // the whole astral code point. Compare the literal regex only elsewhere.
+    const astralBesideQuote = /(?:[\uD800-\uDBFF][\uDC00-\uDFFF]['"]|['"][\uD800-\uDBFF][\uDC00-\uDFFF])/;
+    let state = 0xc0ffee;
+    const next = () => (state = (Math.imul(state, 1664525) + 1013904223) | 0) >>> 0;
+    for (let sample = 0; sample < 50_000; sample += 1) {
+      const length = next() % 25;
+      let input = "";
+      for (let i = 0; i < length; i += 1) input += alphabet[next() % alphabet.length]!;
+      if (astralBesideQuote.test(input)) continue;
+      expect(stripQuotedNames(input)).toBe(input.replace(REFERENCE_PATTERN, '""'));
+    }
+  });
+
+  test("astral quote boundaries follow code-point semantics", () => {
+    expect(stripQuotedNames("𠀀's request failed: 403 - 'x'")).toBe('𠀀\'s request failed: 403 - ""');
+    expect(stripQuotedNames("Failed to put key 'HTTP 401'𝟏: 403 - Forbidden"))
+      .toBe("Failed to put key 'HTTP 401'𝟏: 403 - Forbidden");
+  });
+
+  test("an escaped newline blocks one quote but allows a later quoted name", () => {
+    const message = 'Failed to put key "bad\\\n "HTTP 401": 403 - Forbidden';
+    expect(stripQuotedNames(message)).toBe(message.replace(REFERENCE_PATTERN, '""'));
+  });
+
+  test.each([
+    ["space apostrophe letter", " 'a"],
+    ["apostrophe escape", "'\\"],
+    ["double quote escape", '"\\'],
+    ["hyphen apostrophe letters", "-'ab"],
+    ["space apostrophe escaped x", " 'a\\x"],
+    ["paren apostrophes", "('a'a"],
+  ] as const)("quote scanning stays under 500 ms on 64 KiB of %s", (_name, unit) => {
+    const message = unit.repeat(Math.ceil(64 * 1024 / unit.length)).slice(0, 64 * 1024);
+    const start = performance.now();
+    isTinyCloudSessionError(new Error(message));
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
+  test("quote scanning stays under 500 ms on 64 KiB apostrophes ending in an escaped newline", () => {
+    const prefixLength = 64 * 1024 - 2;
+    const message = " 'a".repeat(Math.ceil(prefixLength / 3)).slice(0, prefixLength) + "\\\n";
+    const start = performance.now();
+    isTinyCloudSessionError(new Error(message));
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   test.each(

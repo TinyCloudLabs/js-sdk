@@ -17,12 +17,16 @@
  * `syncAccessible()`.
  */
 
-import { describe, expect, mock, test, type Mock } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
+import { inspect } from "node:util";
+import { SQLMigrations } from "@tinycloud/sdk-services";
 
 import {
   AccountService,
   KVService,
   ServiceContext,
+  SQLService,
+  authorizationVerdictOf,
   composeManifestRequest,
   submitHostDelegation,
   type ISessionManager,
@@ -501,10 +505,8 @@ describe("sign-in account registry barrier", () => {
   });
 
 
-  // Use the real retry delays: a transient registry rejection must warn only
-  // after its bounded attempts and must not reject the sign-in promise.
-  test("ordinary registry rejection warns and sign-in succeeds", async () => {
-    const { node } = makeNode();
+  test("index exception warns once and sign-in still succeeds without registry retries", async () => {
+    const { node, syncAccessible } = makeNode({ hasSiwe: false });
     const core = Reflect.get(node, "tc");
     const auth = Reflect.get(node, "auth");
     if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
@@ -514,9 +516,10 @@ describe("sign-in account registry barrier", () => {
     Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
     Reflect.set(core, "signIn", async () => {});
     Reflect.set(node, "accountRegistryDeadlineMs", 4_000);
+    const ensure = mock(async () => { throw new Error("registry unavailable"); });
     Reflect.set(node, "_account", {
-      index: { ensure: async () => { throw new Error("registry unavailable"); } },
-      spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+      index: { ensure },
+      spaces: { syncAccessible },
     });
     const serviceContext = Reflect.get(node, "_serviceContext");
     Reflect.set(node, "initializeServices", async () => {
@@ -535,7 +538,10 @@ describe("sign-in account registry barrier", () => {
     } finally {
       console.warn = originalWarn;
     }
-    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(syncAccessible).toHaveBeenCalledTimes(1);
+    expect(warnedWith(warnSpy, "account index initialization failed")).toBe(true);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
   }, 5_000);
 });
 
@@ -608,6 +614,11 @@ describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
 });
 
 describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
+  let restoreMigrationApply: (() => void) | undefined;
+  afterEach(() => {
+    restoreMigrationApply?.();
+    restoreMigrationApply = undefined;
+  });
   test("Unauthorized Action error runs the task exactly once (no retry)", async () => {
     const { node } = makeNode();
     const task = mock(async () => {
@@ -617,7 +628,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     });
 
     const originalWarn = console.warn;
-    const warnSpy = mock(() => {});
+    const warnSpy = mock((..._args: unknown[]) => {});
     console.warn = warnSpy as any;
     try {
       await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
@@ -627,6 +638,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
 
     expect(task).toHaveBeenCalledTimes(1);
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
+    expect(authorizationVerdictOf(warnedError(warnSpy, "authorization verdict is not retryable"))).toBeUndefined();
   });
 
   test("401-shaped error runs the task exactly once (no retry)", async () => {
@@ -636,7 +648,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     });
 
     const originalWarn = console.warn;
-    const warnSpy = mock(() => {});
+    const warnSpy = mock((..._args: unknown[]) => {});
     console.warn = warnSpy as any;
     try {
       await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
@@ -646,7 +658,32 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
 
     expect(task).toHaveBeenCalledTimes(1);
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
+    expect(authorizationVerdictOf(warnedError(warnSpy, "authorization verdict is not retryable"))).toBeUndefined();
   });
+
+  test.each([
+    "upstream body said Unauthorized Action",
+    "request failed: 500 - body mentions 401",
+  ])("untyped incidental text %s does not short-circuit", async (message) => {
+    const { node } = makeNode();
+    const task = mock(async () => {
+      throw new Error(message);
+    });
+    const originalWarn = console.warn;
+    const warnSpy = mock((..._args: unknown[]) => {});
+    console.warn = warnSpy;
+    try {
+      const retry = Reflect.get(node, "withAccountRegistryRetry") as (
+        task: () => Promise<void>, signal: AbortSignal,
+      ) => Promise<void>;
+      await retry.call(node, task, new AbortController().signal);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(task).toHaveBeenCalledTimes(3);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
+    expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+  }, 10_000);
 
   const AUTH_BODIES = [
     "",
@@ -656,6 +693,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
   ];
   /**
    * Where the 401/403 is injected:
+   * - `index.ensure`: a real SQL migration pre-read over a failing SQLService query.
    * - `spaces.syncAccessible`: a real `KVService.put` failure returned as the sync result.
    * - `applications.register`: the real `AccountService.applications.register`
    *   (through `accountErr`) over a real failing `KVService.put`.
@@ -666,6 +704,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
    *   re-activation fails.
    */
   type Wrapper =
+    | "index.ensure"
     | "spaces.syncAccessible"
     | "applications.register"
     | "owned-space activation"
@@ -687,6 +726,167 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       { service: "tinycloud.kv", space: "applications", path: "com.example.registry/", actions: ["get"] },
     ],
   };
+
+  type IndexFailure = "403" | "transient" | "throwing-ensure" | "marked-transport" | "registry-500";
+  const INDEX_MARKER = "MARKER-index-warning-canary";
+
+  function markedTransportError(): Error {
+    return Object.assign(new Error(`SQL transport failure ${INDEX_MARKER}`), {
+      config: { headers: { Authorization: INDEX_MARKER } },
+    });
+  }
+
+  function indexWarnings(warnings: Mock<(...args: unknown[]) => void>): unknown[][] {
+    return warnings.mock.calls.filter((args) => String(args[0]).includes("account index"));
+  }
+
+  async function runRealIndexSync(failure: IndexFailure): Promise<{
+    ensureAttempts: number;
+    writtenKeys: string[];
+    spaceLists: number;
+    registryWrites: number;
+    warnSpy: Mock<(...args: unknown[]) => void>;
+  }> {
+    const { node } = makeNode({ hasSiwe: false });
+    const internals = node as unknown as RegistrySyncInternals;
+    internals.auth.capabilityRequest = composeManifestRequest([MANIFEST]);
+    // Only the transport and, for the rejecting-ensure case, the SQL migration
+    // service boundary are stubbed. Scheduling, retry, account and KV stay real.
+    Reflect.deleteProperty(node, "createAccountRegistryServices");
+    let ensureAttempts = 0;
+    let nextSqlIsEnsure = true;
+    let registryWrites = 0;
+    let spaceLists = 0;
+    let activations = 0;
+    const writtenKeys: string[] = [];
+
+    if (failure === "throwing-ensure") {
+      const originalApply = SQLMigrations.prototype.apply;
+      let first = true;
+      const migrationSpy = spyOn(SQLMigrations.prototype, "apply").mockImplementation(function (
+        this: SQLMigrations, options,
+      ) {
+        if (first) {
+          first = false;
+          ensureAttempts += 1;
+          nextSqlIsEnsure = false;
+          throw markedTransportError();
+        }
+        return originalApply.call(this, options);
+      });
+      restoreMigrationApply = () => migrationSpy.mockRestore();
+    }
+
+    const context = new ServiceContext({
+      hosts: ["https://tinycloud.test"],
+      invoke: (_session, service, path, action) => ({
+        "x-test-service": service,
+        "x-test-path": path,
+        "x-test-action": action,
+      }),
+      fetch: async (_url, init) => {
+        const headers = init?.headers as Record<string, string>;
+        if (headers["x-test-service"] === "sql") {
+          if (nextSqlIsEnsure) {
+            ensureAttempts += 1;
+            nextSqlIsEnsure = false;
+          }
+          if (failure === "403") return new Response("Forbidden", { status: 403 });
+          throw failure === "marked-transport" ? markedTransportError() : new Error("transient SQL transport failure");
+        }
+        if (headers["x-test-service"] === "kv") {
+          if (headers["x-test-action"] === "tinycloud.kv/put") {
+            registryWrites += 1;
+            if (failure === "registry-500") {
+              nextSqlIsEnsure = true;
+              return new Response("registry transient", { status: 500 });
+            }
+            writtenKeys.push(headers["x-test-path"]!);
+          }
+          return new Response(null, { status: 200 });
+        }
+        if (headers["x-test-service"] === "space") {
+          spaceLists += 1;
+          return Response.json([]);
+        }
+        throw new Error("Unexpected registry invocation");
+      },
+    });
+    context.setSession({
+      delegationHeader: { Authorization: "test-session" },
+      delegationCid: "test-cid",
+      spaceId: SPACE_URI,
+      verificationMethod: "did:key:default",
+      jwk: {},
+    });
+    Reflect.set(node, "_serviceContext", context);
+    const originalFetch = globalThis.fetch;
+    const originalWarn = console.warn;
+    const warnSpy = mock((..._args: unknown[]) => {});
+    globalThis.fetch = (async () => {
+      activations += 1;
+      return Response.json({});
+    }) as typeof fetch;
+    console.warn = warnSpy;
+    try {
+      internals.scheduleAccountRegistrySync();
+      await internals.pendingAccountRegistrySync?.promise;
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.warn = originalWarn;
+    }
+    expect(activations).toBeGreaterThan(0);
+    return { ensureAttempts, writtenKeys, spaceLists, registryWrites, warnSpy };
+  }
+
+  test.each(["403", "transient"] as const)(
+    "SQL index %s failure cannot block canonical registry records",
+    async (failure) => {
+      const { writtenKeys, ensureAttempts, spaceLists, registryWrites, warnSpy } = await runRealIndexSync(failure);
+      expect({ writtenKeys, ensureAttempts, spaceLists, registryWrites }).toEqual({
+        writtenKeys: ["applications/com.example.registry"],
+        ensureAttempts: 1,
+        spaceLists: 1,
+        registryWrites: 1,
+      });
+      expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
+      expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+      const warnings = indexWarnings(warnSpy);
+      expect(warnings).toHaveLength(1);
+      expect(authorizationVerdictOf(warnings[0]?.[1])).toBe(failure === "403" ? "forbidden" : undefined);
+    },
+  );
+
+  test("a rejected SQL migration ensure is best-effort and does not reveal its error", async () => {
+    const { writtenKeys, ensureAttempts, spaceLists, warnSpy } = await runRealIndexSync("throwing-ensure");
+    expect({ writtenKeys, ensureAttempts, spaceLists }).toEqual({
+      writtenKeys: ["applications/com.example.registry"], ensureAttempts: 1, spaceLists: 1,
+    });
+    const warnings = indexWarnings(warnSpy);
+    expect(warnings).toHaveLength(1);
+    expect(warnSpy.mock.calls.flatMap((args) => args.map((arg) => inspect(arg, { depth: Infinity, showHidden: true })))
+      .some((text) => text.includes(INDEX_MARKER))).toBe(false);
+  });
+
+  test("an index failure warns once across retries of a failed canonical write", async () => {
+    const { ensureAttempts, registryWrites, writtenKeys, spaceLists, warnSpy } = await runRealIndexSync("registry-500");
+    expect({ ensureAttempts, registryWrites, writtenKeys, spaceLists }).toEqual({
+      ensureAttempts: 3, registryWrites: 3, writtenKeys: [], spaceLists: 0,
+    });
+    expect(indexWarnings(warnSpy)).toHaveLength(1);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
+  }, 10_000);
+
+  test("a transport exception's hidden properties never enter the index warning", async () => {
+    const { writtenKeys, ensureAttempts, spaceLists, warnSpy } = await runRealIndexSync("marked-transport");
+    expect({ writtenKeys, ensureAttempts, spaceLists }).toEqual({
+      writtenKeys: ["applications/com.example.registry"], ensureAttempts: 1, spaceLists: 1,
+    });
+    const warnings = indexWarnings(warnSpy);
+    expect(warnings).toHaveLength(1);
+    expect(warnSpy.mock.calls.flatMap((args) => args.map((arg) => inspect(arg, { depth: Infinity, showHidden: true })))
+      .some((text) => text.includes(INDEX_MARKER))).toBe(false);
+  });
 
   /** The private registry-sync surface these tests drive (test seam). */
   type RegistrySyncInternals = {
@@ -730,7 +930,29 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       fetch: failingResponse,
     }));
 
-    if (wrapper === "spaces.syncAccessible") {
+    if (wrapper === "index.ensure") {
+      const sql = new SQLService();
+      sql.initialize(new ServiceContext({
+        hosts: ["https://tinycloud.test"],
+        session: {
+          delegationHeader: { Authorization: "Bearer session" },
+          delegationCid: "bafy-session",
+          spaceId: SPACE_URI,
+          verificationMethod: "did:key:default",
+          jwk: {},
+        },
+        invoke: () => ({ Authorization: "Bearer signed-invocation" }),
+        fetch: failingResponse,
+      }));
+      internals._account = new AccountService({
+        getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
+        getHost: () => "https://tinycloud.test",
+        getPrimarySpaceId: () => SPACE_URI,
+        getAccountSpaceId: () => `tinycloud:pkh:eip155:1:${ADDRESS}:account`,
+        getSpaces: () => ({ list: async () => ({ ok: true, data: [] }) }) as unknown as ISpaceService,
+        getAccountDb: () => sql.db("account"),
+      });
+    } else if (wrapper === "spaces.syncAccessible") {
       internals._account = {
         index: { ensure: async () => ({ ok: true, data: undefined }) },
         spaces: { syncAccessible: () => kv.put("spaces/record", { ok: true }) },
@@ -742,7 +964,7 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       internals.auth.hostOwnedSpaceResult = () =>
         submitHostDelegation("https://tinycloud.test", { Authorization: HOST_DELEGATION_AUTHORIZATION });
       // Real account service: register → accountErr → the node's wrapper.
-      internals._account = new AccountService({
+      const account = new AccountService({
         getDid: () => `did:pkh:eip155:1:${ADDRESS}`,
         getHost: () => "https://tinycloud.test",
         getPrimarySpaceId: () => SPACE_URI,
@@ -751,6 +973,8 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
         // cases fail before it.
         getSpaces: () => ({ get: () => ({ kv }) }) as unknown as ISpaceService,
       });
+      account.index.ensure = async () => ({ ok: true, data: { database: "account" } });
+      internals._account = account;
     }
 
     // Activation and host delegation both POST `/delegate` through the global
@@ -789,13 +1013,30 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     return { failingCalls, warnSpy };
   }
 
-  /** The message of the error passed with the "not retryable" warning. */
-  function stoppedErrorMessage(warnSpy: Mock<(...args: unknown[]) => void>): string | undefined {
-    const call = warnSpy.mock.calls.find((args) =>
-      String(args[0] ?? "").includes("authorization verdict is not retryable"),
-    );
-    return call?.[1] instanceof Error ? call[1].message : undefined;
+  /** The error attached to a registry-sync warning. */
+  function warnedError(
+    warnSpy: Mock<(...args: unknown[]) => void>,
+    needle: string,
+  ): Error | undefined {
+    const call = warnSpy.mock.calls.find((args) => String(args[0] ?? "").includes(needle));
+    return call?.[1] instanceof Error ? call[1] : undefined;
   }
+
+  test.each(
+    [401, 403, 408, 429, 500].flatMap((status) =>
+      AUTH_BODIES.map((body) => ({ status, body })),
+    ),
+  )("index.ensure $status body=$body warns without retrying", async ({ status, body }) => {
+    const { failingCalls, warnSpy } = await runRegistrySync("index.ensure", status, body);
+    expect(failingCalls).toBe(1);
+    expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+    expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
+    const indexWarnings = warnSpy.mock.calls.filter((args) => String(args[0]).includes("account index"));
+    expect(indexWarnings).toHaveLength(1);
+    expect(authorizationVerdictOf(indexWarnings[0]?.[1])).toBe(
+      status === 401 ? "unauthenticated" : status === 403 ? "forbidden" : "other",
+    );
+  });
 
   test.each(
     WRAPPERS.flatMap((wrapper) =>
@@ -807,21 +1048,56 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     expect(failingCalls).toBe(1);
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(true);
     expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
-    // The wrapper's message keeps the HTTP status for diagnostics.
-    expect(stoppedErrorMessage(warnSpy)).toContain(`: ${status}`);
+    // Preserve the producer's human-readable diagnostics while carrying the status.
+    const failure = warnedError(warnSpy, "authorization verdict is not retryable");
+    expect(failure?.message).toContain(`: ${status}`);
+    expect(authorizationVerdictOf(failure)).toBe(status === 401 ? "unauthenticated" : "forbidden");
   });
 
-  test("typed non-authorization status retries even when the body reads Unauthorized Action", async () => {
-    const { failingCalls, warnSpy } = await runRegistrySync(
-      "spaces.syncAccessible",
-      500,
-      "Unauthorized Action: upstream proxy text",
-    );
+  test.each([
+    [404, "Unauthorized Action: upstream proxy text"],
+    [408, "Forbidden"],
+    [429, "session expired"],
+    [500, "HTTP 401 from another request"],
+  ] as const)(
+    "non-authorization HTTP %i with deceptive body retries a real spaces registry write",
+    async (status, body) => {
+      const { failingCalls, warnSpy } = await runRegistrySync("spaces.syncAccessible", status, body);
+      expect(failingCalls).toBe(3);
+      expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+      const failure = warnedError(warnSpy, "failed after retries");
+      expect(failure?.message).toContain(body);
+      expect(authorizationVerdictOf(failure)).toBe("other");
+    },
+    10_000,
+  );
 
+  test.each(
+    (["applications.register", "owned-space activation", "owned-space create", "post-create activation"] as const)
+      .flatMap((wrapper) =>
+        ([408, 429, 500] as const).map((status) => ({
+          wrapper,
+          status,
+          body: status === 408 ? "Forbidden" : status === 429 ? "session expired" : "Unauthorized Action: proxy",
+        })),
+      ),
+  )("$wrapper retries HTTP $status despite $body", async ({ wrapper, status, body }) => {
+    const { failingCalls, warnSpy } = await runRegistrySync(wrapper, status, body);
     expect(failingCalls).toBe(3);
-    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
     expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+    expect(authorizationVerdictOf(warnedError(warnSpy, "failed after retries"))).toBe("other");
   }, 10_000);
+
+  test.each(["applications.register", "owned-space create", "post-create activation"] as const)(
+    "%s retries HTTP 404 even when its body reads Unauthorized Action",
+    async (wrapper) => {
+      const { failingCalls, warnSpy } = await runRegistrySync(wrapper, 404, "Unauthorized Action: proxy");
+      expect(failingCalls).toBe(3);
+      expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
+      expect(authorizationVerdictOf(warnedError(warnSpy, "failed after retries"))).toBe("other");
+    },
+    10_000,
+  );
 
   test.each(["spaces.syncAccessible", "applications.register"] as const)(
     "%s stops after one write rejected for a full account space",

@@ -4,6 +4,8 @@
  * @packageDocumentation
  */
 
+import { httpResponseError } from "./http-error";
+
 export class ProtocolMismatchError extends Error {
   name = "ProtocolMismatchError" as const;
   constructor(
@@ -68,7 +70,7 @@ export async function checkNodeInfo(
   }
 
   if (!response.ok) {
-    throw new VersionCheckError(host);
+    throw new VersionCheckError(host, await httpResponseError(response, "node info fetch failed"));
   }
 
   const data = (await response.json()) as {

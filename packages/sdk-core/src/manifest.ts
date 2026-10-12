@@ -615,8 +615,9 @@ export async function loadManifest(url: string): Promise<Manifest> {
   }
   const res = await fetchFn(url);
   if (!res.ok) {
-    throw new ManifestValidationError(
-      `failed to fetch manifest from ${url}: HTTP ${res.status}`,
+    throw Object.assign(
+      new ManifestValidationError(`failed to fetch manifest from ${url}: HTTP ${res.status}`),
+      { status: res.status },
     );
   }
   const json = (await res.json()) as unknown;

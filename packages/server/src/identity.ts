@@ -84,9 +84,9 @@ export async function createServerIdentity(
 
 // Message heuristics, for untyped errors only.
 //
-// 1. Double-quoted strings are dropped (escape-aware). The SDK writes
-//    caller-chosen names such as KV keys with `JSON.stringify`, so a status-like
-//    number or quote inside a key can never be read as, or hide, the status.
+// 1. Double-quoted strings and standalone single-quoted names are dropped
+//    (escape-aware). Apostrophes next to Unicode letters, numbers, combining
+//    marks, or underscores are word characters, not quote delimiters.
 // 2. The first number in 400-599 in one of the SDK's diagnostic positions is
 //    the status:
 //      - `: NNN` followed by whitespace or the end — KV `…key "k": 403 - text`,
@@ -97,7 +97,72 @@ export async function createServerIdentity(
 //    Only a 401 refreshes, so a real 502 or 403 is never overridden by a `401`
 //    later in its body.
 // 3. With no status, session wording on the unstripped message decides.
-const QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"/g;
+const NAME_CHARACTER_PATTERN = /[\p{L}\p{N}\p{M}_]/u;
+
+/** Strip standalone quoted names without retrying failed scans of the same quote type. */
+export function stripQuotedNames(message: string): string {
+  let parts: string[] | undefined;
+  let literalStart = 0;
+  let noDoubleClose = false;
+  let noSingleClose = false;
+  let blockedUntilDouble = -1;
+  let blockedUntilSingle = -1;
+  for (let i = 0; i < message.length; i += 1) {
+    const quote = message[i];
+    const double = quote === '"';
+    if (!double && quote !== "'") continue;
+    if (double ? noDoubleClose || i < blockedUntilDouble : noSingleClose || i < blockedUntilSingle) continue;
+    if (!double && i > 0) {
+      const previousCodeUnit = message.charCodeAt(i - 1);
+      const previous = previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff &&
+        i > 1 && message.charCodeAt(i - 2) >= 0xd800 && message.charCodeAt(i - 2) <= 0xdbff
+        ? message.slice(i - 2, i)
+        : message[i - 1]!;
+      if (NAME_CHARACTER_PATTERN.test(previous)) continue;
+    }
+
+    let end = i + 1;
+    let blockedByLineBreak = false;
+    while (end < message.length) {
+      if (message[end] === "\\") {
+        const next = message[end + 1];
+        if (next === "\n" || next === "\r" || next === "\u2028" || next === "\u2029") {
+          blockedByLineBreak = true;
+          break;
+        }
+        end += 2;
+      } else if (message[end] === quote &&
+        (double || end + 1 === message.length ||
+          !NAME_CHARACTER_PATTERN.test(String.fromCodePoint(message.codePointAt(end + 1)!)))) {
+        break;
+      } else {
+        end += 1;
+      }
+    }
+    if (blockedByLineBreak) {
+      // `\\.` cannot consume a line terminator without /s. Earlier starts
+      // hit this slash too; starts after it may still close.
+      if (double) blockedUntilDouble = end;
+      else blockedUntilSingle = end;
+      continue;
+    }
+    if (end >= message.length) {
+      // Escape pairing in the remaining suffix is unchanged for later starts,
+      // so none of this quote type can close after a full scan to the end.
+      if (double) noDoubleClose = true;
+      else noSingleClose = true;
+      if (noDoubleClose && noSingleClose) break;
+      continue;
+    }
+    (parts ??= []).push(message.slice(literalStart, i), '""');
+    i = end;
+    literalStart = end + 1;
+  }
+  if (!parts) return message;
+  parts.push(message.slice(literalStart));
+  return parts.join("");
+}
+
 const DIAGNOSTIC_STATUS_PATTERN =
   /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 const SESSION_ERROR_PATTERN =
@@ -105,7 +170,7 @@ const SESSION_ERROR_PATTERN =
 
 /** The first HTTP error status in a diagnostic position, ignoring quoted strings. */
 function diagnosticStatusOf(message: string): number | undefined {
-  const unquoted = message.replace(QUOTED_STRING_PATTERN, '""');
+  const unquoted = stripQuotedNames(message);
   for (const match of unquoted.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
     const status = Number(match.slice(1).find((group) => group !== undefined));
     if (status >= 400 && status <= 599) return status;

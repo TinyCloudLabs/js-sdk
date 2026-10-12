@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { HooksService } from "./HooksService";
 import { ErrorCodes, type IServiceContext } from "../types";
+import { authorizationVerdictOf } from "../errors";
 import type { HookWebhookRegistration } from "./types";
 
 function createContext(
@@ -85,5 +86,26 @@ describe("HooksService error responses", () => {
     if (result.ok) return;
     expect(result.error.meta?.status).toBe(status);
     expect(result.error.message).toBe(`failed to list webhooks: ${status} hook ticket expired`);
+  });
+
+  test.each(
+    [401, 403, 404, 408, 429, 500, 504].flatMap((status) =>
+      ["", "Unauthorized Action: denied", "Forbidden", "session expired", "timeout"].map((body) => ({
+        status,
+        body,
+      })),
+    ),
+  )("list $status body=$body classifies from the response", async ({ status, body }) => {
+    const service = new HooksService({ host: "https://node.tinycloud.xyz" });
+    service.initialize(createContext(async () => new Response(body, { status })));
+    const result = await service.list();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toBe(`failed to list webhooks: ${status} ${body}`);
+    expect(result.error.meta?.status).toBe(status);
+    expect(authorizationVerdictOf(result.error)).toBe(
+      status === 401 ? "unauthenticated" : status === 403 ? "forbidden" : "other",
+    );
+    expect(result.error.code).toBe(status === 408 || status === 504 ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR);
   });
 });

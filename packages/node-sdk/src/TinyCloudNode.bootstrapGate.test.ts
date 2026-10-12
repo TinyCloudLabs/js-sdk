@@ -369,11 +369,11 @@ describe("bootstrap gate — abort on first rejection", () => {
       throw new Error("Sign request rejected by callback");
     });
 
-    // Stub auth.hostOwnedSpace — it must never be reached (cascade check).
-    let hostOwnedSpaceCallCount = 0;
-    auth.hostOwnedSpace = mock(async () => {
-      hostOwnedSpaceCallCount++;
-      return true;
+    // Stub the method bootstrap actually uses — it must never be reached.
+    let hostOwnedSpaceResultCallCount = 0;
+    auth.hostOwnedSpaceResult = mock(async () => {
+      hostOwnedSpaceResultCallCount++;
+      return { success: true, status: 200 };
     });
 
     // Bootstrap failure degrades to skipped — signIn() itself resolves.
@@ -381,8 +381,8 @@ describe("bootstrap gate — abort on first rejection", () => {
 
     // Only one createBootstrapSession call — the abort prevents further calls.
     expect(createBootstrapCallCount).toBe(1);
-    // hostOwnedSpace must never be called — the abort happened before phase 2.
-    expect(hostOwnedSpaceCallCount).toBe(0);
+    // Hosting must never be reached — the abort happened before phase 2.
+    expect(hostOwnedSpaceResultCallCount).toBe(0);
     // The outcome is surfaced instead of thrown.
     expect(node.bootstrapSkipped).toBe(true);
     expect(node.bootstrapStatus.skipped).toBe(true);
@@ -413,7 +413,6 @@ describe("bootstrap gate — abort on first rejection", () => {
     auth.createBootstrapSession = mock(async () => {
       throw new Error("auto-sign rejected");
     });
-    auth.hostOwnedSpace = mock(async () => true);
 
     // signIn() resolves; the cause is preserved in bootstrapStatus.reason.
     await node.signIn();
