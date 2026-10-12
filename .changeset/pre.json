@@ -57,6 +57,7 @@
     "tc-858-sdk-services",
     "tc-858-web-sdk-vendor",
     "tc-860-courier",
+    "tc-945-courier-space-pending",
     "tc858-replication-write-settlement"
   ]
 }
