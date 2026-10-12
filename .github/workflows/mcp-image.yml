@@ -23,6 +23,7 @@ jobs:
     outputs:
       image: ${{ steps.pick.outputs.image }}
       build: ${{ steps.pick.outputs.build }}
+      version: ${{ steps.pick.outputs.version }}
     steps:
       - name: Pick the image to deploy
         id: pick
@@ -42,11 +43,12 @@ jobs:
             echo "image=ghcr.io/tinycloudlabs/tinycloud-mcp@$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
             echo "build=false" >> "$GITHUB_OUTPUT"
           elif [ -n "$PACKAGE_VERSION" ]; then
-            if ! [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            if ! [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
               echo "::error::package_version must be a published version such as 0.5.0-beta.7"
               exit 1
             fi
             echo "image=ghcr.io/tinycloudlabs/tinycloud-mcp:$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+            echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "::error::Set package_version to build and deploy, or image_digest to redeploy an existing image"
@@ -68,9 +70,9 @@ jobs:
         with:
           context: packages/mcp
           push: true
-          build-args: TINYCLOUD_MCP_VERSION=${{ inputs.package_version }}
+          build-args: TINYCLOUD_MCP_VERSION=${{ needs.resolve.outputs.version }}
           tags: |
-            ghcr.io/tinycloudlabs/tinycloud-mcp:${{ inputs.package_version }}
+            ghcr.io/tinycloudlabs/tinycloud-mcp:${{ needs.resolve.outputs.version }}
             ghcr.io/tinycloudlabs/tinycloud-mcp:latest
   deploy:
     needs: [resolve, image]
@@ -78,15 +80,23 @@ jobs:
     if: ${{ !cancelled() && needs.resolve.result == 'success' && (needs.image.result == 'success' || (needs.image.result == 'skipped' && needs.resolve.outputs.build == 'false')) }}
     runs-on: ubuntu-latest
     environment: production
+    concurrency:
+      group: mcp-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - name: Check the pinned image exists
+      - name: Check the digest is a runnable image index
         if: needs.resolve.outputs.build == 'false'
         env:
           TINYCLOUD_MCP_IMAGE: ${{ needs.resolve.outputs.image }}
-        run: docker manifest inspect "$TINYCLOUD_MCP_IMAGE" >/dev/null
+        # Use the index digest (the tag's digest or the build log's "exporting manifest list");
+        # attestation and single-platform manifest digests are refused.
+        shell: bash
+        run: |
+          docker manifest inspect "$TINYCLOUD_MCP_IMAGE" \
+            | jq -e 'any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64")' >/dev/null
       - name: Install Phala CLI
-        run: npm install --global phala
+        run: npm install --global phala@1.1.22
       - name: Deploy hosted MCP
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
