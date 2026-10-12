@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 3.2.0-beta.6
+
+### Minor Changes
+
+- 33efc8c: Export `siweRuntimeDelegation` to project an OpenKey signed-login (SIWE/ReCap CACAO) grant into a portable runtime delegation. A decrypt-only projection retains its owner space when the signed ReCap has no space entry.
+
 ## 3.2.0-beta.5
 
 ### Patch Changes

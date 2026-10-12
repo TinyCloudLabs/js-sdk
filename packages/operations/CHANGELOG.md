@@ -1,5 +1,13 @@
 # @tinycloud/operations
 
+## 0.5.0-beta.7
+
+### Patch Changes
+
+- 33efc8c: Operation authority checks now judge each required capability against every grant in its owner-exact space together. A session restored from an OpenKey signed login reports one grant per signed action, so an operation needing `tinycloud.kv/get` and `tinycloud.kv/list` on one path was reported as `authority_required` even though both actions were signed.
+- Updated dependencies [33efc8c]
+  - @tinycloud/node-sdk@3.2.0-beta.6
+
 ## 0.5.0-beta.6
 
 ### Patch Changes

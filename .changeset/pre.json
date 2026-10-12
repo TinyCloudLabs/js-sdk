@@ -30,6 +30,9 @@
   },
   "changesets": [
     "republish-replica-beta",
+    "tc-589-mcp-hosted-connect",
+    "tc-589-node-sdk-siwe-delegation",
+    "tc-589-operations-action-union",
     "tc-670-cli-profile-lock-recovery",
     "tc-670-mcp-profile-lock-recovery",
     "tc-670-operations-profile-lock-liveness",
