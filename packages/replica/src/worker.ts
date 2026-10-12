@@ -315,7 +315,7 @@ async function handleSync(request: SyncRequest): Promise<SyncResult> {
   if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
   const engine = new Replica({
     store: s.store,
-    transportFor: (grant) => kvSyncTransport(boundKv(grant, s)),
+    transportFor: (grant) => kvSyncTransport(boundKv(grant, s), { host: s.host }),
     // Siblings hear every committed page and repair batch, not only whole
     // syncs: a sync that fails on page 2 still reports page 1.
     onCommit: () => broadcastCommitted(s),

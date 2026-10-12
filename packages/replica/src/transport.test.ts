@@ -73,6 +73,79 @@ describe("kvSyncTransport.syncPage", () => {
     expect(await codeOf(broken.syncPage({ prefix: "notes/", limit: 7 }))).toBe(ReplicaErrorCode.PROTOCOL_ERROR);
   });
 });
+describe("standalone root feature discovery", () => {
+  test("caches /info, refuses unsupported root sync, and leaves folder sync alone", async () => {
+    let infoRequests = 0;
+    let changeRequests = 0;
+    const fakeFetch: typeof fetch = async () => {
+      infoRequests++;
+      return Response.json({ features: ["kv-sync-v1"] });
+    };
+    const page = {
+      changes: [],
+      more: false,
+      cursor: "root",
+      source: { nodeDid: "did:key:n", space: "s", prefix: "notes/" },
+      authority: { notBefore: null, expiresAt: "2030-01-01T00:00:00Z", retainUntil: null },
+    };
+    const kv = client({
+      changes: async () => {
+        changeRequests++;
+        return { ok: true, data: page };
+      },
+    });
+    const first = kvSyncTransport(kv, { host: "https://replica-root-feature.test", fetch: fakeFetch });
+    const second = kvSyncTransport(kv, { host: "https://replica-root-feature.test", fetch: fakeFetch });
+
+    expect(await codeOf(first.syncPage({ prefix: "/", limit: 10 }))).toBe(ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED);
+    expect(await codeOf(second.syncPage({ prefix: "/", limit: 10 }))).toBe(ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED);
+    expect({ infoRequests, changeRequests }).toEqual({ infoRequests: 1, changeRequests: 0 });
+
+    expect(await codeOf(first.syncPage({ prefix: "notes/", limit: 10 }))).toBeUndefined();
+    expect({ infoRequests, changeRequests }).toEqual({ infoRequests: 1, changeRequests: 1 });
+  });
+
+  test("one-argument transport discovers root support from the KV service host", async () => {
+    let infoUrl = "";
+    let changeRequests = 0;
+    const kv = Object.assign(client({
+      changes: async () => {
+        changeRequests++;
+        return fail("SHOULD_NOT_SYNC", "unsupported root");
+      },
+    }), { host: "https://replica-root-one-argument.test" });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input) => {
+      infoUrl = String(input);
+      return Response.json({ features: ["kv-sync-v1"] });
+    };
+    try {
+      const transport = kvSyncTransport(kv);
+      expect(await codeOf(transport.syncPage({ prefix: "/", limit: 10 })))
+        .toBe(ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED);
+      expect({ infoUrl, changeRequests }).toEqual({
+        infoUrl: "https://replica-root-one-argument.test/info",
+        changeRequests: 0,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("root sync without a discoverable host fails clearly", async () => {
+    const transport = kvSyncTransport(client({}));
+    let error: unknown;
+    try {
+      await transport.syncPage({ prefix: "/", limit: 10 });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      code: ReplicaErrorCode.INVALID_ARGUMENT,
+      message: expect.stringContaining("requires a node host to check kv-sync-root"),
+    });
+  });
+});
 
 describe("kvSyncTransport.fetchContent", () => {
   test("asks in key byte order; missing keys are reported, oversize values are fetched alone, other failures throw", async () => {

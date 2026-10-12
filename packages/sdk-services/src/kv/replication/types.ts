@@ -254,6 +254,8 @@ export interface KVReplicationDeps {
    * after restart. Pending-state failures also fail closed to network reads.
    */
   pending: PendingWriteStore;
+  /** Node `/info` features discovered on sign-in for protocol gating. */
+  nodeFeatures?: readonly string[];
   scheduler: ReplicationScheduler;
   emit(event: ReplicationEvent): void;
   fetch?: FetchFunction;
@@ -337,7 +339,7 @@ export interface ReplicationControl {
 
 export interface ReplicationOptions {
   enabled: boolean;
-  /** Non-empty primary-space prefixes; none empty or overlapping. Prefer no trailing slash. */
+  /** Non-empty list of folder prefixes ending in `/`, or `/` for the whole space. */
   prefixes: string[];
   /** Required for prefixes/spaces where requiresSecretsOptIn returns true. */
   allowSecrets?: boolean;

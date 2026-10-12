@@ -11,6 +11,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { contentHash as hash } from "@tinycloud/replica";
+import { withTinyCloudStateRoot } from "@tinycloud/operations/state";
+import { appendAdditionalDelegation } from "../src/lib/permissions.js";
+import type { PortableDelegation } from "@tinycloud/node-sdk";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -20,7 +24,7 @@ import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const DATABASE_URL = process.env.TC_REPLICA_E2E_DATABASE_URL || undefined;
-const CLI = resolve(import.meta.dir, "../dist/index.js");
+const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/index.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");
 
@@ -50,6 +54,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
   let node: ChildProcess | undefined;
   let space: string;
   let deviceGrantCid: string;
+  let supportsRootSync = false;
   const nodeSecret = randomBytes(48).toString("base64url");
 
   async function startNode(): Promise<void> {
@@ -151,6 +156,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     await startNode();
     const info = (await (await fetch(`${host}/info`)).json()) as { features?: string[] };
     expect(info.features).toContain("kv-sync-v1");
+    supportsRootSync = info.features?.includes("kv-sync-root") === true;
   }, 60_000);
 
   afterAll(async () => {
@@ -180,6 +186,27 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     expect(first.sync).toMatchObject({ changes: 3, fetched: 3, coverage: "complete", promotedGrant: true });
     expect(first.status.counts).toEqual({ keys: 3, contentMissing: 0, tombstones: 0 });
     expect(first.status.source).toMatchObject({ host, space, prefix: "notes/" });
+
+
+    // Saved read-through settings are validated before a KV read starts.
+    const deviceProfilePath = join(home, ".tinycloud", "profiles", "device", "profile.json");
+    const originalDeviceProfile = await readFile(deviceProfilePath);
+    const deviceProfile = JSON.parse(originalDeviceProfile.toString()) as {
+      replication?: { prefixes: string[]; allowSecrets?: boolean };
+    };
+    deviceProfile.replication = { prefixes: ["notes/"] };
+    await writeFile(deviceProfilePath, JSON.stringify(deviceProfile));
+    try {
+      deviceProfile.replication = { prefixes: ["notes"] };
+      await writeFile(deviceProfilePath, JSON.stringify(deviceProfile));
+      const invalidSavedPrefix = await tc(["--replication", "kv", "get", "notes/a.txt"], { profile: "device" });
+      expect(invalidSavedPrefix.code).toBe(2);
+      expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
+      expect(invalidSavedPrefix.stderr).toContain("saved replication prefix");
+      expect(invalidSavedPrefix.stderr).toContain("purging a replica alone");
+    } finally {
+      await writeFile(deviceProfilePath, originalDeviceProfile);
+    }
 
     // 3. Stop the node; a new CLI process reads blake3-identical bytes with the network disabled.
     await stopNode();
@@ -252,6 +279,37 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     }
     expect(await readFile(join(home, "network-attempts.log"), "utf8").catch(() => "")).toBe("");
     await startNode();
+    await ok(["--host", host, "auth", "login", "--method", "local", "--replication-prefix", "/", "--replication-allow-secrets"], "owner");
+    await ok(["profile", "create", "root-device", "--posture", "delegate-session", "--host", host], "owner");
+    await ok(
+      ["auth", "request", "--cap", `tinycloud.kv:${space}::get,list,metadata,sync`, "--expiry", "30d", "--emit", "root-request.json"],
+      "root-device",
+    );
+    const rootGrant = await tc(["auth", "grant", "root-request.json", "--yes"], { profile: "owner" });
+    expect(rootGrant.code).toBe(0);
+    const rootArtifact = JSON.parse(rootGrant.stdout.toString()) as {
+      delegation: PortableDelegation;
+      permissions?: PermissionEntry[];
+    };
+    await withTinyCloudStateRoot(home, () => appendAdditionalDelegation("root-device", {
+      delegation: rootArtifact.delegation,
+      permissions: rootArtifact.permissions ?? [
+        { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/sync"] },
+      ],
+    }));
+    const rootSync = await tc(["replica", "sync", "--prefix", "/", "--replica", "whole-space", "--allow-secrets"], { profile: "root-device" });
+    if (supportsRootSync) {
+      expect({ code: rootSync.code, stderr: rootSync.stderr }).toMatchObject({ code: 0 });
+      const rootStatus = await ok<{ lastError: { code: string } | null }>(["replica", "status", "--replica", "whole-space"], "root-device");
+      expect(rootStatus.lastError).toBeNull();
+    } else {
+      expect({ code: rootSync.code, stderr: rootSync.stderr }).toMatchObject({
+        code: 7,
+        stderr: expect.stringContaining("REPLICATION_ROOT_UNSUPPORTED"),
+      });
+      const rootStatus = await ok<{ lastError: { code: string } }>(["replica", "status", "--replica", "whole-space"], "root-device");
+      expect(rootStatus.lastError.code).toBe("REPLICATION_ROOT_UNSUPPORTED");
+    }
   }, 180_000);
 
   test("an expired grant blocks offline reads; a retain grant keeps them, marked expired, until retainUntil", async () => {
@@ -332,7 +390,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     const revoked = await owner.revokeDelegation(deviceGrantCid);
     if (!revoked.ok) throw new Error(`owner revoke failed: ${JSON.stringify(revoked.error)}`);
 
-    const sync = await tc(["replica", "sync"], { profile: "device" });
+    const sync = await tc(["replica", "sync", "--replica", "notes"], { profile: "device" });
     expect({ code: sync.code, stderr: sync.stderr }).toMatchObject({ code: 5, stderr: expect.stringContaining("GRANT_REVOKED") });
 
     const dir = join(home, ".tinycloud", "profiles", "device", "replicas", "notes");

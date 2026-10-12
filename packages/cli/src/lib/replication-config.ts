@@ -2,6 +2,9 @@ import { join } from "node:path";
 import { profilePath, withProfileLock } from "@tinycloud/operations/state";
 import { sqliteReplicaStorage, type KVReplicaStorage, type ReplicationOptions } from "@tinycloud/node-sdk";
 import { createReplicationEventSink } from "./replication-log.js";
+import { assertFolderPrefix } from "@tinycloud/replica";
+import { CLIError } from "../output/errors.js";
+import { ExitCode } from "../config/constants.js";
 
 export interface CLIReplicationConfig extends ReplicationOptions {
   storage: KVReplicaStorage;
@@ -20,6 +23,20 @@ export function createCliReplicationConfig(
   enabled: boolean,
 ): CLIReplicationConfig | undefined {
   if (!enabled || !settings || settings.prefixes.length === 0) return undefined;
+  for (const prefix of settings.prefixes) {
+    try {
+      assertFolderPrefix(prefix);
+    } catch (error) {
+      const trimmed = prefix.replace(/^\/+/, "").replace(/\/+$/, "");
+      const replacement = trimmed.length > 0 && !trimmed.includes("//") ? `${trimmed}/` : "/";
+      throw new CLIError(
+        "INVALID_REPLICATION_PREFIX",
+        error instanceof Error ? error.message : String(error),
+        ExitCode.USAGE_ERROR,
+        { hint: `Replace the saved replication prefix with \`tc auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` },
+      );
+    }
+  }
   const root = profilePath(profile);
   return {
     enabled: true,

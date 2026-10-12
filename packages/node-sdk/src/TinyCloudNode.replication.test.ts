@@ -205,7 +205,7 @@ describe("TinyCloudNode replication config validation (§3.1)", () => {
       () =>
         new TinyCloudNode({
           wasmBindings: makeFakeWasmBindings(),
-          replication: { enabled: true, prefixes: ["notes"] } as never,
+          replication: { enabled: true, prefixes: ["notes/"] } as never,
         }),
     ).toThrow(/storage/);
     expect(
@@ -219,9 +219,15 @@ describe("TinyCloudNode replication config validation (§3.1)", () => {
       () =>
         new TinyCloudNode({
           wasmBindings: makeFakeWasmBindings(),
-          replication: { enabled: true, storage, prefixes: ["notes/", "notes/todo"] },
+          replication: { enabled: true, storage, prefixes: ["notes/", "notes/todo/"] },
         }),
     ).toThrow(/overlap/);
+  });
+  test("bare prefixes fail construction with a folder suggestion", () => {
+    expect(() => new TinyCloudNode({
+      wasmBindings: makeFakeWasmBindings(),
+      replication: { enabled: true, storage, prefixes: ["notes"] },
+    })).toThrow(/notes\//);
   });
 
   test("a vault prefix without allowSecrets throws; with it, construction succeeds", () => {
@@ -229,7 +235,7 @@ describe("TinyCloudNode replication config validation (§3.1)", () => {
       () =>
         new TinyCloudNode({
           wasmBindings: makeFakeWasmBindings(),
-          replication: { enabled: true, storage, prefixes: ["vault/keys"] },
+          replication: { enabled: true, storage, prefixes: ["vault/keys/"] },
         }),
     ).toThrow(/allowSecrets/);
     expect(
@@ -239,7 +245,7 @@ describe("TinyCloudNode replication config validation (§3.1)", () => {
           replication: {
             enabled: true,
             storage,
-            prefixes: ["vault/keys"],
+            prefixes: ["vault/keys/"],
             allowSecrets: true,
           },
         }),
@@ -422,11 +428,11 @@ describe("replicationAuthority (§4.2)", () => {
   test("no session → sessionGrant and plan refuse SESSION_EXPIRING", async () => {
     const node = new TinyCloudNode({ wasmBindings: makeFakeWasmBindings() });
     const authority = await replicationAuthorityForTest(node);
-    expect(authority.sessionGrant("notes")).toEqual({ refused: "SESSION_EXPIRING" });
-    expect(authority.plan("notes")).toEqual({ refused: "SESSION_EXPIRING" });
+    expect(authority.sessionGrant("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
+    expect(authority.plan("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  test("plan routes through planDelegation with one get+sync entry on the session space", async () => {
+  test("plan routes through planDelegation with one get+sync folder entry", async () => {
     const node = sessionOnlyNode(makeFakeWasmBindings(), fakeSession());
     const planDelegationSpy = mock(() => ({
       path: "runtime" as const,
@@ -434,19 +440,16 @@ describe("replicationAuthority (§4.2)", () => {
       expiresAt: 1_700_000_000_000,
       effectiveExpiration: new Date(1_700_000_000_000),
     }));
-    // Method-shape shim: planDelegation's union return includes internal fields.
     Reflect.set(node, "planDelegation", planDelegationSpy);
     const authority = await replicationAuthorityForTest(node);
-    expect(authority.plan("notes")).toEqual({
+    expect(authority.plan("notes/")).toEqual({
       path: "runtime",
       parentCid: "bafyP",
       expiresAt: 1_700_000_000_000,
     });
     const entries = planDelegationSpy.mock.calls[0]![0] as PermissionEntry[];
-    expect(entries).toHaveLength(2);
-    expect(entries.map((entry) => [entry.space, entry.path, entry.actions])).toEqual([
-      [SPACE_ID, "notes", ["tinycloud.kv/get", "tinycloud.kv/sync"]],
-      [SPACE_ID, "notes/", ["tinycloud.kv/get", "tinycloud.kv/sync"]],
+    expect(entries).toEqual([
+      { service: "tinycloud.kv", space: SPACE_ID, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
   });
 });
@@ -486,7 +489,7 @@ function replicationConfig(over: Record<string, unknown> = {}) {
   return {
     enabled: true,
     storage: {} as never,
-    prefixes: ["notes"],
+    prefixes: ["notes/"],
     ...over,
   };
 }
@@ -530,22 +533,16 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     await (node.auth as NodeUserAuthorization).signIn();
 
     const entries = node.replicationSignInEntries();
-    expect(entries).toHaveLength(2);
-    for (const path of ["notes", "notes/"]) {
-      expect(entries).toContainEqual({
-        service: "tinycloud.kv",
-        space: SPACE_ID,
-        path,
-        actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
-      });
-    }
+    expect(entries).toEqual([
+      { service: "tinycloud.kv", space: SPACE_ID, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
     // Parity (§4.6): the abilities handed to prepareSession carry the same
     // sync entry the restore check will require.
     const spaceAbilities = captured[0]!.spaceAbilities as Record<
       string,
       { kv?: Record<string, string[]> }
     >;
-    expect(spaceAbilities[SPACE_ID]?.kv?.notes).toEqual(
+    expect(spaceAbilities[SPACE_ID]?.kv?.[""]).toEqual(
       expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
     );
   });
@@ -584,7 +581,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
       capabilityRequest,
-      replication: replicationConfig({ prefixes: ["notes", "other"] }),
+      replication: replicationConfig({ prefixes: ["notes/", "other/"] }),
     });
     await (node.auth as NodeUserAuthorization).signIn();
     const entries = node.replicationSignInEntries();
@@ -615,14 +612,14 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       replication: {
         enabled: true,
         storage: {} as never,
-        prefixes: ["vault/keys"],
+        prefixes: ["vault/keys/"],
         allowSecrets: true,
       },
     });
     (gated.auth as NodeUserAuthorization).setRestoredTinyCloudSession(fakeSession());
     // defaultActions grants an unrestricted root get; only the opt-in gate stands.
     const entries = gated.replicationSignInEntries();
-    expect(entries.map((entry) => entry.path).sort()).toEqual(["vault/keys", "vault/keys/"]);
+    expect(entries.map((entry) => entry.path).sort()).toEqual([""]);
     expect(entries.every((entry) => entry.space === SPACE_ID)).toBe(true);
     expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
   });
@@ -643,10 +640,8 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
         fakeSession({ spaceId: accountSpaceId }),
       );
       const entries = node.replicationSignInEntries();
-      expect(entries).toHaveLength(2);
-      expect(entries.map((entry) => [entry.space, entry.path])).toEqual([
-        [accountSpaceId, "notes"],
-        [accountSpaceId, "notes/"],
+      expect(entries).toEqual([
+        { service: "tinycloud.kv", space: accountSpaceId, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
       ]);
       expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
     }
@@ -694,17 +689,15 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       prefix: "secrets",
       replication: replicationConfig({
         allowSecrets: true,
-        prefixes: ["vault/secrets/tokens"],
+        prefixes: ["vault/secrets/tokens/"],
       }),
     });
     (scoped.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
       fakeSession({ spaceId: secretsSpaceId }),
     );
     const entries = scoped.replicationSignInEntries();
-    expect(entries).toHaveLength(2);
-    expect(entries.map((entry) => [entry.space, entry.path])).toEqual([
-      [secretsSpaceId, "vault/secrets/tokens"],
-      [secretsSpaceId, "vault/secrets/tokens/"],
+    expect(entries).toEqual([
+      { service: "tinycloud.kv", space: secretsSpaceId, path: "vault/secrets/tokens/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
     expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
   });

@@ -81,7 +81,7 @@ function spec(over: Partial<KVReplicaSpec> = {}): KVReplicaSpec {
   return {
     identity: identity(),
     space: SPACE_A,
-    prefix: "notes",
+    prefix: "notes/",
     allowSecrets: false,
     ...over,
   };
@@ -545,7 +545,7 @@ describe("read-only replica status inspection", () => {
     if (result.timedOut) throw new Error("Read-only status inspection waited on the mutation guard.");
     expect(result.value).toMatchObject({ coverage: "empty", authority: { state: "valid" } });
 
-    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" });
+    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" });
     expect(await storage.inspectStatus!(spec(), { signal: new AbortController().signal })).toBeUndefined();
     expect(await filesNamed(dir, "replica.db")).toEqual([]);
   });
@@ -660,10 +660,10 @@ describe("sqlite replica handle", () => {
     const storage = createSqliteReplicaStorage(storageOptions());
     const ucan = await mintUcan({
       audience: DEVICE_DID,
-      prefixes: ["notes", "notes/", "other", "other/"],
+      prefixes: ["notes/", "other/"],
     });
-    const notes = await storage.open(spec({ prefix: "notes" }));
-    const other = await storage.open(spec({ prefix: "other" }));
+    const notes = await storage.open(spec({ prefix: "notes/" }));
+    const other = await storage.open(spec({ prefix: "other/" }));
     await notes.installGrant(ucan);
     await other.installGrant(ucan);
 
@@ -731,7 +731,7 @@ describe("purge across the device union (§10.2)", () => {
     await storage.purge({
       identity: identity(),
       space: SPACE_A,
-      prefix: "notes",
+      prefix: "notes/",
       sessionDeviceDid: DELEGATE_DID,
     });
     const replicasAfter = await readdir(join(dir, idDir!, "replicas"));
@@ -743,7 +743,7 @@ describe("purge across the device union (§10.2)", () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());
     await expect(
-      storage.purge({ identity: identity({ host: HOST_B }), space: SPACE_A, prefix: "notes" }),
+      storage.purge({ identity: identity({ host: HOST_B }), space: SPACE_A, prefix: "notes/" }),
     ).resolves.toBeUndefined();
 
     // A partition that never had device.jwk (pure delegate posture) still
@@ -755,7 +755,7 @@ describe("purge across the device union (§10.2)", () => {
     await storage.purge({
       identity: identity(),
       space: SPACE_A,
-      prefix: "notes",
+      prefix: "notes/",
       sessionDeviceDid: DELEGATE_DID,
     });
     expect((await readdir(join(dir, idDir!, "replicas"))).length).toBe(0);
@@ -777,7 +777,7 @@ describe("purge across the device union (§10.2)", () => {
     const lease = await foreign.acquireSyncLease(120_000);
     expect(lease).not.toBeNull();
     await expect(
-      storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" }),
+      storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" }),
     ).rejects.toMatchObject({ code: "REPLICA_BUSY" });
     expect(existsSync(join(dir, idDir!, "replicas", replicaDir!))).toBe(true);
     await foreign.releaseLease(lease!);
@@ -791,7 +791,7 @@ describe("purge across the device union (§10.2)", () => {
     await handle.installGrant(await mintUcan({ audience: DEVICE_DID }));
     // The handle stays OPEN across the purge: generation fencing (the
     // browser wipe contract) must invalidate it — never unlink under it.
-    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" });
+    await storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" });
     await expect(handle.status()).rejects.toMatchObject({ code: "RESET_REQUIRED" });
     await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "RESET_REQUIRED" });
     await expect(handle.list({ prefix: "notes/" })).rejects.toMatchObject({
@@ -815,7 +815,7 @@ describe("purge across the device union (§10.2)", () => {
     await chmod(replicasDir, 0o000);
     try {
       await expect(
-        storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes" }),
+        storage.purge({ identity: identity(), space: SPACE_A, prefix: "notes/" }),
       ).rejects.toMatchObject({ code: "STORAGE_ERROR" });
     } finally {
       await chmod(replicasDir, 0o700);

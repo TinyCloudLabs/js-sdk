@@ -436,6 +436,22 @@ describe("client lifecycle", () => {
       expect(spawned).toBe(0);
     }
   });
+  test("open() rejects bare prefixes before spawning a worker", async () => {
+    let spawned = 0;
+    const promise = openReplica({
+      host: "http://127.0.0.1:1",
+      space: SPACE,
+      prefix: "notes",
+      principal: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+      worker: () => {
+        spawned += 1;
+        return stubWorker().worker;
+      },
+    });
+    const error = await rejectsWith(promise, ReplicaErrorCode.INVALID_ARGUMENT);
+    expect(error.message).toContain("notes/");
+    expect(spawned).toBe(0);
+  });
 
   test("openReplica() terminates the worker when open() fails", async () => {
     // A failed open must not leak a live Worker the caller cannot reach:
@@ -457,5 +473,34 @@ describe("client lifecycle", () => {
       );
       expect(attempt.state.terminated).toBe(true);
     }
+  });
+});
+
+describe("persisted folder-prefix validation", () => {
+  test("init rejects invalid prefixes and reopening rejects invalid persisted state", async () => {
+    const replicaId = nextId();
+    const store = await IndexedDbReplicaStore.open(replicaId, { holder: `holder-${replicaId}` });
+    for (const prefix of ["", "notes", "/notes/", "notes//"]) {
+      await rejectsWith(store.init(config({ replicaId, prefix })), ReplicaErrorCode.INVALID_ARGUMENT);
+    }
+    await store.init(config({ replicaId, prefix: "/" }));
+    await store.close();
+
+    const db = await requestAsPromise(fakeIndexedDB.open(replicaDatabaseName(replicaId)));
+    const tx = db.transaction("meta", "readwrite");
+    const done = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
+    const state = await requestAsPromise<{ config: { prefix: string } }>(tx.objectStore("meta").get("state"));
+    state.config.prefix = "notes";
+    tx.objectStore("meta").put(state, "state");
+    await done;
+    db.close();
+
+    const reopened = await IndexedDbReplicaStore.open(replicaId, { holder: "holder-reopen" });
+    await rejectsWith(reopened.open(), ReplicaErrorCode.INVALID_ARGUMENT);
+    await reopened.close();
   });
 });

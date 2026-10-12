@@ -54,12 +54,14 @@ export function deviceGrant(
   options: { prefix?: string; actions?: string[]; exp?: number; nbf?: number; aud?: string } = {},
 ): ParsedUcanGrant {
   const abilities = Object.fromEntries((options.actions ?? ["get", "list", "metadata", "sync"]).map((a) => [`tinycloud.kv/${a}`, [{}]]));
+  const path = options.prefix ?? "notes/";
+  const resource = path === "" || path === "/" ? `${SPACE}/kv` : `${SPACE}/kv/${path}`;
   return parseUcanGrant(
     signUcan(owner, {
       aud: options.aud ?? device.did,
       exp: options.exp ?? Math.floor(Date.now() / 1000) + 3600,
       ...(options.nbf === undefined ? {} : { nbf: options.nbf }),
-      att: { [`${SPACE}/kv/${options.prefix ?? "notes/"}`]: abilities },
+      att: { [resource]: abilities },
       prf: ["bafyparent"],
     }),
   );

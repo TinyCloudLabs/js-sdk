@@ -118,6 +118,7 @@ let profiles = new Map<string, ProfileLike>();
 let keys = new Map<string, object>();
 let sessions = new Map<string, object>();
 let generatedKeys: GeneratedKey[] = [];
+let manifestPermissions: unknown[] = [];
 let openKeyDelegation: Record<string, unknown>;
 let localSignInResult: LocalSignInResult;
 let authNodeHasRuntimePermissions: boolean;
@@ -148,6 +149,7 @@ function resetState(): void {
   keys = new Map();
   sessions = new Map();
   generatedKeys = [];
+  manifestPermissions = [];
   openKeyDelegation = {
     delegationHeader: { Authorization: "Bearer openkey-new" },
     delegationCid: "bafy-openkey-new",
@@ -432,7 +434,7 @@ mock.module("../lib/permissions.js", () => ({
   loadLocalGrantArtifacts: async () => [],
   removeStoredDelegations: async () => 0,
   loadAdditionalDelegations: async () => [],
-  loadManifestPermissions: async () => [],
+  loadManifestPermissions: async () => manifestPermissions as never,
   loadPermissionRequest: async () => [],
   parseCapSpec: async () => ({
     service: "tinycloud.kv",
@@ -594,9 +596,10 @@ describe("CLI auth rotate command", () => {
     await runAuthCommand(["auth", "rotate", "--paste"]);
 
     expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
+      service: "tinycloud.kv",
       space: "applications",
-      path: "applications/apps/",
-      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
+      path: "",
+      actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
     }));
     expect(recorded.startAuthFlows[0]?.options.permissions).not.toContainEqual(expect.objectContaining({
       space: "default",
@@ -738,14 +741,52 @@ describe("CLI auth login command", () => {
     expect(recorded.startAuthFlows).toEqual([
       { did: "did:key:openkey-session", options: expect.objectContaining({ noPopup: true, jwk: key }) },
     ]);
-    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual({
+    expect(recorded.startAuthFlows[0]?.options.permissions).toContainEqual(expect.objectContaining({
       service: "tinycloud.kv",
       space: "default",
-      path: "notes/",
-      actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
-    });
+      path: "",
+      actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
+    }));
     expect(recorded.setProfiles.at(-1)?.data.replication).toEqual({ prefixes: ["notes/"] });
     expect(recorded.outputs).toEqual([expect.not.objectContaining({ mode: "device" })]);
+  });
+
+  test("owner OpenKey manifest replication reuses whole-space get authority once", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
+    profiles.set("default", makeProfile({
+      did: "did:key:openkey-session",
+      sessionDid: "did:key:openkey-session",
+      authMethod: "openkey",
+    }));
+    keys.set("default", key);
+    manifestPermissions = [
+      { service: "tinycloud.kv", space: "default", path: "", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.capabilities", space: "default", path: "", actions: ["tinycloud.capabilities/read"] },
+    ];
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      verificationMethod: "did:key:openkey-session",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+    };
+
+    await runAuthCommand([
+      "auth", "login", "--method", "openkey", "--no-popup", "--manifest", "root.json",
+      "--replication-prefix", "notes/", "--replication-prefix", "docs/",
+    ]);
+
+    expect(recorded.errors).toEqual([]);
+    const permissions = recorded.startAuthFlows[0]?.options.permissions as Array<{
+      service: string;
+      path: string;
+      actions: string[];
+    }>;
+    expect(permissions.filter((entry) => entry.actions.includes("tinycloud.kv/sync"))).toEqual([
+      expect.objectContaining({
+        service: "tinycloud.kv",
+        path: "",
+        actions: expect.arrayContaining(["tinycloud.kv/get", "tinycloud.kv/sync"]),
+      }),
+    ]);
   });
 
   test("browser login remains available when only stdout is redirected", async () => {

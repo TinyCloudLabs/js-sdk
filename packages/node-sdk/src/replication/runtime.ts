@@ -26,6 +26,7 @@ export interface ReplicationRuntimeBinding {
   chainId?: number;
   principal?: string;
   authority: ReplicationAuthority;
+  nodeFeatures?: readonly string[];
   primaryKV: Array<{ space: string; kv: { setReadThrough(readThrough: KVReadThrough | null): void } }>;
 }
 
@@ -185,6 +186,7 @@ export class ReplicationRuntime {
         scheduler: this.clock,
         emit,
         fetch: context.fetch as FetchFunction,
+        nodeFeatures: input.nodeFeatures,
         previous: previousClose,
       });
       this.current = controller;
