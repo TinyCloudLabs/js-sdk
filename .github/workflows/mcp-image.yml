@@ -108,14 +108,12 @@ jobs:
           test -n "$PHALA_CLOUD_API_KEY"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$TC_MCP_STATE_SECRET"
-          if phala cvms ls --json | jq -e '.items[] | select(.cvmName == "tinycloud-mcp")' >/dev/null; then
-            target=(--cvm-id tinycloud-mcp)
-          else
-            target=(--name tinycloud-mcp --instance-type tdx.small)
-          fi
+          # Always update the existing CVM, which holds the mcp-state volume. A failed
+          # lookup must not fall through to creating an empty replacement; creating the
+          # CVM for the first time is a manual step.
           phala deploy \
             --api-token "$PHALA_CLOUD_API_KEY" \
-            "${target[@]}" \
+            --cvm-id tinycloud-mcp \
             --compose packages/mcp/docker-compose.phala.yml \
             --env "TINYCLOUD_MCP_IMAGE=$TINYCLOUD_MCP_IMAGE" \
             --env "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN" \
