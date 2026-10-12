@@ -35,6 +35,7 @@ export interface GrantPayload {
   signature: string;
   verificationMethod: string;
   jwk?: Record<string, unknown>;
+  spaceReady?: boolean | null;
   spacePending?: boolean;
 }
 
@@ -355,11 +356,12 @@ export async function installGrant(profile: Profile, key: AgentKey, payload: Gra
   saveGrant(grant);
   applyGrantToProfile(profile, grant);
   if (!(await verifySpaceReady(node))) {
+    const pending = payload.spacePending === true && payload.spaceReady === null;
     profile.status = 'awaiting-space';
-    if (payload.spacePending === true) profile.spacePending = true;
+    if (pending) profile.spacePending = true;
     else delete profile.spacePending;
     saveProfile(profile);
-    if (payload.spacePending !== true) throw noSpaceError(profile);
+    if (!pending) throw noSpaceError(profile);
     console.error(`OpenKey is setting up your TinyCloud "${COURIER_SPACE}" space; waiting up to 2.5 minutes…`);
     if (!(await waitForSpaceReady(() => verifySpaceReady(node)))) throw pendingSpaceError(profile);
   }

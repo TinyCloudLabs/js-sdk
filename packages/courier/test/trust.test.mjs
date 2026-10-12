@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
-import { openKeyDelegateUrl, parseGrantPayload, installGrant, resumeGrant } from '../dist/grant.js';
+import { openKeyDelegateUrl, parseGrantPayload, grantFromInput, installGrant, resumeGrant } from '../dist/grant.js';
 import { loadKey, loadProfile, saveGrant, saveKey, saveProfile } from '../dist/profile.js';
 import { AGENT_GRANT, COURIER_SPACE, PREFIX } from '../dist/keys.js';
 import { assertAgentGrant, siweTimes } from '../dist/authority.js';
@@ -358,12 +358,18 @@ function stubSpaceProbe(t, probe) {
 const missingSpace = () => ({ ok: false, error: { status: 404, message: 'Space not found' } });
 const readySpace = () => ({ ok: true, data: { keys: [] } });
 
-test('install without literal spacePending true keeps one probe and existing guidance', async (t) => withHome(async () => {
+test('install without the exact pending contract keeps one probe and existing guidance', async (t) => withHome(async () => {
   const agent = agentKey();
   const signed = await signedGrant(agent);
   let probes = 0;
   const fake = stubSpaceProbe(t, async () => { probes++; return missingSpace(); });
-  for (const fields of [{}, { spaceReady: null }, { spaceReady: false }, { spaceReady: true }, { spacePending: false }, { spacePending: 'true' }]) {
+  const cases = [
+    {}, { spaceReady: null }, { spaceReady: false }, { spaceReady: true },
+    { spacePending: false }, { spacePending: 'true' },
+    { spaceReady: false, spacePending: true }, { spaceReady: true, spacePending: true },
+    { spacePending: true },
+  ];
+  for (const fields of cases) {
     const profile = profileFor(agent);
     await assert.rejects(installGrant(profile, agent, { ...signed, ...fields }), {
       code: 'no-space', message: /Courier will not create it/,
@@ -371,9 +377,40 @@ test('install without literal spacePending true keeps one probe and existing gui
     assert.equal(loadProfile().status, 'awaiting-space');
     assert.equal(loadProfile().spacePending, undefined);
   }
-  assert.equal(probes, 6);
+  assert.equal(probes, cases.length);
   assert.deepEqual(fake.sleeps, []);
   assert.deepEqual(fake.messages, []);
+}));
+
+test('short-code redemption preserves the pending contract and waits for the agents space', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  const { d: _private, ...publicJwk } = agent.jwk;
+  const lookups = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    lookups.push(url);
+    assert.equal(options.redirect, 'error');
+    return new Response(JSON.stringify({ delegation: {
+      ...signed, jwk: publicJwk, spaceReady: null, spacePending: true,
+    } }), { headers: { 'Content-Type': 'application/json' } });
+  });
+  const payload = await grantFromInput(' ABCD-EFGH\n', agent, { apiHost: 'https://openkey.test' });
+  assert.deepEqual(lookups, ['https://openkey.test/api/delegation-codes/abcd-efgh']);
+  assert.equal(payload.spacePending, true);
+  assert.equal(payload.spaceReady, null);
+  let probes = 0;
+  const fake = stubSpaceProbe(t, async () => {
+    if (++probes === 1) return missingSpace();
+    assert.equal(loadProfile().status, 'awaiting-space');
+    assert.equal(loadProfile().spacePending, true);
+    return probes === 3 ? readySpace() : missingSpace();
+  });
+  await installGrant(profileFor(agent), agent, payload);
+  assert.equal(probes, 3);
+  assert.deepEqual(fake.sleeps, [2000]);
+  assert.deepEqual(fake.messages, ['OpenKey is setting up your TinyCloud "agents" space; waiting up to 2.5 minutes…']);
+  assert.equal(loadProfile().status, 'ready');
+  assert.equal('spacePending' in loadProfile(), false);
 }));
 
 test('pending install saves resumable state before waiting and clears it on ready', async (t) => withHome(async () => {
