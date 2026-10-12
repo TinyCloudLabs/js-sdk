@@ -1,10 +1,12 @@
 import type { StorageQuotaInfo } from "../types";
 
+/** @deprecated Use `tc.on("storage.full", handler)` instead. Nothing in the SDK calls `onUpgradeRequired`. */
 export interface QuotaConfig {
   /** Called when a storage quota error is detected (402/413) */
   onUpgradeRequired?: (info: StorageQuotaInfo) => void;
 }
 
+/** @deprecated Use `StorageStatus` from `tc.storage.status()`. */
 export interface QuotaStatus {
   /** Storage limit in bytes for this space */
   limitBytes: number;
@@ -14,6 +16,11 @@ export interface QuotaStatus {
   remainingBytes?: number;
 }
 
+/**
+ * @deprecated Use `tc.storage.status()` for usage and `tc.on("storage.full", handler)`
+ * for rejections. This class reads billing's unauthenticated quota endpoint
+ * and is not wired into the SDK; it will be removed in a future major release.
+ */
 export class TinyCloudQuota {
   private config: QuotaConfig;
   private quotaUrl: string | null = null;
