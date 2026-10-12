@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 3.2.0-beta.9
+
+### Patch Changes
+
+- d825e49: A fresh owner's first private-key sign-in (`tc auth login --method local`, or `TinyCloudNode.signIn()` with a private key) no longer warns `account bootstrap failed: … 401 - Unauthorized Action: …:account/sql/account / tinycloud.sql/schema`, and it creates the account index, registry and bootstrap marker on the account space. Previously these were only repaired on the next sign-in. The default bootstrap session now signs each requested permission onto its own space, as sign-in already does, and an operation on another space that a bootstrap session covers is invoked against that space (TC-957).
+
 ## 3.2.0-beta.8
 
 ### Patch Changes
