@@ -74,7 +74,11 @@ jobs:
   preflight:
     # Credentials check before any build or deploy: a stale key must stop the run before anything changes.
     runs-on: ubuntu-latest
-    environment: production
+    # Read the production secrets without creating a deployment record; no token permissions needed.
+    environment:
+      name: production
+      deployment: false
+    permissions: {}
     steps:
       - name: Install Phala CLI
         run: npm install --global phala@1.1.22
@@ -85,7 +89,9 @@ jobs:
         run: |
           test -n "$PHALA_CLOUD_API_KEY" || { echo "::error::PHALA_CLOUD_API_KEY is not set"; exit 1; }
           if ! cvm=$(phala cvms get tinycloud-mcp --api-token "$PHALA_CLOUD_API_KEY" --json); then
-            echo "::error::Phala could not read CVM tinycloud-mcp with PHALA_CLOUD_API_KEY (see the CLI error above)"
+            # With --json the CLI writes its error object to stdout.
+            reason=$(jq -r '"\(.error // .message // "unknown error") (HTTP \(.http_status // .status // "n/a"))"' <<<"$cvm" 2>/dev/null || echo "unparsed CLI error")
+            echo "::error::Phala could not read CVM tinycloud-mcp with PHALA_CLOUD_API_KEY: $reason"
             exit 1
           fi
           echo "Phala: CVM tinycloud-mcp readable; status=$(jq -r '.status // .cvm_status // "unknown"' <<<"$cvm")"
