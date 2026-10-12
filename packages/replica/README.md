@@ -90,6 +90,8 @@ const store = await SqliteReplicaStore.open("./replica-data", { create: true });
 
 `SqliteReplicaStore.open()` defaults to the runtime's built-in SQLite driver: `node:sqlite` on Node 22.13+ or `bun:sqlite` on Bun. For a managed CLI workflow, use `tc replica` from `@tinycloud/cli`.
 
+For a standalone transport, use `kvSyncTransport(kv, { host })` when the KV client does not expose its node host. Root sync always fetches `/info` and requires `kv-sync-root`; it fails clearly before calling `changes()` when no host is available. An SDK KV service that exposes `host` can use the one-argument `kvSyncTransport(kv)` form. Folder sync does not need feature discovery.
+
 ## Security and storage
 
 - A replica stores only the configured KV prefix. The grant may be broader, but keys and values outside the replica prefix are not stored.

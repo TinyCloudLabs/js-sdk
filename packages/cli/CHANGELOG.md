@@ -1,5 +1,30 @@
 # @tinycloud/cli
 
+## 1.2.0-beta.7
+
+### Patch Changes
+
+- 9836159: `tc` recovers a profile lock left by a crashed process with its own PID in another PID namespace (a container restarted with a persistent `TC_HOME`) once that process's liveness socket in the shared turn directory is gone or refused by the kernel, and still waits for a live or paused one, for one whose socket it cannot verify (a turn directory it does not share, or a sandbox that blocks its own connections), and for older releases. The tc-cli reference documents each condition, what still waits, and the manual remedy for `$TC_HOME/.tinycloud` and per-tenant MCP state, and restores the caveat that the lock does not protect processes with different PIDs in different PID namespaces.
+- Updated dependencies [9836159]
+  - @tinycloud/operations@0.5.0-beta.6
+
+## 1.2.0-beta.6
+
+### Patch Changes
+
+- 47eb547: Replication prefixes are folders such as `notes/`, or `/` for the whole space (requires a node advertising `kv-sync-root`). Bare paths and `""` are rejected.
+
+  For local-key and eligible owner OpenKey sign-ins with unrestricted whole-space KV get coverage, replication adds sync once to the existing whole-space KV entry. Narrower owner coverage and delegated/device grants retain per-prefix scope.
+
+  Published `@tinycloud/replica` declarations, including `./browser` and `./worker`, are self-contained; consumers do not need `@tinycloud/sdk-services`.
+
+  `kvSyncTransport(kv)` discovers the node host exposed by the KV service for whole-space feature checks. If the service does not expose a host, pass `{ host }`; root sync refuses early with a clear error rather than skipping the `kv-sync-root` check.
+
+- Updated dependencies [47eb547]
+  - @tinycloud/node-sdk@3.2.0-beta.5
+  - @tinycloud/operations@0.5.0-beta.5
+  - @tinycloud/sdk-core@3.2.0-beta.5
+
 ## 1.2.0-beta.5
 
 ### Minor Changes

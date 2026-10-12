@@ -177,12 +177,15 @@ export function parseUcanGrant(input: Uint8Array | string): ParsedUcanGrant {
 
 /** The KV path a signed resource names in `space`, or undefined for any other resource. */
 function kvPathIn(resource: string, space: string): string | undefined {
+  for (const root of [`${space}/kv`, `tinycloud://${space}/kv`]) {
+    if (resource === root || resource === `${root}/`) return "/";
+  }
   for (const base of [`${space}/kv/`, `tinycloud://${space}/kv/`]) {
     if (resource.startsWith(base)) return resource.slice(base.length);
   }
   return undefined;
-}
 
+}
 /** True when the signed attenuation grants `ability` on an authority path. */
 export function grantCovers(grant: Pick<ParsedUcanGrant, "att">, space: string, prefix: string, ability: string): boolean {
   for (const [resource, abilities] of Object.entries(grant.att)) {
@@ -200,7 +203,7 @@ export function syncGrantSpaces(grant: Pick<ParsedUcanGrant, "att">): string[] {
   const spaces = new Set<string>();
   for (const [resource, abilities] of Object.entries(grant.att)) {
     if (!("tinycloud.kv/sync" in abilities)) continue;
-    const match = /^(?:tinycloud:\/\/)?(tinycloud:[^/]+)\/kv\//.exec(resource);
+    const match = /^(?:tinycloud:\/\/)?(tinycloud:[^/]+)\/kv(?:\/|$)/.exec(resource);
     if (match) spaces.add(match[1]!);
   }
   return [...spaces];
@@ -221,9 +224,8 @@ export function assertGrantInstallable(
       `The grant was issued to ${grant.audience}, not this device (${input.deviceDid}).`,
     );
   }
-  const requiredPaths = input.prefix.endsWith("/") ? [input.prefix] : [input.prefix, `${input.prefix}/`];
   for (const ability of ["tinycloud.kv/sync", "tinycloud.kv/get"]) {
-    if (!requiredPaths.every((path) => grantCovers(grant, input.space, path, ability))) {
+    if (!grantCovers(grant, input.space, input.prefix, ability)) {
       throw new ReplicaError(
         ReplicaErrorCode.GRANT_NOT_COVERING,
         `The grant does not carry ${ability} on ${input.space}/kv/${input.prefix}.`,

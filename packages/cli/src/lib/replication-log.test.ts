@@ -100,7 +100,7 @@ describe("replication diagnostics", () => {
       { type: "replication.divergence", at: now, op: "get", space: "default", key: "notes/a", replica: "notes", kind: "value", stalenessMs: 10 },
     ];
     const status: ReplicaStatusEntry[] = [{
-      prefix: "notes", state: "ready", pending: { inFlight: 1, committed: 0, ambiguous: 1 }, lagMs: 0,
+      prefix: "notes/", state: "ready", pending: { inFlight: 1, committed: 0, ambiguous: 1 }, lagMs: 0,
       pinned: [{ key: "notes/a", state: "ambiguous", op: "put", since: now, code: "TIMEOUT", likelyOrphaned: false }],
       grant: { cid: "cid", parentCid: "parent", expiresAt: 123, state: "active", unconstrained: true },
     }];

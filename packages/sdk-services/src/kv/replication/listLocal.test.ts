@@ -6,16 +6,19 @@ const meta = { asOf: new Date(1_000_000).toISOString(), coverage: "complete" as 
 const handle = { async list({ prefix, after, limit }: { prefix: string; after?: string; limit?: number }) { const keys = allKeys.filter((key) => key.startsWith(prefix) && (after === undefined || utf8Compare(key, after) > 0)).sort(utf8Compare); return { keys: limit === undefined ? keys : keys.slice(0, limit), meta }; } };
 
 describe("local list parity", () => {
-  test("replica selectors preserve published segment-aware behavior", () => {
-    expect(listPathCovered(["notes"], "notes")).toBe("notes");
-    expect(listPathCovered(["notes"], "notes/")).toBe("notes");
-    expect(listPathCovered(["notes"], "notes/a")).toBe("notes");
-    expect(listPathCovered(["notes"], "notesX")).toBeUndefined();
-    expect(listPathCovered(["notes/"], "notes")).toBeUndefined();
+  test("folder prefixes cover list paths by containment", () => {
+    expect(listPathCovered(["notes/"], "notes/")).toBe("notes/");
     expect(listPathCovered(["notes/"], "notes/a")).toBe("notes/");
+    expect(listPathCovered(["notes/"], "notesX")).toBeUndefined();
     expect(listPathCovered([""], "anything/deep")).toBe("");
   });
 
+  test("the root replica covers every LIST path and lists every key locally", async () => {
+    expect(listPathCovered(["/"], "notes")).toBe("/");
+    expect(listPathCovered(["/"], "")).toBe("/");
+    const page = await localList(handle, "space", "", undefined, undefined, () => {});
+    expect(page.keys).toEqual([...allKeys].sort(utf8Compare));
+  });
   test("exact key and children advance strictly through tcr1 pages", async () => {
     const validateMeta = (value: typeof meta) => { if (value.coverage !== "complete" || value.authority !== "valid") throw new Error("ineligible local read"); };
     const first = await localList(handle, "space", "notes", 1, undefined, validateMeta);

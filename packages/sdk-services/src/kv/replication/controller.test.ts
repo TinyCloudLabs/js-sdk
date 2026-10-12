@@ -13,7 +13,7 @@ const identity = canonicalReplicationIdentity({ host: "https://node.example", sp
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes/"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes }: {
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false }: {
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -33,6 +33,8 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   statusImpl?: (call: number) => Promise<LocalReplicaStatus> | LocalReplicaStatus;
   inspectStatus?: (signal: AbortSignal) => Promise<LocalReplicaStatus | undefined>;
   prefixes?: string[];
+  nodeFeatures?: readonly string[];
+  allowSecrets?: boolean;
 } = {}) {
   let now = 1_000_000;
   let listReads = 0;
@@ -84,7 +86,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   };
   const authority = { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" as const } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime" as const, parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" as const }); }, async mint(_deviceDid: string, _prefix: string, signal: AbortSignal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } };
   const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
-  const createController = () => createKVReplication({ options: { ...options, prefixes, verify }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event) });
+  const createController = () => createKVReplication({ options: { ...options, prefixes, verify, allowSecrets }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event), nodeFeatures });
   const controller = createController();
   return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
@@ -92,6 +94,62 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
 
+describe("whole-space replication", () => {
+  test("reports unsupported nodes and serves covered reads when advertised", async () => {
+    const unsupported = setup({ prefixes: ["/"], allowSecrets: true, nodeFeatures: [] });
+    const noSecretsOptIn = setup({ prefixes: ["/"] });
+    await noSecretsOptIn.controller.get(readRequest(noSecretsOptIn.network));
+    expect(await noSecretsOptIn.controller.status()).toMatchObject([
+      { prefix: "/", state: "unavailable", errorCode: "SECRETS_OPT_IN_REQUIRED" },
+    ]);
+    const fallback = await unsupported.controller.get(readRequest(unsupported.network));
+    expect(fallback.ok).toBe(true);
+    expect(unsupported.counters().opens).toBe(0);
+    expect(await unsupported.controller.status()).toMatchObject([
+      { prefix: "/", state: "unavailable", errorCode: "REPLICATION_ROOT_UNSUPPORTED" },
+    ]);
+
+    const offlineCache = setup({ prefixes: ["/"], allowSecrets: true });
+    const offlineLocal = await offlineCache.controller.get(readRequest(offlineCache.network));
+    expect(offlineLocal.ok && offlineLocal.data.data).toBe("local");
+    expect(offlineCache.counters()).toMatchObject({ opens: 1, syncs: 0, networkCalls: 0 });
+    const supported = setup({ prefixes: ["/"], allowSecrets: true, nodeFeatures: ["kv-sync-root"] });
+    const local = await supported.controller.get(readRequest(supported.network));
+    expect(local.ok && local.data.data).toBe("local");
+    const nested = await supported.controller.list({ ...listRequest(undefined, async () => ok({ keys: [] })), listPath: "notes" });
+    expect(nested).toMatchObject({ ok: true, data: { keys: ["notes/a"] } });
+    const rootList = await supported.controller.list({ ...listRequest(undefined, async () => ok({ keys: [] })), listPath: "" });
+    expect(rootList).toMatchObject({ ok: true, data: { keys: ["notes/a"] } });
+    await supported.pending.update((state) =>
+      begin(state, "root-pending", [{ key: "elsewhere/x", op: "put" }], new Date(1_000_000).toISOString()),
+    );
+    const protectedRootList = await supported.controller.list({
+      ...listRequest(undefined, async () => ok({ keys: ["network"] })),
+      listPath: "",
+    });
+    expect(protectedRootList).toMatchObject({ ok: true, data: { keys: ["network"] } });
+  });
+  test("persisted complete cache keeps coverage but root refusal remains unavailable", async () => {
+    const cached = status();
+    const env = setup({
+      prefixes: ["/"],
+      allowSecrets: true,
+      nodeFeatures: [],
+      inspectStatus: async () => cached,
+    });
+
+    expect(await env.controller.status()).toMatchObject([
+      {
+        prefix: "/",
+        state: "unavailable",
+        reason: "replica_unavailable",
+        errorCode: "REPLICATION_ROOT_UNSUPPORTED",
+        coverage: "complete",
+        authority: { state: "valid" },
+      },
+    ]);
+  });
+});
 describe("KVReplication fallback and pending behavior", () => {
   test("session-only refusal ignores an installed grant and serves the network", async () => {
     const env = setup({ sessionOnly: true, sessionRefused: true });

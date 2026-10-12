@@ -116,7 +116,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
 
   async function openReplicaOnPage(
     target: Page,
-    options: { principal?: string; prefix?: string; defaultWorker?: boolean } = {},
+    options: { principal?: string; prefix?: string; defaultWorker?: boolean; allowSecrets?: boolean } = {},
   ): Promise<{ replicaId: string; deviceDid: string; created: boolean; status: unknown }> {
     return target.evaluate(
       async (input) =>
@@ -126,8 +126,9 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
           prefix: input.prefix ?? "notes/",
           principal: input.principal,
           ...(input.defaultWorker === true ? { defaultWorker: true } : {}),
+          ...(input.allowSecrets === true ? { allowSecrets: true } : {}),
         }),
-      { host, space, prefix: options.prefix, principal: options.principal ?? ownerPrincipal(), defaultWorker: options.defaultWorker },
+      { host, space, prefix: options.prefix, principal: options.principal ?? ownerPrincipal(), defaultWorker: options.defaultWorker, allowSecrets: options.allowSecrets },
     );
   }
 
@@ -383,6 +384,32 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect(allKeys.some((key) => key.startsWith("notes-secret/") || key.startsWith("other/"))).toBe(false);
     expect(allBytes).not.toContain("OUT-OF-SCOPE");
   }, 180_000);
+  test("standalone worker refuses root sync from cached node features and persists the refusal", async () => {
+    const cors = {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "authorization, content-type",
+      "content-type": "application/json",
+    };
+    const infoRoute = async (route: { fulfill(options: { status: number; headers: Record<string, string>; body: string }): Promise<void> }) => {
+      await route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ features: ["kv-sync-v1"] }) });
+    };
+    await context.route(`${host}/info`, infoRoute);
+    const rootPage = await context.newPage();
+    await rootPage.goto(`${origin}/`);
+    await rootPage.waitForFunction(() => window.__replica !== undefined);
+    await rootPage.waitForFunction(() => window.__replica.serviceWorkerReady());
+    await openReplicaOnPage(rootPage, { principal: ownerPrincipal(), prefix: "/", allowSecrets: true });
+    await grantOnPage(rootPage, { path: "" });
+    const sync = await rootPage.evaluate(() =>
+      window.__replica.sync().then(() => null).catch((error: Error & { code?: string }) => error.code),
+    );
+    expect(sync).toBe("REPLICATION_ROOT_UNSUPPORTED");
+    const status = await rootPage.evaluate(async () => (await window.__replica.status()).status.lastError);
+    expect(status?.code).toBe("REPLICATION_ROOT_UNSUPPORTED");
+    await rootPage.close();
+    await context.unroute(`${host}/info`, infoRoute);
+  }, 120_000);
 
 
   test("one tab syncs at a time: busy for the second, committed events across tabs, lock releases on close", async () => {

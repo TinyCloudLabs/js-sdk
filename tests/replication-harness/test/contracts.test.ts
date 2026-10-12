@@ -24,7 +24,7 @@ describe("contract guards", () => {
   test("topology reports multiple violations and requires earlier same-identity issuer", () => {
     const spec: TopologySpec = {
       name: "bad", nodes: [{ id: "a" }], clients: [
-        { id: "device", kind: "sdk", node: "missing", identity: "x", auth: { posture: "delegate-session", grant: { issuer: "owner", caps: [], expiresInMs: 1 } }, replication: { prefixes: ["notes", "notes/a/"] } },
+        { id: "device", kind: "sdk", node: "missing", identity: "x", auth: { posture: "delegate-session", grant: { issuer: "owner", caps: [], expiresInMs: 1 } }, replication: { prefixes: ["notes/", "notes/a/"] } },
         { id: "owner", kind: "sdk", node: "a", identity: "x", auth: { posture: "owner" } },
       ],
     };
@@ -32,9 +32,11 @@ describe("contract guards", () => {
     catch (error) {
       expect(error).toBeInstanceOf(HarnessError);
       expect((error as HarnessError).code).toBe("TOPOLOGY_INVALID");
-      expect((error as HarnessError).detail).toMatchObject({ errors: expect.arrayContaining([
-        expect.stringContaining("unknown node"), expect.stringContaining("must end in /"), expect.stringContaining("overlapping prefixes"), expect.stringContaining("earlier owner"), expect.stringContaining("expiry must be at least 60000ms"),
-      ]) });
+      const errors = ((error as HarnessError).detail as { errors: string[] }).errors;
+      expect(errors.join("\n")).toContain("unknown node");
+      expect(errors.join("\n")).toContain("overlapping prefixes");
+      expect(errors.join("\n")).toContain("earlier owner");
+      expect(errors.join("\n")).toContain("expiry must be at least 60000ms");
     }
   });
 

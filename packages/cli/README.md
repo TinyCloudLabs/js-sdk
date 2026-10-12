@@ -164,10 +164,12 @@ network grant` takes the short name, resolves the network, and grants
 Replication is off by default. `--replication` enables it for one invocation;
 `--no-replication` overrides `TC_REPLICATION=1`, and `--replication-debug`
 writes diagnostics to stderr. Save explicit login prefixes with
-`tc auth login --replication-prefix notes`; saved prefixes are reapplied on
-later logins and rotation. Only an unrestricted covering `get` can receive added
-`sync` authority. `--replication-allow-secrets` is required for a `secrets`
-space or `vault` prefix and stores ciphertext only.
+`tc auth login --replication-prefix notes/`; saved prefixes are reapplied on
+later logins and rotation. Prefixes are folders (`notes/`) or `/` for the
+whole space. Whole-space replication requires `kv-sync-root` support and
+`--replication-allow-secrets`, because it includes `vault/`. Replication needs
+unrestricted `get` and explicit `sync` on that folder or broader; an exact-key
+grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
 Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
 prints a warning because later commits can be read as stale until a subsequent
 sync. `auth logout` removes both legacy replicas and the flag-owned

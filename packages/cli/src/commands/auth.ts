@@ -159,7 +159,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
-    .option("--replication-prefix <prefix>", "Add replication get+sync authority for this prefix (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
+    .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
       try {
@@ -194,7 +194,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         };
         const loginPermissions = permissions === undefined
           ? undefined
-          : buildReplicationLoginRequest(permissions, replicationOptions);
+          : buildReplicationLoginRequest(permissions, {
+            ...replicationOptions,
+            ownerOpenKey: options.device !== true && resolveProfilePosture(profileConfig ?? {}) === "owner-openkey",
+          });
 
         // Only an explicit --host becomes the profile's host; TC_HOST and a
         // discovered local node stay one-off.
@@ -1963,6 +1966,7 @@ export async function refreshOpenKeySession(
   const baseRequest = options.permissions ?? rememberedPermissions;
   const requested = buildReplicationLoginRequest(baseRequest, {
     ...replication,
+    ownerOpenKey: resolveProfilePosture(profile) === "owner-openkey",
     ...(expectedOwner === undefined ? {} : { ownerDid: expectedOwner }),
   });
   if (requested !== undefined) validateLoginPermissions(requested);

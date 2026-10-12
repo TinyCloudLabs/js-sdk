@@ -2,6 +2,7 @@
  * Regression tests for the TC-18 review findings: each fails on the code
  * before the fix.
  */
+import { loadSqlite } from "./sqlite/driver.js";
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -723,4 +724,25 @@ describe("WAL checkpoint after a reset", () => {
     }
     await replica.reset("manual");
   }, 20_000);
+});
+
+describe("persisted folder-prefix validation", () => {
+  test("init rejects invalid prefixes and reopening rejects invalid persisted state", async () => {
+    const dir = await tempDir();
+    const store = await SqliteReplicaStore.open(dir, { create: true });
+    for (const prefix of ["", "notes", "/notes/", "notes//"]) {
+      expect(await codeOf(store.init(config({ prefix })))).toBe(ReplicaErrorCode.INVALID_ARGUMENT);
+    }
+    await store.init(config({ prefix: "/" }));
+    await store.close();
+
+    const openSqlite = await loadSqlite();
+    const db = openSqlite(join(dir, "replica.db"));
+    db.run("UPDATE replica SET prefix = ? WHERE id = 1", "notes");
+    db.close();
+
+    const reopened = await SqliteReplicaStore.open(dir, { create: false });
+    expect(await codeOf(reopened.open())).toBe(ReplicaErrorCode.INVALID_ARGUMENT);
+    await reopened.close();
+  });
 });

@@ -16,6 +16,7 @@ import {
 } from "@tinycloud/operations/state";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
 import {
+  assertFolderPrefix,
   Replica,
   ReplicaError,
   ReplicaErrorCode,
@@ -67,6 +68,7 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
   [ReplicaErrorCode.NODE_ERROR]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.PROTOCOL_ERROR]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.RESET_REQUIRED]: ExitCode.NODE_ERROR,
+  [ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.SOURCE_CHANGED]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.SCOPE_VIOLATION]: ExitCode.NODE_ERROR,
   [ReplicaErrorCode.CONTENT_MISMATCH]: ExitCode.NODE_ERROR,
@@ -483,10 +485,17 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)")
     .option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires")
     .option("--limit <n>", "Feed page size (1-1000)", (value) => Number.parseInt(value, 10))
-    .option("--allow-secrets", "Opt in to copying ciphertext under a secrets prefix; replica grants do not include decrypt")
+    .option("--allow-secrets", "Opt in to copying ciphertext from a secrets space, vault prefix, or whole space")
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
+        if (options.prefix !== undefined) {
+          try {
+            assertFolderPrefix(options.prefix);
+          } catch (error) {
+            throw new CLIError("INVALID_REPLICATION_PREFIX", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+          }
+        }
         const globals = cmd.optsWithGlobals() as { host?: string };
         const config = await ProfileManager.getProfile(profile);
         const deviceDid = config.sessionDid ?? config.did;
@@ -524,7 +533,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           }
         } else {
           const prefix: string | undefined = options.prefix;
-          if (prefix === undefined || prefix === "") {
+          if (prefix === undefined) {
             throw new CLIError("USAGE_ERROR", "The first sync of a replica needs --prefix (and a device grant covering it).", ExitCode.USAGE_ERROR);
           }
           const space = resolveSpace(options.space, prefix, grants);

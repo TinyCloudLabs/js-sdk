@@ -1,58 +1,12 @@
 /**
- * Differential tests keep the replication coverage helpers aligned with
- * sdk-core capability containment, the authority source of truth.
+ * Differential tests keep replication grant authority aligned with the
+ * sdk-core capability containment source of truth.
  */
 
 import { isCapabilitySubset } from "@tinycloud/sdk-core";
-
 import { describe, expect, test } from "bun:test";
-
-import {
-  grantCovers,
-  kvPrefixCovers as kvPrefixCoversReplica,
-  requiresSecretsOptIn as requiresSecretsOptInReplica,
-} from "@tinycloud/replica";
-import { kvPrefixCovers, requiresSecretsOptIn } from "@tinycloud/sdk-services";
-
-describe("kvPrefixCovers parity with @tinycloud/replica", () => {
-  const cases: Array<[string, string]> = [
-    ["", "anything"],
-    ["", ""],
-    ["notes", "notes"],
-    ["notes", "notes/a"],
-    ["notes", "notes-abc"],
-    ["notes", "notes/a/b/c"],
-    ["notes/", "notes"],
-    ["notes/", "notes/"],
-    ["notes/", "notes/a"],
-    ["notes/", "notes//double"],
-    ["a/b", "a/b/c"],
-    ["a/b", "a/bc"],
-    ["Vault", "vault/x"],
-    ["vault", "vault"],
-    ["vault", "vault/keys/a"],
-    ["vault", "vaultx"],
-    ["notes", ""],
-  ];
-
-  for (const [prefix, key] of cases) {
-    test(`${JSON.stringify(prefix)} covers ${JSON.stringify(key)}`, () => {
-      expect(kvPrefixCovers(prefix, key)).toBe(kvPrefixCoversReplica(prefix, key));
-    });
-  }
-});
- 
-describe("published segment-aware selection compatibility", () => {
-  test("bare notes selects its descendants but not notesX", () => {
-    expect(kvPrefixCoversReplica("notes", "notes")).toBe(true);
-    expect(kvPrefixCoversReplica("notes", "notes/a")).toBe(true);
-    expect(kvPrefixCoversReplica("notes", "notesX")).toBe(false);
-    expect(kvPrefixCoversReplica("notes/", "notes")).toBe(false);
-    expect(kvPrefixCoversReplica("notes/", "notes/a")).toBe(true);
-    expect(kvPrefixCoversReplica("", "anything")).toBe(true);
-    expect(kvPrefixCovers("", "anything")).toBe(true);
-  });
-});
+import { grantCovers, requiresSecretsOptIn as requiresSecretsOptInReplica } from "@tinycloud/replica";
+import { requiresSecretsOptIn } from "@tinycloud/sdk-services";
 
 describe("replica grant authority matches sdk-core containment", () => {
   const paths = ["", "/", "notes", "notes/", "notes/private", "notesX", "a/b/", "a/b/c"];
@@ -68,6 +22,7 @@ describe("replica grant authority matches sdk-core containment", () => {
     }
   }
 });
+
  
 
 describe("requiresSecretsOptIn parity with @tinycloud/replica", () => {
@@ -84,6 +39,7 @@ describe("requiresSecretsOptIn parity with @tinycloud/replica", () => {
     ["tinycloud:pkh:eip155:1:0xabc:notsecrets", "vault/a"],
     ["default", "secrets"],
     ["mysecrets", "vault/"],
+    ["default", "/"],
   ];
 
   for (const [space, prefix] of cases) {

@@ -2,6 +2,29 @@ import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { isInstant } from "./scope.js";
 import type { AuthorityWindow, Change, FetchedContent, ReplicaTransport, SyncPage } from "./types.js";
 
+const featureCache = new Map<string, Promise<readonly string[] | undefined>>();
+
+function featuresForHost(host: string, fetchFn: typeof globalThis.fetch): Promise<readonly string[] | undefined> {
+  const cached = featureCache.get(host);
+  if (cached !== undefined) return cached;
+  const discovered = fetchFn(`${host.replace(/\/+$/, "")}/info`)
+    .then(async (response) => {
+      if (!response.ok) return undefined;
+      const info: unknown = await response.json();
+      if (typeof info !== "object" || info === null || !("features" in info)) return undefined;
+      const features = info.features;
+      return Array.isArray(features) && features.every((feature) => typeof feature === "string")
+        ? features
+        : undefined;
+    })
+    .catch(() => undefined);
+  featureCache.set(host, discovered);
+  void discovered.then((features) => {
+    if (features === undefined) featureCache.delete(host);
+  });
+  return discovered;
+}
+
 /** The sdk-services `ServiceError` fields the transport reads. */
 type ServiceError = { code: string; message: string; meta?: Record<string, unknown> };
 type Result<T> = { ok: true; data: T } | { ok: false; error: ServiceError };
@@ -175,9 +198,29 @@ function fetched(key: string, result: Result<KVValue>, request: string): Fetched
 }
 
 /** A `ReplicaTransport` over a KV service bound to the replica's space and grant. */
-export function kvSyncTransport(kv: KVSyncClient): ReplicaTransport {
+export function kvSyncTransport(
+  kv: KVSyncClient,
+  options: { host?: string; fetch?: typeof globalThis.fetch } = {},
+): ReplicaTransport {
+  const host = options.host ?? (kv as KVSyncClient & { host?: unknown }).host;
+  const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   return {
     async syncPage({ prefix, cursor, limit, retentionGrant, signal }) {
+      if (prefix === "/") {
+        if (typeof host !== "string" || host.length === 0) {
+          throw new ReplicaError(
+            ReplicaErrorCode.INVALID_ARGUMENT,
+            "Root sync requires a node host to check kv-sync-root; pass { host } to kvSyncTransport when the KV service does not expose its host.",
+          );
+        }
+        const features = await featuresForHost(host, fetchFn);
+        if (features !== undefined && !features.includes("kv-sync-root")) {
+          throw new ReplicaError(
+            ReplicaErrorCode.REPLICATION_ROOT_UNSUPPORTED,
+            "This node doesn't support whole-space sync yet.",
+          );
+        }
+      }
       const result = await kv.changes({
         prefix,
         limit,

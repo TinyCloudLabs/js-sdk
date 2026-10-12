@@ -43,7 +43,7 @@ describe("node ReplicationRuntime binding", () => {
         return createMemoryPendingStore(identity);
       },
     } as KVReplicaStorage;
-    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage }, clock);
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage }, clock);
     let attached: KVReadThrough | null = null;
     const kv = { setReadThrough(value: KVReadThrough | null) { attached = value; } };
     const binding = (host: string, delegationCid: string) => ({
@@ -58,10 +58,10 @@ describe("node ReplicationRuntime binding", () => {
     await runtime.bind(binding("HTTPS://Node.Example:443/", "bafyFirst"));
     expect(attached).not.toBeNull();
     const first = await runtime.control.status();
-    expect(first.map((entry) => entry.prefix)).toEqual(["notes"]);
+    expect(first.map((entry) => entry.prefix)).toEqual(["notes/"]);
     await runtime.bind(binding("https://node.example", "bafyReplacement"));
     expect(pendingStores).toBe(1);
-    expect(await runtime.control.status()).toMatchObject([{ prefix: "notes", pending: { inFlight: 0, committed: 0, ambiguous: 0 } }]);
+    expect(await runtime.control.status()).toMatchObject([{ prefix: "notes/", pending: { inFlight: 0, committed: 0, ambiguous: 0 } }]);
 
     runtime.attach("another-space", kv);
     expect(attached).toBeNull();
@@ -84,7 +84,7 @@ describe("node ReplicationRuntime binding", () => {
         return createMemoryPendingStore(identity);
       },
     } as KVReplicaStorage;
-    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage }, clock);
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage }, clock);
     const bind = (host: string) => runtime.bind({
       context: context(host), session, address, chainId: 1, authority,
       primaryKV: [{ space: primarySpace, kv: { setReadThrough() {} } }],
@@ -120,7 +120,7 @@ describe("node ReplicationRuntime binding", () => {
       async purge() {},
       pendingWrites: createMemoryPendingStore,
     };
-    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage }, clock);
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage }, clock);
     const bind = (host: string) => runtime.bind({
       context: context(host),
       session,
@@ -156,7 +156,7 @@ describe("node ReplicationRuntime binding", () => {
         return pending;
       },
     } as KVReplicaStorage;
-    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage }, clock);
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage }, clock);
     await runtime.bind({
       context: context("https://clear.example"),
       session,
@@ -199,7 +199,7 @@ describe("node ReplicationRuntime binding", () => {
       async purge() { purges++; },
       pendingWrites: createMemoryPendingStore,
     };
-    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes"], storage, mode: "background" }, scheduled);
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage, mode: "background" }, scheduled);
     const binding = runtime.bind({
       context: context("https://purge-bind.example"),
       session,
