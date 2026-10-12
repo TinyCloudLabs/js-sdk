@@ -7263,14 +7263,12 @@ async function responseError(service, message, response) {
     }
   } catch {
   }
-  const error = wrapError2(
+  return serviceError(
+    response.status === 408 || response.status === 504 ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
+    `${message}: ${response.status} ${detail}`,
     service,
-    new Error(`${message}: ${response.status} ${detail}`)
+    { meta: { status: response.status, statusText: response.statusText } }
   );
-  return {
-    ...error,
-    meta: { ...error.meta, status: response.status, statusText: response.statusText }
-  };
 }
 async function* parseSseStream(body, signal) {
   if (!body) {
@@ -20400,7 +20398,7 @@ async function delegationFromInput(input, did, options) {
       redirect: "error"
     });
     if (!response.ok) {
-      throw new Error(response.status === 404 ? "Delegation code not found or expired. Use the full code shown in OpenKey instead." : `Could not retrieve delegation code (HTTP ${response.status}).`);
+      throw Object.assign(new Error(response.status === 404 ? "Delegation code not found or expired. Use the full code shown in OpenKey instead." : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json();
     parsed = result.delegation;

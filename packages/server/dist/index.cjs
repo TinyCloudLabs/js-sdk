@@ -76,11 +76,63 @@ async function createServerIdentity(options) {
     privateKey: options.privateKey
   };
 }
-var QUOTED_STRING_PATTERN = /"(?:[^"\\]|\\.)*"/g;
+var NAME_CHARACTER_PATTERN = /[\p{L}\p{N}\p{M}_]/u;
+function stripQuotedNames(message) {
+  let parts;
+  let literalStart = 0;
+  let noDoubleClose = false;
+  let noSingleClose = false;
+  let blockedUntilDouble = -1;
+  let blockedUntilSingle = -1;
+  for (let i = 0; i < message.length; i += 1) {
+    const quote = message[i];
+    const double = quote === '"';
+    if (!double && quote !== "'") continue;
+    if (double ? noDoubleClose || i < blockedUntilDouble : noSingleClose || i < blockedUntilSingle) continue;
+    if (!double && i > 0) {
+      const previousCodeUnit = message.charCodeAt(i - 1);
+      const previous = previousCodeUnit >= 56320 && previousCodeUnit <= 57343 && i > 1 && message.charCodeAt(i - 2) >= 55296 && message.charCodeAt(i - 2) <= 56319 ? message.slice(i - 2, i) : message[i - 1];
+      if (NAME_CHARACTER_PATTERN.test(previous)) continue;
+    }
+    let end = i + 1;
+    let blockedByLineBreak = false;
+    while (end < message.length) {
+      if (message[end] === "\\") {
+        const next = message[end + 1];
+        if (next === "\n" || next === "\r" || next === "\u2028" || next === "\u2029") {
+          blockedByLineBreak = true;
+          break;
+        }
+        end += 2;
+      } else if (message[end] === quote && (double || end + 1 === message.length || !NAME_CHARACTER_PATTERN.test(String.fromCodePoint(message.codePointAt(end + 1))))) {
+        break;
+      } else {
+        end += 1;
+      }
+    }
+    if (blockedByLineBreak) {
+      if (double) blockedUntilDouble = end;
+      else blockedUntilSingle = end;
+      continue;
+    }
+    if (end >= message.length) {
+      if (double) noDoubleClose = true;
+      else noSingleClose = true;
+      if (noDoubleClose && noSingleClose) break;
+      continue;
+    }
+    (parts ??= []).push(message.slice(literalStart, i), '""');
+    i = end;
+    literalStart = end + 1;
+  }
+  if (!parts) return message;
+  parts.push(message.slice(literalStart));
+  return parts.join("");
+}
 var DIAGNOSTIC_STATUS_PATTERN = /:\s(\d{3})(?=\s|$)|\bHTTP\s(\d{3})\b|\breturned\s(\d{3})\b|\brejected\s\((\d{3})\)|\((\d{3})\)\.?$/gi;
 var SESSION_ERROR_PATTERN = /\b(session\s+expired|invalid\s+session|token\s+expired|expired\s+credentials?|unauthorized|unauthenticated|sign.?in\s*required)\b/i;
 function diagnosticStatusOf(message) {
-  const unquoted = message.replace(QUOTED_STRING_PATTERN, '""');
+  const unquoted = stripQuotedNames(message);
   for (const match of unquoted.matchAll(DIAGNOSTIC_STATUS_PATTERN)) {
     const status = Number(match.slice(1).find((group) => group !== void 0));
     if (status >= 400 && status <= 599) return status;
