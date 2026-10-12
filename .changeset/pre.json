@@ -42,6 +42,7 @@
     "tc-858-bare-selector-flake",
     "tc-858-cli",
     "tc-858-exact-path-coverage",
+    "tc-858-folder-prefixes",
     "tc-858-node-sdk",
     "tc-858-registry-cancellation",
     "tc-858-revoked-report",
