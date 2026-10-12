@@ -7,6 +7,7 @@ import { ownerSpaceId, sameLoginSpace } from "./scoped-login.js";
 export interface ReplicationLoginOptions {
   prefixes: readonly string[];
   allowSecrets?: boolean;
+  ownerDid?: string;
   ownerOpenKey?: boolean;
 }
 
