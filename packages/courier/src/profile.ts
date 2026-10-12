@@ -52,6 +52,7 @@ export interface Profile {
   spaceId?: string;
   grantExpiresAt?: string;
   status: 'awaiting-grant' | 'awaiting-space' | 'ready';
+  spacePending?: true;
   peers: Record<string, StoredPeer>;
 }
 

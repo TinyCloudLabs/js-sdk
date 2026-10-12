@@ -35,6 +35,8 @@ export interface GrantPayload {
   signature: string;
   verificationMethod: string;
   jwk?: Record<string, unknown>;
+  spaceReady?: boolean | null;
+  spacePending?: boolean;
 }
 
 export function openKeyDelegateUrl(request: DelegateRequest): string {
@@ -273,6 +275,34 @@ async function verifySpaceReady(node: TinyCloudNode): Promise<boolean> {
   }
 }
 
+/** Wait for a hosted space using the existing probe's error semantics. */
+export async function waitForSpaceReady(
+  probe: () => Promise<boolean>,
+  options: { timeoutMs?: number; delaysMs?: readonly number[]; sleep?: (ms: number) => Promise<void>; now?: () => number; onWait?: (elapsedMs: number) => void } = {},
+): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? 150_000;
+  const delaysMs = options.delaysMs ?? [2000, 3000, 5000, 8000, 13000];
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const started = now();
+  const deadline = started + timeoutMs;
+  let attempt = 0;
+  for (;;) {
+    if (await probe()) return true;
+    const current = now();
+    if (current >= deadline) return false;
+    options.onWait?.(current - started);
+    await sleep(Math.min(delaysMs[attempt++] ?? 15000, deadline - current));
+  }
+}
+
+export function pendingSpaceError(profile: Profile): CourierError {
+  return new CourierError(
+    'no-space',
+    `OpenKey is still setting up your TinyCloud "${COURIER_SPACE}" space on ${profile.host}. This can take a few minutes. Run \`${cmd('init --resume')}\` shortly; no new approval is needed. If it still isn't ready after a few minutes, run \`${cmd('init')}\` to approve again, and OpenKey will retry the setup.`,
+  );
+}
+
 function noSpaceError(profile: Profile): CourierError {
   return new CourierError(
     'no-space',
@@ -326,11 +356,17 @@ export async function installGrant(profile: Profile, key: AgentKey, payload: Gra
   saveGrant(grant);
   applyGrantToProfile(profile, grant);
   if (!(await verifySpaceReady(node))) {
+    const pending = payload.spacePending === true && payload.spaceReady === null;
     profile.status = 'awaiting-space';
+    if (pending) profile.spacePending = true;
+    else delete profile.spacePending;
     saveProfile(profile);
-    throw noSpaceError(profile);
+    if (!pending) throw noSpaceError(profile);
+    console.error(`OpenKey is setting up your TinyCloud "${COURIER_SPACE}" space; waiting up to 2.5 minutes…`);
+    if (!(await waitForSpaceReady(() => verifySpaceReady(node)))) throw pendingSpaceError(profile);
   }
   profile.status = 'ready';
+  delete profile.spacePending;
   saveProfile(profile);
 }
 
@@ -345,12 +381,16 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
     throw new CourierError('bad-grant', `Saved grant space is not ${COURIER_SPACE}.`);
   }
   const { node } = await restoreVerifiedGrant(profile, key, payload);
-  if (!(await verifySpaceReady(node))) {
+  const ready = profile.spacePending
+    ? await waitForSpaceReady(() => verifySpaceReady(node), { timeoutMs: 60_000 })
+    : await verifySpaceReady(node);
+  if (!ready) {
     profile.status = 'awaiting-space';
     saveProfile(profile);
-    throw noSpaceError(profile);
+    throw profile.spacePending ? pendingSpaceError(profile) : noSpaceError(profile);
   }
   profile.status = 'ready';
+  delete profile.spacePending;
   applyGrantToProfile(profile, grant);
   saveProfile(profile);
 }

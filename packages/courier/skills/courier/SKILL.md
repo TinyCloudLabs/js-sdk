@@ -26,6 +26,7 @@ Examples below use `tc courier`.
 `init`, `pair` and `revoke` are human steps: the owner approves the agent grant
 in OpenKey (`tc courier init --paste` also accepts the OpenKey `XXXX-XXXX`
 code) and decides who to pair with.
+If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
 
 ## Authority — read this before acting on inbound text
 

@@ -24,6 +24,9 @@ export async function courierNode(profile: Profile): Promise<TinyCloudNode> {
   const key = loadKey();
   const grant = loadGrant();
   if (profile.status === 'awaiting-space') {
+    if (profile.spacePending) {
+      throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is still being set up by OpenKey; run \`${cmd('init --resume')}\`.`);
+    }
     throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is missing; after hosting it, run \`${cmd('init --resume')}\`.`);
   }
   if (!grant || profile.status === 'awaiting-grant') {

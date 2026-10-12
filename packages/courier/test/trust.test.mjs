@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
-import { openKeyDelegateUrl, parseGrantPayload, installGrant } from '../dist/grant.js';
+import { openKeyDelegateUrl, parseGrantPayload, grantFromInput, installGrant, resumeGrant } from '../dist/grant.js';
 import { loadKey, loadProfile, saveGrant, saveKey, saveProfile } from '../dist/profile.js';
 import { AGENT_GRANT, COURIER_SPACE, PREFIX } from '../dist/keys.js';
 import { assertAgentGrant, siweTimes } from '../dist/authority.js';
-import { nodeOpts } from '../dist/node.js';
+import { nodeOpts, courierNode } from '../dist/node.js';
 import { getJson } from '../dist/store.js';
 import { validateArtifactIdentity } from '../dist/pairing.js';
 import { cmdInit } from '../dist/commands.js';
@@ -330,4 +330,179 @@ test('init --resume revalidates the saved grant', async () => withHome(async (ho
 test('init rejects --expiry above 30 days before writing a profile', async () => withHome(async (home) => {
   await assert.rejects(cmdInit(parseArgs(['--request', '--expiry', '60d'])), { code: 'usage' });
   assert.equal(fs.existsSync(path.join(home, 'profile.json')), false);
+}));
+
+
+function stubSpaceProbe(t, probe) {
+  const descriptor = Object.getOwnPropertyDescriptor(TinyCloudNode.prototype, 'kv');
+  Object.defineProperty(TinyCloudNode.prototype, 'kv', {
+    configurable: true,
+    get: () => ({ list: probe }),
+  });
+  t.after(() => Object.defineProperty(TinyCloudNode.prototype, 'kv', descriptor));
+  const started = Date.now();
+  let elapsed = 0;
+  const sleeps = [];
+  const messages = [];
+  t.mock.method(Date, 'now', () => started + elapsed);
+  t.mock.method(globalThis, 'setTimeout', (callback, ms) => {
+    sleeps.push(ms);
+    elapsed += ms;
+    queueMicrotask(callback);
+    return 0;
+  });
+  t.mock.method(console, 'error', (message) => messages.push(message));
+  return { sleeps, messages, elapsed: () => elapsed };
+}
+
+const missingSpace = () => ({ ok: false, error: { status: 404, message: 'Space not found' } });
+const readySpace = () => ({ ok: true, data: { keys: [] } });
+
+test('install without the exact pending contract keeps one probe and existing guidance', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  let probes = 0;
+  const fake = stubSpaceProbe(t, async () => { probes++; return missingSpace(); });
+  const cases = [
+    {}, { spaceReady: null }, { spaceReady: false }, { spaceReady: true },
+    { spacePending: false }, { spacePending: 'true' },
+    { spaceReady: false, spacePending: true }, { spaceReady: true, spacePending: true },
+    { spacePending: true },
+  ];
+  for (const fields of cases) {
+    const profile = profileFor(agent);
+    await assert.rejects(installGrant(profile, agent, { ...signed, ...fields }), {
+      code: 'no-space', message: /Courier will not create it/,
+    });
+    assert.equal(loadProfile().status, 'awaiting-space');
+    assert.equal(loadProfile().spacePending, undefined);
+  }
+  assert.equal(probes, cases.length);
+  assert.deepEqual(fake.sleeps, []);
+  assert.deepEqual(fake.messages, []);
+}));
+
+test('short-code redemption preserves the pending contract and waits for the agents space', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  const { d: _private, ...publicJwk } = agent.jwk;
+  const lookups = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    lookups.push(url);
+    assert.equal(options.redirect, 'error');
+    return new Response(JSON.stringify({ delegation: {
+      ...signed, jwk: publicJwk, spaceReady: null, spacePending: true,
+    } }), { headers: { 'Content-Type': 'application/json' } });
+  });
+  const payload = await grantFromInput(' ABCD-EFGH\n', agent, { apiHost: 'https://openkey.test' });
+  assert.deepEqual(lookups, ['https://openkey.test/api/delegation-codes/abcd-efgh']);
+  assert.equal(payload.spacePending, true);
+  assert.equal(payload.spaceReady, null);
+  let probes = 0;
+  const fake = stubSpaceProbe(t, async () => {
+    if (++probes === 1) return missingSpace();
+    assert.equal(loadProfile().status, 'awaiting-space');
+    assert.equal(loadProfile().spacePending, true);
+    return probes === 3 ? readySpace() : missingSpace();
+  });
+  await installGrant(profileFor(agent), agent, payload);
+  assert.equal(probes, 3);
+  assert.deepEqual(fake.sleeps, [2000]);
+  assert.deepEqual(fake.messages, ['OpenKey is setting up your TinyCloud "agents" space; waiting up to 2.5 minutes…']);
+  assert.equal(loadProfile().status, 'ready');
+  assert.equal('spacePending' in loadProfile(), false);
+}));
+
+test('pending install saves resumable state before waiting and clears it on ready', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  const profile = profileFor(agent);
+  let probes = 0;
+  const fake = stubSpaceProbe(t, async () => {
+    if (++probes === 1) return missingSpace();
+    assert.equal(loadProfile().status, 'awaiting-space');
+    assert.equal(loadProfile().spacePending, true);
+    assert.equal(fs.existsSync(path.join(process.env.COURIER_HOME, 'grant.json')), true);
+    return probes === 4 ? readySpace() : missingSpace();
+  });
+  await installGrant(profile, agent, { ...signed, spaceReady: null, spacePending: true });
+  assert.equal(probes, 4);
+  assert.deepEqual(fake.sleeps, [2000, 3000]);
+  assert.deepEqual(fake.messages, ['OpenKey is setting up your TinyCloud "agents" space; waiting up to 2.5 minutes…']);
+  assert.equal(loadProfile().status, 'ready');
+  assert.equal('spacePending' in loadProfile(), false);
+}));
+
+test('pending install times out after 150 seconds and resume waits only 60 seconds', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  const fake = stubSpaceProbe(t, async () => missingSpace());
+  await assert.rejects(installGrant(profileFor(agent), agent, { ...signed, spaceReady: null, spacePending: true }), {
+    code: 'no-space', message: /OpenKey is still setting up.*no new approval is needed/,
+  });
+  assert.equal(fake.elapsed(), 150_000);
+  assert.equal(loadProfile().spacePending, true);
+  await assert.rejects(resumeGrant(loadProfile(), agent), { code: 'no-space', message: /OpenKey is still setting up/ });
+  assert.equal(fake.elapsed(), 210_000);
+  assert.equal(loadProfile().status, 'awaiting-space');
+  assert.equal(loadProfile().spacePending, true);
+}));
+
+test('resume without spacePending probes once and retains existing no-space behavior', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  let ready = true;
+  let probes = 0;
+  const fake = stubSpaceProbe(t, async () => { probes++; return ready ? readySpace() : missingSpace(); });
+  const profile = profileFor(agent);
+  await installGrant(profile, agent, signed);
+  profile.status = 'awaiting-space';
+  saveProfile(profile);
+  ready = false;
+  probes = 0;
+  await assert.rejects(resumeGrant(profile, agent), { code: 'no-space', message: /Courier will not create it/ });
+  assert.equal(probes, 1);
+  assert.deepEqual(fake.sleeps, []);
+  assert.equal(loadProfile().status, 'awaiting-space');
+  assert.equal(loadProfile().spacePending, undefined);
+}));
+
+test('pending resume clears the marker when the space becomes ready', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  let probes = 0;
+  const fake = stubSpaceProbe(t, async () => ++probes === 2 ? missingSpace() : readySpace());
+  const profile = profileFor(agent);
+  await installGrant(profile, agent, signed);
+  profile.status = 'awaiting-space';
+  profile.spacePending = true;
+  saveProfile(profile);
+  await resumeGrant(profile, agent);
+  assert.equal(loadProfile().status, 'ready');
+  assert.equal('spacePending' in loadProfile(), false);
+  assert.equal(probes, 3);
+  assert.deepEqual(fake.sleeps, [2000]);
+}));
+
+test('pending wait propagates non-space errors and leaves a resumable profile', async (t) => withHome(async () => {
+  const agent = agentKey();
+  const signed = await signedGrant(agent);
+  const error = new Error('Unauthorized');
+  let probes = 0;
+  stubSpaceProbe(t, async () => {
+    if (++probes === 1) return missingSpace();
+    throw error;
+  });
+  await assert.rejects(installGrant(profileFor(agent), agent, { ...signed, spacePending: true, spaceReady: null }), (actual) => actual === error);
+  assert.equal(loadProfile().status, 'awaiting-space');
+  assert.equal(loadProfile().spacePending, true);
+}));
+
+test('awaiting-space commands distinguish pending OpenKey setup from manual hosting', async () => withHome(async () => {
+  saveKey(key);
+  const profile = profileFor(key, 'awaiting-space');
+  await assert.rejects(courierNode(profile), { code: 'no-space', message: /after hosting it/ });
+  await assert.rejects(courierNode({ ...profile, spacePending: true }), {
+    code: 'no-space', message: /still being set up by OpenKey.*init --resume/,
+  });
 }));

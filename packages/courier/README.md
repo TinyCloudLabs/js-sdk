@@ -61,6 +61,7 @@ signing in at the Share view, or from a wallet profile run
 `tc space host agents`, then use `init --resume` without requesting another
 approval. Run `init` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
+If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
 
 ### OpenKey short codes
 
