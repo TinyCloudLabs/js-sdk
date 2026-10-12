@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { SPACE, device, deviceGrant, keyPair, owner, signUcan } from "../test/fixtures.js";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
-import { assertGrantInstallable, grantCovers, parseUcanGrant, ucanCid } from "./grant.js";
+import { assertGrantInstallable, grantCovers, parseUcanGrant, syncGrantSpaces, ucanCid } from "./grant.js";
+import { assertFolderPrefix, kvPrefixCovers, requiresSecretsOptIn } from "./scope.js";
 
 function codeOf(run: () => unknown): string | undefined {
   try {
@@ -12,6 +13,20 @@ function codeOf(run: () => unknown): string | undefined {
   }
   return undefined;
 }
+
+describe("folder prefixes", () => {
+  test("accepts whole space and slash-terminated folders, rejects empty and malformed paths", () => {
+    for (const prefix of ["/", "notes/", "notes/private/"]) expect(() => assertFolderPrefix(prefix)).not.toThrow();
+    for (const prefix of ["", "notes", "notes//", "/notes/"]) expect(() => assertFolderPrefix(prefix)).toThrow(ReplicaError);
+  });
+
+  test("whole-space selection covers every key and requires the secrets opt-in", () => {
+    expect(kvPrefixCovers("/", "notes/a")).toBe(true);
+    expect(kvPrefixCovers("notes/", "notes/a")).toBe(true);
+    expect(kvPrefixCovers("notes/", "notes-x")).toBe(false);
+    expect(requiresSecretsOptIn("space", "/")).toBe(true);
+  });
+});
 
 const install = { deviceDid: device.did, space: SPACE, prefix: "notes/", now: Date.now() };
 
@@ -78,6 +93,20 @@ describe("assertGrantInstallable", () => {
     );
   });
 
+  test("root grants cover the whole space; exact-key grants do not", () => {
+    const root = deviceGrant({ prefix: "/" });
+    expect(grantCovers(root, SPACE, "/", "tinycloud.kv/get")).toBe(true);
+    expect(grantCovers(root, SPACE, "notes/", "tinycloud.kv/sync")).toBe(true);
+    const exact = deviceGrant({ prefix: "notes" });
+    expect(grantCovers(exact, SPACE, "notes/", "tinycloud.kv/get")).toBe(false);
+    const slashResource = parseUcanGrant(signUcan(owner, {
+      aud: device.did,
+      att: { [`${SPACE}/kv/`]: { "tinycloud.kv/get": [{}], "tinycloud.kv/sync": [{}] } },
+    }));
+    expect(grantCovers(slashResource, SPACE, "/", "tinycloud.kv/get")).toBe(true);
+    expect(syncGrantSpaces(root)).toEqual([SPACE]);
+    expect(syncGrantSpaces(slashResource)).toEqual([SPACE]);
+  });
   test("a wildcard never implies tinycloud.kv/sync", () => {
     expect(grantCovers(deviceGrant({ actions: ["*"] }), SPACE, "notes/", "tinycloud.kv/sync")).toBe(false);
     expect(grantCovers(deviceGrant({ actions: ["*"] }), SPACE, "notes/", "tinycloud.kv/get")).toBe(true);

@@ -114,6 +114,7 @@ jobs:
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
+          bun run --cwd packages/courier build
           bun run --cwd packages/cli build
 
       - name: Download TC-858 JUnit evidence for the subject SHA
@@ -226,6 +227,7 @@ jobs:
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
+          bun run --cwd packages/courier build
           bun run --cwd packages/cli build
 
       - name: Log in to GHCR
@@ -307,6 +309,7 @@ jobs:
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
+          bun run --cwd packages/courier build
           bun run --cwd packages/cli build
 
       - name: Log in to GHCR

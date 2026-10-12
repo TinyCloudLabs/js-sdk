@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "3.2.0-beta.3",
+  "version": "3.2.0-beta.5",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -25,6 +25,16 @@
       "types": "./dist/kv/index.d.ts",
       "import": "./dist/kv/index.js",
       "require": "./dist/kv/index.cjs"
+    },
+    "./kv/replication/prefix": {
+      "import": {
+        "types": "./dist/kv/replication/prefix.d.ts",
+        "default": "./dist/kv/replication/prefix.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/prefix.d.cts",
+        "default": "./dist/kv/replication/prefix.cjs"
+      }
     },
     "./kv/replication": {
       "import": {
@@ -56,6 +66,9 @@
     "*": {
       "kv/replication": [
         "dist/kv/replication/index.d.ts"
+      ],
+      "kv/replication/prefix": [
+        "dist/kv/replication/prefix.d.ts"
       ]
     }
   },

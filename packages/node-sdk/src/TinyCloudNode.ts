@@ -38,6 +38,8 @@ import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
   TinyCloud,
+  checkNodeInfo,
+  VersionCheckError,
   TinyCloudSession,
   activateSessionWithHost,
   authorizationVerdictOf,
@@ -1214,6 +1216,7 @@ export class TinyCloudNode {
    * {@link currentTinyCloudSession} as a fallback for `auth.tinyCloudSession`.
    */
   private _restoredTcSession?: TinyCloudSession;
+  private _restoredNodeFeatures?: string[];
   private _activeServiceSession?: ServiceSession;
 
   /**
@@ -1251,7 +1254,12 @@ export class TinyCloudNode {
   }
 
   private get nodeFeatures(): string[] {
-    return this.auth?.nodeFeatures ?? [];
+    return this.auth?.nodeFeatures ?? this._restoredNodeFeatures ?? [];
+  }
+
+  private get replicationNodeFeatures(): readonly string[] | undefined {
+    if (this.auth) return this.auth.nodeFeaturesKnown ? this.auth.nodeFeatures : undefined;
+    return this._restoredNodeFeatures;
   }
 
   /** SIWE domain — uses config override or defaults to app.tinycloud.xyz */
@@ -3230,6 +3238,16 @@ export class TinyCloudNode {
       sessionData.chainId,
     );
     const stagedHost = resolvedHost ?? this.config.host!;
+    let restoredNodeFeatures: string[] | undefined;
+    if (this.config.replication?.enabled) {
+      try {
+        restoredNodeFeatures = (await checkNodeInfo(stagedHost, this.wasmBindings.protocolVersion())).features;
+      } catch (error) {
+        // Offline restores may still serve an existing complete local replica.
+        // A protocol mismatch is not an offline condition and remains fatal.
+        if (!(error instanceof VersionCheckError)) throw error;
+      }
+    }
     // Never blend a metadata-light restore with the prior wallet identity.
     const stagedAddress = restoredAddress;
     const stagedChainId = sessionData.chainId ?? 1;
@@ -3340,8 +3358,9 @@ export class TinyCloudNode {
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
     this.confirmedHostedSpaceIds.clear();
+    this._restoredNodeFeatures = restoredNodeFeatures;
     if (this.auth) {
-      this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
+      this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost], restoredNodeFeatures);
       this._restoredTcSession = undefined;
     } else {
       this._restoredTcSession = stagedTcSession;
@@ -6447,6 +6466,7 @@ export class TinyCloudNode {
       session,
       principal: identityPrincipal,
       authority,
+      nodeFeatures: this.replicationNodeFeatures,
       primaryKV: [{ space: session.spaceId, kv }],
     });
   }

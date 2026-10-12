@@ -1623,6 +1623,18 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
     expect(headerValue(requests[0]?.headers, "x-tinycloud-cursor")).toBe("cursor-1");
     expect(headerValue(requests[0]?.headers, "x-tinycloud-retention-grant")).toBe("bafyretain");
   });
+  test("root sync invokes the empty KV path and normalizes the root source", async () => {
+    const invocations: Array<{ service: string; path: string; action: string }> = [];
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, {
+      ...page,
+      source: { ...page.source, prefix: "" },
+    }), invocations));
+
+    const result = await service.changes({ prefix: "/" });
+    expect(invocations).toEqual([{ service: "kv", path: "", action: KVAction.SYNC }]);
+    expect(result).toMatchObject({ ok: true, data: { source: { prefix: "/" } } });
+  });
 
   test("a bootstrap request sends no cursor, limit or retention header", async () => {
     const requests: FetchRequestInit[] = [];

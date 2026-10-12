@@ -21,7 +21,7 @@
  * holder's state.
  */
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
-import { effectiveAuthority, isInstant } from "../scope.js";
+import { assertFolderPrefix, effectiveAuthority, isInstant } from "../scope.js";
 import type {
   GrantRecord,
   LeaseToken,
@@ -326,6 +326,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged or reopened; open it again to continue.");
     }
     if (state === undefined || state.purged === true) return null;
+    assertFolderPrefix(state.config.prefix);
     return {
       config: state.config,
       grant: state.grant,
@@ -347,6 +348,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   async init(c: ReplicaConfig): Promise<void> {
+    assertFolderPrefix(c.prefix);
     const generation = await this.#writeTx<number>(
       [STORE_META],
       "Creating the replica",

@@ -111,7 +111,7 @@ export async function verifyPackedCliRuntime(): Promise<void> {
         throw new Error("Packed canonical secrets get unexpectedly succeeded.");
       } catch (error) {
         const failure = error as { stderr?: string; code?: number };
-        expect(failure.code).toBe(3);
+        expect(failure.code, failure.stderr).toBe(3);
         const payload = JSON.parse(failure.stderr ?? "{}") as { error?: { code?: unknown } };
         expect(payload.error?.code).toBe("AUTH_REQUIRED");
       }

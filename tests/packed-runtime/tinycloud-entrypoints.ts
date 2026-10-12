@@ -222,11 +222,15 @@ async function prepareIsolatedBuildTree(
     const packageLinks = [
       ["bootstrap", join(sourceDirectory, "packages/bootstrap")],
       ["sdk-services", join(sourceDirectory, "packages/sdk-services")],
+      ["share-envelope", join(sourceDirectory, "packages/share-envelope")],
+      ["share-sdk", join(sourceDirectory, "packages/share-sdk")],
       ["sdk-core", join(sourceDirectory, "packages/sdk-core")],
       ["sdk-rs", join(sourceDirectory, "packages/sdk-rs")],
       ["node-sdk-wasm", join(sourceDirectory, "packages/sdk-rs/packages/node")],
       ["node-sdk", join(sourceDirectory, "packages/node-sdk")],
       ["operations", join(sourceDirectory, "packages/operations")],
+      ["replica", join(sourceDirectory, "packages/replica")],
+      ["courier", join(sourceDirectory, "packages/courier")],
       ["cli", join(sourceDirectory, "packages/cli")],
     ] as const;
     for (const [name, packageDirectory] of packageLinks) {
@@ -254,6 +258,8 @@ async function buildPackedGraph(sourceDirectory: string): Promise<void> {
   const requiredOutputs = [
     ["bootstrap", ["dist/index.js"]],
     ["sdk-services", ["dist/index.js"]],
+    ["share-envelope", ["dist/index.js"]],
+    ["share-sdk", ["dist/index.js"]],
     ["sdk-core", ["dist/index.js"]],
     [
       "node-sdk-wasm",
@@ -268,17 +274,16 @@ async function buildPackedGraph(sourceDirectory: string): Promise<void> {
       "operations",
       ["dist/index.js", "dist/index.cjs", "dist/state.js", "dist/state.cjs"],
     ],
+    ["replica", ["dist/index.js"]],
+    ["courier", ["dist/index.js"]],
     ["cli", ["dist/index.js", "dist/index.d.ts"]],
   ] as const;
   for (const [name, files] of requiredOutputs) {
-    const packageDirectory = tinycloudPackages(sourceDirectory).find(
-      ([candidate]) => candidate === name,
-    )?.[1];
-    if (!packageDirectory)
-      throw new Error(`Unknown TinyCloud package ${name}.`);
-    if (!(await hasFiles(packageDirectory, files))) {
-      await run(process.execPath, ["run", "build"], packageDirectory);
-    }
+    const packageDirectory =
+      name === "node-sdk-wasm"
+        ? join(sourceDirectory, "packages/sdk-rs/packages/node")
+        : join(sourceDirectory, "packages", name);
+    await run(process.execPath, ["run", "build"], packageDirectory);
   }
 }
 

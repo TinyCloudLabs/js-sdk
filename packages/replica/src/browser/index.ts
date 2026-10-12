@@ -19,6 +19,7 @@
  * reads are gated by the stored grant's node-attested window, like the CLI.
  */
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
+import { assertFolderPrefix } from "../scope.js";
 import { isPrincipalDid } from "../did.js";
 import type {
   GetResult,
@@ -46,7 +47,7 @@ export type BrowserReplicaOpenOptions = {
   host: string;
   /** The space id (native form) the replica covers. */
   space: string;
-  /** The KV prefix, e.g. `notes/`. */
+  /** The KV prefix: `/` for the whole space, or a folder such as `notes/`. */
   prefix: string;
   /** A display name; defaults to the prefix. */
   name?: string;
@@ -115,7 +116,8 @@ function workerFrom(source: Worker | URL | string | (() => Worker) | undefined):
  * cursor.
  */
 export async function openReplica(options: BrowserReplicaOpenOptions, events: BrowserReplicaEvents = {}): Promise<BrowserReplica> {
-  // Validate before workerFrom(): a bad principal never spawns a worker.
+  assertFolderPrefix(options.prefix);
+  // Validate before workerFrom(): a bad principal or prefix never spawns a worker.
   if (typeof options.principal !== "string" || !isPrincipalDid(options.principal)) {
     throw new ReplicaError(
       ReplicaErrorCode.INVALID_ARGUMENT,

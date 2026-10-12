@@ -34,6 +34,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
   let host: string;
   let port: number;
   let node: ChildProcess | undefined;
+  let nodeFeatures: string[] = [];
   let space: string;
   const nodeSecret = randomBytes(48).toString("base64url");
   const initial = {
@@ -167,7 +168,8 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     host = `http://127.0.0.1:${port}`;
     await startNode();
     const info = await (await fetch(`${host}/info`)).json() as { features?: string[] };
-    expect(info.features).toContain("kv-sync-v1");
+    nodeFeatures = info.features ?? [];
+    expect(nodeFeatures).toContain("kv-sync-v1");
   }, 60_000);
 
   afterAll(async () => {
@@ -178,6 +180,12 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
   test("covers the 12 Phase 1 CLI acceptance steps", async () => {
     // 1. The local-key sign-in recap must request get+sync for the configured prefix.
+    const bareLogin = await tc(["auth", "login", "--method", "local", "--replication-prefix", "notes"], { profile: "bare-login" });
+    expect(bareLogin.code).toBe(2);
+    expect(bareLogin.stderr).toContain("notes/");
+    const bareReplica = await tc(["replica", "sync", "--prefix", "notes"], { profile: "bare-replica" });
+    expect(bareReplica.code).toBe(2);
+    expect(bareReplica.stderr).toContain("notes/");
     await ok(["init", "--name", "owner", "--key-only"]);
     const login = await ok<{ spaceId: string }>(["auth", "login", "--method", "local", "--replication-prefix", "notes/", "--replication-prefix", "variables/"]);
     space = login.spaceId;
@@ -515,10 +523,10 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
       app_id: "tc858-caveated-scope",
       space: "default",
       permissions: [
-        { service: "tinycloud.kv", path: "notes", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
+        { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] },
       ],
     }));
-    const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes"], { profile: "caveated-scope" });
+    const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes/"], { profile: "caveated-scope" });
     expect(caveatedLogin.code).toBe(2);
     expect(caveatedLogin.stderr).toContain("REPLICATION_PREFIX_CAVEATED");
     expect((JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "caveated-scope", "profile.json"), "utf8")) as { replication?: unknown }).replication).toBeUndefined();
@@ -572,4 +580,67 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(space).toMatch(/^tinycloud:/);
   }, 300_000);
+  test("whole-space replication follows /info support and saved prefixes fail as usage errors", async () => {
+    await ok(["init", "--name", "root-prefix", "--key-only"], "root-prefix");
+    await ok([
+      "auth", "login", "--method", "local", "--replication-prefix", "/", "--replication-allow-secrets",
+    ], "root-prefix");
+    const rootSession = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "root-prefix", "session.json"), "utf8")) as { siwe: string; spaceId: string };
+    const rootRecap = new NodeWasmBindings().parseRecapFromSiwe(rootSession.siwe);
+    const signedRootSync = rootRecap.find((entry) =>
+      entry.space === rootSession.spaceId &&
+      entry.path === "" &&
+      entry.actions.includes("tinycloud.kv/sync"),
+    );
+    expect(signedRootSync).toBeDefined();
+    const seeded = await tc(["kv", "put", "notes/a", "root-value"], { profile: "root-prefix" });
+    expect(seeded.code, seeded.stderr).toBe(0);
+
+    const profilePath = join(home, ".tinycloud", "profiles", "root-prefix", "profile.json");
+    const saved = JSON.parse(await readFile(profilePath, "utf8")) as { replication?: { prefixes: string[]; allowSecrets?: boolean } };
+    await writeFile(profilePath, JSON.stringify({ ...saved, replication: { prefixes: ["notes"] } }, null, 2));
+    const invalidSavedPrefix = await tc(["kv", "get", "notes/a", "--raw"], { profile: "root-prefix", replication: "on" });
+    expect(invalidSavedPrefix.code).toBe(2);
+    expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
+    expect(invalidSavedPrefix.stderr).toContain("purging a replica alone does not change this profile setting");
+    await writeFile(profilePath, JSON.stringify(saved, null, 2));
+
+    const firstRead = await tc(["kv", "get", "notes/a", "--raw"], { profile: "root-prefix", replication: "on" });
+    expect(firstRead.code, firstRead.stderr).toBe(0);
+    expect(firstRead.stdout.toString()).toBe("root-value");
+    const report = await ok<{
+      replicas: Array<{ prefix: string; state: string; errorCode?: string; coverage?: string; counts?: { keys: number } }>;
+    }>(["replica", "report", "--json"], "root-prefix", { replication: "on" });
+    const rootStatus = report.replicas.find((entry) => entry.prefix === "/");
+    expect(rootStatus).toBeDefined();
+    if (nodeFeatures.includes("kv-sync-root")) {
+      const rootProfilePath = join(home, ".tinycloud", "profiles", "root-prefix", "profile.json");
+      const rootProfile = JSON.parse(await readFile(rootProfilePath, "utf8")) as { privateKey: string };
+      const rootSessionData = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "root-prefix", "session.json"), "utf8")) as Parameters<TinyCloudNode["restoreSession"]>[0];
+      const directNode = new TinyCloudNode({ host, privateKey: rootProfile.privateKey, autoBootstrapAccount: false });
+      await directNode.restoreSession(rootSessionData);
+      const directRootChanges = await directNode.kv.changes({ prefix: "/" });
+      expect(directRootChanges.ok, JSON.stringify(directRootChanges)).toBe(true);
+      expect(rootStatus, JSON.stringify(rootStatus)).toMatchObject({ state: "ready", coverage: "complete" });
+      expect(rootStatus!.counts?.keys).toBeGreaterThan(0);
+      const offlineGet = await tc(["kv", "get", "notes/a", "--raw"], {
+        profile: "root-prefix", preload: NO_NETWORK, replication: "on",
+      });
+      expect(offlineGet.code).toBe(0);
+      expect(offlineGet.stdout.toString()).toBe("root-value");
+      expect(offlineGet.stderr).toContain("replica hit");
+      const offlineList = await tc(["kv", "list", "--prefix", "notes"], {
+        profile: "root-prefix", preload: NO_NETWORK, replication: "on",
+      });
+      expect(offlineList.code).toBe(0);
+      expect(offlineList.stdout.toString()).toContain("notes/a");
+      const offlineRootList = await tc(["kv", "list"], {
+        profile: "root-prefix", preload: NO_NETWORK, replication: "on",
+      });
+      expect(offlineRootList.code).toBe(0);
+      expect(offlineRootList.stdout.toString()).toContain("notes/a");
+    } else {
+      expect(rootStatus).toMatchObject({ state: "unavailable", errorCode: "REPLICATION_ROOT_UNSUPPORTED" });
+    }
+  }, 120_000);
 });

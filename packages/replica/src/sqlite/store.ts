@@ -4,7 +4,7 @@ import { chmod, link, mkdir, open, readFile, readdir, rm, rmdir, stat, unlink } 
 import { join } from "node:path";
 
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
-import { effectiveAuthority } from "../scope.js";
+import { assertFolderPrefix, effectiveAuthority } from "../scope.js";
 import type {
   Coverage,
   GrantRecord,
@@ -437,6 +437,7 @@ export class SqliteReplicaStore implements ReplicaStore {
       throw storageError(error, "Reading the replica");
     }
     if (row === undefined) return null;
+    assertFolderPrefix(row.prefix);
     return {
       config: {
         name: row.name,
@@ -475,6 +476,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   }
 
   async init(c: ReplicaConfig): Promise<void> {
+    assertFolderPrefix(c.prefix);
     await this.#guardedWrite("Creating the replica", () => {
       if (this.#row() !== undefined) {
         throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, `Replica ${c.name} already exists.`);
