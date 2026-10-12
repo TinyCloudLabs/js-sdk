@@ -281,9 +281,11 @@ async function tryConnect(path: string): Promise<"connected" | "refused" | "othe
 /**
  * Whether the kernel refuses connections to `name` in `pinned`. A refusal
  * counts only if this process then connects to its own socket (`control`)
- * in the same directory through the same kind of address: a sandbox that
- * fails connect itself (a seccomp filter returning ECONNREFUSED; it cannot
- * read the address, so it cannot tell the two apart) fails that too. Never
+ * in the same directory through the same kind of address. This catches a
+ * sandbox that refuses every connect, but not one that fabricates refusals
+ * selectively (a seccomp filter keyed on call arguments, a seccomp
+ * user-notification supervisor, or a BPF LSM program). Like the PID check,
+ * which trusts kill(2), this decision trusts the kernel's answers. Never
  * under Bun, which reports a refused UNIX connect as ENOENT.
  */
 async function kernelRefuses(pinned: PinnedDirectory, name: string, control: HeldLiveness): Promise<boolean> {

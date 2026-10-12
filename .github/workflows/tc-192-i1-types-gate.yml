@@ -82,7 +82,7 @@ jobs:
           # Exactly PREFLIGHT in packages/operations/src/profile-lock-namespaces.test.ts,
           # which throws under CI if this fails or python3/nsenter are missing.
           unshare --user --map-root-user --pid --fork --mount-proc --uts --net --kill-child=SIGKILL sh -c 'hostname abcdef012345 && echo 10 > /proc/sys/kernel/ns_last_pid'
-          command -v python3 nsenter
+          command -v python3 && command -v nsenter
 
       # The operations tests spawn the CLI from source (auth-import lock
       # contention), which imports @tinycloud/replica.
