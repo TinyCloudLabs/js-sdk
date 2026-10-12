@@ -1,0 +1,15 @@
+{
+  "allowance": {
+    "index.mjs": 6144,
+    "index.cjs": 6144
+  },
+  "entries": [
+    {
+      "pr": "#484/#495",
+      "ticket": "TC-858",
+      "index.mjs": 5756,
+      "index.cjs": 5283,
+      "note": "Phase 1 replica growth measured against cbfe21ee"
+    }
+  ]
+}

@@ -1,47 +1,170 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
+type GzipSizes = { "index.mjs": number; "index.cjs": number };
+type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
+type Ledger = { allowance: GzipSizes; entries: LedgerEntry[] };
 type Baseline = {
-  baselineRef: string;
-  baselineToolchain: { node: string; bun: string; rustc: string; wasmPack: string; build: string; gzip: string };
-  "index.mjs": number;
-  "index.cjs": number;
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
+
+/*
+ * Rule:
+ * - Structural: always reject replica references in either web bundle.
+ * - Per-PR: replica-touching PRs compare gzip growth with their git merge base.
+ * - Cumulative: replica PRs add one measured entry to the reviewed ledger; totals
+ *   cannot exceed its allowance. Entries may record negative deltas when code shrinks.
+ * - Non-replica PRs are never charged; they only validate the ledger shape.
+ *
+ * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
+ * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
+ * and packages/web-sdk/src/** paths containing "replica" or "replication".
+ * Build noise tolerance is 64 gzip bytes: an entry may be up to 64 bytes below
+ * the measured positive delta; always record the exact observed delta when possible.
+ */
+const replicaOwnedPath = (path: string) =>
+  path.startsWith("packages/replica/") ||
+  path.startsWith("packages/sdk-services/src/kv/replication/") ||
+  path.startsWith("packages/sdk-core/src/replication/") ||
+  path.startsWith("packages/node-sdk/src/replication/") ||
+  (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path));
 const distDir = resolve(import.meta.dir, "../dist");
+const repoRoot = resolve(import.meta.dir, "../../..");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
-const actualToolchain = {
-  node: execFileSync("node", ["--version"], { encoding: "utf8" }).trim().replace(/^v/, ""),
-  bun: execFileSync("bun", ["--version"], { encoding: "utf8" }).trim(),
-  rustc: execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim().replace(/^rustc\s+/, ""),
-  wasmPack: execFileSync("wasm-pack", ["--version"], { encoding: "utf8" }).trim(),
-};
-console.log(`Gzip baseline: ${baseline.baselineRef}; Node ${baseline.baselineToolchain.node}; Bun ${baseline.baselineToolchain.bun}; Rust ${baseline.baselineToolchain.rustc}; ${baseline.baselineToolchain.wasmPack}`);
-console.log(`Baseline build: ${baseline.baselineToolchain.build}; gzip: ${baseline.baselineToolchain.gzip}`);
+const ledgerPath = resolve(import.meta.dir, "replica-size-ledger.json");
+const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as Ledger;
+const formats = ["index.mjs", "index.cjs"] as const;
 let failed = false;
-for (const [tool, version] of Object.entries(actualToolchain)) {
-  if (version !== baseline.baselineToolchain[tool as keyof typeof actualToolchain]) {
-    console.error(`Baseline toolchain mismatch: ${tool} baseline=${baseline.baselineToolchain[tool as keyof typeof actualToolchain]} current=${version}`);
-    failed = true;
+
+function validateLedger(value: Ledger): void {
+  if (!value || !value.allowance || !Array.isArray(value.entries)) throw new Error("Invalid replica size ledger shape");
+  for (const format of formats) {
+    if (!Number.isFinite(value.allowance[format])) throw new Error(`Invalid ledger allowance for ${format}`);
+  }
+  for (const entry of value.entries) {
+    if (!entry || typeof entry.pr !== "string" || typeof entry.ticket !== "string" || typeof entry.note !== "string" ||
+        formats.some((format) => !Number.isFinite(entry[format]))) {
+      throw new Error("Invalid replica size ledger entry");
+    }
   }
 }
-for (const filename of ["index.mjs", "index.cjs"] as const) {
-  const source = await readFile(resolve(distDir, filename), "utf8");
+
+function command(program: string, args: string[], cwd = repoRoot): string {
+  return execFileSync(program, args, { cwd, encoding: "utf8" }).trim();
+}
+
+async function gzipSizes(directory: string): Promise<GzipSizes> {
+  const sizes = {} as GzipSizes;
+  for (const format of formats) {
+    sizes[format] = execFileSync("gzip", ["-9", "-c", resolve(directory, format)], { maxBuffer: 10 * 1024 * 1024 }).byteLength;
+  }
+  return sizes;
+}
+
+validateLedger(ledger);
+const currentSizes = await gzipSizes(distDir);
+for (const format of formats) {
+  const source = await readFile(resolve(distDir, format), "utf8");
   for (const forbidden of ["@tinycloud/replica", "tinycloud-replica"]) {
     if (source.includes(forbidden)) {
-      console.error(`${filename}: forbidden replica reference ${JSON.stringify(forbidden)}`);
+      console.error(`${format}: forbidden replica reference ${JSON.stringify(forbidden)}`);
       failed = true;
     }
   }
-  const current = execFileSync("gzip", ["-9", "-c", resolve(distDir, filename)], { maxBuffer: 10 * 1024 * 1024 }).byteLength;
-  const delta = current - baseline[filename];
-  console.log(`${filename}: baseline=${baseline[filename]} gzip-bytes current=${current} delta=${delta} bytes`);
-  if (delta > 6 * 1024) {
-    console.error(`${filename}: gzip delta ${delta} bytes exceeds the 6144-byte limit`);
-    failed = true;
+  console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
+}
+
+const prBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
+if (prBaseSha) {
+  const mergeBase = command("git", ["merge-base", prBaseSha, "HEAD"]);
+  const changedPaths = command("git", ["diff", "--name-only", `${mergeBase}...HEAD`]).split("\n").filter(Boolean);
+  const replicaPaths = changedPaths.filter(replicaOwnedPath);
+  const rustChanged = changedPaths.some((path) => path.startsWith("packages/sdk-rs/"));
+  const tempDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-merge-base-"));
+  const worktree = join(tempDir, "worktree");
+  try {
+    command("git", ["worktree", "add", "--detach", worktree, mergeBase]);
+    execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: worktree, stdio: "inherit" });
+    if (!rustChanged) {
+      for (const directory of ["web-sdk-wasm", "node-sdk-wasm"]) {
+        await cp(resolve(repoRoot, "packages/sdk-rs", directory), resolve(worktree, "packages/sdk-rs", directory), { recursive: true });
+      }
+      console.log("Merge-base build: reusing HEAD WASM outputs (packages/sdk-rs unchanged)");
+    }
+    const buildCommands: [string, string[]][] = [];
+    if (rustChanged) buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs", "build:wasm:node"]]);
+    buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs/packages/node", "build"]]);
+    if (rustChanged) buildCommands.push(["bun", ["run", "--cwd", "packages/sdk-rs", "build:wasm:web"]]);
+    buildCommands.push(
+      ["bun", ["run", "--cwd", "packages/sdk-rs/packages/web", "build"]],
+      ["bun", ["run", "--cwd", "packages/bootstrap", "build"]],
+      ["bun", ["run", "--cwd", "packages/sdk-services", "build"]],
+      ["bun", ["run", "--cwd", "packages/share-envelope", "build"]],
+      ["bun", ["run", "--cwd", "packages/share-sdk", "build"]],
+      ["bun", ["run", "--cwd", "packages/sdk-core", "build"]],
+      ["bun", ["run", "--cwd", "packages/node-sdk", "build"]],
+      ["bun", ["run", "--cwd", "packages/operations", "build"]],
+      ["bun", ["run", "--cwd", "packages/replica", "build"]],
+      ["bun", ["run", "--cwd", "packages/courier", "build"]],
+      ["bun", ["run", "--cwd", "packages/node-sdk", "typecheck:replica-contract"]],
+      ["bun", ["run", "--cwd", "packages/cli", "build"]],
+      ["bun", ["run", "--cwd", "packages/web-sdk", "build"]],
+    );
+    for (const [program, args] of buildCommands) {
+      execFileSync(program, args, { cwd: worktree, stdio: "inherit" });
+    }
+    const baseSizes = await gzipSizes(resolve(worktree, "packages/web-sdk/dist"));
+    for (const format of formats) {
+      const delta = currentSizes[format] - baseSizes[format];
+      console.log(`${format}: merge-base=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${delta} bytes`);
+    }
+    if (replicaPaths.length === 0) {
+      console.log("Replica size budget: non-replica PR; no ledger charge.");
+    } else {
+      const baseLedger = JSON.parse(await readFile(resolve(worktree, "packages/web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Ledger;
+      validateLedger(baseLedger);
+      const appended = ledger.entries.slice(baseLedger.entries.length);
+      const prefixMatches = JSON.stringify(ledger.entries.slice(0, baseLedger.entries.length)) === JSON.stringify(baseLedger.entries);
+      const deltas = Object.fromEntries(formats.map((format) => [format, currentSizes[format] - baseSizes[format]])) as GzipSizes;
+      if (!prefixMatches || appended.length !== 1) {
+        const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
+        const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
+        console.error("Replica-touching PR must append exactly one ledger entry. Add this entry:");
+        console.error(JSON.stringify({ pr, ticket, ...deltas, note: "Replica gzip growth measured against this PR's merge base" }));
+        failed = true;
+      } else {
+        const entry = appended[0];
+        for (const format of formats) {
+          if (deltas[format] > 0 && entry[format] + 64 < deltas[format]) {
+            const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : entry.pr;
+            const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? entry.ticket;
+            console.error(`Ledger entry too small for ${format} (64-byte build-noise tolerance). Replace it with:`);
+            console.error(JSON.stringify({ pr, ticket, ...deltas, note: "Replica gzip growth measured against this PR's merge base" }));
+            failed = true;
+          }
+        }
+      }
+      for (const format of formats) {
+        const total = ledger.entries.reduce((sum, entry) => sum + entry[format], 0);
+        console.log(`${format}: cumulative replica ledger=${total} / ${ledger.allowance[format]} gzip-bytes`);
+        if (total > ledger.allowance[format]) {
+          console.error(`${format}: cumulative replica ledger exceeds allowance. Raising allowance is a budget-owner or Sam decision; edit "allowance" in a reviewed PR.`);
+          failed = true;
+        }
+      }
+      if (replicaPaths.length > 0) console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
+    }
+  } finally {
+    try {
+      command("git", ["worktree", "remove", "--force", worktree]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   }
+} else {
+  console.log("Replica size budget: no pull-request merge base; reporting only.");
 }
 
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
@@ -83,8 +206,8 @@ try {
   console.log(`web-sdk tests: ${cases.length} cases; failures=${failedNames.length}; unhandled=${unhandledErrors}`);
   console.log(`web-sdk failing names: ${failedNames.length === 0 ? "(none)" : failedNames.join(" | ")}`);
   console.log(`web-sdk unhandled signatures: ${unhandledSignatures.length === 0 ? "(none)" : unhandledSignatures.join(" | ")}`);
-  if (baseline.webSdkTestBaseline.ref !== baseline.baselineRef) {
-    console.error("web-sdk test baseline ref does not match the dist baseline ref");
+  if (typeof baseline.webSdkTestBaseline.ref !== "string" || baseline.webSdkTestBaseline.ref.length === 0) {
+    console.error("web-sdk test failure baseline must retain its reference");
     failed = true;
   }
   if (newFailures.length > 0) {
