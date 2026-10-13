@@ -957,11 +957,16 @@ describe("an OpenKey owner session without a signed proof is never used (TC-1053
         const result = await runBuiltCli(home, ["--json", "--profile", "proofless", ...command]);
         expect(JSON.parse(result.stdout).session.state === "unverified").toBe(!usable);
       }
-      // The CLI restore path, and the operations-backed path `secrets wait` uses.
-      for (const command of [["kv", "get", "KEY"], ["secrets", "wait", "KEY", "--timeout", "0", "--owner", seeded.ownerDid]]) {
+      // The CLI restore path, and both operations runtimes: restored (`secrets wait`) and invocation (`secrets get`).
+      for (const command of [
+        ["kv", "get", "KEY"],
+        ["secrets", "wait", "KEY", "--timeout", "0", "--owner", seeded.ownerDid],
+        ["secrets", "get", "KEY", "--raw"],
+      ]) {
         requests.length = 0;
         const result = await runBuiltCli(home, ["--json", "--profile", "proofless", ...command]);
-        if (usable) expect(requests.length).toBeGreaterThan(0);
+        // The control restores: it gets past AUTH_REQUIRED (`secrets get` then stops locally for lack of a decrypt grant).
+        if (usable) expect(result.error?.code).not.toBe("AUTH_REQUIRED");
         else expect({ exitCode: result.exitCode, code: result.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
       }
     } finally {
