@@ -1755,6 +1755,14 @@ describe("CLI secrets commands", () => {
     expect(recorded.outputs).toEqual([{ name: "KEY", value: "stored-value" }]);
   });
 
+  test("interactive canonical get refreshes an unverified owner session (no signed proof) (TC-1059)", async () => {
+    currentSession = { expiresAt: "2099-01-01T00:00:00.000Z" };
+    await runSecretsCommand(["secrets", "get", "KEY"]);
+    expect(recorded.sessionRefreshes).toEqual([{ profile: "default", host: "https://tinycloud.test" }]);
+    expect(recorded.getCalls).toHaveLength(1);
+    expect(recorded.outputs).toEqual([{ name: "KEY", value: "stored-value" }]);
+  });
+
   test("canonical node failures remain node failures, not expired-session authentication errors", async () => {
     interactive = false;
     canonicalResultOverride = {

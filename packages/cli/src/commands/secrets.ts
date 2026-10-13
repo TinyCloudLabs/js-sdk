@@ -296,7 +296,7 @@ async function ensureSecretsNode(
       if (!process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
           "AUTH_REQUIRED",
-          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
+          `Profile "${ctx.profile}" has ${session ? "an expired or unverified" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
           ExitCode.AUTH_REQUIRED,
           { hint: scopedSecretLoginHint(ctx.profile) },
         );

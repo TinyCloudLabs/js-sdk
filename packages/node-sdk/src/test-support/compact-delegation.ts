@@ -9,8 +9,11 @@ export async function mintCompactDelegation(options: {
   expSecs: number;
   host?: string;
   transportExpiry?: string;
+  /** The KV path and actions delegated; default `get` on `vault/secrets/KEY`. */
+  grant?: { path: string; actions: string[] };
 }): Promise<{ delegation: PortableDelegation; ownerDid: string; ownerAddress: string; spaceId: string }> {
   if (!Number.isInteger(options.expSecs)) throw new TypeError("expSecs must be an integer");
+  const grant = options.grant ?? { path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] };
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(OWNER_PRIVATE_KEY);
   const address = await signer.getAddress();
@@ -20,7 +23,7 @@ export async function mintCompactDelegation(options: {
   const ownerVm = manager.getDID("default");
   const now = Date.now();
   const prepared = wasm.prepareSession({
-    abilities: { kv: { "vault/secrets/": ["tinycloud.kv/get", "tinycloud.kv/list"] } },
+    abilities: { kv: { "vault/secrets/": ["tinycloud.kv/get", "tinycloud.kv/list"], ...(options.grant === undefined ? {} : { [grant.path]: grant.actions }) } },
     address,
     chainId: 1,
     domain: "cli.example.test",
@@ -40,7 +43,7 @@ export async function mintCompactDelegation(options: {
     },
     options.audience,
     spaceId,
-    { kv: { "vault/secrets/KEY": ["tinycloud.kv/get"] } },
+    { kv: { [grant.path]: grant.actions } },
     options.expSecs,
     0,
   );
@@ -48,8 +51,8 @@ export async function mintCompactDelegation(options: {
     ...raw,
     delegationHeader: { Authorization: raw.delegation },
     spaceId,
-    path: "vault/secrets/KEY",
-    actions: ["tinycloud.kv/get"],
+    path: grant.path,
+    actions: grant.actions,
     delegateDID: options.audience,
     ownerAddress: address,
     chainId: 1,

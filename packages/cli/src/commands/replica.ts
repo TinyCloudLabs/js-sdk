@@ -14,6 +14,7 @@ import {
   readSession,
   withProfileLock,
 } from "@tinycloud/operations/state";
+import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
 import {
   assertFolderPrefix,
@@ -186,11 +187,18 @@ export async function createReplica(profile: string, config: ReplicaConfig): Pro
   });
 }
 
-/** The compact JWTs this profile holds: its session and every imported delegation. */
+/**
+ * The compact JWTs this profile holds: its session and every imported
+ * delegation. An unverified OpenKey owner session is refused everywhere
+ * (TC-1053), so it never backs a replica either.
+ */
 async function storedGrants(profile: string): Promise<ParsedUcanGrant[]> {
   const authorizations: string[] = [];
-  const session = await readSession<{ delegationHeader?: { Authorization?: unknown } }>(profile).catch(() => null);
-  if (typeof session?.delegationHeader?.Authorization === "string") authorizations.push(session.delegationHeader.Authorization);
+  const session = await readSession<{ delegationHeader?: { Authorization?: unknown }; siwe?: unknown; signature?: unknown }>(profile).catch(() => null);
+  const config = await ProfileManager.getProfile(profile).catch(() => null);
+  if (typeof session?.delegationHeader?.Authorization === "string" && !ownerSessionLacksProof(session, config)) {
+    authorizations.push(session.delegationHeader.Authorization);
+  }
   const records = await readAdditionalDelegations<{ delegation?: { delegationHeader?: { Authorization?: unknown } } }>(profile).catch(
     () => [],
   );
