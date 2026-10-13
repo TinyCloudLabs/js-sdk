@@ -261,6 +261,35 @@ test("TC-994: concurrent callers share one host approval, and a later call in th
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
 });
 
+test("TC-998: a registry sync joining an app's in-flight host stops waiting when it is aborted", async () => {
+  const node = makeNode();
+  stubAccountRegistry(node, {});
+  const approval = Promise.withResolvers<{ success: true; status: number }>();
+  const hostOwnedSpaceResult = mock(() => approval.promise);
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  let hosted = false;
+  const activation = async () =>
+    Response.json(hosted ? { activated: [], skipped: [] } : { activated: [], skipped: [SECRETS] });
+
+  await withFetch(activation, async () => {
+    const app = node.ensureOwnedSpaceHosted("secrets");
+    await nextTasks();
+    const registry = new AbortController();
+    const sync = (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
+      .call(node, SECRETS, registry.signal);
+    const syncOutcome = sync.then(() => "settled", () => "aborted");
+    await nextTasks();
+    registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+    expect(await syncOutcome).toBe("aborted");
+
+    // The app's approval is still open and still completes for the app.
+    hosted = true;
+    approval.resolve({ success: true, status: 200 });
+    expect(await app).toBe(SECRETS);
+  });
+  expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
+});
+
 test("TC-998: an unhosted space is hosted without waiting for the background sync; its registry write queues behind it", async () => {
   const node = makeNode();
   const order: string[] = [];

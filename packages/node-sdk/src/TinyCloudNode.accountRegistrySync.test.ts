@@ -406,6 +406,40 @@ describe("sign-in account registry sync runs in the background (TC-998)", () => 
     expect(registryRead).not.toHaveBeenCalled();
     await node.waitForAccountRegistrySync();
   });
+
+  test("TC-998: a host in flight from a replaced session is not shared with the new session", async () => {
+    const { node } = makeNode();
+    stubSignInSteps(node);
+    slowRegistry(node, 0);
+    const auth = Reflect.get(node, "auth");
+    const approvals: Array<PromiseWithResolvers<{ success: true; status: number }>> = [];
+    const hostOwnedSpaceResult = mock(() => {
+      const approval = Promise.withResolvers<{ success: true; status: number }>();
+      approvals.push(approval);
+      return approval.promise;
+    });
+    Reflect.set(auth, "hostOwnedSpaceResult", hostOwnedSpaceResult);
+    Reflect.set(node, "isOwnedSpaceRegistered", async () => false);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({ activated: [], skipped: [] })) as unknown as typeof fetch;
+    try {
+      await node.signIn();
+      const before = node.ensureOwnedSpaceHosted("account");
+      await settleMicrotasks();
+      expect(approvals).toHaveLength(1);
+
+      await node.signIn();
+      const after = node.ensureOwnedSpaceHosted("account");
+      await settleMicrotasks();
+      expect(approvals).toHaveLength(2);
+
+      for (const approval of approvals) approval.resolve({ success: true, status: 200 });
+      expect(await Promise.all([before, after])).toEqual([ACCOUNT_SPACE, ACCOUNT_SPACE]);
+      await node.waitForAccountRegistrySync();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("sign-in account registry barrier", () => {

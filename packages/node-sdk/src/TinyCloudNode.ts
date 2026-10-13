@@ -2040,6 +2040,7 @@ export class TinyCloudNode {
     this.runtimePermissionGrants = [];
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
+    this.ownedSpaceHosts.clear();
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
@@ -3209,21 +3210,27 @@ export class TinyCloudNode {
 
   /**
    * Submit the host delegation for an owned space, sharing one in-flight
-   * request (and so one approval) between concurrent callers, such as the
-   * background registry sync and {@link ensureOwnedSpaceHosted}.
+   * request (and so one approval) between concurrent callers in this session,
+   * such as the background registry sync and {@link ensureOwnedSpaceHosted}.
+   * The shared request carries no caller's signal; each caller's `signal`
+   * releases only its own wait. Session replacement forgets in-flight hosts.
    */
   private hostOwnedSpaceOnce(spaceId: string, signal?: AbortSignal): Promise<SpaceHostResult> {
-    const inFlight = this.ownedSpaceHosts.get(spaceId);
-    if (inFlight) return inFlight;
-    const authorization = this.auth as NodeUserAuthorization;
-    const hosting = (signal
-      ? authorization.hostOwnedSpaceResult(spaceId, undefined, signal)
-      : authorization.hostOwnedSpaceResult(spaceId)
-    ).finally(() => {
-      this.ownedSpaceHosts.delete(spaceId);
-    });
-    this.ownedSpaceHosts.set(spaceId, hosting);
-    return hosting;
+    let hosting = this.ownedSpaceHosts.get(spaceId);
+    if (!hosting) {
+      const request = (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
+      hosting = request.finally(() => {
+        if (this.ownedSpaceHosts.get(spaceId) === request) this.ownedSpaceHosts.delete(spaceId);
+      });
+      this.ownedSpaceHosts.set(spaceId, request);
+    }
+    if (!signal) return hosting;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    const wait = Promise.withResolvers<SpaceHostResult>();
+    const onAbort = () => wait.reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    hosting.then(wait.resolve, wait.reject).finally(() => signal.removeEventListener("abort", onAbort));
+    return wait.promise;
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
@@ -3593,6 +3600,7 @@ export class TinyCloudNode {
     this.runtimePermissionGrants = stagedPrimary.grants;
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
+    this.ownedSpaceHosts.clear();
     this._restoredNodeFeatures = restoredNodeFeatures;
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost], restoredNodeFeatures);
