@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "18.0.0"
   },
   "changesets": [
+    "tc-998-signin-background-registry",
     "tc-999-bootstrap-marker-read"
   ]
 }
