@@ -39,6 +39,7 @@ import {
   signCompactUcanAuthorization,
 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
+import { computeCid } from "@tinycloud/node-sdk-wasm";
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
@@ -695,44 +696,70 @@ export function createShareAuthorityAdapters(input: {
     return "delivered";
   }) };
   const revocation: ShareRevocationAdapter = {
-    // The node accepts a proofless revocation signed by the target's
-    // delegator, so the session key that minted a bearer link revokes it
-    // without separate revoke authority. Only that key can: a profile that
-    // signed in again since holds a different session key.
+    // The node authorizes a revocation signed by the delegation's delegator,
+    // or by the owner of a space it targets. A bearer link is minted by the
+    // session key, or by the owner wallet when it outlives the session, so a
+    // proofless session-key revocation covers the first, and a local owner
+    // key covers both. Without either key (a session-only profile that signed
+    // in again since, for example) the link cannot be revoked here.
     revokeDelegation: input.revokeDelegation ?? (async ({ delegationCid, record }) => {
       const node = await authenticatedNode();
       const activeNode = await node.activeNodeIdentity();
       if (record.target.origin !== activeNode.origin) throw new Error("share delegation revocation is not bound to the active owner node");
-      // The stored link carries the signed delegation, which names its issuer.
-      // A record without a link leaves the decision to the node.
-      let issuer: string | undefined;
-      if (record.link !== undefined) {
-        const delegation = node.sharing.decodeLink(parseNativeShareUrl(record.link)).delegation;
-        if (delegation.cid !== delegationCid || delegation.authHeader === undefined) throw new Error("stored share link does not carry the share delegation");
-        issuer = parseSignedCompactUcanAttenuation(withoutBearer(delegation.authHeader), delegationCid).payload.iss.split("#", 1)[0];
+      // Revoke only the delegation the stored link carries, bound to the
+      // record's CID by its exact bytes, and never this profile's session.
+      const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", ExitCode.ERROR);
+      let sessionIssued: boolean;
+      try {
+        const decoded = node.sharing.decodeLink(parseNativeShareUrl(record.link ?? ""));
+        const authorization = withoutBearer(decoded.delegation.authHeader ?? "");
+        if (authorization.split(".").length === 3) {
+          const signed = parseSignedCompactUcanAttenuation(authorization, delegationCid);
+          if (signed.payload.aud.split("#", 1)[0] !== decoded.keyDid.split("#", 1)[0]) throw linkUnavailable;
+          sessionIssued = signed.payload.iss.split("#", 1)[0] === node.credentialHolderDid;
+        } else {
+          // An owner-signed link carries a wallet CACAO.
+          if (computeCid(new Uint8Array(Buffer.from(authorization, "base64url")), 0x55n) !== delegationCid) throw linkUnavailable;
+          sessionIssued = false;
+        }
+      } catch {
+        throw linkUnavailable;
       }
-      const issuerKeyUnavailable = new CLIError(
-        "SHARE_ISSUER_KEY_UNAVAILABLE",
-        "the session key that created this share link is not available to this profile; nothing was revoked",
-        ExitCode.PERMISSION_DENIED,
+      if (delegationCid === node.session?.delegationCid) throw linkUnavailable;
+      let authorization: string;
+      if (sessionIssued) {
+        const now = Math.floor(Date.now() / 1000);
+        authorization = (await signCompactUcanAuthorization({
+          issuerDid: node.sessionDid,
+          audienceDid: activeNode.nodeDid,
+          attenuation: { [`urn:cid:${delegationCid}`]: { "tinycloud.delegation/revoke": [{}] } },
+          facts: [{}],
+          proofs: [],
+          notBefore: now,
+          expiresAt: now + 60,
+          nonce: `urn:uuid:${crypto.randomUUID()}`,
+          sign: (bytes) => node.signSessionBytes(bytes),
+        })).authorization;
+      } else if (!node.isSessionOnly) {
+        authorization = await node.signOwnerRevocation(delegationCid);
+      } else {
+        throw new CLIError("SHARE_ISSUER_KEY_UNAVAILABLE", "the key that created this share link is not available to this profile; nothing was revoked", ExitCode.PERMISSION_DENIED);
+      }
+      const response = await fetchFn(`${activeNode.origin}/revoke`, { method: "POST", headers: { Authorization: authorization } });
+      const body = await response.text();
+      if (response.ok) {
+        let receipt: unknown;
+        try { receipt = JSON.parse(body); } catch { receipt = undefined; }
+        if (typeof receipt === "object" && receipt !== null && "revoked" in receipt && receipt.revoked === true && "cid" in receipt && receipt.cid === delegationCid) return;
+      }
+      // The node's /revoke error text is a fixed reason such as "Unauthorized Revoker".
+      const nodeMessage = body.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
+      throw new CLIError(
+        "SHARE_REVOKE_REJECTED",
+        `the node rejected the share revocation (HTTP ${response.status}${response.ok || nodeMessage === "" ? "" : `: ${nodeMessage}`}); nothing was revoked`,
+        ExitCode.NODE_ERROR,
+        { status: response.status },
       );
-      if (issuer !== undefined && issuer !== node.credentialHolderDid) throw issuerKeyUnavailable;
-      const now = Math.floor(Date.now() / 1000);
-      const revocation = await signCompactUcanAuthorization({
-        issuerDid: node.sessionDid,
-        audienceDid: node.credentialHolderDid,
-        attenuation: { [`urn:cid:${delegationCid}`]: { "tinycloud.delegation/revoke": [{}] } },
-        facts: [{}],
-        proofs: [],
-        notBefore: now,
-        expiresAt: now + 60,
-        nonce: `urn:uuid:${crypto.randomUUID()}`,
-        sign: (bytes) => node.signSessionBytes(bytes),
-      });
-      const response = await fetchFn(`${activeNode.origin}/revoke`, { method: "POST", headers: { Authorization: revocation.authorization } });
-      if (response.ok) return;
-      if (response.status === 403 && issuer === undefined) throw issuerKeyUnavailable;
-      throw new CLIError("SHARE_REVOKE_REJECTED", `the node rejected the share revocation (HTTP ${response.status}); nothing was revoked`, ExitCode.NODE_ERROR, { status: response.status });
     }),
     revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
       const node = await authenticatedNode();
