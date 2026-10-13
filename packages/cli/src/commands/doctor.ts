@@ -69,11 +69,13 @@ export function registerDoctorCommand(program: Command): void {
         if (profileOk && profileName) {
           try {
             const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-            const { state, expiresAt } = storedSessionState(session);
+            const profile = await ProfileManager.getProfile(profileName);
+            const { state, expiresAt } = storedSessionState(session, profile);
             sessionOk = sessionStateIsUsable(state);
             if (state === "expired") {
-              const posture = resolveProfilePosture(await ProfileManager.getProfile(profileName));
-              sessionDetail = `expired ${expiresAt} — ${signInAgainHint(profileName, posture)}`;
+              sessionDetail = `expired ${expiresAt} — ${signInAgainHint(profileName, resolveProfilePosture(profile))}`;
+            } else if (state === "unverified") {
+              sessionDetail = `not usable (no signed OpenKey proof) — ${signInAgainHint(profileName, resolveProfilePosture(profile))}`;
             } else {
               sessionDetail = sessionOk ? "active" : "no session — run tc auth login";
             }

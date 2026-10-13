@@ -50,12 +50,54 @@ describe("tc doctor (TC-1048)", () => {
         env: { ...process.env, HOME: home, TC_HOME: home }, stdin: "ignore", stdout: "ignore", stderr: "ignore",
       });
       expect(await init.exited).toBe(0);
-      await writeFile(join(home, ".tinycloud/profiles/demo/session.json"), JSON.stringify({ expiresAt: "2026-01-01T00:00:00.000Z" }));
+      await writeFile(join(home, ".tinycloud/profiles/demo/session.json"), JSON.stringify({
+        siwe: "Expiration Time: 2026-01-01T00:00:00.000Z",
+        signature: "0x00",
+        expiresAt: "2026-01-01T00:00:00.000Z",
+      }));
       const checks = await doctor(home, ["--profile", "demo"]);
       expect(checks.find((check) => check.name === "Session")).toEqual({
         name: "Session",
         ok: false,
         detail: expect.stringMatching(/^expired 2026-01-01T00:00:00\.000Z — Sign in again with: tc --profile demo auth login/),
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("reports a signed, unexpired owner session as active", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-doctor-session-"));
+    try {
+      const init = Bun.spawn([process.env.NODE_BINARY ?? "node", cliEntry, "init", "--name", "demo", "--key-only", "--host", node.url.origin], {
+        env: { ...process.env, HOME: home, TC_HOME: home }, stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      });
+      expect(await init.exited).toBe(0);
+      await writeFile(join(home, ".tinycloud/profiles/demo/session.json"), JSON.stringify({
+        siwe: "Expiration Time: 2099-01-01T00:00:00.000Z",
+        signature: "0x00",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }));
+      const checks = await doctor(home, ["--profile", "demo"]);
+      expect(checks.find((check) => check.name === "Session")).toEqual({ name: "Session", ok: true, detail: "active" });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("fails the session check for an owner session with no signed proof (TC-1053) and names the sign-in command", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-doctor-session-"));
+    try {
+      const init = Bun.spawn([process.env.NODE_BINARY ?? "node", cliEntry, "init", "--name", "demo", "--key-only", "--host", node.url.origin], {
+        env: { ...process.env, HOME: home, TC_HOME: home }, stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      });
+      expect(await init.exited).toBe(0);
+      await writeFile(join(home, ".tinycloud/profiles/demo/session.json"), JSON.stringify({ expiresAt: "2099-01-01T00:00:00.000Z" }));
+      const checks = await doctor(home, ["--profile", "demo"]);
+      expect(checks.find((check) => check.name === "Session")).toEqual({
+        name: "Session",
+        ok: false,
+        detail: "not usable (no signed OpenKey proof) — Sign in again with: tc --profile demo auth login --method openkey",
       });
     } finally {
       await rm(home, { recursive: true, force: true });
