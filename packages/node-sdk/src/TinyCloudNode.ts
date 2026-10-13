@@ -3226,11 +3226,13 @@ export class TinyCloudNode {
     }
     if (!signal) return hosting;
     if (signal.aborted) return Promise.reject(signal.reason);
-    const wait = Promise.withResolvers<SpaceHostResult>();
-    const onAbort = () => wait.reject(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
-    hosting.then(wait.resolve, wait.reject).finally(() => signal.removeEventListener("abort", onAbort));
-    return wait.promise;
+    const shared = hosting;
+    // node-sdk's lib target predates Promise.withResolvers.
+    return new Promise<SpaceHostResult>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      shared.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
