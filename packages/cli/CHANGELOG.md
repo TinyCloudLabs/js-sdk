@@ -1,5 +1,12 @@
 # @tinycloud/cli
 
+## 1.2.2-beta.1
+
+### Patch Changes
+
+- afe7e56: `tc` commands now exit once they finish, even when the caller keeps stdin open (TC-1025). Most visibly, `tc auth login --paste` used to stay running after printing `authenticated: true` until a wrapper that wrote the code and kept its pipe open finally closed it. The CLI now releases stdin after the command settles. `tc courier` has its own entry point and is unchanged.
+- 4c0ff89: `tc auth status` and `tc auth whoami` no longer report an expired session as signed in (TC-973). `authenticated` is now true only when the stored session has not expired, or has no recorded expiry. A signed SIWE `Expiration Time` takes precedence over unsigned expiry metadata, as it does when commands restore the session. Both commands also report `session: { state, expiresAt }` in their JSON, using the same evaluation as `tc context` (`missing`, `expired`, `present` or `unknown-expiry`); `tc context` now applies the same SIWE precedence to its `expiresAt`. Human output gains a `Session` line, and `auth status` prints the sign-in command when the session has expired. The exit status is still 0.
+
 ## 1.2.2-beta.0
 
 ### Patch Changes

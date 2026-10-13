@@ -20772,6 +20772,16 @@ function sessionExpiresAt(session) {
   if (typeof value === "string") return new Date(value).toISOString();
   return null;
 }
+function storedSessionState(session) {
+  if (session === null) return { state: "missing", expiresAt: null };
+  const siweExpiry = typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : void 0;
+  const expiresAt = siweExpiry !== void 0 && Number.isFinite(Date.parse(siweExpiry)) ? new Date(siweExpiry).toISOString() : sessionExpiresAt(session);
+  if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
+  return { state: Date.parse(expiresAt) <= Date.now() ? "expired" : "present", expiresAt };
+}
+function sessionStateIsUsable(state2) {
+  return state2 === "present" || state2 === "unknown-expiry";
+}
 function ownerSpaceId(space, ownerDid) {
   return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;
 }
@@ -22244,10 +22254,12 @@ function registerAuthCommand(program, options) {
       }
       const posture = profile ? resolveProfilePosture(profile) : null;
       const operatorType = profile ? resolveProfileOperatorType(profile) : null;
-      const authenticated = session !== null;
+      const { state: sessionState, expiresAt } = storedSessionState(session);
+      const authenticated = sessionStateIsUsable(sessionState);
       if (shouldOutputJson()) {
         outputJson({
           authenticated,
+          session: { state: sessionState, expiresAt },
           did: profile?.did ?? null,
           sessionDid: profile?.sessionDid ?? null,
           ownerDid: profile?.ownerDid ?? null,
@@ -22265,6 +22277,7 @@ function registerAuthCommand(program, options) {
         process.stdout.write(theme.heading("Authentication Status") + "\n");
         process.stdout.write(formatField("Profile", ctx.profile) + "\n");
         process.stdout.write(formatField("Authenticated", authenticated) + "\n");
+        process.stdout.write(formatField("Session", describeSession(sessionState, expiresAt)) + "\n");
         process.stdout.write(formatField("Auth Method", profile?.authMethod ?? null) + "\n");
         process.stdout.write(formatField("Posture", posture) + "\n");
         process.stdout.write(formatField("Operator", operatorType) + "\n");
@@ -22276,6 +22289,11 @@ function registerAuthCommand(program, options) {
         process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
         process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
+        if (sessionState === "expired") {
+          process.stdout.write(`
+${signInAgainHint(ctx.profile, posture ?? void 0)}
+`);
+        }
       }
     } catch (error) {
       return handleError(error);
@@ -22723,7 +22741,8 @@ function registerAuthCommand(program, options) {
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
-      const authenticated = session !== null;
+      const { state: sessionState, expiresAt } = storedSessionState(session);
+      const authenticated = sessionStateIsUsable(sessionState);
       const posture = resolveProfilePosture(profile);
       const operatorType = resolveProfileOperatorType(profile);
       if (shouldOutputJson()) {
@@ -22735,6 +22754,7 @@ function registerAuthCommand(program, options) {
           spaceId: profile.spaceId ?? null,
           host: profile.host,
           authenticated,
+          session: { state: sessionState, expiresAt },
           authMethod: profile.authMethod ?? null,
           posture,
           operatorType,
@@ -22753,11 +22773,24 @@ function registerAuthCommand(program, options) {
         process.stdout.write(formatField("Space ID", profile.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Host", profile.host) + "\n");
         process.stdout.write(formatField("Authenticated", authenticated) + "\n");
+        process.stdout.write(formatField("Session", describeSession(sessionState, expiresAt)) + "\n");
       }
     } catch (error) {
       return handleError(error);
     }
   });
+}
+function describeSession(state2, expiresAt) {
+  switch (state2) {
+    case "missing":
+      return "none";
+    case "expired":
+      return `expired ${expiresAt}`;
+    case "present":
+      return `active until ${expiresAt}`;
+    case "unknown-expiry":
+      return "active (no recorded expiry)";
+  }
 }
 async function emitPermissionRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
@@ -23687,7 +23720,6 @@ function registerContextCommand(program) {
       const profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
       const spaceId = await resolveSpaceUri(options.space, ctx.profile) ?? (typeof session?.spaceId === "string" ? session.spaceId : profile.spaceId ?? null);
-      const expiresAt = sessionExpiresAt(session);
       let root = cmd;
       while (root.parent) root = root.parent;
       outputJson({
@@ -23699,8 +23731,7 @@ function registerContextCommand(program) {
         host: ctx.host,
         spaceId,
         session: {
-          state: session === null ? "missing" : expiresAt === null ? "unknown-expiry" : Date.parse(expiresAt) <= Date.now() ? "expired" : "present",
-          expiresAt,
+          ...storedSessionState(session),
           evidence: "local-metadata"
         },
         access: "not-tested"

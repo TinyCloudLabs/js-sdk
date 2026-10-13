@@ -29,6 +29,8 @@
     "@tinycloud/sdk-services-test": "18.0.0"
   },
   "changesets": [
-    "bright-frogs-repair"
+    "bright-frogs-repair",
+    "tc-1025-paste-exit",
+    "tc-973-auth-status-expired"
   ]
 }

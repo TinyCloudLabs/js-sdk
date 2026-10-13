@@ -18815,6 +18815,7 @@ if (argv[0] === "courier") {
   }
   try {
     await program.parseAsync(process.argv);
+    process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
       const stdoutFlushed = Promise.withResolvers();
