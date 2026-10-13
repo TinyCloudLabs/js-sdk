@@ -303,4 +303,33 @@ describe("browser callback login", () => {
       if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
     }
   });
+
+  test.each([
+    ["the browser login", false],
+    ["the paste login", true],
+  ])("Ctrl-C in a terminal cancels %s instead of waiting (TC-1062)", async (_label, paste) => {
+    const input = new PassThrough();
+    Object.defineProperty(input, "isTTY", { value: true });
+    const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+    const originalStderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    const messages: string[] = [];
+    const error = spyOn(console, "error").mockImplementation((...args) => { messages.push(args.join(" ")); });
+    Object.defineProperty(process, "stdin", { configurable: true, value: input });
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
+    try {
+      const flow = startAuthFlow("did:key:z6MkDelegate", { paste, noPopup: true, openkeyHost: "https://openkey.test" })
+        .catch((failure: unknown) => failure);
+      // Wait until the flow is reading the terminal.
+      while (!messages.some((message) => message.includes("/delegate?"))) await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      input.write("\x03");
+      expect(await flow).toMatchObject({ code: "CANCELLED", exitCode: 130 });
+    } finally {
+      error.mockRestore();
+      input.destroy();
+      if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
+      if (originalStderrTTY) Object.defineProperty(process.stderr, "isTTY", originalStderrTTY);
+      else Reflect.deleteProperty(process.stderr, "isTTY");
+    }
+  });
 });

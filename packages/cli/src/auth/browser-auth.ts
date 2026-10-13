@@ -82,7 +82,9 @@ export async function startAuthFlow(
 
   try {
     return await callbackFlow(did, options);
-  } catch {
+  } catch (error) {
+    // Ctrl-C cancels the login; it isn't a reason to fall back to paste.
+    if (error instanceof CLIError && error.code === "CANCELLED") throw error;
     // Fallback to paste if browser can't open
     if (process.stdin.isTTY) {
       console.error("Could not open browser. Falling back to manual paste mode.");
@@ -379,6 +381,8 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
             resolving = false;
           }
         });
+        // On a TTY, readline takes Ctrl-C itself and would only pause (TC-1062).
+        rl.on("SIGINT", () => settle({ error: loginCancelled() }));
       }
     });
 
@@ -423,7 +427,18 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
         },
       ));
     });
+    // On a TTY, readline takes Ctrl-C itself and would only pause (TC-1062).
+    rl.on("SIGINT", () => {
+      if (answered) return;
+      answered = true;
+      rl.close();
+      reject(loginCancelled());
+    });
     rl.setPrompt("Enter short code or paste full delegation code: ");
     rl.prompt();
   });
+}
+
+function loginCancelled(): CLIError {
+  return new CLIError("CANCELLED", "Interrupted: tc auth login stopped before approval. No session was saved.", ExitCode.CANCELLED);
 }
