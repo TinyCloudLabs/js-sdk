@@ -69,7 +69,7 @@ import {
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
-import { openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
+import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   generateLocalIdentity,
@@ -1892,11 +1892,11 @@ async function handleOpenKeyAuth(
     profile: profileName,
     did: profile.did,
     spaceId: delegationData.spaceId,
+    ownerDid: profile.ownerDid ?? null,
     authMethod: "openkey",
     ...(options.permissions
       ? {
           scoped: true,
-          ownerDid: profile.ownerDid,
           host,
           permissions: delegationData.permissions,
           declined,
@@ -2064,6 +2064,7 @@ export async function refreshOpenKeySession(
       : {}),
   });
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
+  announceFirstOwner(profileName, expectedOwner, verifiedOwner);
 
   return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }

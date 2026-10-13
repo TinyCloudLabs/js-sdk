@@ -1882,7 +1882,7 @@ describe("OpenKey primary key (TC-705)", () => {
 
   afterEach(() => restoreStderr());
 
-  test("a login approved by the primary key records it and warns about nothing", async () => {
+  test("a first login approved by the primary key records it and names the new owner, with no primary-key warning", async () => {
     openKeyDelegation = signedBy(primaryOwner, { primary: true });
 
     const { profile } = await refreshOpenKeySession("default", activeHost);
@@ -1890,7 +1890,9 @@ describe("OpenKey primary key (TC-705)", () => {
     expect(profile.ownerDid).toBe(primaryOwner);
     expect(profile.ownerKeyPrimary).toBe(true);
     expect(profiles.get("default")?.ownerKeyPrimary).toBe(true);
-    expect(stderr.join("")).toBe("");
+    // No primary-key warning; the first login names the owner it pinned (TC-1058).
+    expect(stderr.join("")).not.toContain("primary OpenKey key");
+    expect(stderr.join("")).toContain(primaryOwner);
   });
 
   test("a login approved by another key succeeds, records it and warns on stderr only", async () => {
@@ -1926,6 +1928,24 @@ describe("OpenKey primary key (TC-705)", () => {
 
     expect("ownerKeyPrimary" in profile).toBe(false);
     expect(profiles.get("default")?.ownerKeyPrimary).toBeUndefined();
+    expect(stderr.join("")).not.toContain("primary OpenKey key");
+  });
+
+  test("a login on a profile that already has an owner names no new owner (TC-1058)", async () => {
+    profiles.set("default", makeProfile({ did: sessionDid, sessionDid, authMethod: "openkey", posture: "owner-openkey", ownerDid: primaryOwner }));
+    openKeyDelegation = signedBy(primaryOwner, { primary: true });
+
+    await refreshOpenKeySession("default", activeHost);
+
+    expect(stderr.join("")).toBe("");
+  });
+
+  test("a first login with --owner names no new owner: the operator chose it (TC-1058)", async () => {
+    openKeyDelegation = signedBy(otherOwner, { primary: true });
+
+    await refreshOpenKeySession("default", activeHost, { expectedOwner: otherOwner });
+
+    expect(profiles.get("default")?.ownerDid).toBe(otherOwner);
     expect(stderr.join("")).toBe("");
   });
 

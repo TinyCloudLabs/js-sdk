@@ -1,5 +1,6 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -50,6 +51,9 @@ const PRIVATE_JWK_FIELDS = new Set([
   "oth",
   "k",
 ]);
+
+/** Real delegation callbacks are a few KB; anything far larger is refused unread. */
+const MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
 
 export function publicJwkForDelegation(jwk: object): object {
   const publicJwk: Record<string, unknown> = {};
@@ -247,6 +251,8 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       settled = true;
       clearTimeout(timeout);
       server.close();
+      // A held-open socket must not keep the CLI alive after the login settles.
+      server.closeAllConnections();
       if (rl) {
         rl.close();
       }
@@ -257,37 +263,61 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       }
     }
 
-    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      if (req.method === "POST" && req.url === "/callback") {
-        let body = "";
-        req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
-        req.on("end", () => {
-          try {
-            const data = JSON.parse(body) as DelegationData;
-            const invalid = validateDelegationCallbackPayload(data);
-            if (invalid) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: invalid }));
-              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
-              return;
-            }
-            // Send CORS headers and success response
-            res.writeHead(200, {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*",
-            });
-            res.end(JSON.stringify({ success: true }));
-            settle({ data });
-          } catch (err) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Invalid JSON" }));
-            settle({ error: new Error("Invalid delegation data received") });
+    // Only OpenKey's page, which received this unguessable path in the
+    // approval URL, can deliver the delegation (TC-1058). Browsers always send
+    // Origin on this cross-origin POST, so a request without OpenKey's origin
+    // is refused. Structurally invalid requests are answered and ignored, so a
+    // stray one can't end the login. This is not sender authentication: a local
+    // process that learns the path (it is in the printed URL and the browser's
+    // argv) can forge the header and post a well-formed payload, which ends the
+    // login with a proof error at worst; the per-login OpenKey nonce closes that.
+    const callbackPath = `/callback/${randomBytes(16).toString("base64url")}`;
+    const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
+    const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
+
+    // Check for stalled requests every second, so the timeouts below apply promptly.
+    const server = createServer({ connectionsCheckingInterval: 1_000 }, (req: IncomingMessage, res: ServerResponse) => {
+      if (req.headers.origin !== openKeyOrigin) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && req.url === callbackPath) {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        req.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_CALLBACK_BODY_BYTES) {
+            res.writeHead(413, cors);
+            res.end();
+            req.destroy();
+            return;
           }
+          chunks.push(chunk);
         });
-      } else if (req.method === "OPTIONS") {
+        req.on("end", () => {
+          let data: DelegationData;
+          try {
+            data = JSON.parse(Buffer.concat(chunks).toString("utf8")) as DelegationData;
+          } catch {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid JSON" }));
+            return;
+          }
+          const invalid = validateDelegationCallbackPayload(data);
+          if (invalid) {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: invalid }));
+            return;
+          }
+          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+          settle({ data });
+        });
+      } else if (req.method === "OPTIONS" && req.url === callbackPath) {
         // CORS preflight
         res.writeHead(204, {
-          "Access-Control-Allow-Origin": "*",
+          ...cors,
           "Access-Control-Allow-Methods": "POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
         });
@@ -297,6 +327,9 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
         res.end();
       }
     });
+    // Slow or stalled requests are dropped instead of lingering for the whole login.
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 10_000;
 
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
@@ -305,7 +338,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
         return;
       }
       const port = addr.port;
-      const callbackUrl = `http://127.0.0.1:${port}/callback`;
+      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);

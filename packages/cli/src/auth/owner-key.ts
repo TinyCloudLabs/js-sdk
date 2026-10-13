@@ -38,6 +38,16 @@ export function warnIfNotPrimaryKey(ownerDid: string | undefined, primary: boole
 }
 
 /**
+ * The first verified login pins its signer as the profile's owner. Nothing
+ * yet binds an approval to one login attempt (TC-1058), so when the owner was
+ * neither pinned nor requested with --owner, say on stderr who it is.
+ */
+export function announceFirstOwner(profileName: string, expectedOwner: string | undefined, ownerDid: string | undefined): void {
+  if (expectedOwner !== undefined || ownerDid === undefined) return;
+  process.stderr.write(`Profile "${profileName}" now belongs to ${ownerDid}. If that isn't your OpenKey account, stop using this profile and create a new one with tc init.\n`);
+}
+
+/**
  * The request a plain `tc auth login --owner <did>` sends to OpenKey: the
  * abilities OpenKey signs for a login without a request (kv, sql and
  * capabilities read on the `default` space root), on `owner`'s space URI.
