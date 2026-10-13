@@ -148,3 +148,15 @@ for (const [label, stored] of [
     expect(decision).toEqual({ action: "run", mode: "repair" });
   });
 }
+
+// resolveBootstrapDecision would also map a validator throw to repair, so check
+// the validator itself: malformed JSON is "not completed", not an exception.
+test("the marker validator rejects malformed JSON without throwing", () => {
+  const { kv } = nodeLikeKv();
+  const node = makeNode(kv);
+  const stepIds = bootstrapSteps(ADDRESS, 1).map((step) => step.id);
+  const validate = Reflect.get(node, "isAcceptedBootstrapCompletionMarker");
+
+  expect(validate.call(node, "not-json{", stepIds)).toBe(false);
+  expect(validate.call(node, JSON.stringify({ v: 1, stepIds }), stepIds)).toBe(true);
+});
