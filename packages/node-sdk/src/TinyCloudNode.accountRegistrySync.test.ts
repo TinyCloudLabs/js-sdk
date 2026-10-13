@@ -407,15 +407,21 @@ describe("sign-in account registry sync runs in the background (TC-998)", () => 
     await node.waitForAccountRegistrySync();
   });
 
-  test("TC-998: a host in flight from a replaced session is not shared with the new session", async () => {
+  test("TC-998: a host in flight from a replaced session is cancelled, not shared, and doesn't mark the new session hosted", async () => {
     const { node } = makeNode();
     stubSignInSteps(node);
     slowRegistry(node, 0);
     const auth = Reflect.get(node, "auth");
+    // Each sign-in installs a new session object, as NodeUserAuthorization does.
+    Reflect.set(Reflect.get(node, "tc"), "signIn", async () => {
+      Reflect.set(auth, "tinyCloudSession", { ...Reflect.get(auth, "tinyCloudSession") });
+    });
     const approvals: Array<PromiseWithResolvers<{ success: true; status: number }>> = [];
-    const hostOwnedSpaceResult = mock(() => {
+    const hostSignals: AbortSignal[] = [];
+    const hostOwnedSpaceResult = mock((_spaceId: string, _purpose: unknown, signal: AbortSignal) => {
       const approval = Promise.withResolvers<{ success: true; status: number }>();
       approvals.push(approval);
+      hostSignals.push(signal);
       return approval.promise;
     });
     Reflect.set(auth, "hostOwnedSpaceResult", hostOwnedSpaceResult);
@@ -429,12 +435,16 @@ describe("sign-in account registry sync runs in the background (TC-998)", () => 
       expect(approvals).toHaveLength(1);
 
       await node.signIn();
+      expect(hostSignals[0]?.aborted).toBe(true);
+      // The old approval lands late (the mock ignores the abort) and finishes the old call.
+      approvals[0]!.resolve({ success: true, status: 200 });
+      await before;
+
       const after = node.ensureOwnedSpaceHosted("account");
       await settleMicrotasks();
       expect(approvals).toHaveLength(2);
-
-      for (const approval of approvals) approval.resolve({ success: true, status: 200 });
-      expect(await Promise.all([before, after])).toEqual([ACCOUNT_SPACE, ACCOUNT_SPACE]);
+      approvals[1]!.resolve({ success: true, status: 200 });
+      expect(await after).toBe(ACCOUNT_SPACE);
       await node.waitForAccountRegistrySync();
     } finally {
       globalThis.fetch = originalFetch;

@@ -951,7 +951,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     );
 
     expect(auth.hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
-    expect(auth.hostOwnedSpaceResult).toHaveBeenCalledWith(accountSpaceId);
+    expect(auth.hostOwnedSpaceResult).toHaveBeenCalledWith(accountSpaceId, undefined, expect.any(AbortSignal));
   });
 
   test("signIn writes manifest records into the account applications registry", async () => {

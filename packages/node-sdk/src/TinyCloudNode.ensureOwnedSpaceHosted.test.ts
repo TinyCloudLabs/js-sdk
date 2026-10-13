@@ -196,7 +196,7 @@ test("TC-473: ensureOwnedSpaceHosted issues one registry write after hosting", a
 
   expect(spaceId).toBe(SECRETS);
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
-  expect(hostOwnedSpaceResult).toHaveBeenCalledWith(SECRETS);
+  expect(hostOwnedSpaceResult).toHaveBeenCalledWith(SECRETS, undefined, expect.any(AbortSignal));
   expect(register).toHaveBeenCalledTimes(1);
 });
 
@@ -288,6 +288,33 @@ test("TC-998: a registry sync joining an app's in-flight host stops waiting when
     expect(await app).toBe(SECRETS);
   });
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
+});
+
+test("TC-998: a host only the registry sync waits for is cancelled when the sync is aborted", async () => {
+  const node = makeNode();
+  const hostSignals: AbortSignal[] = [];
+  const approval = Promise.withResolvers<{ success: true; status: number }>();
+  const hostOwnedSpaceResult = mock((_spaceId: string, _purpose: unknown, signal: AbortSignal) => {
+    hostSignals.push(signal);
+    return approval.promise;
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const registry = new AbortController();
+
+  await withFetch(async () => Response.json({ activated: [], skipped: [SECRETS] }), async () => {
+    const sync = (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
+      .call(node, SECRETS, registry.signal)
+      .then(() => "settled", () => "aborted");
+    await nextTasks();
+    expect(hostSignals).toHaveLength(1);
+    expect(hostSignals[0]?.aborted).toBe(false);
+
+    registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+    expect(await sync).toBe("aborted");
+    // No caller is left, so the host request itself is cancelled and a late approval is discarded.
+    expect(hostSignals[0]?.aborted).toBe(true);
+    approval.resolve({ success: true, status: 200 });
+  });
 });
 
 test("TC-998: a registry sync aborted just before hosting opens no approval and leaves nothing unhandled", async () => {
