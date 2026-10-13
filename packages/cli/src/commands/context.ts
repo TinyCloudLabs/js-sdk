@@ -27,7 +27,7 @@ export function registerContextCommand(program: Command): void {
           host: ctx.host,
           spaceId,
           session: {
-            ...storedSessionState(session),
+            ...storedSessionState(session, profile),
             evidence: "local-metadata",
           },
           access: "not-tested",

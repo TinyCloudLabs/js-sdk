@@ -931,3 +931,28 @@ describe("auth status and whoami report an expired session as signed out (TC-973
     }
   }, 60_000);
 });
+
+describe("an OpenKey owner session without a signed proof is never used (TC-1053)", () => {
+  test("status reports it unverified and commands refuse it before any node request", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-unverified-session-"));
+    try {
+      await seedProfile(home, "owner-openkey", "live");
+      // What the removed unverified paste login could save.
+      await withTinyCloudStateRoot(home, () => writeJsonAtomic(sessionPath("expired"), {
+        delegationHeader: { Authorization: "x" }, delegationCid: "bafy", spaceId: "s",
+      }));
+      requests.length = 0;
+      for (const command of [["auth", "status"], ["auth", "whoami"], ["context"]]) {
+        const result = await runBuiltCli(home, ["--json", "--profile", "expired", ...command]);
+        expect(JSON.parse(result.stdout)).toMatchObject({ session: { state: "unverified" } });
+      }
+      const status = await runBuiltCli(home, ["--json", "--profile", "expired", "status"]);
+      expect(JSON.parse(status.stdout).profiles.find((p: { name: string }) => p.name === "expired"))
+        .toMatchObject({ authenticated: false, status: "signed-out" });
+      const read = await runBuiltCli(home, ["--json", "--profile", "expired", "kv", "get", "KEY"]);
+      expect({ exitCode: read.exitCode, code: read.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+});

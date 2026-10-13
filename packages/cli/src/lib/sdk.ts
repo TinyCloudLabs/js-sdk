@@ -4,7 +4,7 @@ import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../c
 import { CLIError, wrapError } from "../output/errors.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
-import { sessionExpiredError } from "../auth/session-expired.js";
+import { ownerSessionLacksProof, sessionExpiredError } from "../auth/session-expired.js";
 import { recordWarnings } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
@@ -79,11 +79,15 @@ async function restoreProfileSession(
   profile: ProfileConfig | null,
   sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
 ): Promise<void> {
+  const posture = profile === null ? undefined : resolveProfilePosture(profile);
+  if (ownerSessionLacksProof(sessionData, profile)) {
+    throw sessionExpiredError(profileName, posture);
+  }
   try {
     await node.restoreSession(sessionData);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
-      throw sessionExpiredError(profileName, profile === null ? undefined : resolveProfilePosture(profile));
+      throw sessionExpiredError(profileName, posture);
     }
     throw error;
   }

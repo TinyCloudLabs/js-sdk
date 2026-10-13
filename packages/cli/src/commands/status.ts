@@ -18,6 +18,7 @@ import {
   permissionsFromDelegation,
   type StoredAdditionalDelegation,
 } from "../lib/permissions.js";
+import { ownerSessionLacksProof } from "../auth/session-expired.js";
 
 interface StatusSummary {
   generatedAt: string;
@@ -155,7 +156,8 @@ async function inspectProfile(params: {
   ]);
   const hasPrivateKey = typeof profile?.privateKey === "string" && profile.privateKey.length > 0;
   const localKeyAuthenticated = profile?.authMethod === "local" && hasPrivateKey;
-  const sessionAuthenticated = session !== null && sessionExpired !== true;
+  const sessionAuthenticated = session !== null && sessionExpired !== true &&
+    !ownerSessionLacksProof(session, profile);
   const authenticated = localKeyAuthenticated || sessionAuthenticated;
   const status = resolveStatus({
     exists: profile !== null,

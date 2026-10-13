@@ -16,7 +16,7 @@ const { registerTinyCloudCommands } = await import("../command-registry.js");
 const ownerDid = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
 
 beforeEach(async () => {
-  await ProfileManager.setProfile("chosen", { name: "chosen", did: "did:key:test", ownerDid, host: "https://stored.example", chainId: 1, spaceName: "default", createdAt: "2026-01-01T00:00:00.000Z", privateKey: "never-output-private-key", authMethod: "openkey" });
+  await ProfileManager.setProfile("chosen", { name: "chosen", did: "did:key:test", ownerDid, host: "https://stored.example", chainId: 1, spaceName: "default", createdAt: "2026-01-01T00:00:00.000Z", privateKey: "never-output-private-key", authMethod: "openkey", posture: "delegate-session" });
   const expSecs = Math.floor(Date.now() / 1000) - 60;
   const imported = await mintCompactDelegation({ audience: "did:key:test", expSecs });
   await ProfileManager.setSession("chosen", {

@@ -153,7 +153,7 @@ function resetState(): void {
   openKeyDelegation = {
     delegationHeader: { Authorization: "Bearer openkey-new" },
     delegationCid: "bafy-openkey-new",
-    spaceId: "space-openkey-new",
+    spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
     expiry: "2099-01-01T00:00:00.000Z",
@@ -506,7 +506,6 @@ mock.module("../output/errors.js", () => ({
 }));
 
 const {
-  mergePrivateJwkIntoSession,
   readAuthArtifactSource,
   refreshOpenKeySession,
   registerAuthCommand,
@@ -560,7 +559,7 @@ describe("CLI auth rotate command", () => {
       authMethod: "openkey",
       posture: "owner-openkey",
       ownerDid: "did:pkh:eip155:1:0xowner",
-      spaceId: "space-openkey-new",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
     }));
     expect(recorded.outputs).toEqual([
       {
@@ -570,7 +569,7 @@ describe("CLI auth rotate command", () => {
         did: "did:key:new-openkey",
         sessionDid: "did:key:new-openkey",
         authMethod: "openkey",
-        spaceId: "space-openkey-new",
+        spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
       },
     ]);
   });
@@ -1700,36 +1699,6 @@ describe("CLI auth artifact sources", () => {
   });
 });
 
-describe("mergePrivateJwkIntoSession (write-side JWK sanitization)", () => {
-  const FULL_KEY = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-
-  test("splices `d` from key.json into a public-only session JWK", () => {
-    const session = {
-      delegationCid: "bafy",
-      spaceId: "tinycloud:space",
-      jwk: { kty: "OKP", crv: "Ed25519", x: "session-public" },
-    };
-    const merged = mergePrivateJwkIntoSession(session, FULL_KEY);
-    expect((merged.jwk as { d?: string }).d).toBe("key-private");
-    // Keeps everything else
-    expect((merged.jwk as { x?: string }).x).toBe("session-public");
-    expect(merged.spaceId).toBe("tinycloud:space");
-  });
-
-  test("does not overwrite a session JWK that already has `d`", () => {
-    const sessionJwk = { kty: "OKP", crv: "Ed25519", x: "session-public", d: "session-private" };
-    const session = { delegationCid: "bafy", jwk: sessionJwk };
-    const merged = mergePrivateJwkIntoSession(session, FULL_KEY);
-    expect((merged.jwk as { d?: string }).d).toBe("session-private");
-  });
-
-  test("returns the session unchanged when no `jwk` field is present", () => {
-    const session = { delegationCid: "bafy", spaceId: "tinycloud:space" };
-    const merged = mergePrivateJwkIntoSession(session, FULL_KEY);
-    expect(merged).toBe(session);
-  });
-});
-
 describe("CLI auth request command", () => {
   beforeEach(() => {
     resetState();
@@ -1828,7 +1797,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     openKeyDelegation = {
       delegationHeader: { Authorization: "Bearer openkey-new" },
       delegationCid: "bafy-openkey",
-      spaceId: "tinycloud:space",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
       expiry: "2099-01-01T00:00:00.000Z",
@@ -1849,7 +1818,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     expect(persisted.jwk.x).toBe("key-public");
   });
 
-  test("when OpenKey returns a full JWK (with `d`), persisted session.json keeps OpenKey's `d`", async () => {
+  test("a `d` in OpenKey's JWK is ignored: session.json signs with key.json's key (TC-1053)", async () => {
     const fullKey = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
     profiles.set("default", makeProfile({
       did: "did:key:z6MkSession",
@@ -1861,7 +1830,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     openKeyDelegation = {
       delegationHeader: { Authorization: "Bearer openkey-new" },
       delegationCid: "bafy-openkey",
-      spaceId: "tinycloud:space",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
       expiry: "2099-01-01T00:00:00.000Z",
@@ -1875,7 +1844,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     await refreshOpenKeySession("default", activeHost);
 
     const persisted = sessions.get("default") as { jwk: { d?: string } };
-    expect(persisted.jwk.d).toBe("openkey-returned-private");
+    expect(persisted.jwk).toEqual(fullKey);
   });
 });
 
@@ -1893,6 +1862,7 @@ describe("OpenKey primary key (TC-705)", () => {
       verificationMethod: sessionDid,
       address: owner.split(":")[4],
       chainId: 1,
+      spaceId: `tinycloud:${owner.slice("did:".length)}:default`,
       ...extra,
     };
   }
@@ -1937,6 +1907,15 @@ describe("OpenKey primary key (TC-705)", () => {
     expect(warning).toContain("separate owner with its own spaces and data");
     // Machine output carries no warning text.
     expect(JSON.stringify(recorded.outputs)).not.toContain("primary OpenKey key");
+  });
+
+  test("a proof whose space belongs to another account is refused and saves nothing (TC-1053)", async () => {
+    openKeyDelegation = signedBy(otherOwner, { spaceId: `tinycloud:${primaryOwner.slice("did:".length)}:default` });
+
+    await expect(refreshOpenKeySession("default", activeHost)).rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
+
+    expect(sessions.has("default")).toBe(false);
+    expect(profiles.get("default")?.ownerDid).toBeUndefined();
   });
 
   test("an OpenKey that does not report the flag records nothing, clears an earlier answer and stays quiet", async () => {

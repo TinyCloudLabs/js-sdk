@@ -200,6 +200,9 @@ describe("stored grant replay session gate", () => {
     spaceId: "tinycloud:space",
     verificationMethod: "did:key:zSession",
     jwk: fullKey,
+    // OpenKey owner sessions always carry the signed proof (TC-1053).
+    siwe: "siwe-message",
+    signature: "0xsignature",
   };
 
   test("restored own session replays, but explicit private key does not", async () => {
@@ -277,6 +280,8 @@ describe("ensureAuthenticated restoreSession uses full keypair from key.json", (
     delegationCid: "bafy-session",
     spaceId: "tinycloud:space",
     verificationMethod: "did:key:zSession",
+    siwe: "siwe-message",
+    signature: "0xsignature",
   };
 
   test("OpenKey path: public-only session.jwk falls back to key.json (the full keypair)", async () => {

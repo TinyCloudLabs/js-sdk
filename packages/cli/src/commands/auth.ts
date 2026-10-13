@@ -45,7 +45,6 @@ import { startAuthFlow } from "../auth/browser-auth.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
-  mergePrivateJwkIntoSession,
   resolveDeviceApiHost,
 } from "../auth/device-auth.js";
 import {
@@ -62,6 +61,7 @@ import {
   type RequestedExpiry,
   openKeyExpiryParam,
   withVerifiedAuthority,
+  ownerSpaceId,
   sessionStateIsUsable,
   storedSessionState,
   type StoredSessionState,
@@ -71,7 +71,6 @@ import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
-export { mergePrivateJwkIntoSession } from "../auth/device-auth.js";
 import {
   generateLocalIdentity,
   deriveAddress,
@@ -347,7 +346,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const posture = profile ? resolveProfilePosture(profile) : null;
         const operatorType = profile ? resolveProfileOperatorType(profile) : null;
 
-        const { state: sessionState, expiresAt } = storedSessionState(session);
+        const { state: sessionState, expiresAt } = storedSessionState(session, profile);
         const authenticated = sessionStateIsUsable(sessionState);
 
         if (shouldOutputJson()) {
@@ -383,7 +382,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
           process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
           process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
-          if (sessionState === "expired") {
+          if (sessionState === "expired" || sessionState === "unverified") {
             process.stdout.write(`\n${signInAgainHint(ctx.profile, posture ?? undefined)}\n`);
           }
         }
@@ -945,9 +944,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
-        const { state: sessionState, expiresAt } = storedSessionState(session);
-        const authenticated = sessionStateIsUsable(sessionState);
         const posture = resolveProfilePosture(profile);
+        const { state: sessionState, expiresAt } = storedSessionState(session, profile);
+        const authenticated = sessionStateIsUsable(sessionState);
         const operatorType = resolveProfileOperatorType(profile);
 
         if (shouldOutputJson()) {
@@ -992,6 +991,7 @@ function describeSession(state: StoredSessionState, expiresAt: string | null): s
     case "expired": return `expired ${expiresAt}`;
     case "present": return `active until ${expiresAt}`;
     case "unknown-expiry": return "active (no recorded expiry)";
+    case "unverified": return "not usable (no signed OpenKey proof)";
   }
 }
 
@@ -2014,14 +2014,10 @@ export async function refreshOpenKeySession(
     ...(permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
-  // Scoped login persists only signed, verified authority. Every path checks
-  // the signed proof whenever it carries one, the profile records an owner
-  // (which it must keep) or --expiry was requested; the owner recorded on the
-  // profile only ever comes from a verified proof.
-  // OpenKey only ever receives the public JWK (browser-auth.ts
-  // `publicJwkForDelegation`), so any JWK it echoes back is public-only;
-  // persisting it verbatim would shadow key.json and break the WASM signer
-  // (kv/sql). Merge the private parameter back in before writing session.json.
+  // Login persists only signed, verified authority: the owner, permissions,
+  // expiry and space all come from OpenKey's proof for this profile's key.
+  // The saved session always signs with key.json's key, the one the proof was
+  // verified against; a JWK the callback echoes is never trusted (TC-1053).
   const sessionDid = profile.sessionDid ?? profile.did;
   let sanitizedSession: Record<string, unknown>;
   let verifiedOwner: string | undefined;
@@ -2034,12 +2030,15 @@ export async function refreshOpenKeySession(
     verifiedOwner = sanitizedSession.ownerDid as string;
     declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
-    // Authority fields (owner, permissions, expiry, trust marker) come only
-    // from a verified proof. OpenKey always returns one; a delegation without
-    // a verifiable proof for this key is refused, never saved (TC-1053).
+    // A delegation without a verifiable proof for this key is refused, never saved (TC-1053).
     const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+    // The session's space must belong to the signing owner, as on the scoped path.
+    const spaceId = String(delegationData.spaceId);
+    if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
+    }
     verifiedOwner = signed.ownerDid;
-    sanitizedSession = withVerifiedAuthority(mergePrivateJwkIntoSession(delegationData, key), signed);
+    sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
   }
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
