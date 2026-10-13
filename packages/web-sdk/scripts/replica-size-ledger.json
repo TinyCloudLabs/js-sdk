@@ -3,5 +3,13 @@
     "index.mjs": 388,
     "index.cjs": 861
   },
-  "entries": []
+  "entries": [
+    {
+      "pr": "#511",
+      "ticket": "TC-1051",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    }
+  ]
 }
