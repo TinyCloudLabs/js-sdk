@@ -122,6 +122,21 @@ export function sessionExpiresAt(session: Record<string, unknown> | null): strin
   return null;
 }
 
+export type StoredSessionState = "missing" | "expired" | "present" | "unknown-expiry";
+
+/** A stored session's state from its own expiry ({@link sessionExpiresAt}); local metadata only, never contacts the node. */
+export function storedSessionState(session: Record<string, unknown> | null): StoredSessionState {
+  if (session === null) return "missing";
+  const expiresAt = sessionExpiresAt(session);
+  if (expiresAt === null) return "unknown-expiry";
+  return Date.parse(expiresAt) <= Date.now() ? "expired" : "present";
+}
+
+/** Whether commands still use a session in this state: unexpired, or with no recorded expiry to check. */
+export function sessionStateIsUsable(state: StoredSessionState): boolean {
+  return state === "present" || state === "unknown-expiry";
+}
+
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
 export function ownerSpaceId(space: string, ownerDid: string): string {
   return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;

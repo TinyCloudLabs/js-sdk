@@ -63,6 +63,10 @@ import {
   openKeyExpiryParam,
   withoutTrustFields,
   withVerifiedAuthority,
+  sessionExpiresAt,
+  sessionStateIsUsable,
+  storedSessionState,
+  type StoredSessionState,
 } from "../auth/scoped-login.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
@@ -81,7 +85,7 @@ import {
 import { theme } from "../output/theme.js";
 import { registerAuthGrantsCommand } from "./auth-grants.js";
 import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
-import { withSignInHint } from "../auth/session-expired.js";
+import { signInAgainHint, withSignInHint } from "../auth/session-expired.js";
 import { delegationExpiredError, isActivationExpiry } from "../auth/delegation-expiry.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import {
@@ -335,7 +339,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const hasKey = await ProfileManager.getKey(ctx.profile);
-        const session = await ProfileManager.getSession(ctx.profile);
+        const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
         let profile;
         try {
           profile = await ProfileManager.getProfile(ctx.profile);
@@ -345,11 +349,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const posture = profile ? resolveProfilePosture(profile) : null;
         const operatorType = profile ? resolveProfileOperatorType(profile) : null;
 
-        const authenticated = session !== null;
+        const sessionState = storedSessionState(session);
+        const expiresAt = sessionExpiresAt(session);
+        const authenticated = sessionStateIsUsable(sessionState);
 
         if (shouldOutputJson()) {
           outputJson({
             authenticated,
+            session: { state: sessionState, expiresAt },
             did: profile?.did ?? null,
             sessionDid: profile?.sessionDid ?? null,
             ownerDid: profile?.ownerDid ?? null,
@@ -367,6 +374,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           process.stdout.write(theme.heading("Authentication Status") + "\n");
           process.stdout.write(formatField("Profile", ctx.profile) + "\n");
           process.stdout.write(formatField("Authenticated", authenticated) + "\n");
+          process.stdout.write(formatField("Session", describeSession(sessionState, expiresAt)) + "\n");
           process.stdout.write(formatField("Auth Method", profile?.authMethod ?? null) + "\n");
           process.stdout.write(formatField("Posture", posture) + "\n");
           process.stdout.write(formatField("Operator", operatorType) + "\n");
@@ -378,6 +386,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
           process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
           process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
+          if (sessionState === "expired") {
+            process.stdout.write(`\n${signInAgainHint(ctx.profile, posture ?? undefined)}\n`);
+          }
         }
       } catch (error) {
         return handleError(error);
@@ -936,8 +947,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
 
         const profile = await ProfileManager.getProfile(ctx.profile);
-        const session = await ProfileManager.getSession(ctx.profile);
-        const authenticated = session !== null;
+        const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
+        const sessionState = storedSessionState(session);
+        const expiresAt = sessionExpiresAt(session);
+        const authenticated = sessionStateIsUsable(sessionState);
         const posture = resolveProfilePosture(profile);
         const operatorType = resolveProfileOperatorType(profile);
 
@@ -950,6 +963,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             spaceId: profile.spaceId ?? null,
             host: profile.host,
             authenticated,
+            session: { state: sessionState, expiresAt },
             authMethod: profile.authMethod ?? null,
             posture,
             operatorType,
@@ -968,11 +982,21 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           process.stdout.write(formatField("Space ID", profile.spaceId ?? null) + "\n");
           process.stdout.write(formatField("Host", profile.host) + "\n");
           process.stdout.write(formatField("Authenticated", authenticated) + "\n");
+          process.stdout.write(formatField("Session", describeSession(sessionState, expiresAt)) + "\n");
         }
       } catch (error) {
         return handleError(error);
       }
     });
+}
+
+function describeSession(state: StoredSessionState, expiresAt: string | null): string {
+  switch (state) {
+    case "missing": return "none";
+    case "expired": return `expired ${expiresAt}`;
+    case "present": return `active until ${expiresAt}`;
+    case "unknown-expiry": return "active (no recorded expiry)";
+  }
 }
 
 async function emitPermissionRequestArtifact(

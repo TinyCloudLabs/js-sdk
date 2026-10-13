@@ -888,3 +888,29 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     expect(shareRequests).not.toContain("/invoke");
   });
 });
+
+describe("auth status and whoami report an expired session as signed out (TC-973)", () => {
+  test.each([
+    ["delegate-session", "expired", false, "expired"],
+    ["local-owner-key", "expired", false, "expired"],
+    ["owner-openkey", "expired", false, "expired"],
+    ["owner-openkey", "live", true, "present"],
+  ] as const)("%s with a %s session", async (posture, state, authenticated, sessionState) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-auth-status-expiry-"));
+    try {
+      await seedProfile(home, posture, state);
+      requests.length = 0;
+      for (const command of [["auth", "status"], ["auth", "whoami"]]) {
+        const result = await runBuiltCli(home, ["--json", "--profile", "expired", ...command]);
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          authenticated,
+          session: { state: sessionState, expiresAt: expect.any(String) },
+        });
+      }
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

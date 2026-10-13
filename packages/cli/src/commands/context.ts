@@ -3,7 +3,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { outputJson } from "../output/formatter.js";
 import { handleError } from "../output/errors.js";
-import { sessionExpiresAt } from "../auth/scoped-login.js";
+import { sessionExpiresAt, storedSessionState } from "../auth/scoped-login.js";
 
 export function registerContextCommand(program: Command): void {
   program.command("context")
@@ -28,7 +28,7 @@ export function registerContextCommand(program: Command): void {
           host: ctx.host,
           spaceId,
           session: {
-            state: session === null ? "missing" : expiresAt === null ? "unknown-expiry" : Date.parse(expiresAt) <= Date.now() ? "expired" : "present",
+            state: storedSessionState(session),
             expiresAt,
             evidence: "local-metadata",
           },
