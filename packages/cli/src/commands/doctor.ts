@@ -4,7 +4,7 @@ import { DEFAULT_HOST } from "../config/constants.js";
 import { outputJson, shouldOutputJson, formatCheck, formatSection } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError } from "../output/errors.js";
-import { sessionExpiresAt, sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
+import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
 import { signInAgainHint } from "../auth/session-expired.js";
 import { resolveProfilePosture } from "../config/types.js";
 
@@ -69,11 +69,11 @@ export function registerDoctorCommand(program: Command): void {
         if (profileOk && profileName) {
           try {
             const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-            const state = storedSessionState(session);
+            const { state, expiresAt } = storedSessionState(session);
             sessionOk = sessionStateIsUsable(state);
             if (state === "expired") {
               const posture = resolveProfilePosture(await ProfileManager.getProfile(profileName));
-              sessionDetail = `expired ${sessionExpiresAt(session)} — ${signInAgainHint(profileName, posture)}`;
+              sessionDetail = `expired ${expiresAt} — ${signInAgainHint(profileName, posture)}`;
             } else {
               sessionDetail = sessionOk ? "active" : "no session — run tc auth login";
             }
