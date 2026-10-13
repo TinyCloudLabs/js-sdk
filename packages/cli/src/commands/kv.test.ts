@@ -448,13 +448,14 @@ describe("CLI kv list paging (TC-982)", () => {
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "KV_LIST_CURSOR_MISSING" })]);
   });
 
-  test("a very large page doesn't overflow the call stack", async () => {
-    listPages = { "": { keys: Array.from({ length: 200_000 }, (_, index) => `k${index}`), truncated: false } };
+  test("a very large read-through page doesn't overflow the call stack", async () => {
+    // A million keys: past what a spread push survives in Bun as well as Node.
+    listPages = { "": { keys: Array.from({ length: 1_000_000 }, (_, index) => `k${index}`), truncated: false } };
 
     await runKv(["list"]);
 
     expect(recorded.errors).toEqual([]);
-    expect(recorded.outputs).toEqual([expect.objectContaining({ count: 200_000, truncated: false })]);
+    expect(recorded.outputs).toEqual([expect.objectContaining({ count: 1_000_000, truncated: false })]);
   });
 
   test("an older node that doesn't report truncation gives null, not false", async () => {
