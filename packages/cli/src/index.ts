@@ -160,6 +160,9 @@ if (argv[0] === "courier") {
 
   try {
     await program.parseAsync(process.argv);
+    // The command is done with stdin. A pipe a caller keeps open (an agent
+    // harness after `auth login --paste`) must not hold the process (TC-1025).
+    process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
       const stdoutFlushed = Promise.withResolvers<void>();
