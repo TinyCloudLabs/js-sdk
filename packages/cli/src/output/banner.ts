@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { isInteractive, shouldOutputJson } from "./formatter.js";
 import { pickTagline } from "./taglines.js";
 import { theme } from "./theme.js";
@@ -22,7 +23,7 @@ function formatBannerLine(version: string): string {
   const commit = resolveCommitHash();
   const tagline = pickTagline();
 
-  const versionPart = `tc v${version}`;
+  const versionPart = `${CLI_NAME} v${version}`;
   const commitPart = commit ? ` (${commit})` : "";
   const separator = " — ";
 
@@ -31,7 +32,7 @@ function formatBannerLine(version: string): string {
   }
 
   return [
-    theme.brand("☁️  tc"),
+    theme.brand(`☁️  ${CLI_NAME}`),
     " ",
     theme.muted(`v${version}`),
     commit ? theme.dim(` (${commit})`) : "",

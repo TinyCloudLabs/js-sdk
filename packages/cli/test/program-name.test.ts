@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 const PACKAGE_DIR = resolve(import.meta.dir, "..");
@@ -15,6 +15,24 @@ describe("program name", () => {
       const result = spawnSync("node", [resolve(PACKAGE_DIR, target), "--help"], { encoding: "utf-8" });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`\nUsage: ${name} [options] [command]\n`);
+    }
+  });
+
+  test("an error hint names the bin the user ran", () => {
+    const home = mkdtempSync("/var/tmp/tc-program-name-");
+    const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;
+    try {
+      for (const [name, target] of Object.entries(bin)) {
+        const result = spawnSync("node", [resolve(PACKAGE_DIR, target), "--json", "kv", "list"], {
+          encoding: "utf-8",
+          env: { ...ambient, HOME: home },
+        });
+        expect(JSON.parse(result.stderr)).toEqual({
+          error: { code: "AUTH_REQUIRED", message: `Not authenticated. Run \`${name} auth login\` or \`${name} init\` first.` },
+        });
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

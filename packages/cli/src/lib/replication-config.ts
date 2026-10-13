@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { profilePath, withProfileLock } from "@tinycloud/operations/state";
 import { sqliteReplicaStorage, type KVReplicaStorage, type ReplicationOptions } from "@tinycloud/node-sdk";
 import { createReplicationEventSink } from "./replication-log.js";
@@ -33,7 +34,7 @@ export function createCliReplicationConfig(
         "INVALID_REPLICATION_PREFIX",
         error instanceof Error ? error.message : String(error),
         ExitCode.USAGE_ERROR,
-        { hint: `Replace the saved replication prefix with \`tc auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` },
+        { hint: `Replace the saved replication prefix with \`${CLI_NAME} auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` },
       );
     }
   }

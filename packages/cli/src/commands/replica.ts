@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
@@ -80,11 +81,11 @@ const EXIT_BY_CODE: Record<ReplicaErrorCode, number> = {
 const READ_FAILURE: Record<Exclude<ReplicaReadResult["status"], "present">, { code: string; exit: number; what: string }> = {
   absent: { code: "KEY_ABSENT", exit: ExitCode.NOT_FOUND, what: "is not in the replica (the replica covers its whole prefix)" },
   deleted: { code: "KEY_DELETED", exit: ExitCode.NOT_FOUND, what: "was deleted at the source" },
-  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: "is known but its content has not been fetched yet; run tc replica sync" },
+  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME} replica sync` },
   coverage_incomplete: {
     code: "COVERAGE_INCOMPLETE",
     exit: ExitCode.NOT_FOUND,
-    what: "is not in the replica, which has not finished its first sync; run tc replica sync",
+    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME} replica sync`,
   },
   not_covered: { code: "NOT_COVERED", exit: ExitCode.USAGE_ERROR, what: "is outside the replica's prefix" },
 };
@@ -146,7 +147,7 @@ async function existingReplicaName(profile: string, option: string | undefined):
   const names = await replicaNames(profile);
   if (names.length === 1) return names[0]!;
   if (names.length === 0) {
-    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: tc replica sync --prefix <prefix>`);
+    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME} replica sync --prefix <prefix>`);
   }
   throw new CLIError("USAGE_ERROR", `Profile "${profile}" has several replicas (${names.join(", ")}); pass --replica <name>.`, ExitCode.USAGE_ERROR);
 }
@@ -225,9 +226,9 @@ async function storedGrants(profile: string): Promise<ParsedUcanGrant[]> {
 function grantHint(space: string, prefix: string): string {
   return [
     "A replica needs a device grant with get and sync on its prefix:",
-    `  device: tc auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
-    "  owner:  tc auth grant req.json > grant.json",
-    "  device: tc auth import grant.json",
+    `  device: ${CLI_NAME} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
+    `  owner:  ${CLI_NAME} auth grant req.json > grant.json`,
+    `  device: ${CLI_NAME} auth import grant.json`,
   ].join("\n");
 }
 
@@ -335,7 +336,7 @@ function describeStatus(status: ReplicaStatus): string {
     formatField("Size", formatBytes(status.bytes)),
     formatField("Grant", status.device.delegationCid),
     formatField("Last error", status.lastError ? `${status.lastError.code}: ${status.lastError.message}` : null),
-    formatField("Purge", status.purgePending ? "incomplete: content files remain; the next tc replica command retries" : null),
+    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME} replica command retries` : null),
   ].join("\n");
 }
 
@@ -536,7 +537,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
             await store.close();
             throw new ReplicaError(
               ReplicaErrorCode.CONFIG_MISMATCH,
-              `Replica ${name} already follows ${differs}. Use another --replica name, or tc replica reset --replica ${name} --purge first.`,
+              `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME} replica reset --replica ${name} --purge first.`,
             );
           }
         } else {

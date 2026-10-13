@@ -1,4 +1,5 @@
 import { signInRecovery } from "@tinycloud/operations/recovery";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 
@@ -18,8 +19,8 @@ export function signInAgainHint(profileName: string, posture: string | undefined
   );
   if (command === undefined) {
     return delegate
-      ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with tc auth login --method openkey --paste --manifest <manifest.json>.`
-      : `Sign in again to profile ${JSON.stringify(profileName)} with tc auth login.`;
+      ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with ${CLI_NAME} auth login --method openkey --paste --manifest <manifest.json>.`
+      : `Sign in again to profile ${JSON.stringify(profileName)} with ${CLI_NAME} auth login.`;
   }
   return delegate
     ? `Have the owner approve a new scoped login: ${command}. Pass the owner's code on stdin, newline-terminated.`

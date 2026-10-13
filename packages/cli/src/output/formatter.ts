@@ -1,4 +1,5 @@
 import ora from "ora";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { theme } from "./theme.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 
@@ -16,7 +17,7 @@ export interface OperationWarningOutput {
 function warningLine(warnings: readonly OperationWarningOutput[]): string {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`;
 }
 
 /**

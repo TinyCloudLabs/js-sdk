@@ -1,4 +1,5 @@
 import { resolveManifestKnowledgeRoot } from "@tinycloud/sdk-core";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { ProfileManager } from "../config/profiles.js";
@@ -45,8 +46,8 @@ export function registerManifestCommand(program: Command): void {
     .addHelpText("after", `
 
 Examples:
-  $ tc manifest resolve ./manifest.json
-  $ tc manifest resolve https://app.example.com/manifest.json --json
+  $ ${CLI_NAME} manifest resolve ./manifest.json
+  $ ${CLI_NAME} manifest resolve https://app.example.com/manifest.json --json
 
 What it shows:
   - app_id, name, manifest_version
@@ -56,7 +57,7 @@ What it shows:
 
 This command is read-only and does NOT contact the node — it just resolves
 the manifest against the active profile's address/chain so you know which
-\`--space\` and \`--db\` values to pass to other tc commands.
+\`--space\` and \`--db\` values to pass to other ${CLI_NAME} commands.
 `)
     .action(async (source: string, _options, cmd) => {
       try {
@@ -134,7 +135,7 @@ the manifest against the active profile's address/chain so you know which
           for (const db of sqlDbs) {
             process.stdout.write(`  ${theme.value(db)}\n`);
           }
-          process.stdout.write(theme.muted(`\nUse with: tc sql query --space ${spaceName} --db <db> "..."\n`));
+          process.stdout.write(theme.muted(`\nUse with: ${CLI_NAME} sql query --space ${spaceName} --db <db> "..."\n`));
         }
 
         if (permissions.length > 0) {

@@ -1,3 +1,4 @@
+import { CLI_NAME } from "./cli-name.js";
 import type { TinyCloudPosture } from "./contract.js";
 
 /**
@@ -24,12 +25,12 @@ export const SAFE_PROFILE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MIGRATION_OPERATION_ID = "tinycloud.auth.capabilities";
 
 const SIGN_IN_TEMPLATES: Readonly<Record<"local" | "openkey" | "scoped", (profile: string) => string>> = {
-  local: (profile) => `tc --profile ${profile} auth login --method local`,
-  openkey: (profile) => `tc --profile ${profile} auth login --method openkey`,
-  scoped: (profile) => `tc --profile ${profile} auth login --method openkey --paste --manifest <manifest.json>`,
+  local: (profile) => `${CLI_NAME} --profile ${profile} auth login --method local`,
+  openkey: (profile) => `${CLI_NAME} --profile ${profile} auth login --method openkey`,
+  scoped: (profile) => `${CLI_NAME} --profile ${profile} auth login --method openkey --paste --manifest <manifest.json>`,
 };
 
-const migrationCommand = (profile: string): string => `tc --profile ${profile} auth caps`;
+const migrationCommand = (profile: string): string => `${CLI_NAME} --profile ${profile} auth caps`;
 
 /**
  * The persistent login (one that writes a stored session) for a profile of
@@ -71,7 +72,7 @@ export function isSafeRecovery(
   if (!("command" in record)) return true;
   const command = record.command;
   if (typeof command !== "string") return false;
-  const profile = /^tc --profile (\S+) /.exec(command)?.[1];
+  const profile = /^\S+ --profile (\S+) /.exec(command)?.[1];
   if (profile === undefined || !SAFE_PROFILE_TOKEN.test(profile)) return false;
   return action === "sign_in"
     ? Object.values(SIGN_IN_TEMPLATES).some((template) => template(profile) === command)

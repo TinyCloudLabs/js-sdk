@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ReplicationEvent } from "@tinycloud/node-sdk";
@@ -67,7 +68,7 @@ export function createReplicationEventSink(
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {
       pinnedNotices.add(event.key);
-      process.stderr.write(`[replication] ${event.key} reads from the network: an earlier write's outcome is unknown (${event.pendingState}${event.code ? `, ${event.code}` : ""}). Review: tc replica report\n`);
+      process.stderr.write(`[replication] ${event.key} reads from the network: an earlier write's outcome is unknown (${event.pendingState}${event.code ? `, ${event.code}` : ""}). Review: ${CLI_NAME} replica report\n`);
     }
   };
 }

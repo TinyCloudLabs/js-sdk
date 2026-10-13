@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   inspectShare,
   receiveShare,
@@ -93,13 +94,13 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     // A local-key profile signs in again with its key. Any other profile gets
     // the publishing scope through OpenKey device login.
     const loginHint = localKey
-      ? `\`tc ${profileHint}auth login --method local\``
-      : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+      ? `\`${CLI_NAME} ${profileHint}auth login --method local\``
+      : `\`${CLI_NAME} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName === undefined ? "this session" : `profile ${profileName}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME} init --name publisher --key-only && ${CLI_NAME} --profile publisher enable share\``,
         5,
       );
     }

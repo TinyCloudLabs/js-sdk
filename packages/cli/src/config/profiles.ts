@@ -1,4 +1,5 @@
 import { chmod, lstat, readdir, rm, rmdir } from "node:fs/promises";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { join } from "node:path";
 import {
   profilePath,
@@ -106,7 +107,7 @@ export class ProfileManager {
     if (!profile) {
       throw new CLIError(
         "PROFILE_NOT_FOUND",
-        `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`,
+        `Profile "${name}" does not exist. Create it with \`${CLI_NAME} init --name ${name}\`.`,
       );
     }
     return profile;
@@ -169,7 +170,7 @@ export class ProfileManager {
     if (config.defaultProfile === name) {
       throw new CLIError(
         "PROFILE_DELETE_DEFAULT",
-        `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`,
+        `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME} profile default <other>\`.`,
       );
     }
     const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error: NodeJS.ErrnoException) => {

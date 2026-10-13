@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { TinyCloudNode, type PermissionEntry } from "@tinycloud/node-sdk";
 import { DelegationRequestBindingSchema, PermissionEntrySchema } from "@tinycloud/operations/artifacts";
 import {
@@ -128,7 +129,7 @@ function renderList(result: {
   }
   process.stdout.write(`Profile: ${result.profile}\n`);
   process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` +
-    (result.session?.cid ? ` (revoke with tc delegation revoke ${result.session.cid})\n` : "\n"));
+    (result.session?.cid ? ` (revoke with ${CLI_NAME} delegation revoke ${result.session.cid})\n` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.\n`);
   process.stdout.write(formatTable(
     ["CID", "LOCAL", "EXPIRES", "SOURCE", "BOUND", "SCOPE"],
@@ -236,7 +237,7 @@ export function registerAuthGrantsCommand(
                 ExitCode.ERROR,
                 {
                   causeCode: cause.code,
-                  hint: `Do not use --revoke again. After fixing local profile storage, run: tc --profile ${ctx.profile} auth grants remove ${cid}`,
+                  hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME} --profile ${ctx.profile} auth grants remove ${cid}`,
                 },
               );
             }

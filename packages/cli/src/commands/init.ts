@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
@@ -34,7 +35,7 @@ export function registerInitCommand(program: Command): void {
         if (await ProfileManager.profileExists(profileName)) {
           throw new CLIError(
             "PROFILE_EXISTS",
-            `Profile "${profileName}" already exists. Use \`tc profile delete ${profileName}\` first or choose a different name.`,
+            `Profile "${profileName}" already exists. Use \`${CLI_NAME} profile delete ${profileName}\` first or choose a different name.`,
             ExitCode.ERROR,
           );
         }

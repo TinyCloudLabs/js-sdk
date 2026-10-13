@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, hostname, userInfo } from "node:os";
@@ -364,13 +365,13 @@ async function runSecretOperation<T>(params: {
 
 function secretPermissionReason(action: SecretAction, name?: string): string {
   const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`tc secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+  return `Allow \`${CLI_NAME} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 
 /** Browser approval is possible when the person can see stderr or answer on stdin. */
 function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string, missing: readonly Readonly<Record<string, unknown>>[] = []): void {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
-  const command = `tc secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  const command = `${CLI_NAME} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
     action === "get"
@@ -390,7 +391,7 @@ function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig
 }
 
 function scopedSecretLoginHint(profileName: string): string {
-  return `Have the owner approve a scoped login whose manifest names the secret: tc --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME} --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
 
 
@@ -596,7 +597,7 @@ function throwCanonicalSecretGetError(
           "AUTH_REQUIRED",
           "Not signed in to TinyCloud.",
           ExitCode.AUTH_REQUIRED,
-          { hint: `Sign in with: tc --profile ${result.context.profile} auth login` },
+          { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
         );
       }
       if (result.error.code === "NODE_UNREACHABLE") {
@@ -1251,7 +1252,7 @@ export function registerSecretsCommand(
                 name: "Encryption network",
                 ok: false,
                 detail: `${networkName} not found`,
-                hint: `tc secrets network init ${networkName}`,
+                hint: `${CLI_NAME} secrets network init ${networkName}`,
               },
         ];
         let secret: SecretDoctorResult["secret"];
@@ -1302,8 +1303,8 @@ export function registerSecretsCommand(
               detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
               hint: notFound
                 ? local
-                  ? `tc secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin`
-                  : `tc secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}`
+                  ? `${CLI_NAME} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin`
+                  : `${CLI_NAME} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}`
                 : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`,
             });
           }
@@ -1633,7 +1634,7 @@ export function registerSecretsCommand(
         if (effectiveLocal(profile, options)) {
           throw new CLIError(
             "LOCAL_OWNER_PROFILE",
-            `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with tc secrets put NAME --stdin instead of requesting them.`,
+            `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME} secrets put NAME --stdin instead of requesting them.`,
             ExitCode.USAGE_ERROR,
           );
         }

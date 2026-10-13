@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   buildSecretRequestUrl,
   isSafeRequestAccessRecovery,
@@ -139,7 +140,7 @@ function missingPrivateKeyError(): CLIError {
     "AUTH_REQUIRED",
     `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
-    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` },
+    { hint: `Sign in again with: ${CLI_NAME} --profile ${profileName} auth login --method openkey` },
   );
 }
 
@@ -278,7 +279,7 @@ function buildAuthHint(error: CLIError): string | undefined {
   if (!spec) return undefined;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
+    `Request it with: ${CLI_NAME} auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
     "Then retry the original command.",
   ].join("\n");
 }
@@ -340,12 +341,12 @@ function buildNetworkHint(): string | undefined {
   lines.push(activeHost ? `Active profile "${activeName}" → ${activeHost}` : `Active profile "${activeName}"`);
 
   if (others.length === 0) {
-    lines.push(`No other profiles configured. Run \`tc profile create <name>\` or \`tc init\`.`);
+    lines.push(`No other profiles configured. Run \`${CLI_NAME} profile create <name>\` or \`${CLI_NAME} init\`.`);
   } else {
     lines.push(`Switch to a reachable profile:`);
     const longest = Math.max(...others.map((p) => p.name.length));
     for (const { name, host } of others) {
-      lines.push(`  tc profile switch ${name.padEnd(longest)}   # ${host}`);
+      lines.push(`  ${CLI_NAME} profile switch ${name.padEnd(longest)}   # ${host}`);
     }
   }
   lines.push(`Or override per-command with --host or TC_HOST.`);

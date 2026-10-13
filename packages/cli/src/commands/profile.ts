@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { createInterface } from "node:readline";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, isInteractive, shouldOutputJson, formatField } from "../output/formatter.js";
@@ -191,9 +192,9 @@ profile at command time. Precedence for every kv/sql command:
   explicit --space flag  >  profile defaultSpace  >  primary space.
 
 Examples:
-  $ tc profile set-default-space applications
-  $ tc profile set-default-space applications --profile cli-test
-  $ tc profile set-default-space --unset
+  $ ${CLI_NAME} profile set-default-space applications
+  $ ${CLI_NAME} profile set-default-space applications --profile cli-test
+  $ ${CLI_NAME} profile set-default-space --unset
 `)
     .action(async (name: string | undefined, options, cmd) => {
       try {
@@ -207,7 +208,7 @@ Examples:
         if (!options.unset && (name === undefined || name === "")) {
           throw new CLIError(
             "USAGE_ERROR",
-            "Provide a space name (e.g. `tc profile set-default-space applications`) or pass --unset.",
+            `Provide a space name (e.g. \`${CLI_NAME} profile set-default-space applications\`) or pass --unset.`,
             ExitCode.USAGE_ERROR,
           );
         }

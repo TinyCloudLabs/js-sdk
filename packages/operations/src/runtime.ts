@@ -3,6 +3,7 @@ import type {
   RuntimeDelegationActivator,
   TinyCloudNode,
 } from "@tinycloud/node-sdk";
+import { CLI_NAME } from "./cli-name.js";
 import * as nodeSdk from "@tinycloud/node-sdk";
 
 import {
@@ -322,7 +323,7 @@ async function createRestoredRuntime(
       )) {
         return failed(summary, operationError(
           "PROFILE_MIGRATION_REQUIRED",
-          `Profile "${profileName}" has a one-time stored-grant upgrade to finish. Run one authenticated command on it (tc --profile <profile> auth caps), then retry.`,
+          `Profile "${profileName}" has a one-time stored-grant upgrade to finish. Run one authenticated command on it (${CLI_NAME} --profile <profile> auth caps), then retry.`,
           { retryable: false, details: { recovery: migrationRecovery(profileName) } },
         ));
       }

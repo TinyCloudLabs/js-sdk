@@ -1,4 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import type { ProfileConfig } from "../config/types.js";
 import { theme } from "../output/theme.js";
 import { ownerSpaceId } from "./scoped-login.js";
@@ -28,7 +29,7 @@ export function nonPrimaryKeyWarning(ownerDid: string): string {
   const address = ownerDid.split(":")[4] ?? ownerDid;
   return `${theme.warn("Warning:")} you signed in with OpenKey key ${address} (${ownerDid}), which is not your account's primary OpenKey key. ` +
     "This key is a separate owner with its own spaces and data, so this profile does not see the data stored under your primary key.\n" +
-    "To use your primary key, log in again and choose the primary key in OpenKey, for example into a new profile: tc init --name <profile>\n";
+    `To use your primary key, log in again and choose the primary key in OpenKey, for example into a new profile: ${CLI_NAME} init --name <profile>\n`;
 }
 
 /** Warn on stderr only when OpenKey said the approving key is not primary; stdout stays untouched. */
@@ -44,7 +45,7 @@ export function warnIfNotPrimaryKey(ownerDid: string | undefined, primary: boole
  */
 export function announceFirstOwner(profileName: string, expectedOwner: string | undefined, ownerDid: string | undefined): void {
   if (expectedOwner !== undefined || ownerDid === undefined) return;
-  process.stderr.write(`Profile "${profileName}" now belongs to ${ownerDid}. If that isn't your OpenKey account, stop using this profile and create a new one with tc init.\n`);
+  process.stderr.write(`Profile "${profileName}" now belongs to ${ownerDid}. If that isn't your OpenKey account, stop using this profile and create a new one with ${CLI_NAME} init.\n`);
 }
 
 /**

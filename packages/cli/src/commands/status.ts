@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   NodeWasmBindings,
   type PermissionEntry,
@@ -414,7 +415,7 @@ function formatStatus(summary: StatusSummary): string {
   lines.push("");
 
   if (summary.profiles.length === 0) {
-    lines.push(theme.muted("No profiles configured. Run: tc init"));
+    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME} init`));
     return `${lines.join("\n")}\n`;
   }
 

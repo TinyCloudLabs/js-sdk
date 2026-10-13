@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { TinyCloudNode, IDatabaseHandle } from "@tinycloud/node-sdk";
@@ -64,12 +65,12 @@ database for simple apps, or pass --db to target a named database. Pass
 --space to target a non-primary space (e.g. the manifest "applications" space).
 
 Common workflows:
-  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
-  $ tc sql query "SELECT id, body FROM notes ORDER BY id"
-  $ tc sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
-  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
-  $ tc sql export --db analytics --output analytics.db
+  $ ${CLI_NAME} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
+  $ ${CLI_NAME} sql query "SELECT id, body FROM notes ORDER BY id"
+  $ ${CLI_NAME} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ ${CLI_NAME} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME} sql export --db analytics --output analytics.db
 
 Commands:
   query     Read rows with SELECT statements
@@ -94,10 +95,10 @@ Tips:
     .addHelpText("after", `
 
 Examples:
-  $ tc sql query "SELECT * FROM notes ORDER BY id"
-  $ tc sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
-  $ tc sql query "SELECT count(*) AS total FROM events" --db analytics --json
-  $ tc sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME} sql query "SELECT * FROM notes ORDER BY id"
+  $ ${CLI_NAME} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
+  $ ${CLI_NAME} sql query "SELECT count(*) AS total FROM events" --db analytics --json
+  $ ${CLI_NAME} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
 
 Output:
   Human output is formatted as a table. Piped output or --json returns
@@ -150,11 +151,11 @@ Output:
     .addHelpText("after", `
 
 Examples:
-  $ tc sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ tc sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
-  $ tc sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
-  $ tc sql execute "DROP TABLE old_notes" --db archive
-  $ tc sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
+  $ ${CLI_NAME} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
+  $ ${CLI_NAME} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
+  $ ${CLI_NAME} sql execute "DROP TABLE old_notes" --db archive
+  $ ${CLI_NAME} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
 
 Output:
   Returns JSON with the changed row count and last inserted row id when available.
@@ -195,9 +196,9 @@ Output:
     .addHelpText("after", `
 
 Examples:
-  $ tc sql export
-  $ tc sql export --db analytics --output analytics.db
-  $ tc sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
+  $ ${CLI_NAME} sql export
+  $ ${CLI_NAME} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
 
 Output:
   Writes the database file locally and returns JSON with the path and size.
@@ -246,19 +247,19 @@ Output:
     .addHelpText("after", `
 
 Examples:
-  $ tc sql copy --from-db com.tinycloud.conversation-sync/conversations \\
+  $ ${CLI_NAME} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
                 --to-db xyz.tinycloud.listen/conversations \\
                 --space applications --dry-run
-  $ tc sql copy --from-space applications --from-db com.foo/data \\
+  $ ${CLI_NAME} sql copy --from-space applications --from-db com.foo/data \\
                 --to-space applications --to-db com.bar/data \\
                 --table conversation --table participant
 
 Notes:
   - Refuses to run when (resolved space, db) is identical for source and destination.
-  - Does NOT create destination tables. Run the target app once (or use \`tc sql execute\`)
+  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME} sql execute\`)
     to materialize the schema before copying.
   - One row at a time; suitable for small/medium datasets. Large copies should
-    use \`tc sql export\` + bulk import.
+    use \`${CLI_NAME} sql export\` + bulk import.
   - Authorization: the active session/delegation must cover sql/read on source
     AND sql/write on destination. Otherwise the relevant operation will fail.
 `)

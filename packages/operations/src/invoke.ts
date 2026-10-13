@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 
+import { CLI_NAME } from "./cli-name.js";
 import {
   makePkhSpaceId,
   parsePkhDid,
@@ -911,7 +912,7 @@ function approvalAction(
     kind: "openkey",
     requestId: request.requestId,
     ...(url === undefined ? {} : { url }),
-    fallback: "tc auth grant <request-artifact>",
+    fallback: `${CLI_NAME} auth grant <request-artifact>`,
   };
 }
 
