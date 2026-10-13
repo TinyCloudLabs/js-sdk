@@ -16,5 +16,5 @@
 - **Share SDK.** `ShareRevocationAdapter.revokeDelegation` now receives the share `record` next to `delegationCid` and `scope`, and `revokeShare` passes it. Adapters that ignore it still type-check, but code that calls `adapter.revokeDelegation(...)` directly must now pass `record`. `revokeShare` keeps an existing `revokedAt`.
 - **sdk-core.** These are additions only:
   - `parseSignedCompactUcanAttenuation` also returns the verified issuer as `payload.iss`.
-  - The new `parseSignedSiweCacao(authorization, expectedCid?)` checks a wallet SIWE CACAO's exact-bytes CID and EIP-191 signature, and returns its issuer, audience and ReCap attenuation.
+  - The new `parseSignedSiweCacao(authorization, expectedCid?)` verifies a wallet SIWE CACAO: size (64 KiB) and nesting (64) limits, the exact-bytes CID, canonical DAG-CBOR, the CACAO shape (integer version 1, no unknown or empty fields, safe-integer chain ID), the ReCap shape and statement, and the EIP-191 signature. It returns the issuer, audience, `expiresAt` and the ReCap attenuation. It does not enforce validity times; callers decide.
 - **node-sdk.** The new `TinyCloudNode.signOwnerRevocation(cid)` signs a wallet (CACAO) revocation that the node's `POST /revoke` accepts from the space owner.

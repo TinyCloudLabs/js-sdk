@@ -283,7 +283,8 @@ describe("bearer share revocation", () => {
       const token = record.link!.split("tc1=")[1]!;
       const original = links.get(token)!;
       const bytes = new Uint8Array(Buffer.from(original.delegation.authHeader, "base64url"));
-      bytes[bytes.length - 2]! ^= 0x01;
+      // The CACAO ends with the signature bytes, then `"t": "eip191"` (9 bytes).
+      bytes[bytes.length - 12]! ^= 0x01;
       const cid: string = wasm.computeCid(bytes, 0x55n);
       delegations.set(cid, { delegator: OWNER_DID });
       links.set(token, { ...original, delegation: { cid, authHeader: Buffer.from(bytes).toString("base64url") } });

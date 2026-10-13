@@ -709,8 +709,8 @@ export function createShareAuthorityAdapters(input: {
       // Revoke only the delegation the stored link carries: signed, bound to
       // the record's CID by its exact bytes, delegated to the link's own key
       // for the record's resource, and never this profile's session.
-      // Exit codes follow `tc share`: 4 unavailable, 5 permission denied, 1 check node state before retrying.
-      const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", 4);
+      // Exit codes follow `tc share`: 4 unavailable (ExitCode.NOT_FOUND), 5 permission denied, 1 check node state before retrying.
+      const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", ExitCode.NOT_FOUND);
       const resource = `${record.target.spaceId}/kv/${record.resource.path}`;
       let sessionIssued: boolean;
       try {
@@ -769,7 +769,7 @@ export function createShareAuthorityAdapters(input: {
       throw new CLIError(
         "SHARE_REVOKE_REJECTED",
         `the node rejected the share revocation (HTTP ${response.status}${nodeMessage === "" ? "" : `: ${nodeMessage}`}); nothing was revoked`,
-        4,
+        ExitCode.NOT_FOUND,
         { status: response.status },
       );
     }),

@@ -158,8 +158,14 @@ describe("Share lifecycle and authorization parity", () => {
     expect(calls).toEqual(["bafy-enforcement:direct"]);
   });
 
-  it("keeps the first revocation time when a revoked share is revoked again", async () => {
-    const records = new MemorySenderShareRecordStorage();
+  it.each([
+    ["an atomic update", () => new MemorySenderShareRecordStorage()],
+    ["only put and get", () => {
+      const memory = new MemorySenderShareRecordStorage();
+      return { put: memory.put.bind(memory), get: memory.get.bind(memory), list: memory.list.bind(memory), delete: memory.delete.bind(memory) };
+    }],
+  ])("keeps the first revocation time when a revoked share is revoked again, in a store with %s", async (_case, store) => {
+    const records = store();
     await records.put(record);
     const adapter = { async revokeDelegation() {} };
     const first = await revokeShare({ record, records, adapter, now: () => new Date("2026-01-01T00:00:00.000Z") });

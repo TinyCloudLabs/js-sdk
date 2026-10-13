@@ -74,7 +74,12 @@ export async function revokeShare(input: {
     const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
     revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== undefined) {
-    await input.records.put({ ...input.record, revokedAt });
+    // Without an atomic update, read the latest record first. A concurrent
+    // writer between this read and put can still win; stores that need that
+    // guarantee implement `update`.
+    const latest = await input.records.get(input.record.shareId);
+    revokedAt = latest?.revokedAt ?? revokedAt;
+    await input.records.put({ ...(latest ?? input.record), revokedAt });
   }
   return { state: "revoked", target: target as "bearer" | "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt };
 }
