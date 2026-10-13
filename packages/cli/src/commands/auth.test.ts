@@ -1882,7 +1882,7 @@ describe("OpenKey primary key (TC-705)", () => {
 
   afterEach(() => restoreStderr());
 
-  test("a login approved by the primary key records it and warns about nothing", async () => {
+  test("a first login approved by the primary key records it and names the new owner, with no primary-key warning", async () => {
     openKeyDelegation = signedBy(primaryOwner, { primary: true });
 
     const { profile } = await refreshOpenKeySession("default", activeHost);
@@ -1937,6 +1937,15 @@ describe("OpenKey primary key (TC-705)", () => {
 
     await refreshOpenKeySession("default", activeHost);
 
+    expect(stderr.join("")).toBe("");
+  });
+
+  test("a first login with --owner names no new owner: the operator chose it (TC-1058)", async () => {
+    openKeyDelegation = signedBy(otherOwner, { primary: true });
+
+    await refreshOpenKeySession("default", activeHost, { expectedOwner: otherOwner });
+
+    expect(profiles.get("default")?.ownerDid).toBe(otherOwner);
     expect(stderr.join("")).toBe("");
   });
 

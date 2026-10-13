@@ -25,7 +25,7 @@ import {
   type SignedSession,
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
-import { openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
+import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -621,5 +621,6 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
   });
   warnIfNotPrimaryKey(result.ownerDid, result.primary);
+  announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
   return { profile, result };
 }

@@ -52,6 +52,9 @@ const PRIVATE_JWK_FIELDS = new Set([
   "k",
 ]);
 
+/** Real delegation callbacks are a few KB; anything far larger is refused unread. */
+const MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
+
 export function publicJwkForDelegation(jwk: object): object {
   const publicJwk: Record<string, unknown> = {};
 
@@ -248,6 +251,8 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       settled = true;
       clearTimeout(timeout);
       server.close();
+      // A held-open socket must not keep the CLI alive after the login settles.
+      server.closeAllConnections();
       if (rl) {
         rl.close();
       }
@@ -259,26 +264,39 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
     }
 
     // Only OpenKey's page, which received this unguessable path in the
-    // approval URL, can deliver the delegation (TC-1058). Anything else is
-    // answered and ignored, so a stray or hostile request can't end the login.
+    // approval URL, can deliver the delegation (TC-1058). Browsers always send
+    // Origin on this cross-origin POST, so a request without OpenKey's origin
+    // is refused. Anything else is answered and ignored, so a stray or hostile
+    // request can't end the login. This is not sender authentication: a local
+    // process that learns the path (it is in the printed URL and the browser's
+    // argv) can forge the header; the per-login OpenKey nonce closes that.
     const callbackPath = `/callback/${randomBytes(16).toString("base64url")}`;
     const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
     const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      const origin = req.headers.origin;
-      if (origin !== undefined && origin !== openKeyOrigin) {
+      if (req.headers.origin !== openKeyOrigin) {
         res.writeHead(403);
         res.end();
         return;
       }
       if (req.method === "POST" && req.url === callbackPath) {
-        let body = "";
-        req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+        const chunks: Buffer[] = [];
+        let size = 0;
+        req.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_CALLBACK_BODY_BYTES) {
+            res.writeHead(413, cors);
+            res.end();
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
         req.on("end", () => {
           let data: DelegationData;
           try {
-            data = JSON.parse(body) as DelegationData;
+            data = JSON.parse(Buffer.concat(chunks).toString("utf8")) as DelegationData;
           } catch {
             res.writeHead(400, { ...cors, "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Invalid JSON" }));
@@ -307,6 +325,9 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
         res.end();
       }
     });
+    // Slow or stalled requests are dropped instead of lingering for the whole login.
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 10_000;
 
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
