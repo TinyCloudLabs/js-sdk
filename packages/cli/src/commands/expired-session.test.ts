@@ -888,3 +888,46 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     expect(shareRequests).not.toContain("/invoke");
   });
 });
+
+describe("auth status and whoami report an expired session as signed out (TC-973)", () => {
+  // `metadata` overwrites the unsigned `expiresAt` beside the signed SIWE; the SIWE expiry must win, as it does for commands.
+  test.each([
+    ["delegate-session", "expired", null, false, "expired"],
+    ["local-owner-key", "expired", null, false, "expired"],
+    ["owner-openkey", "expired", null, false, "expired"],
+    ["owner-openkey", "live", null, true, "present"],
+    ["owner-openkey", "live", "past", true, "present"],
+    ["owner-openkey", "expired", "future", false, "expired"],
+  ] as const)("%s with a %s session (unsigned expiry: %s)", async (posture, state, metadata, authenticated, sessionState) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-auth-status-expiry-"));
+    try {
+      await seedProfile(home, posture, state);
+      if (metadata !== null) {
+        await withTinyCloudStateRoot(home, async () => {
+          const path = sessionPath("expired");
+          const session: Record<string, unknown> = JSON.parse(await readFile(path, "utf8"));
+          session.expiresAt = new Date(Date.now() + (metadata === "past" ? -86_400_000 : 86_400_000)).toISOString();
+          await writeJsonAtomic(path, session);
+        });
+      }
+      requests.length = 0;
+      for (const command of [["auth", "status"], ["auth", "whoami"]]) {
+        const result = await runBuiltCli(home, ["--json", "--profile", "expired", ...command]);
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          authenticated,
+          session: { state: sessionState, expiresAt: expect.any(String) },
+        });
+      }
+      const context = await runBuiltCli(home, ["--json", "--profile", "expired", "context"]);
+      expect(JSON.parse(context.stdout)).toMatchObject({ session: { state: sessionState } });
+      expect(requests).toEqual([]);
+      // A command agrees: signed out means AUTH_REQUIRED before any node request.
+      const read = await runBuiltCli(home, ["--json", "--profile", "expired", "kv", "get", "KEY"]);
+      if (authenticated) expect(requests.length).toBeGreaterThan(0);
+      else expect({ exitCode: read.exitCode, code: read.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
