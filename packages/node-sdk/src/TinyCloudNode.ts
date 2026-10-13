@@ -3254,7 +3254,10 @@ export class TinyCloudNode {
       const onAbort = () => {
         reject(signal.reason);
         shared.waiters -= 1;
-        if (shared.waiters === 0) shared.controller.abort(signal.reason);
+        if (shared.waiters !== 0) return;
+        shared.controller.abort(signal.reason);
+        // A caller arriving now must start a fresh request, not join the cancelled one.
+        if (this.ownedSpaceHosts.get(spaceId) === shared) this.ownedSpaceHosts.delete(spaceId);
       };
       signal.addEventListener("abort", onAbort, { once: true });
       shared.promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));

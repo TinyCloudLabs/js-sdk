@@ -290,18 +290,24 @@ test("TC-998: a registry sync joining an app's in-flight host stops waiting when
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
 });
 
-test("TC-998: a host only the registry sync waits for is cancelled when the sync is aborted", async () => {
+test("TC-998: a host only the registry sync waits for is cancelled when the sync is aborted; a new caller starts afresh", async () => {
   const node = makeNode();
+  stubAccountRegistry(node, {});
   const hostSignals: AbortSignal[] = [];
-  const approval = Promise.withResolvers<{ success: true; status: number }>();
+  const approvals: Array<PromiseWithResolvers<{ success: true; status: number }>> = [];
   const hostOwnedSpaceResult = mock((_spaceId: string, _purpose: unknown, signal: AbortSignal) => {
+    const approval = Promise.withResolvers<{ success: true; status: number }>();
+    approvals.push(approval);
     hostSignals.push(signal);
     return approval.promise;
   });
   Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
   const registry = new AbortController();
+  let hosted = false;
+  const activation = async () =>
+    Response.json(hosted ? { activated: [], skipped: [] } : { activated: [], skipped: [SECRETS] });
 
-  await withFetch(async () => Response.json({ activated: [], skipped: [SECRETS] }), async () => {
+  await withFetch(activation, async () => {
     const sync = (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
       .call(node, SECRETS, registry.signal)
       .then(() => "settled", () => "aborted");
@@ -310,10 +316,19 @@ test("TC-998: a host only the registry sync waits for is cancelled when the sync
     expect(hostSignals[0]?.aborted).toBe(false);
 
     registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+    // The app asks in the same tick, before the cancelled request has settled.
+    const app = node.ensureOwnedSpaceHosted("secrets");
     expect(await sync).toBe("aborted");
-    // No caller is left, so the host request itself is cancelled and a late approval is discarded.
+    // No caller was left, so the host request itself is cancelled and a late approval is discarded.
     expect(hostSignals[0]?.aborted).toBe(true);
-    approval.resolve({ success: true, status: 200 });
+
+    await nextTasks();
+    expect(hostSignals).toHaveLength(2);
+    expect(hostSignals[1]?.aborted).toBe(false);
+    hosted = true;
+    approvals[1]!.resolve({ success: true, status: 200 });
+    expect(await app).toBe(SECRETS);
+    approvals[0]!.resolve({ success: true, status: 200 });
   });
 });
 
