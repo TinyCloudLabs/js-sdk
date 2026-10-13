@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.2.2-beta.5
+
+### Patch Changes
+
+- c20d7e2: `tc doctor` reports the session state again instead of "error reading session" for every profile with a session. An owner session with no signed OpenKey proof now shows "not usable (no signed OpenKey proof)" with the sign-in command.
+
 ## 1.2.2-beta.4
 
 ### Patch Changes

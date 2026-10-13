@@ -30,6 +30,7 @@
   },
   "changesets": [
     "bright-frogs-repair",
+    "doctor-session-state",
     "tc-1025-paste-exit",
     "tc-1048-doctor-healthz",
     "tc-1053-paste-proof",

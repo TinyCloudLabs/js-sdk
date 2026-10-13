@@ -23931,11 +23931,13 @@ function registerDoctorCommand(program) {
       if (profileOk && profileName2) {
         try {
           const session = await ProfileManager.getSession(profileName2);
-          const { state: state2, expiresAt } = storedSessionState(session);
+          const profile = await ProfileManager.getProfile(profileName2);
+          const { state: state2, expiresAt } = storedSessionState(session, profile);
           sessionOk = sessionStateIsUsable(state2);
           if (state2 === "expired") {
-            const posture = resolveProfilePosture(await ProfileManager.getProfile(profileName2));
-            sessionDetail = `expired ${expiresAt} \u2014 ${signInAgainHint(profileName2, posture)}`;
+            sessionDetail = `expired ${expiresAt} \u2014 ${signInAgainHint(profileName2, resolveProfilePosture(profile))}`;
+          } else if (state2 === "unverified") {
+            sessionDetail = `not usable (no signed OpenKey proof) \u2014 ${signInAgainHint(profileName2, resolveProfilePosture(profile))}`;
           } else {
             sessionDetail = sessionOk ? "active" : "no session \u2014 run tc auth login";
           }
