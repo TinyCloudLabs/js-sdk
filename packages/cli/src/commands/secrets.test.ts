@@ -147,10 +147,13 @@ let outputJsonRequested = false;
 let interactive = true;
 const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+// A live OpenKey owner session; OpenKey always records its signed proof.
 let currentSession: object | null = {
   expiresAt: "2099-01-01T00:00:00.000Z",
   address: "0x0000000000000000000000000000000000000001",
   chainId: 1,
+  siwe: "siwe-message",
+  signature: "0xsignature",
 };
 let currentProfile = {
   name: "default",
@@ -528,7 +531,7 @@ mock.module("@tinycloud/operations", () => ({
 mock.module("./auth.js", () => ({
   refreshOpenKeySession: async (profile: string, host: string) => {
     recorded.sessionRefreshes.push({ profile, host });
-    currentSession = { expiresAt: "2099-01-01T00:00:00.000Z" };
+    currentSession = { expiresAt: "2099-01-01T00:00:00.000Z", siwe: "siwe-message", signature: "0xsignature" };
   },
   ensureDelegationAuthority: async (params: {
     ctx: { profile: string };
@@ -621,6 +624,8 @@ beforeEach(() => {
     expiresAt: "2099-01-01T00:00:00.000Z",
     address: "0x0000000000000000000000000000000000000001",
     chainId: 1,
+    siwe: "siwe-message",
+    signature: "0xsignature",
   };
   currentProfile = {
     name: "default",
@@ -1172,6 +1177,19 @@ describe("CLI secrets commands", () => {
     ]);
     expect(recorded.outputs).toEqual([
       { name: "ANTHROPIC_API_KEY", value: "delegated-value" },
+    ]);
+  });
+
+  test("refreshes an unverified owner OpenKey session (no signed proof) before listing secrets (TC-1059)", async () => {
+    currentSession = { expiresAt: "2099-01-01T00:00:00.000Z" };
+
+    await runSecretsCommand(["secrets", "list"]);
+
+    expect(recorded.sessionRefreshes).toEqual([
+      { profile: "default", host: "https://tinycloud.test" },
+    ]);
+    expect(recorded.outputs).toEqual([
+      { secrets: ["ANTHROPIC_API_KEY"], count: 1 },
     ]);
   });
 

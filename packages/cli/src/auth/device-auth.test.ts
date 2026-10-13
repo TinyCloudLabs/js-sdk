@@ -540,7 +540,7 @@ describe("device login persistence", () => {
   });
 
   test("keeps another app's live session unless --replace-session; renewing the same scope is allowed", async () => {
-    const appSession = { spaceId: wasm.makeSpaceId(address, 1, "applications"), expiresAt: new Date(Date.now() + 86_400_000).toISOString(), permissions: [{ service: "tinycloud.kv", space: "applications", path: "tinychat/", actions: ["tinycloud.kv/get"] }] };
+    const appSession = { spaceId: wasm.makeSpaceId(address, 1, "applications"), expiresAt: new Date(Date.now() + 86_400_000).toISOString(), siwe: "siwe-message", signature: "0xsignature", permissions: [{ service: "tinycloud.kv", space: "applications", path: "tinychat/", actions: ["tinycloud.kv/get"] }] };
     await ProfileManager.setKey("agent", key);
     await ProfileManager.setProfile("agent", { ...baseProfile, ownerDid, posture: "owner-openkey" });
     await ProfileManager.setSession("agent", appSession);

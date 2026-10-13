@@ -52,7 +52,8 @@ const profile = {
 const secretAttempts: string[] = [];
 let operationAttempts = 0;
 const installedDelegations: string[] = [];
-let currentSession: Record<string, unknown> | null = { expiresAt: "2099-01-01T00:00:00.000Z" };
+// A live OpenKey owner session; OpenKey always records its signed proof.
+let currentSession: Record<string, unknown> | null = { expiresAt: "2099-01-01T00:00:00.000Z", siwe: "siwe-message", signature: "0xsignature" };
 
 // A real node restored offline, so storing the approved grant reads its signed
 // authority as replay does; activation and secret reads are recorded instead.
