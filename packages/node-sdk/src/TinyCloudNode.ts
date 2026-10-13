@@ -2905,7 +2905,7 @@ export class TinyCloudNode {
     const delays = [250, 1_000, 3_000];
     // A newer sign-in superseding this sync is routine; only the hang guard warns.
     const stopped = (detail: unknown) => {
-      if ((signal.reason as { name?: string } | undefined)?.name === "TimeoutError") {
+      if (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError") {
         console.warn("TinyCloud account registry sync stopped: deadline exceeded", detail);
       }
     };
@@ -3216,6 +3216,8 @@ export class TinyCloudNode {
    * releases only its own wait. Session replacement forgets in-flight hosts.
    */
   private hostOwnedSpaceOnce(spaceId: string, signal?: AbortSignal): Promise<SpaceHostResult> {
+    // An aborted caller must neither open an approval nor leave a rejection unhandled.
+    if (signal?.aborted) return Promise.reject(signal.reason);
     let hosting = this.ownedSpaceHosts.get(spaceId);
     if (!hosting) {
       const request = (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
@@ -3225,7 +3227,6 @@ export class TinyCloudNode {
       this.ownedSpaceHosts.set(spaceId, request);
     }
     if (!signal) return hosting;
-    if (signal.aborted) return Promise.reject(signal.reason);
     const shared = hosting;
     // node-sdk's lib target predates Promise.withResolvers.
     return new Promise<SpaceHostResult>((resolve, reject) => {

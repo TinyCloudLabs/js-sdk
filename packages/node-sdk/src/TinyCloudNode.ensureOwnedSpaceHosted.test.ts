@@ -290,6 +290,35 @@ test("TC-998: a registry sync joining an app's in-flight host stops waiting when
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
 });
 
+test("TC-998: a registry sync aborted just before hosting opens no approval and leaves nothing unhandled", async () => {
+  const node = makeNode();
+  const hostOwnedSpaceResult = mock(async () => {
+    throw new Error("wallet rejected");
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const registry = new AbortController();
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // The hang guard fires while the activation probe is answering "skipped".
+    const outcome = await withFetch(async () => {
+      registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+      return Response.json({ activated: [], skipped: [SECRETS] });
+    }, () =>
+      (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
+        .call(node, SECRETS, registry.signal)
+        .then(() => "settled", (error: unknown) => (error instanceof DOMException ? error.name : "other")));
+    await nextTasks();
+
+    expect(outcome).toBe("TimeoutError");
+    expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 test("TC-998: an unhosted space is hosted without waiting for the background sync; its registry write queues behind it", async () => {
   const node = makeNode();
   const order: string[] = [];
