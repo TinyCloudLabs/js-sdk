@@ -494,7 +494,7 @@ export function registerShareCommand(program: Command): void {
     });
 
   share.command("revoke <id>")
-    .description("Revoke addressed shares; report bearer retention honestly")
+    .description("Revoke a bearer or addressed share this profile created")
     .option("--ancestor", "Revoke the owner delegation ancestry")
     .option("--json", "Print versioned JSON")
     .action(async (id: string, options, command: Command) => {
