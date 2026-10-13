@@ -216,6 +216,7 @@ export type {
   SharePortableDelegation,
   PortableDelegationImportReceipt,
 } from "./delegations";
+export { parseSignedSiweCacao, type SignedSiweCacao } from "./delegations/cacao";
 
 export {
   ATTESTED_ENFORCER_BINDING_V2_SCHEMA,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   MemoryEncryptedShareHistoryStorage,
+  MemorySenderShareRecordStorage,
   EncryptedSenderShareHistory,
   authorizeShare,
   listShares,
@@ -155,6 +156,26 @@ describe("Share lifecycle and authorization parity", () => {
       state: "revoked", target: "bearer", delegationCid: "bafy-enforcement",
     });
     expect(calls).toEqual(["bafy-enforcement:direct"]);
+  });
+
+  it.each([
+    ["an atomic update", () => new MemorySenderShareRecordStorage()],
+    ["only put and get", () => {
+      const memory = new MemorySenderShareRecordStorage();
+      return { put: memory.put.bind(memory), get: memory.get.bind(memory), list: memory.list.bind(memory), delete: memory.delete.bind(memory) };
+    }],
+  ])("keeps the first revocation time when a revoked share is revoked again, in a store with %s", async (_case, store) => {
+    const records = store();
+    await records.put(record);
+    const adapter = { async revokeDelegation() {} };
+    const first = await revokeShare({ record, records, adapter, now: () => new Date("2026-01-01T00:00:00.000Z") });
+    const stored = (await records.get(record.shareId))!;
+    const again = await revokeShare({ record: stored, records, adapter, now: () => new Date("2026-02-01T00:00:00.000Z") });
+    // A caller holding the record from before the first revocation must not overwrite it either.
+    const stale = await revokeShare({ record, records, adapter, now: () => new Date("2026-03-01T00:00:00.000Z") });
+
+    expect([first, again, stale].map((result) => result.state === "revoked" && result.revokedAt)).toEqual(Array(3).fill("2026-01-01T00:00:00.000Z"));
+    expect((await records.get(record.shareId))?.revokedAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
   it("requires Policy/v3 root authority for addressed revocation", async () => {

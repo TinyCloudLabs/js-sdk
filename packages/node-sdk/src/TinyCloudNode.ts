@@ -1,4 +1,5 @@
 import { signedCompactUcanExpiry } from "./delegation";
+import { generateNonce, SiweMessage } from "siwe";
 /**
  * TinyCloudNode - High-level API for Node.js users.
  *
@@ -5149,6 +5150,32 @@ export class TinyCloudNode {
         skipped: activation.skipped ?? [],
       },
     };
+  }
+
+  /**
+   * Sign a wallet (CACAO) revocation of the delegation `cid` for the node's
+   * `POST /revoke`, and return its Authorization header value. The node
+   * accepts it when the owner delegated `cid` or owns a space its abilities
+   * target, whichever key issued it. Valid for 60 seconds. Requires the
+   * owner wallet signer.
+   */
+  async signOwnerRevocation(cid: string): Promise<string> {
+    if (!this.signer) throw new Error("Owner wallet signer is required");
+    const session = this.currentTinyCloudSession();
+    if (!session) throw new Error("Owner session is required");
+    const issuedAt = new Date();
+    const siwe = new SiweMessage({
+      domain: this.siweDomain,
+      address: this.wasmBindings.ensureEip55(session.address),
+      uri: `ucan:${cid}`,
+      version: "1",
+      chainId: session.chainId,
+      nonce: generateNonce(),
+      issuedAt: issuedAt.toISOString(),
+      expirationTime: new Date(issuedAt.getTime() + 60_000).toISOString(),
+    }).prepareMessage();
+    const signature = await this.signer.signMessage(siwe);
+    return this.wasmBindings.siweToDelegationHeaders({ siwe, signature }).Authorization;
   }
 
   /** Register a signed policy and sibling roots with this Node's Policy/v3 runtime. */

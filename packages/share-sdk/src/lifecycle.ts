@@ -13,8 +13,11 @@ export interface SharePolicyRootRevocation {
 }
 
 export interface ShareRevocationAdapter {
-  /** Native bearer authority uses the ordinary node delegation endpoint. */
-  revokeDelegation?(input: { readonly delegationCid: string; readonly scope: "direct" | "ancestor" }): Promise<void>;
+  /**
+   * Native bearer authority uses the node's ordinary revocation endpoint. The
+   * record carries the stored link, whose delegation names its issuer.
+   */
+  revokeDelegation?(input: { readonly delegationCid: string; readonly scope: "direct" | "ancestor"; readonly record: SenderShareRecord }): Promise<void>;
   /**
    * Addressed Policy/v3 authority uses the Node's signed root-revocation
    * endpoint. The Node checks that root for active sessions, new admission,
@@ -53,7 +56,7 @@ export async function revokeShare(input: {
   if (delegationCid === undefined) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
   if (target === "bearer") {
     if (input.adapter.revokeDelegation === undefined) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope });
+    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
   } else {
     if (input.record.ownerDid === undefined) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
     if (input.adapter.revokePolicyRoot === undefined) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
@@ -65,11 +68,18 @@ export async function revokeShare(input: {
       nodeAudience: policyNodeAudience(input.record),
     });
   }
-  const revokedAt = (input.now?.() ?? new Date()).toISOString();
+  // Revoking again is idempotent at the node; the first revocation time stands.
+  let revokedAt = input.record.revokedAt ?? (input.now?.() ?? new Date()).toISOString();
   if (input.records?.update !== undefined) {
-    await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
+    revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== undefined) {
-    await input.records.put({ ...input.record, revokedAt });
+    // Without an atomic update, read the latest record first. A concurrent
+    // writer between this read and put can still win; stores that need that
+    // guarantee implement `update`.
+    const latest = await input.records.get(input.record.shareId);
+    revokedAt = latest?.revokedAt ?? revokedAt;
+    await input.records.put({ ...(latest ?? input.record), revokedAt });
   }
   return { state: "revoked", target: target as "bearer" | "recipientDid" | "email" | "emailDomain", delegationCid, revokedAt };
 }
