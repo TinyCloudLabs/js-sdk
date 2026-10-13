@@ -186,7 +186,8 @@ describe("scoped first login", () => {
   });
 
   const baseProfile = () => ({ name: "scoped", host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString() });
-  const liveAppSession = () => ({ spaceId: wasm.makeSpaceId(address, 1, "tinychat"), expiresAt: new Date(Date.now() + 86_400_000).toISOString() });
+  // A live session another app saved through OpenKey, which always records its signed proof.
+  const liveAppSession = () => ({ spaceId: wasm.makeSpaceId(address, 1, "tinychat"), expiresAt: new Date(Date.now() + 86_400_000).toISOString(), siwe: "siwe-message", signature: "0xsignature" });
 
   async function persistImportedSession(expSecs: number, extras: Record<string, unknown> = {}) {
     const imported = await mintCompactDelegation({
@@ -265,6 +266,14 @@ describe("scoped first login", () => {
     expect(calls).toBe(0);
     expect(await ProfileManager.getSession("scoped")).toEqual(app);
     await refreshOpenKeySession("scoped", host, { permissions: requested, replaceSession: true, openKeyAcquisition: acquire });
+    expect(await ProfileManager.getSession("scoped")).toMatchObject({ spaceId });
+  });
+
+  test("an unverified owner session doesn't block a scoped login (TC-1059)", async () => {
+    // No signed proof: commands already refuse it, so there's no authority to protect.
+    const { siwe: _siwe, signature: _signature, ...unverified } = liveAppSession();
+    await ProfileManager.setSession("scoped", unverified);
+    await refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => proof() });
     expect(await ProfileManager.getSession("scoped")).toMatchObject({ spaceId });
   });
 

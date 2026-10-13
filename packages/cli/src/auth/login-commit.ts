@@ -1,5 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -90,6 +90,8 @@ export function assertSessionReplaceable(
   }
   const { session } = snapshot;
   if (session === null) return;
+  // An unverified owner session holds no authority to protect (TC-1053, TC-1059).
+  if (ownerSessionLacksProof(session, snapshot.profile)) return;
   const expiresAt = sessionExpiresAt(session);
   if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
   const held = Array.isArray(session.permissions) ? (session.permissions as PermissionEntry[]).filter((permission) =>

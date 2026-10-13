@@ -9,7 +9,7 @@ import {
 } from "@tinycloud/node-sdk";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
   buildSecretRequestUrl,
@@ -292,11 +292,11 @@ async function ensureSecretsNode(
   const profile = selectedProfile ?? await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
     const session = await ProfileManager.getSession(ctx.profile);
-    if (!session || isStoredSessionExpired(session)) {
+    if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof(session, profile)) {
       if (!process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
           "AUTH_REQUIRED",
-          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
+          `Profile "${ctx.profile}" has ${session ? "an expired or unverified" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
           ExitCode.AUTH_REQUIRED,
           { hint: scopedSecretLoginHint(ctx.profile) },
         );
@@ -466,7 +466,7 @@ async function canonicalSecretGet(
         throw sessionExpiredError(params.ctx.profile, posture);
       }
       if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
-        if (!session || isStoredSessionExpired(session)) {
+        if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof(session, profile)) {
           ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
         }
       }

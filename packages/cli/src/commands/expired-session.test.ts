@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PortableDelegation } from "@tinycloud/node-sdk";
 import { pathToFileURL } from "node:url";
 const { mintCompactDelegation } = await import(new URL("../../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href) as {
-  mintCompactDelegation(options: { audience: string; expSecs: number; host?: string }): Promise<{
+  mintCompactDelegation(options: { audience: string; expSecs: number; host?: string; grant?: { path: string; actions: string[] } }): Promise<{
     delegation: PortableDelegation;
     ownerDid: string;
     spaceId: string;
@@ -135,6 +135,7 @@ async function seedImportedProfile(
   profileName: string,
   expSecs: number,
   localNodeUrl?: string,
+  grant?: { path: string; actions: string[] },
 ): Promise<{ artifactPath: string; delegation: PortableDelegation; ownerDid: string; sessionDid: string; spaceId: string; jwk: object }> {
   const wasm = new NodeWasmBindings();
   const manager = wasm.createSessionManager();
@@ -143,6 +144,7 @@ async function seedImportedProfile(
     audience: sessionDid.split("#", 1)[0]!,
     expSecs,
     host: node.url.origin,
+    ...(grant === undefined ? {} : { grant }),
   });
   const profile = {
     name: profileName,
@@ -970,6 +972,39 @@ describe("an OpenKey owner session without a signed proof is never used (TC-1053
         else expect({ exitCode: result.exitCode, code: result.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
       }
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("a replica never syncs with an unverified owner session (TC-1059)", () => {
+  // A real compact delegation that carries sync on notes/, saved as the profile's session with no SIWE proof.
+  // The built CLI runs under Bun here: tc replica needs built-in SQLite, which CI's Node 20 lacks.
+  test.each([
+    ["an owner-openkey profile", "owner-openkey", false],
+    ["a delegate-session profile (control)", "delegate-session", true],
+  ] as const)("%s", async (_label, posture, usable) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-unverified-replica-"));
+    const nodeBinary = process.env.NODE_BINARY;
+    process.env.NODE_BINARY = process.execPath;
+    try {
+      const seeded = await seedImportedProfile(home, "proofless", Math.floor(Date.now() / 1000) + 3600, undefined, {
+        path: "notes/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/sync"],
+      });
+      await seedImportedSession(home, "proofless", seeded);
+      await withTinyCloudStateRoot(home, async () => {
+        const path = profileConfigPath("proofless");
+        const profile: Record<string, unknown> = JSON.parse(await readFile(path, "utf8"));
+        profile.posture = posture;
+        await writeJsonAtomic(path, profile);
+      });
+      const result = await runBuiltCli(home, ["--json", "--profile", "proofless", "replica", "sync", "--prefix", "notes/"]);
+      if (usable) expect(result.error?.code).not.toBeOneOf(["GRANT_MISSING", "RUNTIME_UNSUPPORTED"]);
+      else expect({ exitCode: result.exitCode, code: result.error?.code }).toEqual({ exitCode: 3, code: "GRANT_MISSING" });
+    } finally {
+      if (nodeBinary === undefined) delete process.env.NODE_BINARY;
+      else process.env.NODE_BINARY = nodeBinary;
       await rm(home, { recursive: true, force: true });
     }
   }, 60_000);
