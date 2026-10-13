@@ -1222,13 +1222,35 @@ export class TinyCloudNode {
    */
   private readonly confirmedHostedSpaceIds = new Set<string>();
 
+  /**
+   * Owned space ids known to be hosted for the current session: the sign-in
+   * activation listed them as `activated`, or this session hosted them. Unlike
+   * {@link confirmedHostedSpaceIds}, nothing here is inferred from a space being
+   * merely absent from `skipped`. Read by {@link ensureOwnedSpaceHosted}.
+   */
+  private readonly hostedOwnedSpaceIds = new Set<string>();
+  /**
+   * In-flight host delegations, so concurrent callers share one approval per
+   * space. `waiters` counts callers still waiting; the request is cancelled
+   * once every caller with a signal has aborted and none waits without one.
+   */
+  private readonly ownedSpaceHosts = new Map<string, {
+    promise: Promise<SpaceHostResult>;
+    controller: AbortController;
+    waiters: number;
+  }>();
+
   /** Serializes account-registry writes for the active node instance. */
   private accountRegistryTail: Promise<void> = Promise.resolve();
-  /** Bounds best-effort registry work on the sign-in critical path. */
-  private accountRegistryDeadlineMs = 4_000;
+  /**
+   * Hang guard for the background registry sync. It is off the sign-in path,
+   * so it must outlast a slow but healthy sync (9–18 s on prod 1.20.2, TC-998).
+   */
+  private accountRegistryDeadlineMs = 30_000;
   private pendingAccountRegistrySync?: {
     session: TinyCloudSession;
     promise: Promise<void>;
+    controller: AbortController;
   };
 
   /**
@@ -1996,7 +2018,9 @@ export class TinyCloudNode {
     }
 
     // Do not replace the active session while its best-effort registry sync is
-    // still issuing writes with that session's authority.
+    // still issuing writes with that session's authority. That sync's remaining
+    // work belongs to the session being replaced, so stop it before draining.
+    this.pendingAccountRegistrySync?.controller.abort();
     await this.accountRegistryTail;
 
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
@@ -2023,9 +2047,15 @@ export class TinyCloudNode {
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
     this.confirmedHostedSpaceIds.clear();
+    this.hostedOwnedSpaceIds.clear();
 
     await this.tc.signIn(options);
+    this.cancelOwnedSpaceHosts();
     this.syncResolvedHostFromAuth();
+    // The first POST of a delegation is the only one that lists hosted spaces.
+    for (const spaceId of (this.auth as NodeUserAuthorization).lastActivationActivatedSpaceIds ?? []) {
+      this.hostedOwnedSpaceIds.add(spaceId);
+    }
 
     // Bind the replacement services to the runtime dependencies active for
     // this sign-in and permanently retire anything captured from the previous
@@ -2076,13 +2106,24 @@ export class TinyCloudNode {
     }
 
     if (!bootstrapped) {
+      // Best-effort and off the critical path (TC-998); callers that need the
+      // registry written await waitForAccountRegistrySync().
       this.scheduleAccountRegistrySync();
-      // Drain the bounded best-effort queue before callers can issue their
-      // first KV write; on failure or deadline, its requests are already aborted.
-      await this.accountRegistryTail;
     }
 
     this.notificationHandler.success("Successfully signed in");
+  }
+
+  /**
+   * Wait for the account-registry sync that {@link signIn} starts in the
+   * background (account index, this app's manifest record, space list).
+   * Resolves once it has finished, failed or hit its hang guard; it never
+   * rejects, and failures are logged as warnings. `signIn()` does not wait for
+   * it, so call this only when you need the registry written, or before a first
+   * write against a SQLite-backed node older than 1.20.2 (TC-899).
+   */
+  async waitForAccountRegistrySync(): Promise<void> {
+    await this.accountRegistryTail;
   }
 
   private ownedSpaceId(name: string): string {
@@ -2819,17 +2860,17 @@ export class TinyCloudNode {
         clearTimeout(deadline);
       }
     });
-    this.pendingAccountRegistrySync = { session, promise };
-    const clearPendingSync = () => {
+    this.pendingAccountRegistrySync = { session, promise, controller };
+    const settle = () => {
+      clearTimeout(deadline);
       if (this.pendingAccountRegistrySync?.promise === promise) {
         this.pendingAccountRegistrySync = undefined;
       }
     };
-    void promise.then(clearPendingSync, clearPendingSync);
-    void promise.then(
-      () => clearTimeout(deadline),
-      () => clearTimeout(deadline),
-    );
+    void promise.then(settle, (error: unknown) => {
+      settle();
+      console.warn("TinyCloud account registry sync failed", error);
+    });
   }
 
   private enqueueAccountRegistryOperation(
@@ -2879,10 +2920,16 @@ export class TinyCloudNode {
     signal: AbortSignal,
   ): Promise<void> {
     const delays = [250, 1_000, 3_000];
+    // A newer sign-in superseding this sync is routine; only the hang guard warns.
+    const stopped = (detail: unknown) => {
+      if (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError") {
+        console.warn("TinyCloud account registry sync stopped: deadline exceeded", detail);
+      }
+    };
     let lastError: unknown;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (signal.aborted) {
-        console.warn("TinyCloud account registry sync stopped: deadline exceeded", signal.reason);
+        stopped(signal.reason);
         return;
       }
       try {
@@ -2890,7 +2937,7 @@ export class TinyCloudNode {
         return;
       } catch (error) {
         if (signal.aborted) {
-          console.warn("TinyCloud account registry sync stopped: deadline exceeded", error);
+          stopped(error);
           return;
         }
         // Authorization verdicts are deterministic, not transient: retrying a
@@ -3009,7 +3056,7 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires an active session");
     }
 
-    if (this.confirmedHostedSpaceIds.has(spaceId)) {
+    if (this.confirmedHostedSpaceIds.has(spaceId) || this.hostedOwnedSpaceIds.has(spaceId)) {
       return;
     }
 
@@ -3031,10 +3078,7 @@ export class TinyCloudNode {
       );
     }
 
-    const authorization = this.auth as NodeUserAuthorization;
-    const created = signal
-      ? await authorization.hostOwnedSpaceResult(spaceId, undefined, signal)
-      : await authorization.hostOwnedSpaceResult(spaceId);
+    const created = await this.hostOwnedSpaceOnce(spaceId, signal);
     if (!created.success) {
       throw Object.assign(
         new Error(`Failed to create owned space ${spaceId}: ${describeHostFailure(created)}`),
@@ -3055,7 +3099,11 @@ export class TinyCloudNode {
         { cause: retry },
       );
     }
-    this.confirmedHostedSpaceIds.add(spaceId);
+    // A host that finishes after a session replacement says nothing about the new session.
+    if (this.auth.tinyCloudSession === session) {
+      this.confirmedHostedSpaceIds.add(spaceId);
+      this.hostedOwnedSpaceIds.add(spaceId);
+    }
   }
 
   /**
@@ -3091,7 +3139,7 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires a TinyCloud host");
     }
 
-    const hosted = await (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
+    const hosted = await this.hostOwnedSpaceOnce(spaceId);
     if (!hosted.success) {
       throw Object.assign(
         new Error(`Failed to host owned space ${spaceId}: ${describeHostFailure(hosted)}`),
@@ -3117,6 +3165,7 @@ export class TinyCloudNode {
         { cause: activation },
       );
     }
+    if (this.auth?.tinyCloudSession === session) this.hostedOwnedSpaceIds.add(spaceId);
 
     try {
       await this.enqueueAccountRegistryOperation(session, async () => {
@@ -3148,18 +3197,19 @@ export class TinyCloudNode {
    * registered on the node.
    *
    * Calling this resolves `name` to the owner's owned-space URI
-   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`). It first consults the
-   * account-space spaces registry (`account/spaces/{space_id}`, the canonical
-   * KV source of truth, fronted by a best-effort SQLite index): if the space is
-   * already registered/hosted it returns the URI WITHOUT submitting a host
-   * delegation, avoiding a redundant host-SIWE signature prompt for owners who
-   * already use the space. Only when the space is absent — or the registry
-   * check fails for any reason (e.g. a cold SQLite index reporting
-   * `no such table: spaces`) — does it fall through to {@link hostOwnedSpace}.
+   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`). It returns WITHOUT
+   * submitting a host delegation when the space is known to be hosted: the
+   * sign-in activation listed it as `activated` (any space the session's recap
+   * covers), this session already hosted it, or the account-space spaces
+   * registry (`account/spaces/{space_id}`, the canonical KV source of truth,
+   * fronted by a best-effort SQLite index) has its record. Otherwise it falls
+   * through to {@link hostOwnedSpace}, which asks for a signature; a host
+   * already in flight for the same space (e.g. from the background registry
+   * sync) is shared rather than asked for twice.
    *
-   * The registry check is purely an optimization: any failure falls back to
-   * hosting, and the host SIWE is idempotent server-side, so re-hosting an
-   * existing space remains a safe no-op. Must be called after {@link signIn}.
+   * Hosting is still needed when the space really isn't hosted, or when the
+   * session's recap doesn't cover it and the registry has no record; the host
+   * SIWE is idempotent server-side. Must be called after {@link signIn}.
    *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
@@ -3169,17 +3219,64 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
 
-    // signIn schedules its registry sync before returning. Let that operation
-    // finish before this explicit read/host/write sequence begins.
-    await this.accountRegistryTail;
-
     const spaceId = this.ownedSpaceId(name);
 
-    if (await this.isOwnedSpaceRegistered(spaceId)) {
+    if (this.hostedOwnedSpaceIds.has(spaceId) || await this.isOwnedSpaceRegistered(spaceId)) {
       return spaceId;
     }
 
     return this.hostOwnedSpace(name);
+  }
+
+  /**
+   * Submit the host delegation for an owned space, sharing one in-flight
+   * request (and so one approval) between concurrent callers in this session,
+   * such as the background registry sync and {@link ensureOwnedSpaceHosted}.
+   * Each caller's `signal` releases only its own wait; the request itself is
+   * cancelled once no caller is left waiting, or when the session is replaced
+   * ({@link cancelOwnedSpaceHosts}), so a late approval is discarded.
+   */
+  private hostOwnedSpaceOnce(spaceId: string, signal?: AbortSignal): Promise<SpaceHostResult> {
+    // An aborted caller must neither open an approval nor leave a rejection unhandled.
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    let entry = this.ownedSpaceHosts.get(spaceId);
+    if (!entry) {
+      const controller = new AbortController();
+      const promise = (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId, undefined, controller.signal);
+      const created = { promise, controller, waiters: 0 };
+      this.ownedSpaceHosts.set(spaceId, created);
+      const forget = () => {
+        if (this.ownedSpaceHosts.get(spaceId) === created) this.ownedSpaceHosts.delete(spaceId);
+      };
+      promise.then(forget, forget);
+      entry = created;
+    }
+    if (!signal) {
+      // A caller without a signal waits to the end, so the request is never cancelled for it.
+      entry.waiters = Number.POSITIVE_INFINITY;
+      return entry.promise;
+    }
+    entry.waiters += 1;
+    const shared = entry;
+    // node-sdk's lib target predates Promise.withResolvers.
+    return new Promise<SpaceHostResult>((resolve, reject) => {
+      const onAbort = () => {
+        reject(signal.reason);
+        shared.waiters -= 1;
+        if (shared.waiters !== 0) return;
+        shared.controller.abort(signal.reason);
+        // A caller arriving now must start a fresh request, not join the cancelled one.
+        if (this.ownedSpaceHosts.get(spaceId) === shared) this.ownedSpaceHosts.delete(spaceId);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      shared.promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  }
+
+  /** Session replacement: cancel the replaced session's in-flight hosts and forget them. */
+  private cancelOwnedSpaceHosts(): void {
+    for (const { controller } of this.ownedSpaceHosts.values()) controller.abort();
+    this.ownedSpaceHosts.clear();
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
@@ -3505,6 +3602,12 @@ export class TinyCloudNode {
       recap: stagedRecap,
     });
 
+    // Like signIn: stop the replaced session's background registry sync and let
+    // its in-flight writes drain before the session is swapped. A rejected
+    // restore threw above and leaves that sync running.
+    this.pendingAccountRegistrySync?.controller.abort();
+    await this.accountRegistryTail;
+
     // Every operation below is a non-throwing pointer/value swap.
     const oldGraph = this._serviceGraph;
     const oldCore = this.tc;
@@ -3542,6 +3645,8 @@ export class TinyCloudNode {
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
     this.confirmedHostedSpaceIds.clear();
+    this.hostedOwnedSpaceIds.clear();
+    this.cancelOwnedSpaceHosts();
     this._restoredNodeFeatures = restoredNodeFeatures;
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost], restoredNodeFeatures);

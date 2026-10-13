@@ -951,7 +951,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     );
 
     expect(auth.hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
-    expect(auth.hostOwnedSpaceResult).toHaveBeenCalledWith(accountSpaceId);
+    expect(auth.hostOwnedSpaceResult).toHaveBeenCalledWith(accountSpaceId, undefined, expect.any(AbortSignal));
   });
 
   test("signIn writes manifest records into the account applications registry", async () => {
@@ -1001,15 +1001,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     }) as unknown as typeof fetch;
     (node as any).ensureOwnedSpaceHostedById = ensureOwnedSpaceHostedById;
 
-    let registrySync: Promise<void> | undefined;
-    const originalWithAccountRegistryRetry = (node as any).withAccountRegistryRetry.bind(node);
-    (node as any).withAccountRegistryRetry = (task: () => Promise<void>, signal: AbortSignal) => {
-      registrySync = originalWithAccountRegistryRetry(task, signal);
-      return registrySync;
-    };
     try {
       await node.signIn();
-      await registrySync;
+      await node.waitForAccountRegistrySync();
     } finally {
       globalThis.fetch = originalFetch;
     }

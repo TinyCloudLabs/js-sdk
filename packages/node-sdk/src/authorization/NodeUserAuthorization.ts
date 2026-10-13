@@ -336,6 +336,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private _nodeInfoIdentity?: { host: string; nodeId: string };
   private _lastActivationSkippedSpaceIds: string[] = [];
+  /**
+   * Spaces the sign-in activation reported hosted. Only the first POST of a
+   * delegation lists them: the node answers a repeat with empty lists.
+   */
+  private _lastActivationActivatedSpaceIds: string[] = [];
 
   constructor(config: NodeUserAuthorizationConfig) {
     this.wasm = config.wasmBindings;
@@ -500,6 +505,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // retain skip decisions from the previous activation.
     this.tinycloudHosts = hosts && hosts.length > 0 ? [...hosts] : undefined;
     this._lastActivationSkippedSpaceIds = [];
+    this._lastActivationActivatedSpaceIds = [];
     if (!session) {
       this._session = undefined;
       this._tinyCloudSession = undefined;
@@ -610,6 +616,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get lastActivationSkippedSpaceIds(): string[] {
     return [...this._lastActivationSkippedSpaceIds];
+  }
+
+  get lastActivationActivatedSpaceIds(): string[] {
+    return [...this._lastActivationActivatedSpaceIds];
   }
 
   /**
@@ -1245,8 +1255,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   ): void {
     if (result.success) {
       this._lastActivationSkippedSpaceIds = result.skipped ?? [];
+      this._lastActivationActivatedSpaceIds = result.activated ?? [];
       return;
     }
+    this._lastActivationActivatedSpaceIds = [];
     this._lastActivationSkippedSpaceIds = result.status === 404
       ? [primarySpaceId]
       : [];

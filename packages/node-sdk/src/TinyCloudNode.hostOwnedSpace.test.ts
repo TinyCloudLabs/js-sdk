@@ -86,7 +86,7 @@ test("hostOwnedSpace resolves the owned space URI and always submits the host de
   // Always hosts (does not infer "already hosted" from session activation),
   // and passes the resolved owned-space URI to the auth layer.
   expect(hostOwnedSpace).toHaveBeenCalledTimes(1);
-  expect(hostOwnedSpace).toHaveBeenCalledWith(APPS);
+  expect(hostOwnedSpace).toHaveBeenCalledWith(APPS, undefined, expect.any(AbortSignal));
 });
 
 test("hostOwnedSpace succeeds when re-activation omits the space from skipped", async () => {
@@ -144,7 +144,7 @@ test("hostOwnedSpace throws when re-activation reports the space skipped", async
   ).rejects.toThrow("Failed to activate session for owned space");
   // The host was still attempted (idempotent), it is only the post-host
   // usability assertion that failed.
-  expect(hostOwnedSpace).toHaveBeenCalledWith(APPS);
+  expect(hostOwnedSpace).toHaveBeenCalledWith(APPS, undefined, expect.any(AbortSignal));
 });
 
 test("hostOwnedSpace throws when re-activation fails", async () => {

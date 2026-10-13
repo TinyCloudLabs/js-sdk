@@ -98,6 +98,28 @@ function withFetch<T>(
   });
 }
 
+/**
+ * The node's answer to a repeat POST of an already stored delegation: empty
+ * lists. Only the sign-in activation (the first POST) lists hosted spaces.
+ */
+async function repeatActivation(): Promise<Response> {
+  return Response.json({ activated: [], skipped: [] });
+}
+
+/** Mark SECRETS hosted the way sign-in does from its activation's `activated` list. */
+function signInActivated(node: TinyCloudNode): void {
+  (Reflect.get(node, "hostedOwnedSpaceIds") as Set<string>).add(SECRETS);
+}
+
+/** Let pending fetches and promise chains run. */
+async function nextTasks(): Promise<void> {
+  for (let hop = 0; hop < 5; hop += 1) {
+    const nextTask = Promise.withResolvers<void>();
+    setImmediate(nextTask.resolve);
+    await nextTask.promise;
+  }
+}
+
 test("ensureOwnedSpaceHosted does NOT host when the SQLite index already lists the space", async () => {
   const node = makeNode();
   const indexList = mock(async () => ({
@@ -167,20 +189,206 @@ test("TC-473: ensureOwnedSpaceHosted issues one registry write after hosting", a
     })),
     register,
   });
-  const hostOwnedSpaceResult = (node as any).auth.hostOwnedSpaceResult;
+  const hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
 
-  const spaceId = await withFetch(
-    async () =>
-      new Response(JSON.stringify({ activated: [SECRETS], skipped: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    () => node.ensureOwnedSpaceHosted("secrets"),
-  );
+  const spaceId = await withFetch(repeatActivation, () => node.ensureOwnedSpaceHosted("secrets"));
 
   expect(spaceId).toBe(SECRETS);
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
-  expect(hostOwnedSpaceResult).toHaveBeenCalledWith(SECRETS);
+  expect(hostOwnedSpaceResult).toHaveBeenCalledWith(SECRETS, undefined, expect.any(AbortSignal));
+  expect(register).toHaveBeenCalledTimes(1);
+});
+
+test("TC-998: a registered space resolves while the background registry sync is still running", async () => {
+  const node = makeNode();
+  const get = mock(async () => ({ ok: true as const, data: {} }));
+  stubAccountRegistry(node, { get });
+  const hostOwnedSpace = mock(async () => SECRETS);
+  Reflect.set(node, "hostOwnedSpace", hostOwnedSpace);
+  const backgroundSync = Promise.withResolvers<void>();
+  Reflect.set(node, "accountRegistryTail", backgroundSync.promise);
+
+  expect(await node.ensureOwnedSpaceHosted("secrets")).toBe(SECRETS);
+  expect(hostOwnedSpace).not.toHaveBeenCalled();
+  backgroundSync.resolve();
+});
+
+for (const [label, registry] of [
+  ["404s", { get: mock(async () => ({ ok: false as const, error: { code: "NOT_FOUND", message: "Space not found", service: "kv" } })) }],
+  ["throws", {
+    indexList: mock(async () => {
+      throw new Error("no such table: spaces");
+    }),
+    get: mock(async () => {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }),
+  }],
+] as const) {
+  test(`TC-994: a space the sign-in activation reported hosted is not re-hosted when its registry read ${label}`, async () => {
+    const node = makeNode();
+    stubAccountRegistry(node, registry);
+    const hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
+    Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+    signInActivated(node);
+
+    const spaceId = await withFetch(repeatActivation, () => node.ensureOwnedSpaceHosted("secrets"));
+
+    expect(spaceId).toBe(SECRETS);
+    expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+    // Known hosted: the slow registry read is skipped entirely.
+    expect(registry.get).not.toHaveBeenCalled();
+  });
+}
+
+test("TC-994: concurrent callers share one host approval, and a later call in the session asks for none", async () => {
+  const node = makeNode();
+  stubAccountRegistry(node, {});
+  const approval = Promise.withResolvers<{ success: true; status: number }>();
+  const hostOwnedSpaceResult = mock(() => approval.promise);
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+
+  const [first, second, later] = await withFetch(repeatActivation, async () => {
+    // e.g. the background registry sync and the app hosting the same space.
+    const pending = [node.ensureOwnedSpaceHosted("secrets"), node.ensureOwnedSpaceHosted("secrets")];
+    await nextTasks();
+    approval.resolve({ success: true, status: 200 });
+    const settled = await Promise.all(pending);
+    return [...settled, await node.ensureOwnedSpaceHosted("secrets")];
+  });
+
+  expect([first, second, later]).toEqual([SECRETS, SECRETS, SECRETS]);
+  expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
+});
+
+test("TC-998: a registry sync joining an app's in-flight host stops waiting when it is aborted", async () => {
+  const node = makeNode();
+  stubAccountRegistry(node, {});
+  const approval = Promise.withResolvers<{ success: true; status: number }>();
+  const hostOwnedSpaceResult = mock(() => approval.promise);
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  let hosted = false;
+  const activation = async () =>
+    Response.json(hosted ? { activated: [], skipped: [] } : { activated: [], skipped: [SECRETS] });
+
+  await withFetch(activation, async () => {
+    const app = node.ensureOwnedSpaceHosted("secrets");
+    await nextTasks();
+    const registry = new AbortController();
+    const sync = (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
+      .call(node, SECRETS, registry.signal);
+    const syncOutcome = sync.then(() => "settled", () => "aborted");
+    await nextTasks();
+    registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+    expect(await syncOutcome).toBe("aborted");
+
+    // The app's approval is still open and still completes for the app.
+    hosted = true;
+    approval.resolve({ success: true, status: 200 });
+    expect(await app).toBe(SECRETS);
+  });
+  expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
+});
+
+test("TC-998: a host only the registry sync waits for is cancelled when the sync is aborted; a new caller starts afresh", async () => {
+  const node = makeNode();
+  stubAccountRegistry(node, {});
+  const hostSignals: AbortSignal[] = [];
+  const approvals: Array<PromiseWithResolvers<{ success: true; status: number }>> = [];
+  const hostOwnedSpaceResult = mock((_spaceId: string, _purpose: unknown, signal: AbortSignal) => {
+    const approval = Promise.withResolvers<{ success: true; status: number }>();
+    approvals.push(approval);
+    hostSignals.push(signal);
+    return approval.promise;
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const registry = new AbortController();
+  let hosted = false;
+  const activation = async () =>
+    Response.json(hosted ? { activated: [], skipped: [] } : { activated: [], skipped: [SECRETS] });
+
+  await withFetch(activation, async () => {
+    const sync = (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
+      .call(node, SECRETS, registry.signal)
+      .then(() => "settled", () => "aborted");
+    await nextTasks();
+    expect(hostSignals).toHaveLength(1);
+    expect(hostSignals[0]?.aborted).toBe(false);
+
+    registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+    // The app asks in the same tick, before the cancelled request has settled.
+    const app = node.ensureOwnedSpaceHosted("secrets");
+    expect(await sync).toBe("aborted");
+    // No caller was left, so the host request itself is cancelled and a late approval is discarded.
+    expect(hostSignals[0]?.aborted).toBe(true);
+
+    await nextTasks();
+    expect(hostSignals).toHaveLength(2);
+    expect(hostSignals[1]?.aborted).toBe(false);
+    hosted = true;
+    approvals[1]!.resolve({ success: true, status: 200 });
+    expect(await app).toBe(SECRETS);
+    approvals[0]!.resolve({ success: true, status: 200 });
+  });
+});
+
+test("TC-998: a registry sync aborted just before hosting opens no approval and leaves nothing unhandled", async () => {
+  const node = makeNode();
+  const hostOwnedSpaceResult = mock(async () => {
+    throw new Error("wallet rejected");
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const registry = new AbortController();
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // The hang guard fires while the activation probe is answering "skipped".
+    const outcome = await withFetch(async () => {
+      registry.abort(new DOMException("Account registry deadline exceeded", "TimeoutError"));
+      return Response.json({ activated: [], skipped: [SECRETS] });
+    }, () =>
+      (Reflect.get(node, "ensureOwnedSpaceHostedById") as (id: string, signal: AbortSignal) => Promise<void>)
+        .call(node, SECRETS, registry.signal)
+        .then(() => "settled", (error: unknown) => (error instanceof DOMException ? error.name : "other")));
+    await nextTasks();
+
+    expect(outcome).toBe("TimeoutError");
+    expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("TC-998: an unhosted space is hosted without waiting for the background sync; its registry write queues behind it", async () => {
+  const node = makeNode();
+  const order: string[] = [];
+  const register = mock(async () => {
+    order.push("register");
+    return { ok: true as const, data: {} };
+  });
+  stubAccountRegistry(node, { register });
+  const hostOwnedSpaceResult = mock(async () => {
+    order.push("host");
+    return { success: true, status: 200 };
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const backgroundSync = Promise.withResolvers<void>();
+  Reflect.set(node, "accountRegistryTail", backgroundSync.promise.then(() => {
+    order.push("background sync");
+  }));
+
+  const spaceId = await withFetch(repeatActivation, async () => {
+    const ensured = node.ensureOwnedSpaceHosted("secrets");
+    await nextTasks();
+    expect(order).toEqual(["host"]);
+    backgroundSync.resolve();
+    return ensured;
+  });
+
+  expect(spaceId).toBe(SECRETS);
+  expect(order).toEqual(["host", "background sync", "register"]);
   expect(register).toHaveBeenCalledTimes(1);
 });
 
