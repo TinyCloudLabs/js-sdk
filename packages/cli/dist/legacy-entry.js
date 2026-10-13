@@ -21023,7 +21023,7 @@ init_constants();
 init_profiles();
 init_errors();
 init_space();
-import { isLocalOwnerProfile as isLocalOwnerProfile3 } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
 function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile3(profile)) return;
@@ -21070,6 +21070,7 @@ function assertSessionReplaceable(profileName2, snapshot, ownerDid, scope, newEx
   }
   const { session } = snapshot;
   if (session === null) return;
+  if (ownerSessionLacksProof3(session, snapshot.profile)) return;
   const expiresAt = sessionExpiresAt(session);
   if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
   const held = Array.isArray(session.permissions) ? session.permissions.filter((permission) => ownerDid === void 0 || typeof session.spaceId !== "string" || !isLegacyNestedDecrypt(permission, scope, ownerDid, session.spaceId)) : void 0;
@@ -25054,6 +25055,7 @@ import {
   readSession as readSession2,
   withProfileLock as withProfileLock5
 } from "@tinycloud/operations/state";
+import { ownerSessionLacksProof as ownerSessionLacksProof4 } from "@tinycloud/operations/profile";
 init_profiles();
 init_constants();
 init_errors();
@@ -25178,7 +25180,10 @@ async function createReplica(profile, config) {
 async function storedGrants(profile) {
   const authorizations = [];
   const session = await readSession2(profile).catch(() => null);
-  if (typeof session?.delegationHeader?.Authorization === "string") authorizations.push(session.delegationHeader.Authorization);
+  const config = await ProfileManager.getProfile(profile).catch(() => null);
+  if (typeof session?.delegationHeader?.Authorization === "string" && !ownerSessionLacksProof4(session, config)) {
+    authorizations.push(session.delegationHeader.Authorization);
+  }
   const records = await readAdditionalDelegations2(profile).catch(
     () => []
   );
@@ -25652,7 +25657,7 @@ import { join as join11 } from "path";
 import { homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
-import { isLocalOwnerProfile as isLocalOwnerProfile4 } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile as isLocalOwnerProfile4, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
   buildSecretRequestUrl as buildSecretRequestUrl2,
@@ -26187,11 +26192,11 @@ async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfi
   const profile = selectedProfile ?? await ProfileManager.getProfile(ctx.profile).catch(() => null);
   if (profile?.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
     const session = await ProfileManager.getSession(ctx.profile);
-    if (!session || isStoredSessionExpired(session)) {
+    if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof5(session, profile)) {
       if (!process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
           "AUTH_REQUIRED",
-          `Profile "${ctx.profile}" has ${session ? "an expired" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
+          `Profile "${ctx.profile}" has ${session ? "an expired or unverified" : "no"} OpenKey session; headless secret access cannot open a browser login.`,
           ExitCode.AUTH_REQUIRED,
           { hint: scopedSecretLoginHint(ctx.profile) }
         );
@@ -26299,7 +26304,7 @@ async function canonicalSecretGet(params, collect) {
         throw sessionExpiredError(params.ctx.profile, posture);
       }
       if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
-        if (!session || isStoredSessionExpired(session)) {
+        if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof5(session, profile2)) {
           ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
         }
       }
@@ -36547,7 +36552,7 @@ init_permissions();
 import {
   NodeWasmBindings as NodeWasmBindings2
 } from "@tinycloud/node-sdk";
-import { ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
+import { ownerSessionLacksProof as ownerSessionLacksProof6 } from "@tinycloud/operations/profile";
 var wasmBindings = null;
 function registerStatusCommand(program) {
   program.command("status").description("Show local TinyCloud profile, session, delegation, and permission state").action(async (_options, cmd) => {
@@ -36614,7 +36619,7 @@ async function inspectProfile(params) {
   ]);
   const hasPrivateKey = typeof profile?.privateKey === "string" && profile.privateKey.length > 0;
   const localKeyAuthenticated = profile?.authMethod === "local" && hasPrivateKey;
-  const sessionAuthenticated = session !== null && sessionExpired !== true && !ownerSessionLacksProof3(session, profile);
+  const sessionAuthenticated = session !== null && sessionExpired !== true && !ownerSessionLacksProof6(session, profile);
   const authenticated = localKeyAuthenticated || sessionAuthenticated;
   const status = resolveStatus({
     exists: profile !== null,
