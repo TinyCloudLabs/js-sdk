@@ -2269,6 +2269,15 @@ export class TinyCloudNode {
     value: unknown,
     canonicalStepIds: readonly string[],
   ): boolean {
+    // KV returns a text/plain value as a string; markers written from Node
+    // were stored text/plain (TC-999).
+    if (typeof value === "string") {
+      try {
+        value = JSON.parse(value);
+      } catch {
+        return false;
+      }
+    }
     if (typeof value !== "object" || value === null) return false;
     const entries = Object.entries(value);
     const markerValue = (name: string): unknown =>
