@@ -1,5 +1,11 @@
 # @tinycloud/courier
 
+## 0.1.3-beta.2
+
+### Patch Changes
+
+- 1a8a8a7: Skills resolve the CLI from the agents.tinycloud.xyz private install (`~/.local/share/tinycloud/cli`, or `TC_BIN`), falling back to a global npm install; tc-cli INSTALL.md points at agents.tinycloud.xyz for setup and skill installs.
+
 ## 0.1.3-beta.1
 
 ### Patch Changes

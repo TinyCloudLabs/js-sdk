@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "18.0.0"
   },
   "changesets": [
+    "skills-private-cli-path",
     "tc-1062-ctrlc-login",
     "tc-545-bearer-share-revoke",
     "tc-982-kv-list-paging",
