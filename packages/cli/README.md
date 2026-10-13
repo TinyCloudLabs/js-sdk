@@ -10,8 +10,9 @@ npm install -g @tinycloud/cli
 
 Requires Node.js >= 20.
 
-On Linux, iproute2 installs `/usr/sbin/tc` (traffic control), which can shadow
-this CLI on PATH. If the npm global prefix is root-owned, run
+The package installs two identical commands: `tc` and `tinycloud`. On Linux,
+iproute2 installs `/usr/sbin/tc` (traffic control), which can shadow `tc` on
+PATH; `tinycloud` avoids that clash and accepts the same arguments. If the npm global prefix is root-owned, run
 `npm config set prefix ~/.local` before installing: Ubuntu's default PATH puts
 `~/.local/bin` before `/usr/sbin`, but `~/.profile` adds it only if the
 directory existed at login, so start a new login shell after the first
