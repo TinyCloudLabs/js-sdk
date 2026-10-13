@@ -1,5 +1,73 @@
 # @tinycloud/operations
 
+## 0.5.0
+
+### Minor Changes
+
+- ad4a11f: Unify stored-grant replay across CLI, operations, and MCP. Refused replay candidates use fixed-code warnings; only a cross-user compact import with a verified signed audience, matching stored transport audience, and correct CID remains separate and silent.
+
+  Breaking behavior for `@tinycloud/cli`:
+  - Grants without a `siweProof` (including CLI <=1.1.0-beta.13 and 1.0.x escalations and non-compact imports without proof) are refused with `proof_missing`. Owners can approve again using `tc auth request --grant [--device]`; delegates can request, receive, and import a new signed grant or reimport the original artifact with its proof. Remove stale rows using `tc auth grants remove <old-cid>`; an owner may add `--revoke`.
+  - Unbound compact grants no longer install before migration binds them (including a busy migration lock, `--private-key` on a local profile, or a session without `verificationMethod`); they report `unbound`. Run an ordinary command, sign in again, or reimport the artifact to recover.
+  - Compact grants with invalid signatures or CIDs are refused locally with `proof_invalid` or `cid_mismatch`; damaged transport audiences are refused rather than silently classified as cross-user. A single `Bearer` prefix is stripped before activation so verified grants authorize reads; a double prefix is refused.
+  - `tc auth import` refuses every proofless non-compact delegation (`INVALID_AUTH_IMPORT`, exit 2), including cross-user artifacts; none is stored or recorded in grant history. A compact or signed-login delegation failing verification returns `DELEGATION_REJECTED` (exit 1). A tampered transport audience cannot turn a session grant into a silent cross-user import. Valid session-targeted imports bind to `unbound-import:<cid>`.
+  - Commands that replay may now emit a `{warnings}` stderr line or include `error.warnings`; `TC_DEBUG_REPLAY` is removed. `--private-key` on an OpenKey profile no longer replays stored grants.
+  - Owner OpenKey `tc delegation revoke` no longer requests raw `urn:cid` authority (unsupported by deployed OpenKey). It uses a CID-bound owner-space fallback, or fails immediately with `RAW_RECAP_RESOURCE_UNSUPPORTED` instead of timing out.
+
+  `@tinycloud/sdk-core` now exposes the verified signed `payload.aud` from `parseSignedCompactUcanAttenuation` and rejects compact tokens without an audience. The audience is read during the existing signature verification, so replay does not decode an unsigned payload separately.
+
+  Breaking behavior for `@tinycloud/operations`:
+  - `replayLimit(entry)` no longer takes `migrated` or returns `"signed"`; `replayStoredDelegation` options no longer take `migrated`; `activateUnboundCompactImport` becomes `activateUnboundImport` and accepts signed-login records. New APIs: `replayProfileDelegations`, `inspectStoredDelegation`, `storedDelegationForAnotherKey`, `verifiedCompactAudience`, `storedDelegationSource`, and `withoutBearer`.
+  - Unbound compact grants are refused before migration; `createInvocationRuntime` replays only for a restored persisted session. `liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` counts only bound, unexpired grants. Invalid compact proofs report `proof_invalid`. `generated/operations.json` changes accordingly.
+
+  `@tinycloud/mcp` receives the shared replay and status behavior through its `@tinycloud/operations` dependency; no MCP-generated schema changes in this release.
+
+- 4f851e6: New operation `tinycloud.secrets.status@1`. It is read-only and never signs in: it restores the profile's stored session only, writes no profile state (no session, store, lock or migration marker), saves no authority requests, and returns `ready`, `pending` (with a Secret Manager `/request` link for the missing names, or a `tc secrets put … --stdin` hint for a local identity) or `consent_required` (with the `denied` names). It has an 18 s response deadline. Its errors carry `details.recovery`: `sign_in` with the persistent login command for the profile's posture, or `complete_migration` with `tc --profile <profile> auth caps` (`operationId: "tinycloud.auth.capabilities"`); a command is included only for a profile name that is safe in a shell command.
+
+  New exports and contracts:
+  - `@tinycloud/operations/secret-request`: the one Secret Manager link builder (`buildSecretRequestUrl`, `secretSetupFor`, `buildSecretManagerUrl`), the TC-832 owner/name/scope rules (`canonicalSecretRequestOwner`, `isValidSecretName`, `isValidSecretRequestScope`, `validSecretNames`), `resolveSecretsOwner`, `missingSecretRecovery`, `ownerOfSpace` and `isSafeRequestAccessRecovery`.
+  - `@tinycloud/operations/recovery`: `signInRecovery`, `migrationRecovery`, `isSafeRecovery`, `SAFE_PROFILE_TOKEN`.
+  - `isLocalOwnerProfile` from `@tinycloud/operations/profile`: the one local-owner predicate (posture `local-owner-key`, `authMethod: "local"`, or a stored `privateKey`), now shared with the CLI.
+  - The `"restored"` runtime requirement. The kernel dispatches the declared requirement and applies the same owner opt-in and posture checks to `"restored"` as to `"authenticated"`. `replayStoredDelegationRecords` replays stored grants without migrating; `replayProfileDelegations` is unchanged.
+  - `OperationDefinition.deadlineMs`, the new error code `PROFILE_MIGRATION_REQUIRED`, and the stored-grant skip reasons `activation_unavailable` and `activation_unauthenticated`.
+  - Error details that now survive redaction, each strictly validated: `AUTH_REQUIRED.recovery`/`reason` (`explicit_key`), `SESSION_NOT_FOUND.recovery`, `PROFILE_MIGRATION_REQUIRED.recovery`, `INPUT_INVALID.reason` (`OWNER_MISMATCH`, `OWNER_DID_UNKNOWN`) and `KV_NOT_FOUND.{names, scope, owner, recoveryKind}`. Runtime-preparation errors now pass the same allowlist as execution errors.
+
+  Breaking behavior:
+  - `tinycloud.secrets.get`'s `setup_required.setup` moves from the `/app?secret=…&space=…` link to the canonical `/request?owner=…&name=…&v=1` link and gains the required fields `action: "add_secret"`, `names` and `owner`; the generated result schema requires them.
+  - A missing secret for a local identity (including a profile with a stored `privateKey`), or one no request link can express (a legacy scope such as `scoped`, a name or scope over 64 characters, or an unknown owner), now returns error `KV_NOT_FOUND` with `details.recoveryKind` (`put_locally` or `not_requestable`) instead of `setup_required`.
+  - `buildSecretSetupUrl` is removed. Code that enumerates `OPERATION_ERROR_CODES`, `STORED_GRANT_SKIP_REASONS` or `OperationRuntimeRequirement` sees the new values. `generated/operations.json` gains the new operation, error code, skip reasons and setup fields.
+
+### Patch Changes
+
+- 33efc8c: Operation authority checks now judge each required capability against every grant in its owner-exact space together. A session restored from an OpenKey signed login reports one grant per signed action, so an operation needing `tinycloud.kv/get` and `tinycloud.kv/list` on one path was reported as `authority_required` even though both actions were signed.
+- 9836159: A process that finds its own PID in a profile-lock record it did not write — a restarted container's PID 1 meeting its crashed predecessor's turn and `.lock` — no longer waits forever once that predecessor is provably gone. Turn and `.lock` owner records gain JSON fields only (`instanceId`; on Linux `bootId`, `pidNamespace`, `processStartTime`, `liveness`), and each Linux acquisition listens on a UNIX socket `profile-locks/<profile>/.live-<dir dev>-<dir ino>-<uuid>`, named after the turn directory it is bound in, until it releases. Such a record from the same boot is abandoned when it comes from the same PID namespace with a different process start time (no socket needed, Bun included), or from another PID namespace when its socket was bound in the checking process's own turn directory (same device and inode) and is either gone or refused by the kernel; a refusal counts only under Node, and only if the checking process can then connect to its own socket in that directory, which catches sandboxes that refuse every connect, while sandboxes that fabricate refusals selectively are unsupported, as for the PID check. A live or paused same-PID holder is waited for whatever its hostname. Records from older releases or other boots, holders without a socket, sockets bound in another turn directory (`profile-locks/` not shared, or recreated), checking processes without a working socket of their own, macOS and Windows keep waiting (manual remedy in the tc-cli reference). Staging directories of a dead same-PID predecessor are now collected, and each release under Node removes liveness sockets the kernel refuses, including ones no record names. Records of other PIDs are judged as before: the lock still does not protect processes with different PIDs in different PID namespaces.
+- 6a7fa64: A SIWE-less session created by `tc auth import` now expires locally at the compact UCAN's signed `exp`; expired restores throw `AUTH_EXPIRED` before host lookup, including sessions imported by earlier releases. The new `signedCompactUcanExpiry` export reads that signed lifetime. CACAO-headed sessions remain refused only by the node.
+
+  A request-bound compact import whose signed expiry passes during its locked store write now reports `DELEGATION_EXPIRED` and rolls back the grant and any provisional session. If a fresh delegate profile's provisional session expires during import, it is rolled back unless another writer has since changed the profile. Cross-user compact imports require transport expiry to match signed `exp`, and persist the signed expiry. An import that is already expired or expires before activation also reports `DELEGATION_EXPIRED` without storing a grant.
+
+  The client clock is authoritative. `context` reports imported-session expiry, and the scoped paste login named by the hint is no longer blocked by an unknown expiry. Before probing a configured local node, session-using commands verify the stored session locally; this also covers older imported sessions. Login, logout, rotate, status, whoami, context, node, profile, `space host-request|switch`, `enable`, `auth request` without `--grant`, explicit private-key commands, and profiles without a stored session retain discovery behavior. Deferred discovery after owner refresh respects a context copied with another host.
+
+- Updated dependencies [33efc8c]
+- Updated dependencies [26f86bd]
+- Updated dependencies [ad4a11f]
+- Updated dependencies [6a7fa64]
+- Updated dependencies [4756923]
+- Updated dependencies [4f851e6]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [47eb547]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [d825e49]
+- Updated dependencies [df18325]
+  - @tinycloud/node-sdk@3.2.0
+  - @tinycloud/sdk-services@3.2.0
+  - @tinycloud/sdk-core@3.2.0
+
 ## 0.5.0-beta.10
 
 ### Patch Changes

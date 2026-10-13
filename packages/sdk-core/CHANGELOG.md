@@ -1,5 +1,81 @@
 # @tinycloudlabs/sdk-core
 
+## 3.2.0
+
+### Minor Changes
+
+- 26f86bd: TC-628: Storage status, one `storage.full` event, and no doomed writes on read paths.
+  - Storage rejections read the node's JSON 402/413 body. `meta.usedBytes`/`meta.limitBytes` still describe the space, and `meta.account` carries `{ usedBytes, limitBytes, plan }` for the whole account when the node sends it. The old plain-text body still parses. SQL and DuckDB now report a storage 413 (the node's `storage_limit_reached` body or storage text) as `STORAGE_LIMIT_REACHED`, as KV already did; a 413 without it stays `*_RESPONSE_TOO_LARGE`.
+  - `tc.on("storage.full", handler)` on `TinyCloudNode` and `TinyCloudWeb` fires once, on the first write any service has rejected for storage. The event carries the code, the space numbers, `account` and the rejected `spaceId`. It also goes through the service context's `emit` as `storage.full` (`TelemetryEvents.STORAGE_FULL`). Which owners are full is recorded per owner, so a full delegated space never hides that the signed-in account is full too. It fires again once `storage.status()` has reported room for every owner whose write was rejected, or after signing in or restoring a session whose primary space belongs to a different owner. Restoring the same owner with or without the optional address/SIWE metadata keeps the episode.
+  - `tc.storage.status({ space? })` reads usage and plan from the node (`tinycloud.space/info`, TC-626) and returns `{ usedBytes, limitBytes, account, plan, state, manageUrl }`. `state` is `ok`, `nearly_full` (≥ 90%) or `full`, from the account totals when known, and `limitBytes: null` means unlimited. It needs `tinycloud.space/info` on that space, from the session recap or an installed runtime delegation. Default sessions do not request it yet. When the grant cannot be confirmed locally, it returns `PERMISSION_DENIED` and sends no request. A node without the usage read returns the new `STORAGE_STATUS_UNAVAILABLE` code.
+  - While the signed-in account's storage is known full:
+    - `spaces.list()` still lists, but does not register each listed space;
+    - sign-in skips the bootstrap repair (`bootstrapStatus.reason: "storage-full"`);
+    - sign-in skips the background account registry sync (index ensure, manifest records, space sync).
+
+    These writes would only be refused again. A rejection on another owner's space does not stop them, and does not hide a later rejection on the account's own.
+
+  - `SpaceServiceConfig` (and `SpaceServiceConfigSchema`) accepts `isStorageFull?: () => boolean`; when it returns true, `list()` skips `onSpaceRegistered`.
+  - New exports:
+    - functions and values: `parseStorageRejection`, `parseStorageStatus`, `storageUsageState`, `StorageFullMonitor` (per-owner: `isFullFor(spaceId)`, `clearFor(spaceId)`), `STORAGE_MANAGE_URL`, `STORAGE_NEARLY_FULL_RATIO`, and the error code `ErrorCodes.STORAGE_STATUS_UNAVAILABLE`;
+    - types: `StorageStatus`, `StorageStatusOptions`, `StorageUsage`, `StorageUsageState`, `IStorageService`, `StorageFullEvent`, `StorageFullHandler`, `StorageAccountUsage` and `StorageRejectionDetails`.
+  - Deprecated, still exported unchanged: `TinyCloudQuota`, `QuotaConfig`, `QuotaStatus` and `StorageQuotaInfo`. Use `storage.status()` and `on("storage.full")` instead.
+
+- ad4a11f: Unify stored-grant replay across CLI, operations, and MCP. Refused replay candidates use fixed-code warnings; only a cross-user compact import with a verified signed audience, matching stored transport audience, and correct CID remains separate and silent.
+
+  Breaking behavior for `@tinycloud/cli`:
+  - Grants without a `siweProof` (including CLI <=1.1.0-beta.13 and 1.0.x escalations and non-compact imports without proof) are refused with `proof_missing`. Owners can approve again using `tc auth request --grant [--device]`; delegates can request, receive, and import a new signed grant or reimport the original artifact with its proof. Remove stale rows using `tc auth grants remove <old-cid>`; an owner may add `--revoke`.
+  - Unbound compact grants no longer install before migration binds them (including a busy migration lock, `--private-key` on a local profile, or a session without `verificationMethod`); they report `unbound`. Run an ordinary command, sign in again, or reimport the artifact to recover.
+  - Compact grants with invalid signatures or CIDs are refused locally with `proof_invalid` or `cid_mismatch`; damaged transport audiences are refused rather than silently classified as cross-user. A single `Bearer` prefix is stripped before activation so verified grants authorize reads; a double prefix is refused.
+  - `tc auth import` refuses every proofless non-compact delegation (`INVALID_AUTH_IMPORT`, exit 2), including cross-user artifacts; none is stored or recorded in grant history. A compact or signed-login delegation failing verification returns `DELEGATION_REJECTED` (exit 1). A tampered transport audience cannot turn a session grant into a silent cross-user import. Valid session-targeted imports bind to `unbound-import:<cid>`.
+  - Commands that replay may now emit a `{warnings}` stderr line or include `error.warnings`; `TC_DEBUG_REPLAY` is removed. `--private-key` on an OpenKey profile no longer replays stored grants.
+  - Owner OpenKey `tc delegation revoke` no longer requests raw `urn:cid` authority (unsupported by deployed OpenKey). It uses a CID-bound owner-space fallback, or fails immediately with `RAW_RECAP_RESOURCE_UNSUPPORTED` instead of timing out.
+
+  `@tinycloud/sdk-core` now exposes the verified signed `payload.aud` from `parseSignedCompactUcanAttenuation` and rejects compact tokens without an audience. The audience is read during the existing signature verification, so replay does not decode an unsigned payload separately.
+
+  Breaking behavior for `@tinycloud/operations`:
+  - `replayLimit(entry)` no longer takes `migrated` or returns `"signed"`; `replayStoredDelegation` options no longer take `migrated`; `activateUnboundCompactImport` becomes `activateUnboundImport` and accepts signed-login records. New APIs: `replayProfileDelegations`, `inspectStoredDelegation`, `storedDelegationForAnotherKey`, `verifiedCompactAudience`, `storedDelegationSource`, and `withoutBearer`.
+  - Unbound compact grants are refused before migration; `createInvocationRuntime` replays only for a restored persisted session. `liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` counts only bound, unexpired grants. Invalid compact proofs report `proof_invalid`. `generated/operations.json` changes accordingly.
+
+  `@tinycloud/mcp` receives the shared replay and status behavior through its `@tinycloud/operations` dependency; no MCP-generated schema changes in this release.
+
+- 4f851e6: Create-only secret writes, app-derived secret scopes, typed vault write errors, and classified delegation activation failures.
+  - **New:** `appSecretScope(appId)` derives the canonical secret scope for an app id (`com.listen.app` → `com-listen-app`), with `SECRET_SCOPE_RE`, `MAX_SECRET_SCOPE_LENGTH` (64) and `TC832_RESERVED_SCOPES` exported from every SDK package.
+  - **New:** `secrets.put(name, value, { ifAbsent: true })` (type `SecretPutOptions`) writes only when the secret does not exist. An existing secret fails with vault error `ALREADY_EXISTS` (KV 412; `meta.status` and the typed KV error as `cause`) and is never overwritten. `DataVaultService.put` accepts `{ ifNoneMatch: "*" }` for network-encrypted vaults; a legacy (key-blob) vault refuses it with `STORAGE_ERROR` before any KV call. The Node and Web secrets wrappers forward the option unchanged.
+  - **New:** a refused vault write keeps its authorization classification. A refused write is `AUTH_UNAUTHORIZED` only for HTTP 401 (sign-in needed). A 403 is `PERMISSION_DENIED`. Both keep `meta.status` and the typed KV error as `cause`, so `validatedCapabilityOf` still finds the missing capability. Other failures stay `STORAGE_ERROR`, now with `meta` and the KV error chained as the cause.
+  - **Fix:** KV `get`/`head`/`delete` now honour their timeout and abort signal while reading a 404 body that never finishes, instead of hanging; `createSignedReadUrl` error bodies get the same fix.
+  - **New:** node-sdk classifies delegation activation failures. `useRuntimeDelegation` reports an unreachable host as an error with `code: "ACTIVATION_TRANSPORT_FAILED"`. `RuntimeDelegationRejection` gains `activation_unavailable` (transport failure, 408, 429, 5xx) and `activation_unauthenticated` (401); every other activation failure stays `activation_rejected`.
+
+  **Breaks:**
+  - Code that matched `STORAGE_ERROR` for a vault or secrets write refused by authorization now receives `AUTH_UNAUTHORIZED` (401) or `PERMISSION_DENIED` (403, or no status).
+  - `VaultError`/`VaultErrorInput` gain the `ALREADY_EXISTS`, `AUTH_UNAUTHORIZED` and `PERMISSION_DENIED` variants, so exhaustive `switch`es over the vault error code need the new cases.
+  - Code that enumerates `RuntimeDelegationRejection` / `RUNTIME_DELEGATION_REJECTIONS` sees two new reasons; activation failures that were `activation_rejected` may now be `activation_unavailable` or `activation_unauthenticated`.
+
+- df18325: Add the Phase 1 replication contract, canonical identity and scope helpers, network-only KV read option, and nullable KVService read-through seam. With the seam unset, KV operations retain their existing network behavior. Pending-write stores declare whether their committed epoch and records survive restarts; for non-durable stores, controllers must require a successful in-process sync before serving local reads, otherwise use the network with `REPLICA_UNPROVEN_SINCE_START`. Node/CLI adapters must provide durable pending state and fail closed to network reads rather than silently falling back to memory.
+
+### Patch Changes
+
+- 4756923: Location registry and target `/info` failures, single-source location resolution failures, manifest fetches, node version checks, and CLI delegation-code fetches now carry typed HTTP status. A 401 or 403 from these producers is an authorization verdict: the CLI exits with `AUTH_REQUIRED` or `PERMISSION_DENIED` instead of `ERROR`, `withSessionRefresh` signs in again on 401, and account-registry sync stops rather than retrying a single-source location 401 or 403. Location resolutions with multiple independent failures remain unclassified.
+
+  Hook timeouts are classified from HTTP status rather than response text: 408 and 504 report `TIMEOUT`, while hook HTTP error messages containing `timeout` retain the server's diagnostic text. Account-registry retry uses the message fallback only for genuinely untyped errors. The untyped session-error fallback ignores standalone single-quoted names, not apostrophes inside words, and strips quoted names in linear time (also fixing master's slow case with many escaped double quotes).
+
+  An account-index initialization failure, whether a failed result or a thrown error, no longer blocks or retries account-registry sync; it is warned at most once per sync with only its HTTP status and error code, and the canonical registry writes and space sync continue.
+
+- df18325: Bound the sign-in account-registry drain to four seconds and abort its SQL, KV, and hosting requests on expiry. Registry failures remain warning-only, so sign-in succeeds after the bounded drain.
+- Updated dependencies [26f86bd]
+- Updated dependencies [4756923]
+- Updated dependencies [4f851e6]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [47eb547]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+  - @tinycloud/sdk-services@3.2.0
+
 ## 3.2.0-beta.8
 
 ### Patch Changes

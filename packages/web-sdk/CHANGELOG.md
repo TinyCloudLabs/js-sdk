@@ -1,5 +1,58 @@
 # @tinycloudlabs/web-sdk
 
+## 3.2.0
+
+### Minor Changes
+
+- 26f86bd: TC-628: Storage status, one `storage.full` event, and no doomed writes on read paths.
+  - Storage rejections read the node's JSON 402/413 body. `meta.usedBytes`/`meta.limitBytes` still describe the space, and `meta.account` carries `{ usedBytes, limitBytes, plan }` for the whole account when the node sends it. The old plain-text body still parses. SQL and DuckDB now report a storage 413 (the node's `storage_limit_reached` body or storage text) as `STORAGE_LIMIT_REACHED`, as KV already did; a 413 without it stays `*_RESPONSE_TOO_LARGE`.
+  - `tc.on("storage.full", handler)` on `TinyCloudNode` and `TinyCloudWeb` fires once, on the first write any service has rejected for storage. The event carries the code, the space numbers, `account` and the rejected `spaceId`. It also goes through the service context's `emit` as `storage.full` (`TelemetryEvents.STORAGE_FULL`). Which owners are full is recorded per owner, so a full delegated space never hides that the signed-in account is full too. It fires again once `storage.status()` has reported room for every owner whose write was rejected, or after signing in or restoring a session whose primary space belongs to a different owner. Restoring the same owner with or without the optional address/SIWE metadata keeps the episode.
+  - `tc.storage.status({ space? })` reads usage and plan from the node (`tinycloud.space/info`, TC-626) and returns `{ usedBytes, limitBytes, account, plan, state, manageUrl }`. `state` is `ok`, `nearly_full` (≥ 90%) or `full`, from the account totals when known, and `limitBytes: null` means unlimited. It needs `tinycloud.space/info` on that space, from the session recap or an installed runtime delegation. Default sessions do not request it yet. When the grant cannot be confirmed locally, it returns `PERMISSION_DENIED` and sends no request. A node without the usage read returns the new `STORAGE_STATUS_UNAVAILABLE` code.
+  - While the signed-in account's storage is known full:
+    - `spaces.list()` still lists, but does not register each listed space;
+    - sign-in skips the bootstrap repair (`bootstrapStatus.reason: "storage-full"`);
+    - sign-in skips the background account registry sync (index ensure, manifest records, space sync).
+
+    These writes would only be refused again. A rejection on another owner's space does not stop them, and does not hide a later rejection on the account's own.
+
+  - `SpaceServiceConfig` (and `SpaceServiceConfigSchema`) accepts `isStorageFull?: () => boolean`; when it returns true, `list()` skips `onSpaceRegistered`.
+  - New exports:
+    - functions and values: `parseStorageRejection`, `parseStorageStatus`, `storageUsageState`, `StorageFullMonitor` (per-owner: `isFullFor(spaceId)`, `clearFor(spaceId)`), `STORAGE_MANAGE_URL`, `STORAGE_NEARLY_FULL_RATIO`, and the error code `ErrorCodes.STORAGE_STATUS_UNAVAILABLE`;
+    - types: `StorageStatus`, `StorageStatusOptions`, `StorageUsage`, `StorageUsageState`, `IStorageService`, `StorageFullEvent`, `StorageFullHandler`, `StorageAccountUsage` and `StorageRejectionDetails`.
+  - Deprecated, still exported unchanged: `TinyCloudQuota`, `QuotaConfig`, `QuotaStatus` and `StorageQuotaInfo`. Use `storage.status()` and `on("storage.full")` instead.
+
+- 4f851e6: Create-only secret writes, app-derived secret scopes, typed vault write errors, and classified delegation activation failures.
+  - **New:** `appSecretScope(appId)` derives the canonical secret scope for an app id (`com.listen.app` → `com-listen-app`), with `SECRET_SCOPE_RE`, `MAX_SECRET_SCOPE_LENGTH` (64) and `TC832_RESERVED_SCOPES` exported from every SDK package.
+  - **New:** `secrets.put(name, value, { ifAbsent: true })` (type `SecretPutOptions`) writes only when the secret does not exist. An existing secret fails with vault error `ALREADY_EXISTS` (KV 412; `meta.status` and the typed KV error as `cause`) and is never overwritten. `DataVaultService.put` accepts `{ ifNoneMatch: "*" }` for network-encrypted vaults; a legacy (key-blob) vault refuses it with `STORAGE_ERROR` before any KV call. The Node and Web secrets wrappers forward the option unchanged.
+  - **New:** a refused vault write keeps its authorization classification. A refused write is `AUTH_UNAUTHORIZED` only for HTTP 401 (sign-in needed). A 403 is `PERMISSION_DENIED`. Both keep `meta.status` and the typed KV error as `cause`, so `validatedCapabilityOf` still finds the missing capability. Other failures stay `STORAGE_ERROR`, now with `meta` and the KV error chained as the cause.
+  - **Fix:** KV `get`/`head`/`delete` now honour their timeout and abort signal while reading a 404 body that never finishes, instead of hanging; `createSignedReadUrl` error bodies get the same fix.
+  - **New:** node-sdk classifies delegation activation failures. `useRuntimeDelegation` reports an unreachable host as an error with `code: "ACTIVATION_TRANSPORT_FAILED"`. `RuntimeDelegationRejection` gains `activation_unavailable` (transport failure, 408, 429, 5xx) and `activation_unauthenticated` (401); every other activation failure stays `activation_rejected`.
+
+  **Breaks:**
+  - Code that matched `STORAGE_ERROR` for a vault or secrets write refused by authorization now receives `AUTH_UNAUTHORIZED` (401) or `PERMISSION_DENIED` (403, or no status).
+  - `VaultError`/`VaultErrorInput` gain the `ALREADY_EXISTS`, `AUTH_UNAUTHORIZED` and `PERMISSION_DENIED` variants, so exhaustive `switch`es over the vault error code need the new cases.
+  - Code that enumerates `RuntimeDelegationRejection` / `RUNTIME_DELEGATION_REJECTIONS` sees two new reasons; activation failures that were `activation_rejected` may now be `activation_unavailable` or `activation_unauthenticated`.
+
+### Patch Changes
+
+- df18325: Generate the CoordinationOS vendor manifest from its pinned compatibility contract version, independent of the package's release version, so vendor builds remain reproducible after package version bumps.
+- Updated dependencies [33efc8c]
+- Updated dependencies [26f86bd]
+- Updated dependencies [ad4a11f]
+- Updated dependencies [6a7fa64]
+- Updated dependencies [4756923]
+- Updated dependencies [4f851e6]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [47eb547]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [d825e49]
+  - @tinycloud/node-sdk@3.2.0
+  - @tinycloud/sdk-core@3.2.0
+
 ## 3.2.0-beta.9
 
 ### Patch Changes

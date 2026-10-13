@@ -1,5 +1,61 @@
 # @tinycloud/mcp
 
+## 0.5.0
+
+### Minor Changes
+
+- 4f851e6: Add `tinycloud_secrets_status` (`tinycloud.secrets.status@1`) for local/stdio MCP only; the hosted server does not register it. It is read-only (`readOnlyHint`, `idempotentHint`, `openWorldHint`) and never signs in: it uses the profile's stored session and reports each named secret as `ready`, `pending`, or `consent_required` without saving a permission request.
+
+  Missing-secret `setup` is now the canonical Secret Manager `/request` link (`{url, names, scope?, owner, action: "add_secret"}`) instead of the old setup link. A `complete_migration` recovery in `error.details.recovery` now carries `tool: "tinycloud_auth_capabilities"`, taken from the binding table.
+
+  Tool bindings gain an optional `surfaces` field (`"local"` / `"hosted"`, default both), and `McpStartupSelection` gains a required `surface`; `registerTinyCloudTools` skips bindings not on that surface. Generated `mcp-facts.json` lists each tool's surfaces.
+
+  **Breaks:** direct callers of `registerTinyCloudTools` must pass `surface`; clients that parsed the old setup link shape; the local server now lists 17 tools.
+
+### Patch Changes
+
+- 33efc8c: The hosted MCP connect flow now completes. `tinycloud_connect` accepts a correctly signed OpenKey bootstrap: its account access is checked with the SDK subset check, which considers every signed action together instead of requiring one grant to carry them all. An approved operation delegation is imported as a full `tinycloud.auth.delegation` v1 artifact, and OpenKey's signed-login (CACAO) delegation is verified from its SIWE and accepted, so the retried tool call uses it.
+
+  Hosted mode no longer exposes `tinycloud_auth_import`: delegations reach a hosted tenant only through the OpenKey approval callback, which binds them to the requesting account and the stored request. Approval callbacks must carry the SIWE, signature, address and chain ID. Access tokens are refused unless every owner DID claim is exactly `did:pkh:eip155:<chain>:0x<40 hex>`; owner DIDs are canonicalised before they are compared or shown.
+
+- 9836159: A restarted `tinycloud-mcp-http` container (PID 1, same host boot, state volume kept) recovers the profile turn and `.lock` its crashed predecessor held (`.lock` once 30 s old) instead of waiting forever; a live MCP sharing the volume from another container is still waited for. After a host or VM reboot, a volume moved to another machine, a predecessor from an older release, or a container whose seccomp profile fails UNIX-socket connects, the wait remains: with no MCP or `tc` process using the profile, remove `$TC_MCP_STATE_DIR/tenants/<tenant>/.tinycloud/profile-locks/agent` and `$TC_MCP_STATE_DIR/tenants/<tenant>/.tinycloud/profiles/agent/.lock`.
+- ad4a11f: Unify stored-grant replay across CLI, operations, and MCP. Refused replay candidates use fixed-code warnings; only a cross-user compact import with a verified signed audience, matching stored transport audience, and correct CID remains separate and silent.
+
+  Breaking behavior for `@tinycloud/cli`:
+  - Grants without a `siweProof` (including CLI <=1.1.0-beta.13 and 1.0.x escalations and non-compact imports without proof) are refused with `proof_missing`. Owners can approve again using `tc auth request --grant [--device]`; delegates can request, receive, and import a new signed grant or reimport the original artifact with its proof. Remove stale rows using `tc auth grants remove <old-cid>`; an owner may add `--revoke`.
+  - Unbound compact grants no longer install before migration binds them (including a busy migration lock, `--private-key` on a local profile, or a session without `verificationMethod`); they report `unbound`. Run an ordinary command, sign in again, or reimport the artifact to recover.
+  - Compact grants with invalid signatures or CIDs are refused locally with `proof_invalid` or `cid_mismatch`; damaged transport audiences are refused rather than silently classified as cross-user. A single `Bearer` prefix is stripped before activation so verified grants authorize reads; a double prefix is refused.
+  - `tc auth import` refuses every proofless non-compact delegation (`INVALID_AUTH_IMPORT`, exit 2), including cross-user artifacts; none is stored or recorded in grant history. A compact or signed-login delegation failing verification returns `DELEGATION_REJECTED` (exit 1). A tampered transport audience cannot turn a session grant into a silent cross-user import. Valid session-targeted imports bind to `unbound-import:<cid>`.
+  - Commands that replay may now emit a `{warnings}` stderr line or include `error.warnings`; `TC_DEBUG_REPLAY` is removed. `--private-key` on an OpenKey profile no longer replays stored grants.
+  - Owner OpenKey `tc delegation revoke` no longer requests raw `urn:cid` authority (unsupported by deployed OpenKey). It uses a CID-bound owner-space fallback, or fails immediately with `RAW_RECAP_RESOURCE_UNSUPPORTED` instead of timing out.
+
+  `@tinycloud/sdk-core` now exposes the verified signed `payload.aud` from `parseSignedCompactUcanAttenuation` and rejects compact tokens without an audience. The audience is read during the existing signature verification, so replay does not decode an unsigned payload separately.
+
+  Breaking behavior for `@tinycloud/operations`:
+  - `replayLimit(entry)` no longer takes `migrated` or returns `"signed"`; `replayStoredDelegation` options no longer take `migrated`; `activateUnboundCompactImport` becomes `activateUnboundImport` and accepts signed-login records. New APIs: `replayProfileDelegations`, `inspectStoredDelegation`, `storedDelegationForAnotherKey`, `verifiedCompactAudience`, `storedDelegationSource`, and `withoutBearer`.
+  - Unbound compact grants are refused before migration; `createInvocationRuntime` replays only for a restored persisted session. `liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` counts only bound, unexpired grants. Invalid compact proofs report `proof_invalid`. `generated/operations.json` changes accordingly.
+
+  `@tinycloud/mcp` receives the shared replay and status behavior through its `@tinycloud/operations` dependency; no MCP-generated schema changes in this release.
+
+- Updated dependencies [33efc8c]
+- Updated dependencies [33efc8c]
+- Updated dependencies [26f86bd]
+- Updated dependencies [9836159]
+- Updated dependencies [ad4a11f]
+- Updated dependencies [6a7fa64]
+- Updated dependencies [4756923]
+- Updated dependencies [4f851e6]
+- Updated dependencies [4f851e6]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [47eb547]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [d825e49]
+  - @tinycloud/node-sdk@3.2.0
+  - @tinycloud/operations@0.5.0
+
 ## 0.5.0-beta.10
 
 ### Patch Changes

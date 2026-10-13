@@ -1,5 +1,105 @@
 # @tinycloud/cli
 
+## 1.2.0
+
+### Minor Changes
+
+- ad4a11f: Add `tc auth grants list` for local verification and inspection of stored grants without a network request, and `tc auth grants remove <cid> [--revoke]` for deleting matching local records. Local removal is available to delegates; only `--revoke` is owner-only and removes local rows after successful node revocation.
+
+  Cross-user imports appear as `for_another_key` only when their CID and signed audience verify and match the stored transport audience; tampered rows retain their refusal reason. `--revoke` uses the usual verified local-node discovery. A concurrent local removal after node revocation succeeds with `removed: 0`; other local removal failures return `GRANT_REVOKED_LOCAL_REMOVE_FAILED` with a structured cause code and a hint to retry local-only.
+
+- 4f851e6: New `tc secrets request <NAME...> [--scope S | --app ID] [--owner DID] [--requester LABEL] [--open]`: prints the owner's Secret Manager `/request` link as `{url, names, scope?, owner}` and exits 0, offline. A local identity (local-owner profile, a profile holding a `privateKey`, `--private-key` or `TC_PRIVATE_KEY`) gets `LOCAL_OWNER_PROFILE` (exit 2); an unknown owner is `OWNER_DID_UNKNOWN` (exit 3).
+
+  New `tc secrets wait <NAME...> [--scope S | --app ID] [--owner DID] [--timeout D]`: polls until the secrets exist, each check in a child process killed if it overruns, bounded at timeout + 21 s (`--timeout 0` checks once). It never signs in: it needs a stored session, and `TC_PRIVATE_KEY` is not supported (exit 3). It writes no profile state and saves no consent. Exit 8 (`PENDING`) when the deadline passes with names still missing, 130 (`CANCELLED`) when interrupted, 1 for `PROFILE_MIGRATION_REQUIRED` (run `tc --profile P auth caps` once after an upgrade) or `PROBE_FAILED`.
+
+  New `--app ID` on `request`, `wait` and `manage` derives the scope with `appSecretScope`. `tc secrets manage [NAME...] [--scope S | --app ID] [--no-open]` opens the Secret Manager at the named secrets.
+
+  Error JSON gains three validated, value-free fields: `error.setup` (`{url, names, scope?, owner, action: "add_secret"}`, on `NOT_FOUND` and on `wait`'s `PERMISSION_DENIED`), `error.recovery` (`sign_in`, `complete_migration` or `request_access`, exact shapes only) and `error.progress` (`{present, pending}`, on `wait`'s `NETWORK_ERROR`/`CANCELLED`).
+
+  Fixes: `tc secrets get --delegation` now reports a missing secret with the owner's request link (never for a local identity), and a refused delegated read (403, a capability 401, `AUTH_UNAUTHORIZED`) exits 5 instead of 1. Manifest secrets resolve the owner with the shared rule (a delegate session's space owner counts; a `--owner` that disagrees with the profile's owner is `OWNER_MISMATCH`, exit 2).
+
+  **Breaks:** `tc secrets manage` JSON is now `{url, opened}` (was `{opened: url}`), and it takes optional names. Refused `tc secrets put` / `tc vault put` writes exit 3 or 5 instead of 1. `tc secrets doctor` hints for a missing secret now name `tc secrets request NAME`, or `tc secrets put NAME --stdin` for a local identity. A missing secret on `tc secrets get` now carries `error.setup` with a `/request?owner=…` link instead of an `/app` hint, and a local identity gets no link.
+
+- df18325: Add the opt-in replication flags, saved login prefixes, diagnostics log and report, bounded replication shutdown that forces a successful exit after a stalled drain, and lease-safe logout cleanup under one profile lock for legacy and flag-owned replicas. Registrations arriving during shutdown are drained before completion. The new login authority is limited to prefixes already covered by an unrestricted `get`; scoped logins are never broadened. Scoped app manifests preserve ReCap caveats, so caveated-only gets cannot authorize replication. Fresh local login still bootstraps missing profiles, key rotation preserves saved scoped permissions, and replication-enabled unscoped logins retain their full KV/SQL defaults. A missing replication grant emits one warning per prefix per invocation while reads remain network-backed.
+
+  The CLI now supplies profile-partitioned SQLite storage to the node runtime and registers the node's live replication control surface for reports. Secret/vault existence reads that determine CLI behavior bypass local replicas and remain network-authoritative. Replication profile writes are serialized by the profile guard; with `TC_REPLICATION` unset, no replica store is opened.
+
+  `TC_REPLICATION_VERIFY=1` now forwards the verification policy to the node runtime; with the flag unset, CLI replication remains disabled and creates no replication directory.
+
+- d84cfed: New package `@tinycloud/courier` (first beta): Courier, agent-to-agent threads over TinyCloud, moved into this repo from TinyCloudLabs/courier. It ships the standalone `courier` bin, the library entry `main(argv, { prog })`, and the `courier` agent skill. The package has no `license` field yet (TC-861).
+
+  `@tinycloud/cli` bundles Courier as `tc courier …`. It takes the same arguments as `courier`, keeps its own profile in `$COURIER_HOME` (default `~/.courier`) rather than a tc profile, and is loaded only when invoked. tc options before `courier` (for example `tc -p x courier …`) exit 2. The CLI tarball now ships the `courier` skill next to `tc-cli`; install both with `--skill tc-cli courier`.
+
+  `courier init --paste` and `courier init --grant-file -` accept OpenKey `XXXX-XXXX` short codes (TC-823). The code is redeemed at `--openkey-api-host`, `COURIER_OPENKEY_API_HOST`, or by default `https://api.openkey.so` (for `https://openkey.so`, otherwise the OpenKey host). The redeemed delegation must be bound to the local Courier agent key.
+
+### Patch Changes
+
+- 9836159: `tc` recovers a profile lock left by a crashed process with its own PID in another PID namespace (a container restarted with a persistent `TC_HOME`) once that process's liveness socket in the shared turn directory is gone or refused by the kernel, and still waits for a live or paused one, for one whose socket it cannot verify (a turn directory it does not share, or a sandbox that blocks its own connections), and for older releases. The tc-cli reference documents each condition, what still waits, and the manual remedy for `$TC_HOME/.tinycloud` and per-tenant MCP state, and restores the caveat that the lock does not protect processes with different PIDs in different PID namespaces.
+- ad4a11f: Unify stored-grant replay across CLI, operations, and MCP. Refused replay candidates use fixed-code warnings; only a cross-user compact import with a verified signed audience, matching stored transport audience, and correct CID remains separate and silent.
+
+  Breaking behavior for `@tinycloud/cli`:
+  - Grants without a `siweProof` (including CLI <=1.1.0-beta.13 and 1.0.x escalations and non-compact imports without proof) are refused with `proof_missing`. Owners can approve again using `tc auth request --grant [--device]`; delegates can request, receive, and import a new signed grant or reimport the original artifact with its proof. Remove stale rows using `tc auth grants remove <old-cid>`; an owner may add `--revoke`.
+  - Unbound compact grants no longer install before migration binds them (including a busy migration lock, `--private-key` on a local profile, or a session without `verificationMethod`); they report `unbound`. Run an ordinary command, sign in again, or reimport the artifact to recover.
+  - Compact grants with invalid signatures or CIDs are refused locally with `proof_invalid` or `cid_mismatch`; damaged transport audiences are refused rather than silently classified as cross-user. A single `Bearer` prefix is stripped before activation so verified grants authorize reads; a double prefix is refused.
+  - `tc auth import` refuses every proofless non-compact delegation (`INVALID_AUTH_IMPORT`, exit 2), including cross-user artifacts; none is stored or recorded in grant history. A compact or signed-login delegation failing verification returns `DELEGATION_REJECTED` (exit 1). A tampered transport audience cannot turn a session grant into a silent cross-user import. Valid session-targeted imports bind to `unbound-import:<cid>`.
+  - Commands that replay may now emit a `{warnings}` stderr line or include `error.warnings`; `TC_DEBUG_REPLAY` is removed. `--private-key` on an OpenKey profile no longer replays stored grants.
+  - Owner OpenKey `tc delegation revoke` no longer requests raw `urn:cid` authority (unsupported by deployed OpenKey). It uses a CID-bound owner-space fallback, or fails immediately with `RAW_RECAP_RESOURCE_UNSUPPORTED` instead of timing out.
+
+  `@tinycloud/sdk-core` now exposes the verified signed `payload.aud` from `parseSignedCompactUcanAttenuation` and rejects compact tokens without an audience. The audience is read during the existing signature verification, so replay does not decode an unsigned payload separately.
+
+  Breaking behavior for `@tinycloud/operations`:
+  - `replayLimit(entry)` no longer takes `migrated` or returns `"signed"`; `replayStoredDelegation` options no longer take `migrated`; `activateUnboundCompactImport` becomes `activateUnboundImport` and accepts signed-login records. New APIs: `replayProfileDelegations`, `inspectStoredDelegation`, `storedDelegationForAnotherKey`, `verifiedCompactAudience`, `storedDelegationSource`, and `withoutBearer`.
+  - Unbound compact grants are refused before migration; `createInvocationRuntime` replays only for a restored persisted session. `liveAdditionalDelegationCount` in `tinycloud.status.get` and `tinycloud.auth.status` counts only bound, unexpired grants. Invalid compact proofs report `proof_invalid`. `generated/operations.json` changes accordingly.
+
+  `@tinycloud/mcp` receives the shared replay and status behavior through its `@tinycloud/operations` dependency; no MCP-generated schema changes in this release.
+
+- 6a7fa64: A SIWE-less session created by `tc auth import` now expires locally at the compact UCAN's signed `exp`; expired restores throw `AUTH_EXPIRED` before host lookup, including sessions imported by earlier releases. The new `signedCompactUcanExpiry` export reads that signed lifetime. CACAO-headed sessions remain refused only by the node.
+
+  A request-bound compact import whose signed expiry passes during its locked store write now reports `DELEGATION_EXPIRED` and rolls back the grant and any provisional session. If a fresh delegate profile's provisional session expires during import, it is rolled back unless another writer has since changed the profile. Cross-user compact imports require transport expiry to match signed `exp`, and persist the signed expiry. An import that is already expired or expires before activation also reports `DELEGATION_EXPIRED` without storing a grant.
+
+  The client clock is authoritative. `context` reports imported-session expiry, and the scoped paste login named by the hint is no longer blocked by an unknown expiry. Before probing a configured local node, session-using commands verify the stored session locally; this also covers older imported sessions. Login, logout, rotate, status, whoami, context, node, profile, `space host-request|switch`, `enable`, `auth request` without `--grant`, explicit private-key commands, and profiles without a stored session retain discovery behavior. Deferred discovery after owner refresh respects a context copied with another host.
+
+- 4756923: Location registry and target `/info` failures, single-source location resolution failures, manifest fetches, node version checks, and CLI delegation-code fetches now carry typed HTTP status. A 401 or 403 from these producers is an authorization verdict: the CLI exits with `AUTH_REQUIRED` or `PERMISSION_DENIED` instead of `ERROR`, `withSessionRefresh` signs in again on 401, and account-registry sync stops rather than retrying a single-source location 401 or 403. Location resolutions with multiple independent failures remain unclassified.
+
+  Hook timeouts are classified from HTTP status rather than response text: 408 and 504 report `TIMEOUT`, while hook HTTP error messages containing `timeout` retain the server's diagnostic text. Account-registry retry uses the message fallback only for genuinely untyped errors. The untyped session-error fallback ignores standalone single-quoted names, not apostrophes inside words, and strips quoted names in linear time (also fixing master's slow case with many escaped double quotes).
+
+  An account-index initialization failure, whether a failed result or a thrown error, no longer blocks or retries account-registry sync; it is warned at most once per sync with only its HTTP status and error code, and the canonical registry writes and space sync continue.
+
+- df18325: Exact-key grants cannot cover folders under sdk-core capability containment. Local LIST keeps the exact-only network fallback and nested-LIST pending-write protection.
+- 47eb547: Replication prefixes are folders such as `notes/`, or `/` for the whole space (requires a node advertising `kv-sync-root`). Bare paths and `""` are rejected.
+
+  For local-key and eligible owner OpenKey sign-ins with unrestricted whole-space KV get coverage, replication adds sync once to the existing whole-space KV entry. Narrower owner coverage and delegated/device grants retain per-prefix scope.
+
+  Published `@tinycloud/replica` declarations, including `./browser` and `./worker`, are self-contained; consumers do not need `@tinycloud/sdk-services`.
+
+  `kvSyncTransport(kv)` discovers the node host exposed by the KV service for whole-space feature checks. If the service does not expose a host, pass `{ host }`; root sync refuses early with a clear error rather than skipping the `kv-sync-root` check.
+
+- 05c4efa: Courier waits up to 2.5 minutes during init when OpenKey reports `spacePending: true` with `spaceReady: null`. It saves the grant and pending profile before waiting so interrupted or timed-out setup can resume without a new approval. Pending `init --resume` waits up to one minute and clears the marker when the space is ready. Responses without literal `spacePending: true` keep the existing single-probe behavior and manual hosting guidance. Authentication and network errors still propagate.
+
+  The CLI bundles the updated Courier behavior and skill as `tc courier`. Both packages release on the existing beta channel. Release Courier before, or in the same window as, the TC-945 OpenKey API deployment.
+
+- d825e49: A fresh owner's first private-key sign-in (`tc auth login --method local`, or `TinyCloudNode.signIn()` with a private key) no longer warns `account bootstrap failed: … 401 - Unauthorized Action: …:account/sql/account / tinycloud.sql/schema`, and it creates the account index, registry and bootstrap marker on the account space. Previously these were only repaired on the next sign-in. The default bootstrap session now signs each requested permission onto its own space, as sign-in already does, and an operation on another space that a bootstrap session covers is invoked against that space (TC-957).
+- Updated dependencies [33efc8c]
+- Updated dependencies [33efc8c]
+- Updated dependencies [26f86bd]
+- Updated dependencies [9836159]
+- Updated dependencies [ad4a11f]
+- Updated dependencies [6a7fa64]
+- Updated dependencies [4756923]
+- Updated dependencies [4f851e6]
+- Updated dependencies [4f851e6]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [47eb547]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [df18325]
+- Updated dependencies [d825e49]
+  - @tinycloud/node-sdk@3.2.0
+  - @tinycloud/operations@0.5.0
+  - @tinycloud/sdk-core@3.2.0
+
 ## 1.2.0-beta.12
 
 ### Patch Changes
