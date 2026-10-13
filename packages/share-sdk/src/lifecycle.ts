@@ -68,9 +68,11 @@ export async function revokeShare(input: {
       nodeAudience: policyNodeAudience(input.record),
     });
   }
-  const revokedAt = (input.now?.() ?? new Date()).toISOString();
+  // Revoking again is idempotent at the node; the first revocation time stands.
+  let revokedAt = input.record.revokedAt ?? (input.now?.() ?? new Date()).toISOString();
   if (input.records?.update !== undefined) {
-    await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
+    revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== undefined) {
     await input.records.put({ ...input.record, revokedAt });
   }

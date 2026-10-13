@@ -1,13 +1,26 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { MemorySenderShareRecordStorage, revokeShare, type SenderShareRecord, type ShareRevocationResult } from "@tinycloud/share-sdk";
 import { didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
-import { parseCompactUcanAuthorization, signCompactUcanRootAuthorization, type CompactUcanAuthorizationV1 } from "@tinycloud/sdk-core";
-import { computeCid } from "@tinycloud/node-sdk-wasm";
+import {
+  parseCompactUcanAuthorization,
+  parseSignedSiweCacao,
+  signCompactUcanRootAuthorization,
+  type CompactUcanAuthorizationV1,
+} from "@tinycloud/sdk-core";
+import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 
 const NODE_ORIGIN = "https://node.example";
 const NODE_DID = "did:key:z6MkvRXNYcE7MMduynWTgeKbDaT1iijDSC8pZqXZc8rHPrf2";
-const OWNER_DID = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
-const SPACE_ID = `tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default`;
+
+// A test owner wallet signs real SIWE CACAOs: owner-signed links and the
+// owner revocations `TinyCloudNode.signOwnerRevocation` produces.
+const wasm = new NodeWasmBindings();
+const ownerSigner = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
+const OWNER_ADDRESS = await ownerSigner.getAddress();
+const OWNER_DID = `did:pkh:eip155:1:${OWNER_ADDRESS}`;
+const SPACE_ID: string = wasm.makeSpaceId(OWNER_ADDRESS, 1, "default");
+const ownerNode = new TinyCloudNode({ host: NODE_ORIGIN, signer: ownerSigner, autoDiscoverLocalNode: false });
+Object.assign(ownerNode, { _restoredTcSession: { address: OWNER_ADDRESS, chainId: 1, spaceId: SPACE_ID } });
 
 interface SessionKey {
   readonly did: string;
@@ -24,48 +37,50 @@ async function sessionKey(): Promise<SessionKey> {
 }
 
 /**
- * The owner node's revocation rule (tinycloud-core models/revocation.rs): a
- * proofless revocation is authorized when its signer is the target's
- * delegator or the owner of the space it targets. A compact UCAN names the
- * target as `urn:cid:<cid>`. The owner's wallet CACAO revocation is stood in
- * for by an `owner:<did>:<cid>` token here; the local-node smoke exercises
- * the real CACAO.
+ * The owner node's `POST /revoke` (tinycloud-core models/revocation.rs): a
+ * proofless revocation is authorized when its verified signer is the
+ * target's delegator or the owner of the space it targets. A compact UCAN
+ * names the target as `urn:cid:<cid>`; a wallet CACAO as `aud ucan:<cid>`.
  */
-const delegations = new Map<string, { readonly delegator: string; readonly owner: string }>();
+const delegations = new Map<string, { readonly delegator: string }>();
 const revoked = new Set<string>();
 const links = new Map<string, { readonly keyDid: string; readonly delegation: { readonly cid: string; readonly authHeader: string } }>();
 const revocations: string[] = [];
-let nodeReply: { readonly status: number; readonly body: string } | undefined;
+/** Refuse before applying the revocation. */
+let refusal: { readonly status: number; readonly body: string } | undefined;
+/** Apply the revocation, then reply with this body instead of the receipt. */
+let receiptBody: string | undefined;
 
 async function nodeFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   const url = new URL(String(input));
   if (url.origin !== NODE_ORIGIN || url.pathname !== "/revoke" || init?.method !== "POST") return new Response("not found", { status: 404 });
   const authorization = new Headers(init.headers).get("authorization") ?? "";
   revocations.push(authorization);
-  if (nodeReply !== undefined) return new Response(nodeReply.body, { status: nodeReply.status });
+  if (refusal !== undefined) return new Response(refusal.body, { status: refusal.status });
   let signer: string;
   let cid: string;
-  if (authorization.startsWith("owner:")) {
-    [, signer = "", cid = ""] = /^owner:(did:pkh:[^:]+:[^:]+:[^:]+):(.+)$/.exec(authorization) ?? [];
-  } else {
-    let payload: CompactUcanAuthorizationV1["payload"];
-    try {
-      payload = parseCompactUcanAuthorization(authorization).payload;
-    } catch {
-      return new Response("Failed to verify signature", { status: 403 });
+  try {
+    if (authorization.includes(".")) {
+      const payload: CompactUcanAuthorizationV1["payload"] = parseCompactUcanAuthorization(authorization).payload;
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.nbf > now || payload.exp <= now || payload.prf.length !== 0) return new Response("Unauthorized Revoker", { status: 403 });
+      const target = Object.entries(payload.att).find(([, actions]) => actions["tinycloud.delegation/revoke"] !== undefined)?.[0] ?? "";
+      signer = payload.iss.split("#", 1)[0]!;
+      cid = target.startsWith("urn:cid:") ? target.slice("urn:cid:".length) : "";
+    } else {
+      const cacao = await parseSignedSiweCacao(authorization);
+      if (cacao.expiresAt === undefined || Date.parse(cacao.expiresAt) <= Date.now()) return new Response("Revocation expired or not yet valid", { status: 403 });
+      signer = cacao.issuer;
+      cid = cacao.audience.startsWith("ucan:") ? cacao.audience.slice("ucan:".length) : "";
     }
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.nbf > now || payload.exp <= now) return new Response("Revocation expired or not yet valid", { status: 403 });
-    const target = Object.entries(payload.att).find(([, actions]) => actions["tinycloud.delegation/revoke"] !== undefined)?.[0];
-    if (!target?.startsWith("urn:cid:") || payload.prf.length !== 0) return new Response("Unauthorized Revoker", { status: 403 });
-    signer = payload.iss.split("#", 1)[0]!;
-    cid = target.slice("urn:cid:".length);
+  } catch {
+    return new Response("Failed to verify signature", { status: 403 });
   }
   const delegation = delegations.get(cid);
   if (delegation === undefined) return new Response("Cannot find parent delegation", { status: 403 });
-  if (signer !== delegation.delegator && signer !== delegation.owner) return new Response("Unauthorized Revoker", { status: 403 });
+  if (signer !== delegation.delegator && signer !== OWNER_DID) return new Response("Unauthorized Revoker", { status: 403 });
   revoked.add(cid);
-  return Response.json({ revoked: true, cid });
+  return receiptBody === undefined ? Response.json({ revoked: true, cid }) : new Response(receiptBody, { status: 200 });
 }
 
 /** The profile the next CLI invocation restores. */
@@ -90,7 +105,7 @@ mock.module("../lib/sdk.js", () => ({
       signSessionBytes: session.sign,
       signOwnerRevocation: async (cid: string) => {
         if (!ownerKey) throw new Error("Owner wallet signer is required");
-        return `owner:${OWNER_DID}:${cid}`;
+        return ownerNode.signOwnerRevocation(cid);
       },
       sharing: {
         decodeLink: (token: string) => {
@@ -108,12 +123,12 @@ const { createShareAuthorityAdapters } = await import("./adapters.js");
 /** One CLI invocation: a fresh adapter restores the profile's current session. */
 const revocationAdapter = () => createShareAuthorityAdapters({ profileName: async () => "publisher", fetchFn: nodeFetch as typeof globalThis.fetch }).revocation;
 
-function bearerRecord(cid: string, token: string): SenderShareRecord {
+function bearerRecord(cid: string, path: string, token: string): SenderShareRecord {
   const now = Date.now();
   return {
     shareId: cid,
     target: { origin: NODE_ORIGIN, nodeAudience: NODE_DID, spaceId: SPACE_ID },
-    resource: { kind: "exact", path: "xyz.tinycloud.share/shares/abc/note.md" },
+    resource: { kind: "exact", path },
     actions: ["tinycloud.kv/get"],
     recipientMatcher: { kind: "bearer" },
     targetKind: "bearer",
@@ -124,34 +139,50 @@ function bearerRecord(cid: string, token: string): SenderShareRecord {
   };
 }
 
+const sharePath = () => `xyz.tinycloud.share/shares/${crypto.randomUUID().replaceAll("-", "")}/note.md`;
+
 /** A bearer link as `tc share publish` records it when the session key mints it. */
 async function sessionSignedShare(issuer: SessionKey): Promise<SenderShareRecord> {
   const linkKey = await sessionKey();
+  const path = sharePath();
   const now = Math.floor(Date.now() / 1000);
   const delegation = await signCompactUcanRootAuthorization({
     issuerDid: issuer.did,
     audienceDid: linkKey.did,
-    attenuation: { [`${SPACE_ID}/kv/xyz.tinycloud.share/shares/abc/note.md`]: { "tinycloud.kv/get": [{}] } },
+    attenuation: { [`${SPACE_ID}/kv/${path}`]: { "tinycloud.kv/get": [{}] } },
     facts: [{}],
     notBefore: now,
     expiresAt: now + 3600,
     nonce: `urn:uuid:${crypto.randomUUID()}`,
     sign: issuer.sign,
   });
-  delegations.set(delegation.cid, { delegator: issuer.did, owner: OWNER_DID });
+  delegations.set(delegation.cid, { delegator: issuer.did });
   const token = `token-${delegation.cid}`;
   links.set(token, { keyDid: linkKey.did, delegation: { cid: delegation.cid, authHeader: delegation.authorization } });
-  return bearerRecord(delegation.cid, token);
+  return bearerRecord(delegation.cid, path, token);
 }
 
-/** A bearer link that outlives the session: the owner wallet signs a CACAO delegation. */
+/** A bearer link that outlives the session: the owner wallet signs a CACAO, as `createOwnerDelegation` does. */
 async function ownerSignedShare(): Promise<SenderShareRecord> {
-  const bytes = crypto.getRandomValues(new Uint8Array(96));
-  const delegationCid = computeCid(bytes, 0x55n);
-  delegations.set(delegationCid, { delegator: OWNER_DID, owner: OWNER_DID });
-  const token = `token-${delegationCid}`;
-  links.set(token, { keyDid: (await sessionKey()).did, delegation: { cid: delegationCid, authHeader: Buffer.from(bytes).toString("base64url") } });
-  return bearerRecord(delegationCid, token);
+  const linkKey = await sessionKey();
+  const path = sharePath();
+  const issuedAt = new Date();
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { [path]: ["tinycloud.kv/get"] } },
+    address: OWNER_ADDRESS,
+    chainId: 1,
+    domain: "app.tinycloud.xyz",
+    issuedAt: issuedAt.toISOString(),
+    expirationTime: new Date(issuedAt.getTime() + 60 * 86_400_000).toISOString(),
+    spaceId: SPACE_ID,
+    delegateUri: linkKey.did,
+  });
+  const signed = wasm.completeSessionSetup({ ...prepared, signature: await ownerSigner.signMessage(prepared.siwe) });
+  const cid: string = signed.delegationCid;
+  delegations.set(cid, { delegator: OWNER_DID });
+  const token = `token-${cid}`;
+  links.set(token, { keyDid: `${linkKey.did}#${linkKey.did.slice("did:key:".length)}`, delegation: { cid, authHeader: signed.delegationHeader.Authorization } });
+  return bearerRecord(cid, path, token);
 }
 
 interface RevokeOutcome {
@@ -170,12 +201,18 @@ async function revoke(record: SenderShareRecord): Promise<RevokeOutcome> {
   return { ...outcome, revokedAt: (await records.get(record.shareId))?.revokedAt };
 }
 
+/** Point a record at another link's token, as a tampered sender history could. */
+function withLinkOf(record: SenderShareRecord, other: SenderShareRecord, cid = other.shareId): SenderShareRecord {
+  return { ...record, shareId: cid, enforcementDelegationCid: cid, link: other.link };
+}
+
 afterEach(() => {
   delegations.clear();
   revoked.clear();
   links.clear();
   revocations.length = 0;
-  nodeReply = undefined;
+  refusal = undefined;
+  receiptBody = undefined;
   profile = undefined;
 });
 
@@ -194,15 +231,18 @@ describe("bearer share revocation", () => {
     expect({ iss: payload.iss.split("#", 1)[0], aud: payload.aud, prf: payload.prf }).toEqual({ iss: publisher.did, aud: NODE_DID, prf: [] });
   });
 
-  it("revokes an owner-signed link on a profile that holds the owner key", async () => {
+  it("revokes an owner-signed link with the owner wallet's CACAO revocation", async () => {
     const record = await ownerSignedShare();
     profile = { session: await sessionKey(), ownerKey: true };
 
     const outcome = await revoke(record);
 
     expect(outcome).toMatchObject({ result: { state: "revoked" } });
-    expect(revoked.has(record.shareId)).toBe(true);
     expect(outcome.revokedAt).toBeString();
+    expect(revoked.has(record.shareId)).toBe(true);
+    const cacao = await parseSignedSiweCacao(revocations[0]!);
+    expect({ issuer: cacao.issuer, audience: cacao.audience }).toEqual({ issuer: OWNER_DID, audience: `ucan:${record.shareId}` });
+    expect(Date.parse(cacao.expiresAt!) - Date.now()).toBeLessThanOrEqual(60_000);
   });
 
   it("revokes a link an earlier session key signed with the owner key", async () => {
@@ -210,12 +250,12 @@ describe("bearer share revocation", () => {
     profile = { session: await sessionKey(), ownerKey: true };
 
     expect(await revoke(record)).toMatchObject({ result: { state: "revoked" } });
-    expect(revocations).toEqual([`owner:${OWNER_DID}:${record.shareId}`]);
+    expect((await parseSignedSiweCacao(revocations[0]!)).issuer).toBe(OWNER_DID);
   });
 
   it.each([
     ["another session key signed", () => sessionKey().then(sessionSignedShare)],
-    ["the owner wallet signed", () => ownerSignedShare()],
+    ["the owner wallet signed", ownerSignedShare],
   ])("refuses a link %s on a session-only profile without asking the node", async (_case, share) => {
     const record = await share();
     profile = { session: await sessionKey(), ownerKey: false };
@@ -228,21 +268,39 @@ describe("bearer share revocation", () => {
   });
 
   it.each([
-    ["has no stored link", (record: SenderShareRecord) => ({ ...record, link: undefined })],
-    ["names another delegation CID", (record: SenderShareRecord) => ({ ...record, shareId: "bafkr4iother", enforcementDelegationCid: "bafkr4iother" })],
-  ])("refuses a record that %s without asking the node", async (_case, tamper) => {
-    const publisher = await sessionKey();
-    const record = tamper(await sessionSignedShare(publisher));
-    profile = { session: publisher, ownerKey: true };
+    ["has no stored link", async () => ({ ...await ownerSignedShare(), link: undefined })],
+    ["names a CID its link does not carry", async () => ({ ...await ownerSignedShare(), shareId: "bafkr4iother", enforcementDelegationCid: "bafkr4iother" })],
+    ["points at another share's owner-signed CACAO", async () => withLinkOf(await ownerSignedShare(), await ownerSignedShare())],
+    ["points at another share's session-signed link", async () => withLinkOf(await ownerSignedShare(), await sessionSignedShare(await sessionKey()))],
+    ["carries a CACAO delegated to another key", async () => {
+      const record = await ownerSignedShare();
+      const token = record.link!.split("tc1=")[1]!;
+      links.set(token, { ...links.get(token)!, keyDid: (await sessionKey()).did });
+      return record;
+    }],
+    ["carries a CACAO whose signature was altered", async () => {
+      const record = await ownerSignedShare();
+      const token = record.link!.split("tc1=")[1]!;
+      const original = links.get(token)!;
+      const bytes = new Uint8Array(Buffer.from(original.delegation.authHeader, "base64url"));
+      bytes[bytes.length - 2]! ^= 0x01;
+      const cid: string = wasm.computeCid(bytes, 0x55n);
+      delegations.set(cid, { delegator: OWNER_DID });
+      links.set(token, { ...original, delegation: { cid, authHeader: Buffer.from(bytes).toString("base64url") } });
+      return { ...record, shareId: cid, enforcementDelegationCid: cid };
+    }],
+  ])("refuses a record that %s without asking the node", async (_case, tampered) => {
+    const record = await tampered();
+    profile = { session: await sessionKey(), ownerKey: true };
 
     const outcome = await revoke(record);
 
-    expect(outcome.error).toMatchObject({ code: "SHARE_LINK_UNAVAILABLE", exitCode: 1 });
+    expect(outcome.error).toMatchObject({ code: "SHARE_LINK_UNAVAILABLE", exitCode: 4 });
     expect(revocations).toEqual([]);
+    expect(revoked.size).toBe(0);
   });
 
   it("never revokes this profile's own session delegation, even through a link bound to it", async () => {
-    // A tampered history can bind a record and link to the session delegation's bytes.
     const record = await ownerSignedShare();
     profile = { session: await sessionKey(), ownerKey: true, sessionDelegationCid: record.shareId };
 
@@ -253,19 +311,36 @@ describe("bearer share revocation", () => {
   });
 
   it.each([
-    [403, "Cannot find parent delegation", "the node rejected the share revocation (HTTP 403: Cannot find parent delegation); nothing was revoked"],
-    [500, "database unavailable", "the node rejected the share revocation (HTTP 500: database unavailable); nothing was revoked"],
-    [200, JSON.stringify({ revoked: true, cid: "bafkr4iother" }), "the node rejected the share revocation (HTTP 200); nothing was revoked"],
-  ])("reports a node reply %i for a link the session key signed as SHARE_REVOKE_REJECTED", async (status, body, message) => {
+    [403, "Cannot find parent delegation"],
+    [500, "database unavailable"],
+  ])("reports node refusal %i as SHARE_REVOKE_REJECTED with its reason", async (status, body) => {
     const publisher = await sessionKey();
     const record = await sessionSignedShare(publisher);
     profile = { session: publisher, ownerKey: false };
-    nodeReply = { status, body };
+    refusal = { status, body };
 
     const outcome = await revoke(record);
 
-    expect(outcome.error).toMatchObject({ code: "SHARE_REVOKE_REJECTED", exitCode: 7, status: status === 200 ? undefined : status, message });
-    expect(revocations).toHaveLength(1);
+    expect(outcome.error).toMatchObject({
+      code: "SHARE_REVOKE_REJECTED", exitCode: 4, status,
+      message: `the node rejected the share revocation (HTTP ${status}: ${body}); nothing was revoked`,
+    });
+    expect(outcome.revokedAt).toBeUndefined();
+  });
+
+  it.each([
+    ["a receipt for another CID", JSON.stringify({ revoked: true, cid: "bafkr4iother" })],
+    ["no JSON receipt", "ok"],
+  ])("reports a revocation the node applied but answered with %s as SHARE_REVOKE_UNCONFIRMED", async (_case, body) => {
+    const publisher = await sessionKey();
+    const record = await sessionSignedShare(publisher);
+    profile = { session: publisher, ownerKey: false };
+    receiptBody = body;
+
+    const outcome = await revoke(record);
+
+    expect(revoked.has(record.shareId)).toBe(true);
+    expect(outcome.error).toMatchObject({ code: "SHARE_REVOKE_UNCONFIRMED", exitCode: 1, message: expect.stringContaining("may already be revoked") });
     expect(outcome.revokedAt).toBeUndefined();
   });
 });

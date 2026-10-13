@@ -35,11 +35,11 @@ import {
   LocationRecordValidationError,
   LocationRegistryHttpError,
   parseSignedCompactUcanAttenuation,
+  parseSignedSiweCacao,
   revokePolicyRootV3,
   signCompactUcanAuthorization,
 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
-import { computeCid } from "@tinycloud/node-sdk-wasm";
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
@@ -706,20 +706,26 @@ export function createShareAuthorityAdapters(input: {
       const node = await authenticatedNode();
       const activeNode = await node.activeNodeIdentity();
       if (record.target.origin !== activeNode.origin) throw new Error("share delegation revocation is not bound to the active owner node");
-      // Revoke only the delegation the stored link carries, bound to the
-      // record's CID by its exact bytes, and never this profile's session.
-      const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", ExitCode.ERROR);
+      // Revoke only the delegation the stored link carries: signed, bound to
+      // the record's CID by its exact bytes, delegated to the link's own key
+      // for the record's resource, and never this profile's session.
+      // Exit codes follow `tc share`: 4 unavailable, 5 permission denied, 1 check node state before retrying.
+      const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", 4);
+      const resource = `${record.target.spaceId}/kv/${record.resource.path}`;
       let sessionIssued: boolean;
       try {
         const decoded = node.sharing.decodeLink(parseNativeShareUrl(record.link ?? ""));
+        const linkKey = decoded.keyDid.split("#", 1)[0];
         const authorization = withoutBearer(decoded.delegation.authHeader ?? "");
         if (authorization.split(".").length === 3) {
           const signed = parseSignedCompactUcanAttenuation(authorization, delegationCid);
-          if (signed.payload.aud.split("#", 1)[0] !== decoded.keyDid.split("#", 1)[0]) throw linkUnavailable;
+          if (signed.payload.aud.split("#", 1)[0] !== linkKey || signed.payload.att[resource] === undefined) throw linkUnavailable;
           sessionIssued = signed.payload.iss.split("#", 1)[0] === node.credentialHolderDid;
         } else {
-          // An owner-signed link carries a wallet CACAO.
-          if (computeCid(new Uint8Array(Buffer.from(authorization, "base64url")), 0x55n) !== delegationCid) throw linkUnavailable;
+          // A link that outlives the session carries the owner wallet's CACAO.
+          const signed = await parseSignedSiweCacao(authorization, delegationCid);
+          const owner = /^tinycloud:pkh:(eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):/.exec(record.target.spaceId)?.[1];
+          if (owner === undefined || signed.issuer.toLowerCase() !== `did:pkh:${owner}`.toLowerCase() || signed.audience !== linkKey || signed.attenuation[resource] === undefined) throw linkUnavailable;
           sessionIssued = false;
         }
       } catch {
@@ -751,13 +757,19 @@ export function createShareAuthorityAdapters(input: {
         let receipt: unknown;
         try { receipt = JSON.parse(body); } catch { receipt = undefined; }
         if (typeof receipt === "object" && receipt !== null && "revoked" in receipt && receipt.revoked === true && "cid" in receipt && receipt.cid === delegationCid) return;
+        throw new CLIError(
+          "SHARE_REVOKE_UNCONFIRMED",
+          `the node answered the share revocation with HTTP ${response.status} but did not confirm it; the link may already be revoked. Check whether it still opens before retrying`,
+          ExitCode.ERROR,
+          { status: response.status },
+        );
       }
       // The node's /revoke error text is a fixed reason such as "Unauthorized Revoker".
       const nodeMessage = body.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
       throw new CLIError(
         "SHARE_REVOKE_REJECTED",
-        `the node rejected the share revocation (HTTP ${response.status}${response.ok || nodeMessage === "" ? "" : `: ${nodeMessage}`}); nothing was revoked`,
-        ExitCode.NODE_ERROR,
+        `the node rejected the share revocation (HTTP ${response.status}${nodeMessage === "" ? "" : `: ${nodeMessage}`}); nothing was revoked`,
+        4,
         { status: response.status },
       );
     }),
