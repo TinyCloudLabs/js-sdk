@@ -1820,6 +1820,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     const fullKey = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
     profiles.set("default", makeProfile({
       did: "did:key:z6MkSession",
+      sessionDid: "did:key:z6MkSession",
       authMethod: "openkey",
       posture: "owner-openkey",
     }));
@@ -1831,6 +1832,10 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
       expiry: "2099-01-01T00:00:00.000Z",
+      siwe: "siwe-message",
+      signature: "0xsignature",
+      address: "0xowner",
+      chainId: 1,
       // The public-only JWK OpenKey echoes back (public-only because
       // browser-auth.ts strips `d` before sending to OpenKey).
       jwk: { kty: "OKP", crv: "Ed25519", x: "key-public" },
@@ -1848,6 +1853,7 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
     const fullKey = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
     profiles.set("default", makeProfile({
       did: "did:key:z6MkSession",
+      sessionDid: "did:key:z6MkSession",
       authMethod: "openkey",
       posture: "owner-openkey",
     }));
@@ -1859,6 +1865,10 @@ describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
       ownerDid: "did:pkh:eip155:1:0xowner",
       verificationMethod: "did:key:z6MkSession",
       expiry: "2099-01-01T00:00:00.000Z",
+      siwe: "siwe-message",
+      signature: "0xsignature",
+      address: "0xowner",
+      chainId: 1,
       jwk: { kty: "OKP", crv: "Ed25519", x: "key-public", d: "openkey-returned-private" },
     };
 
@@ -1940,14 +1950,14 @@ describe("OpenKey primary key (TC-705)", () => {
     expect(stderr.join("")).toBe("");
   });
 
-  test("the flag is never recorded without a verified owner", async () => {
+  test("a login without a proof is refused, saving neither the flag nor a session (TC-1053)", async () => {
     const { siwe: _siwe, signature: _signature, ...unsigned } = signedBy(otherOwner, { primary: false });
     openKeyDelegation = unsigned;
 
-    const { profile } = await refreshOpenKeySession("default", activeHost);
+    await expect(refreshOpenKeySession("default", activeHost)).rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
 
-    expect(profile.ownerKeyPrimary).toBeUndefined();
-    expect(stderr.join("")).toBe("");
+    expect(profiles.get("default")?.ownerKeyPrimary).toBeUndefined();
+    expect(sessions.has("default")).toBe(false);
   });
 
   test("--owner on a plain login names that owner's space so OpenKey preselects its key", async () => {

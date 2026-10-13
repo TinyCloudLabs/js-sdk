@@ -61,7 +61,6 @@ import {
   verifySignedSession,
   type RequestedExpiry,
   openKeyExpiryParam,
-  withoutTrustFields,
   withVerifiedAuthority,
   sessionStateIsUsable,
   storedSessionState,
@@ -2036,18 +2035,11 @@ export async function refreshOpenKeySession(
     declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
     // Authority fields (owner, permissions, expiry, trust marker) come only
-    // from a verified proof; an unverified callback contributes none of them.
-    const carriesProof = typeof delegationData.siwe === "string" && typeof delegationData.signature === "string";
-    const merged = mergePrivateJwkIntoSession(delegationData, key);
-    if (carriesProof || expiry !== undefined || expectedOwner !== undefined) {
-      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
-      verifiedOwner = signed.ownerDid;
-      sanitizedSession = withVerifiedAuthority(merged, signed);
-    } else {
-      // Not a proof: also drop a lone SIWE or signature, so an unsigned
-      // `Expiration Time` is never read as this session's expiry.
-      sanitizedSession = Object.fromEntries(Object.entries(withoutTrustFields(merged)).filter(([name]) => name !== "siwe" && name !== "signature"));
-    }
+    // from a verified proof. OpenKey always returns one; a delegation without
+    // a verifiable proof for this key is refused, never saved (TC-1053).
+    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+    verifiedOwner = signed.ownerDid;
+    sanitizedSession = withVerifiedAuthority(mergePrivateJwkIntoSession(delegationData, key), signed);
   }
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
