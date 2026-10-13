@@ -1,5 +1,11 @@
 # @tinycloud/replica
 
+## 0.2.1-beta.0
+
+### Patch Changes
+
+- a007d43: Declare `@tinycloud/sdk-services` as a runtime dependency used by the replica package.
+
 ## 0.2.0
 
 ### Minor Changes
