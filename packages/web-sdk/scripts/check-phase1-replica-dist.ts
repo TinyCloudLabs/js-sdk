@@ -21,6 +21,8 @@ type Baseline = {
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
  * and packages/web-sdk/src/** paths containing "replica" or "replication".
+ * Test files (`*.test.*`) under those paths are not replica-owned: they never
+ * reach a web bundle, so a test-only edit cannot grow it.
  * Build noise tolerance is 64 gzip bytes: an entry may be up to 64 bytes below
  * the measured positive delta; always record the exact observed delta when possible.
  *
@@ -30,11 +32,13 @@ type Baseline = {
  * decision, made by editing `allowance` in a reviewed PR.
  */
 const replicaOwnedPath = (path: string) =>
-  path.startsWith("packages/replica/") ||
-  path.startsWith("packages/sdk-services/src/kv/replication/") ||
-  path.startsWith("packages/sdk-core/src/replication/") ||
-  path.startsWith("packages/node-sdk/src/replication/") ||
-  (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path));
+  !/\.test\.[cm]?[jt]sx?$/.test(path) && (
+    path.startsWith("packages/replica/") ||
+    path.startsWith("packages/sdk-services/src/kv/replication/") ||
+    path.startsWith("packages/sdk-core/src/replication/") ||
+    path.startsWith("packages/node-sdk/src/replication/") ||
+    (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path))
+  );
 const distDir = resolve(import.meta.dir, "../dist");
 const repoRoot = resolve(import.meta.dir, "../../..");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
