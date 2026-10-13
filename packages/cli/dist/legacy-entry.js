@@ -16288,7 +16288,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   });
   const { prehash } = eddsaOpts;
   const { BASE, Fp: Fp2, Fn: Fn2 } = Point;
-  const randomBytes8 = eddsaOpts.randomBytes || randomBytes;
+  const randomBytes9 = eddsaOpts.randomBytes || randomBytes;
   const adjustScalarBytes2 = eddsaOpts.adjustScalarBytes || ((bytes) => bytes);
   const domain = eddsaOpts.domain || ((data, ctx, phflag) => {
     _abool2(phflag, "phflag");
@@ -16370,7 +16370,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
     signature: 2 * _size,
     seed: _size
   };
-  function randomSecretKey(seed = randomBytes8(lengths.seed)) {
+  function randomSecretKey(seed = randomBytes9(lengths.seed)) {
     return _abytes2(seed, lengths.seed, "seed");
   }
   function keygen(seed) {
@@ -20282,6 +20282,7 @@ init_types();
 init_constants();
 init_errors();
 import { createServer } from "http";
+import { randomBytes as randomBytes3 } from "crypto";
 import { createInterface } from "readline";
 var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
   "d",
@@ -20293,6 +20294,7 @@ var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
   "oth",
   "k"
 ]);
+var MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
 function publicJwkForDelegation(jwk) {
   const publicJwk = {};
   for (const [key, value] of Object.entries(jwk)) {
@@ -20443,6 +20445,7 @@ async function callbackFlow(did, options = {}) {
       settled = true;
       clearTimeout(timeout);
       server.close();
+      server.closeAllConnections();
       if (rl) {
         rl.close();
       }
@@ -20452,37 +20455,50 @@ async function callbackFlow(did, options = {}) {
         reject(result.error);
       }
     }
-    const server = createServer((req, res) => {
-      if (req.method === "POST" && req.url === "/callback") {
-        let body = "";
+    const callbackPath = `/callback/${randomBytes3(16).toString("base64url")}`;
+    const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
+    const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
+    const server = createServer({ connectionsCheckingInterval: 1e3 }, (req, res) => {
+      if (req.headers.origin !== openKeyOrigin) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && req.url === callbackPath) {
+        const chunks = [];
+        let size = 0;
         req.on("data", (chunk) => {
-          body += chunk.toString();
+          size += chunk.length;
+          if (size > MAX_CALLBACK_BODY_BYTES) {
+            res.writeHead(413, cors);
+            res.end();
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
         });
         req.on("end", () => {
+          let data;
           try {
-            const data = JSON.parse(body);
-            const invalid2 = validateDelegationCallbackPayload(data);
-            if (invalid2) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: invalid2 }));
-              settle({ error: new Error(`Invalid delegation payload: ${invalid2}`) });
-              return;
-            }
-            res.writeHead(200, {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*"
-            });
-            res.end(JSON.stringify({ success: true }));
-            settle({ data });
-          } catch (err2) {
-            res.writeHead(400, { "Content-Type": "application/json" });
+            data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } catch {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Invalid JSON" }));
-            settle({ error: new Error("Invalid delegation data received") });
+            return;
           }
+          const invalid2 = validateDelegationCallbackPayload(data);
+          if (invalid2) {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: invalid2 }));
+            return;
+          }
+          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+          settle({ data });
         });
-      } else if (req.method === "OPTIONS") {
+      } else if (req.method === "OPTIONS" && req.url === callbackPath) {
         res.writeHead(204, {
-          "Access-Control-Allow-Origin": "*",
+          ...cors,
           "Access-Control-Allow-Methods": "POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type"
         });
@@ -20492,6 +20508,8 @@ async function callbackFlow(did, options = {}) {
         res.end();
       }
     });
+    server.headersTimeout = 1e4;
+    server.requestTimeout = 1e4;
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
@@ -20499,7 +20517,7 @@ async function callbackFlow(did, options = {}) {
         return;
       }
       const port = addr.port;
-      const callbackUrl = `http://127.0.0.1:${port}/callback`;
+      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
@@ -20589,14 +20607,14 @@ import {
   createECDH,
   createHash,
   createHmac,
-  randomBytes as randomBytes4
+  randomBytes as randomBytes5
 } from "crypto";
 
 // src/auth/local-key.ts
 init_replication_config();
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
-import { randomBytes as randomBytes3 } from "crypto";
+import { randomBytes as randomBytes4 } from "crypto";
 var wasmInitialized = false;
 function ensureWasm() {
   if (!wasmInitialized) {
@@ -20621,7 +20639,7 @@ function keyToDID(jwk) {
   return mgr.getDID(keyId);
 }
 function generateEthereumPrivateKey() {
-  const keyBytes = randomBytes3(32);
+  const keyBytes = randomBytes4(32);
   return "0x" + keyBytes.toString("hex");
 }
 async function deriveAddress(privateKey) {
@@ -21140,6 +21158,11 @@ function warnIfNotPrimaryKey(ownerDid, primary) {
   if (primary !== false || ownerDid === void 0) return;
   process.stderr.write(nonPrimaryKeyWarning(ownerDid));
 }
+function announceFirstOwner(profileName2, expectedOwner, ownerDid) {
+  if (expectedOwner !== void 0 || ownerDid === void 0) return;
+  process.stderr.write(`Profile "${profileName2}" now belongs to ${ownerDid}. If that isn't your OpenKey account, stop using this profile and create a new one with tc init.
+`);
+}
 function ownerLoginPermissions(owner) {
   const space = ownerSpaceId("default", owner);
   return [
@@ -21385,8 +21408,8 @@ async function acquireDeviceDelegation(input) {
   const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
   const shareOrigin = canonicalOrigin(input.shareOrigin, "Share origin");
   const fetchFn = input.fetchFn ?? globalThis.fetch;
-  const deviceSecret = randomBytes4(32).toString("base64url");
-  const codeVerifier = randomBytes4(32).toString("base64url");
+  const deviceSecret = randomBytes5(32).toString("base64url");
+  const codeVerifier = randomBytes5(32).toString("base64url");
   const relayKey = createECDH("prime256v1");
   relayKey.generateKeys();
   const relayPublicJwk = relayPublicJwkOf(relayKey);
@@ -21545,6 +21568,7 @@ async function loginWithDeviceAuthorization(input) {
     approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true }
   });
   warnIfNotPrimaryKey(result.ownerDid, result.primary);
+  announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
   return { profile, result };
 }
 
@@ -23436,10 +23460,10 @@ async function handleOpenKeyAuth(profileName2, host, options = {}) {
     profile: profileName2,
     did: profile.did,
     spaceId: delegationData.spaceId,
+    ownerDid: profile.ownerDid ?? null,
     authMethod: "openkey",
     ...options.permissions ? {
       scoped: true,
-      ownerDid: profile.ownerDid,
       host,
       permissions: delegationData.permissions,
       declined,
@@ -23559,6 +23583,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     ...permissions && verifiedOwner ? { approved: { scope: sanitizedSession.permissions, ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } } : {}
   });
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
+  announceFirstOwner(profileName2, expectedOwner, verifiedOwner);
   return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }
 
@@ -23858,6 +23883,8 @@ init_constants();
 init_formatter();
 init_theme();
 init_errors();
+init_session_expired();
+init_types();
 function registerDoctorCommand(program) {
   program.command("doctor").description("Run diagnostic checks").action(async (_options, cmd) => {
     try {
@@ -23903,8 +23930,14 @@ function registerDoctorCommand(program) {
       if (profileOk && profileName2) {
         try {
           const session = await ProfileManager.getSession(profileName2);
-          sessionOk = session !== null;
-          sessionDetail = sessionOk ? "active" : "no session \u2014 run tc auth login";
+          const { state: state2, expiresAt } = storedSessionState(session);
+          sessionOk = sessionStateIsUsable(state2);
+          if (state2 === "expired") {
+            const posture = resolveProfilePosture(await ProfileManager.getProfile(profileName2));
+            sessionDetail = `expired ${expiresAt} \u2014 ${signInAgainHint(profileName2, posture)}`;
+          } else {
+            sessionDetail = sessionOk ? "active" : "no session \u2014 run tc auth login";
+          }
         } catch {
           sessionDetail = "error reading session";
         }
@@ -23917,7 +23950,7 @@ function registerDoctorCommand(program) {
       try {
         const host = profileOk && profileName2 ? (await ProfileManager.getProfile(profileName2)).host : globalOpts.host || DEFAULT_HOST;
         const start = Date.now();
-        const response = await fetch(`${host}/health`);
+        const response = await fetch(`${host}/healthz`);
         const latency = Date.now() - start;
         nodeReachable = response.ok;
         nodeDetail = nodeReachable ? `${host} (${latency}ms)` : `${host} returned ${response.status}`;
@@ -23936,7 +23969,7 @@ function registerDoctorCommand(program) {
           spaceDetail = "error checking space";
         }
       } else {
-        spaceDetail = "skipped (no session)";
+        spaceDetail = "skipped (no active session)";
       }
       checks.push({ name: "Space", ok: spaceOk, detail: spaceDetail });
       const result = {
@@ -24922,7 +24955,7 @@ function parseOperatorType(raw) {
 // src/commands/replica.ts
 init_sdk();
 init_replication_registry();
-import { randomBytes as randomBytes5 } from "crypto";
+import { randomBytes as randomBytes6 } from "crypto";
 import { constants as fsConstants2 } from "fs";
 import { open as open4, readdir as readdir5, rename as rename3, stat as stat3, unlink as unlink2, readFile as readFile9, lstat as lstat4 } from "fs/promises";
 import { basename as basename3, dirname as dirname5, join as join10, resolve as resolve2 } from "path";
@@ -25269,7 +25302,7 @@ function describeStatus(status) {
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve2(path);
-  const temp = join10(dirname5(target), `.${basename3(target)}.${randomBytes5(6).toString("hex")}.tmp`);
+  const temp = join10(dirname5(target), `.${basename3(target)}.${randomBytes6(6).toString("hex")}.tmp`);
   const handle = await open4(temp, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
@@ -25456,7 +25489,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         chooseGrant(grants, deviceDid, space, prefix);
         store = await createReplica(profile, {
           name,
-          replicaId: randomBytes5(16).toString("hex"),
+          replicaId: randomBytes6(16).toString("hex"),
           host,
           space,
           prefix,
@@ -35546,7 +35579,7 @@ function receiveJson(result, path) {
 // src/share/io.ts
 import { constants } from "fs";
 import { lstat as lstat5, mkdir as mkdir4, mkdtemp, open as open7, readFile as readFile11, realpath as realpath2, stat as stat4, link as link2, rename as rename4, rm as rm6, unlink as unlink3 } from "fs/promises";
-import { randomBytes as randomBytes6 } from "crypto";
+import { randomBytes as randomBytes7 } from "crypto";
 import { basename as basename4, join as join12, resolve as resolve3, sep as sep2 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
@@ -35633,7 +35666,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const stagingDirectory = await mkdtemp(join12(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat5(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join12(stagingDirectory, `.tinycloud-share-${randomBytes6(16).toString("hex")}.tmp`);
+  const stagingPath = join12(stagingDirectory, `.tinycloud-share-${randomBytes7(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -36091,7 +36124,7 @@ init_constants();
 init_sdk();
 init_host();
 init_theme();
-import { randomBytes as randomBytes7 } from "crypto";
+import { randomBytes as randomBytes8 } from "crypto";
 import { mkdir as mkdir5, writeFile as writeFile4 } from "fs/promises";
 import { dirname as dirname6 } from "path";
 function didWithoutFragment2(did) {
@@ -36172,7 +36205,7 @@ it directly with \`tc space host <name>\` (no request needed).
       const artifact = {
         kind: "tinycloud.host.request",
         version: 1,
-        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes7(4).toString("hex")}`,
+        requestId: `hostreq_${Date.now().toString(36)}_${randomBytes8(4).toString("hex")}`,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         spaceName,
         spaceId,

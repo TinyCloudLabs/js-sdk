@@ -1,5 +1,21 @@
 # @tinycloud/cli
 
+## 1.2.2-beta.3
+
+### Patch Changes
+
+- 00ad275: `tc doctor` no longer reports a healthy node as down (TC-1048). It probed `/health`, which TinyCloud nodes answer with 404, and now probes `/healthz`, as `tc node health` does. Its Session check now fails for an expired session and prints the command to sign in again, instead of reporting it as active.
+- 8eed117: The browser login's local callback is narrower (TC-1058). It now:
+  - listens on an unguessable `/callback/<random>` path;
+  - answers only requests whose `Origin` is OpenKey's (others, including requests with no `Origin`, get 403);
+  - refuses bodies over 1 MiB (413);
+  - ignores a structurally invalid or foreign request without ending the login;
+  - closes any held-open connection once the login settles, so a stray socket can't keep `tc` running.
+
+  This doesn't authenticate the sender: a local process that learns the path, which appears in the printed URL and the browser's command line, can forge the header and send a well-formed payload. At worst that ends the login with a proof error, because the CLI verifies OpenKey's signed proof before saving anything. Binding each approval to one login attempt needs an OpenKey nonce.
+
+  When a login (browser, paste or device) first pins a profile's owner and you didn't pass `--owner`, the CLI now prints that owner on stderr. Plain `auth login --method openkey` also reports `ownerDid` in its JSON.
+
 ## 1.2.2-beta.2
 
 ### Patch Changes

@@ -31,7 +31,9 @@
   "changesets": [
     "bright-frogs-repair",
     "tc-1025-paste-exit",
+    "tc-1048-doctor-healthz",
     "tc-1053-paste-proof",
+    "tc-1058-callback-binding",
     "tc-973-auth-status-expired"
   ]
 }
