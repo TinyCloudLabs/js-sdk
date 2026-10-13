@@ -1222,6 +1222,16 @@ export class TinyCloudNode {
    */
   private readonly confirmedHostedSpaceIds = new Set<string>();
 
+  /**
+   * Owned space ids known to be hosted for the current session: the sign-in
+   * activation listed them as `activated`, or this session hosted them. Unlike
+   * {@link confirmedHostedSpaceIds}, nothing here is inferred from a space being
+   * merely absent from `skipped`. Read by {@link ensureOwnedSpaceHosted}.
+   */
+  private readonly hostedOwnedSpaceIds = new Set<string>();
+  /** In-flight host delegations, so concurrent callers share one approval per space. */
+  private readonly ownedSpaceHosts = new Map<string, Promise<SpaceHostResult>>();
+
   /** Serializes account-registry writes for the active node instance. */
   private accountRegistryTail: Promise<void> = Promise.resolve();
   /**
@@ -2029,9 +2039,14 @@ export class TinyCloudNode {
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
     this.confirmedHostedSpaceIds.clear();
+    this.hostedOwnedSpaceIds.clear();
 
     await this.tc.signIn(options);
     this.syncResolvedHostFromAuth();
+    // The first POST of a delegation is the only one that lists hosted spaces.
+    for (const spaceId of (this.auth as NodeUserAuthorization).lastActivationActivatedSpaceIds ?? []) {
+      this.hostedOwnedSpaceIds.add(spaceId);
+    }
 
     // Bind the replacement services to the runtime dependencies active for
     // this sign-in and permanently retire anything captured from the previous
@@ -3023,7 +3038,7 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires an active session");
     }
 
-    if (this.confirmedHostedSpaceIds.has(spaceId)) {
+    if (this.confirmedHostedSpaceIds.has(spaceId) || this.hostedOwnedSpaceIds.has(spaceId)) {
       return;
     }
 
@@ -3045,10 +3060,7 @@ export class TinyCloudNode {
       );
     }
 
-    const authorization = this.auth as NodeUserAuthorization;
-    const created = signal
-      ? await authorization.hostOwnedSpaceResult(spaceId, undefined, signal)
-      : await authorization.hostOwnedSpaceResult(spaceId);
+    const created = await this.hostOwnedSpaceOnce(spaceId, signal);
     if (!created.success) {
       throw Object.assign(
         new Error(`Failed to create owned space ${spaceId}: ${describeHostFailure(created)}`),
@@ -3070,6 +3082,7 @@ export class TinyCloudNode {
       );
     }
     this.confirmedHostedSpaceIds.add(spaceId);
+    this.hostedOwnedSpaceIds.add(spaceId);
   }
 
   /**
@@ -3105,7 +3118,7 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires a TinyCloud host");
     }
 
-    const hosted = await (this.auth as NodeUserAuthorization).hostOwnedSpaceResult(spaceId);
+    const hosted = await this.hostOwnedSpaceOnce(spaceId);
     if (!hosted.success) {
       throw Object.assign(
         new Error(`Failed to host owned space ${spaceId}: ${describeHostFailure(hosted)}`),
@@ -3131,6 +3144,7 @@ export class TinyCloudNode {
         { cause: activation },
       );
     }
+    this.hostedOwnedSpaceIds.add(spaceId);
 
     try {
       await this.enqueueAccountRegistryOperation(session, async () => {
@@ -3162,22 +3176,19 @@ export class TinyCloudNode {
    * registered on the node.
    *
    * Calling this resolves `name` to the owner's owned-space URI
-   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`). It first consults the
-   * account-space spaces registry (`account/spaces/{space_id}`, the canonical
-   * KV source of truth, fronted by a best-effort SQLite index): if the space is
-   * already registered/hosted it returns the URI WITHOUT submitting a host
-   * delegation, avoiding a redundant host-SIWE signature prompt for owners who
-   * already use the space. When the registry has no record, it asks the node
-   * through session activation (no signature): a hosted space the session's
-   * recap covers comes back `activated`. Only when neither says the space is
-   * hosted does it fall through to {@link hostOwnedSpace}, which asks for a
-   * signature. Before that, it lets the background account-registry sync
-   * finish (the sync hosts the account space itself) and asks the node again,
-   * so one sign-in never asks twice for the same space.
+   * (`tinycloud:pkh:eip155:<chain>:<addr>:<name>`). It returns WITHOUT
+   * submitting a host delegation when the space is known to be hosted: the
+   * sign-in activation listed it as `activated` (any space the session's recap
+   * covers), this session already hosted it, or the account-space spaces
+   * registry (`account/spaces/{space_id}`, the canonical KV source of truth,
+   * fronted by a best-effort SQLite index) has its record. Otherwise it falls
+   * through to {@link hostOwnedSpace}, which asks for a signature; a host
+   * already in flight for the same space (e.g. from the background registry
+   * sync) is shared rather than asked for twice.
    *
-   * A space the session's recap does not cover is in neither activation list,
-   * so for such a space a missing registry record still means hosting; the
-   * host SIWE is idempotent server-side. Must be called after {@link signIn}.
+   * Hosting is still needed when the space really isn't hosted, or when the
+   * session's recap doesn't cover it and the registry has no record; the host
+   * SIWE is idempotent server-side. Must be called after {@link signIn}.
    *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
@@ -3189,12 +3200,7 @@ export class TinyCloudNode {
 
     const spaceId = this.ownedSpaceId(name);
 
-    if (await this.isOwnedSpaceRegistered(spaceId) || await this.isOwnedSpaceActivated(spaceId)) {
-      return spaceId;
-    }
-
-    await this.accountRegistryTail;
-    if (await this.isOwnedSpaceActivated(spaceId)) {
+    if (this.hostedOwnedSpaceIds.has(spaceId) || await this.isOwnedSpaceRegistered(spaceId)) {
       return spaceId;
     }
 
@@ -3202,21 +3208,22 @@ export class TinyCloudNode {
   }
 
   /**
-   * Whether the node reports `spaceId` hosted for the current session. Session
-   * activation lists hosted spaces the recap covers as `activated`; it needs no
-   * signature. Any failure, or a space outside the recap, is inconclusive and
-   * returns false.
+   * Submit the host delegation for an owned space, sharing one in-flight
+   * request (and so one approval) between concurrent callers, such as the
+   * background registry sync and {@link ensureOwnedSpaceHosted}.
    */
-  private async isOwnedSpaceActivated(spaceId: string): Promise<boolean> {
-    const session = this.auth?.tinyCloudSession;
-    const host = this.hosts[0] ?? this.config.host;
-    if (!session || !host) return false;
-    try {
-      const activation = await activateSessionWithHost(host, session.delegationHeader);
-      return activation.success && activation.activated?.includes(spaceId) === true;
-    } catch {
-      return false;
-    }
+  private hostOwnedSpaceOnce(spaceId: string, signal?: AbortSignal): Promise<SpaceHostResult> {
+    const inFlight = this.ownedSpaceHosts.get(spaceId);
+    if (inFlight) return inFlight;
+    const authorization = this.auth as NodeUserAuthorization;
+    const hosting = (signal
+      ? authorization.hostOwnedSpaceResult(spaceId, undefined, signal)
+      : authorization.hostOwnedSpaceResult(spaceId)
+    ).finally(() => {
+      this.ownedSpaceHosts.delete(spaceId);
+    });
+    this.ownedSpaceHosts.set(spaceId, hosting);
+    return hosting;
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
@@ -3542,6 +3549,12 @@ export class TinyCloudNode {
       recap: stagedRecap,
     });
 
+    // Like signIn: stop the replaced session's background registry sync and let
+    // its in-flight writes drain before the session is swapped. A rejected
+    // restore threw above and leaves that sync running.
+    this.pendingAccountRegistrySync?.controller.abort();
+    await this.accountRegistryTail;
+
     // Every operation below is a non-throwing pointer/value swap.
     const oldGraph = this._serviceGraph;
     const oldCore = this.tc;
@@ -3579,6 +3592,7 @@ export class TinyCloudNode {
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
     this.confirmedHostedSpaceIds.clear();
+    this.hostedOwnedSpaceIds.clear();
     this._restoredNodeFeatures = restoredNodeFeatures;
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost], restoredNodeFeatures);

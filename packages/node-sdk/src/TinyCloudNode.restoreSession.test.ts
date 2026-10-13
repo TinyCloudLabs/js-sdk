@@ -525,6 +525,51 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     }
   });
 
+  test("TC-998: a successful restore stops the replaced session's background registry sync; a rejected one leaves it", async () => {
+    const proof = await signedRestorableSession();
+    const node = new TinyCloudNode({
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+    await node.restoreSession({ ...proof, tinycloudHosts: [RESTORE_HOST] });
+
+    const signals: AbortSignal[] = [];
+    const started = Promise.withResolvers<void>();
+    let registryWrites = 0;
+    Reflect.set(node, "createAccountRegistryServices", (context: ServiceContext, signal: AbortSignal) => {
+      signals.push(signal);
+      return {
+        contexts: [context],
+        account: {
+          index: {
+            // Held until aborted, like a slow account SQL read on the old session.
+            ensure: () => {
+              const held = Promise.withResolvers<never>();
+              signal.addEventListener("abort", () => held.reject(signal.reason), { once: true });
+              started.resolve();
+              return held.promise;
+            },
+          },
+          spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+        },
+      };
+    });
+    Reflect.set(node, "writeManifestRegistryRecords", async () => {
+      registryWrites += 1;
+    });
+    Reflect.get(node, "scheduleAccountRegistrySync").call(node);
+    await started.promise;
+
+    const forged = { ...proof, signature: `${proof.signature.slice(0, -4)}0000` };
+    await expect(node.restoreSession({ ...forged, tinycloudHosts: [RESTORE_HOST] })).rejects.toThrow();
+    expect(signals[0]?.aborted).toBe(false);
+
+    await node.restoreSession({ ...proof, tinycloudHosts: [RESTORE_HOST] });
+    expect(signals[0]?.aborted).toBe(true);
+    await node.waitForAccountRegistrySync();
+    expect(registryWrites).toBe(0);
+  });
+
   test("rejects a captured encryption discovery that resolves after restore retires its graph", async () => {
     const originalFetch = globalThis.fetch;
     let requestSignal: AbortSignal | undefined;

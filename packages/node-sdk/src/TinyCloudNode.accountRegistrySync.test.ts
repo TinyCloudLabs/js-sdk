@@ -385,6 +385,27 @@ describe("sign-in account registry sync runs in the background (TC-998)", () => 
       process.off("unhandledRejection", onUnhandled);
     }
   });
+
+  test("TC-994: a space the sign-in activation listed as activated is not re-hosted after sign-in", async () => {
+    const { node } = makeNode();
+    stubSignInSteps(node);
+    slowRegistry(node, 0);
+    const auth = Reflect.get(node, "auth");
+    Reflect.set(auth, "lastActivationActivatedSpaceIds", [ACCOUNT_SPACE]);
+    const hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
+    Reflect.set(auth, "hostOwnedSpaceResult", hostOwnedSpaceResult);
+    const registryRead = mock(async () => {
+      throw new Error("registry read must not be needed");
+    });
+    Reflect.set(node, "isOwnedSpaceRegistered", registryRead);
+
+    await node.signIn();
+    expect(await node.ensureOwnedSpaceHosted("account")).toBe(ACCOUNT_SPACE);
+
+    expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+    expect(registryRead).not.toHaveBeenCalled();
+    await node.waitForAccountRegistrySync();
+  });
 });
 
 describe("sign-in account registry barrier", () => {
