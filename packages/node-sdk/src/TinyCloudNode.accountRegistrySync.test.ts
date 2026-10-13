@@ -17,7 +17,7 @@
  * `syncAccessible()`.
  */
 
-import { afterEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
+import { afterEach, describe, expect, jest, mock, spyOn, test, type Mock } from "bun:test";
 import { inspect } from "node:util";
 import { SQLMigrations } from "@tinycloud/sdk-services";
 
@@ -198,40 +198,197 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   return { node, wasm, syncAccessible };
 }
 
-describe("sign-in account registry barrier", () => {
-  test("waits for queued registry writes before resolving", async () => {
-    const { node } = makeNode();
-    const registry = Promise.withResolvers<void>();
-    const scheduled = Promise.withResolvers<void>();
-    const core = Reflect.get(node, "tc");
-    if (core === null || typeof core !== "object") throw new Error("TinyCloud core is unavailable");
-    const auth = Reflect.get(node, "auth");
-    if (auth === null || typeof auth !== "object") throw new Error("Node authorization is unavailable");
-    Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
-    Reflect.set(core, "signIn", async () => {});
-    Reflect.set(node, "initializeServices", async () => {});
-    Reflect.set(node, "registerPrimarySessionGrant", () => {});
-    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
-    Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
-    Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
-    Reflect.set(node, "scheduleAccountRegistrySync", () => {
-      Reflect.set(node, "accountRegistryTail", registry.promise);
-      scheduled.resolve();
-    });
+/** Settle promise chains without advancing (fake) timers. */
+async function settleMicrotasks(): Promise<void> {
+  for (let i = 0; i < 200; i += 1) await Promise.resolve();
+}
 
-    let settled = false;
-    const signIn = node.signIn().then(() => {
-      settled = true;
-    });
-    await scheduled.promise;
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    registry.resolve();
-    await signIn;
-    expect(settled).toBe(true);
+/**
+ * Sign in with fake timers frozen. Fails fast (instead of hanging) if sign-in
+ * waits on the registry sync or any of its timers.
+ */
+async function signInWithoutTimers(node: TinyCloudNode): Promise<void> {
+  let signedIn = false;
+  const signIn = node.signIn().then(() => {
+    signedIn = true;
   });
-  test("aborts a hung registry request at its real-time deadline before sign-in resolves", async () => {
+  await settleMicrotasks();
+  expect(signedIn).toBe(true);
+  await signIn;
+}
+
+/**
+ * Stub every sign-in step around the registry sync. The real
+ * `scheduleAccountRegistrySync` runs against `makeNode`'s registry services.
+ */
+function stubSignInSteps(node: TinyCloudNode): void {
+  const core = Reflect.get(node, "tc");
+  const auth = Reflect.get(node, "auth");
+  if (!core || typeof core !== "object" || !auth || typeof auth !== "object") {
+    throw new Error("Sign-in dependencies are unavailable");
+  }
+  Reflect.set(node, "_restoredTcSession", Reflect.get(auth, "tinyCloudSession"));
+  Reflect.set(auth, "hosts", ["https://tinycloud.test"]);
+  Reflect.set(core, "signIn", async () => {});
+  const serviceContext = Reflect.get(node, "_serviceContext");
+  Reflect.set(node, "initializeServices", async () => {
+    Reflect.set(node, "_serviceContext", serviceContext);
+  });
+  Reflect.set(node, "registerPrimarySessionGrant", () => {});
+  Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
+  Reflect.set(node, "ensureRequestedEncryptionNetworks", async () => {});
+  Reflect.set(node, "ensureOwnedSpaceHostedById", async () => {});
+}
+
+/** A registry whose index step takes `ms` (fake) milliseconds, or until aborted. */
+function slowRegistry(node: TinyCloudNode, ms: number): { written: () => boolean; signals: AbortSignal[] } {
+  let written = false;
+  const signals: AbortSignal[] = [];
+  Reflect.set(node, "createAccountRegistryServices", (context: ServiceContext, signal: AbortSignal) => {
+    signals.push(signal);
+    return {
+      contexts: [context],
+      account: {
+        index: {
+          ensure: () => {
+            const { promise, resolve, reject } = Promise.withResolvers<{ ok: true; data: undefined }>();
+            const timer = setTimeout(() => resolve({ ok: true, data: undefined }), ms);
+            signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(signal.reason);
+            }, { once: true });
+            return promise;
+          },
+        },
+        spaces: { syncAccessible: async () => ({ ok: true, data: [] }) },
+      },
+    };
+  });
+  Reflect.set(node, "writeManifestRegistryRecords", async () => {
+    written = true;
+  });
+  return { written: () => written, signals };
+}
+
+describe("sign-in account registry sync runs in the background (TC-998)", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test("signIn resolves while a 10 s registry sync is still running, and the sync still writes", async () => {
+    jest.useFakeTimers();
+    const { node } = makeNode();
+    stubSignInSteps(node);
+    const registry = slowRegistry(node, 10_000);
+
+    await signInWithoutTimers(node);
+    expect(registry.signals).toHaveLength(1);
+    expect(registry.written()).toBe(false);
+
+    let synced = false;
+    const waited = node.waitForAccountRegistrySync().then(() => {
+      synced = true;
+    });
+    jest.advanceTimersByTime(9_999);
+    await settleMicrotasks();
+    expect(synced).toBe(false);
+
+    jest.advanceTimersByTime(1);
+    await settleMicrotasks();
+    expect(synced).toBe(true);
+    await waited;
+    expect(registry.written()).toBe(true);
+    expect(registry.signals[0]?.aborted).toBe(false);
+  });
+
+  test("a first write after waitForAccountRegistrySync() starts only after the registry writes settle", async () => {
+    jest.useFakeTimers();
+    const { node } = makeNode();
+    stubSignInSteps(node);
+    const order: string[] = [];
+    slowRegistry(node, 5_000);
+    Reflect.set(node, "writeManifestRegistryRecords", async () => {
+      order.push("registry write");
+    });
+
+    await signInWithoutTimers(node);
+    const firstWrite = node.waitForAccountRegistrySync().then(() => {
+      order.push("app write");
+    });
+    await settleMicrotasks();
+    expect(order).toEqual([]);
+
+    jest.advanceTimersByTime(5_000);
+    await settleMicrotasks();
+    expect(order).toEqual(["registry write", "app write"]);
+    await firstWrite;
+  });
+
+  test("the hang guard aborts a sync that outlives it and the session stays usable", async () => {
+    jest.useFakeTimers();
+    const { node } = makeNode();
+    stubSignInSteps(node);
+    const registry = slowRegistry(node, 60_000);
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await signInWithoutTimers(node);
+      const session = node.restorableSession;
+      jest.advanceTimersByTime(29_999);
+      await settleMicrotasks();
+      expect(registry.signals[0]?.aborted).toBe(false);
+
+      jest.advanceTimersByTime(1);
+      let synced = false;
+      void node.waitForAccountRegistrySync().then(() => {
+        synced = true;
+      });
+      await settleMicrotasks();
+      expect(synced).toBe(true);
+      expect(registry.signals[0]?.aborted).toBe(true);
+      expect(registry.written()).toBe(false);
+      expect(warnedWith(warnSpy, "deadline exceeded")).toBe(true);
+
+      expect(node.restorableSession).toBe(session);
+      const createScopedKV = Reflect.get(node, "createSpaceScopedKVService") as (spaceId: string) => KVService;
+      const put = await createScopedKV.call(node, SPACE_URI).put("after-guard", { ok: true });
+      expect(put.ok).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("background sync failures are logged, never unhandled", async () => {
+    const { node } = makeNode();
+    stubSignInSteps(node);
+    Reflect.set(node, "createAccountRegistryServices", () => {
+      throw new Error("registry services unavailable");
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const originalWarn = console.warn;
+    const warnSpy = mock(() => {});
+    console.warn = warnSpy as unknown as typeof console.warn;
+    try {
+      await node.signIn();
+      await node.waitForAccountRegistrySync();
+      // Unhandled rejections are reported after the current macrotask.
+      const nextTask = Promise.withResolvers<void>();
+      setImmediate(nextTask.resolve);
+      await nextTask.promise;
+      expect(warnedWith(warnSpy, "account registry sync failed")).toBe(true);
+      expect(unhandled).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
+describe("sign-in account registry barrier", () => {
+  test("a new sign-in aborts the replaced session's hung registry request instead of waiting", async () => {
     const { node } = makeNode();
     const core = Reflect.get(node, "tc");
     const auth = Reflect.get(node, "auth");
@@ -303,7 +460,7 @@ describe("sign-in account registry barrier", () => {
     } finally {
       console.warn = originalWarn;
     }
-    expect(warnedWith(warnSpy, "deadline exceeded")).toBe(true);
+    expect(warnedWith(warnSpy, "deadline exceeded")).toBe(false);
     expect(Date.now() - started).toBeLessThan(250);
     expect(requestSignals).toHaveLength(1);
     expect(requestSignals[0]?.aborted).toBe(true);
@@ -535,6 +692,7 @@ describe("sign-in account registry barrier", () => {
     console.warn = warnSpy as unknown as typeof console.warn;
     try {
       await node.signIn();
+      await node.waitForAccountRegistrySync();
     } finally {
       console.warn = originalWarn;
     }

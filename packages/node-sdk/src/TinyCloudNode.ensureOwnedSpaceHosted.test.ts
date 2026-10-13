@@ -98,6 +98,21 @@ function withFetch<T>(
   });
 }
 
+/** A node whose session activation reports SECRETS hosted while `hosted()` is true. */
+function nodeActivation(hosted: () => boolean): (input: RequestInfo | URL) => Promise<Response> {
+  return async () =>
+    Response.json(hosted() ? { activated: [SECRETS], skipped: [] } : { activated: [], skipped: [SECRETS] });
+}
+
+/** Let pending fetches and promise chains run. */
+async function nextTasks(): Promise<void> {
+  for (let hop = 0; hop < 5; hop += 1) {
+    const nextTask = Promise.withResolvers<void>();
+    setImmediate(nextTask.resolve);
+    await nextTask.promise;
+  }
+}
+
 test("ensureOwnedSpaceHosted does NOT host when the SQLite index already lists the space", async () => {
   const node = makeNode();
   const indexList = mock(async () => ({
@@ -149,7 +164,7 @@ test("ensureOwnedSpaceHosted hosts when neither index nor canonical KV lists the
   const hostOwnedSpace = mock(async () => SECRETS);
   (node as any).hostOwnedSpace = hostOwnedSpace;
 
-  const spaceId = await node.ensureOwnedSpaceHosted("secrets");
+  const spaceId = await withFetch(nodeActivation(() => false), () => node.ensureOwnedSpaceHosted("secrets"));
 
   expect(spaceId).toBe(SECRETS);
   expect(hostOwnedSpace).toHaveBeenCalledTimes(1);
@@ -167,20 +182,114 @@ test("TC-473: ensureOwnedSpaceHosted issues one registry write after hosting", a
     })),
     register,
   });
-  const hostOwnedSpaceResult = (node as any).auth.hostOwnedSpaceResult;
+  let hosted = false;
+  const hostOwnedSpaceResult = mock(async () => {
+    hosted = true;
+    return { success: true, status: 200 };
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
 
-  const spaceId = await withFetch(
-    async () =>
-      new Response(JSON.stringify({ activated: [SECRETS], skipped: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    () => node.ensureOwnedSpaceHosted("secrets"),
-  );
+  const spaceId = await withFetch(nodeActivation(() => hosted), () => node.ensureOwnedSpaceHosted("secrets"));
 
   expect(spaceId).toBe(SECRETS);
   expect(hostOwnedSpaceResult).toHaveBeenCalledTimes(1);
   expect(hostOwnedSpaceResult).toHaveBeenCalledWith(SECRETS);
+  expect(register).toHaveBeenCalledTimes(1);
+});
+
+test("TC-998: a registered space resolves while the background registry sync is still running", async () => {
+  const node = makeNode();
+  const get = mock(async () => ({ ok: true as const, data: {} }));
+  stubAccountRegistry(node, { get });
+  const hostOwnedSpace = mock(async () => SECRETS);
+  Reflect.set(node, "hostOwnedSpace", hostOwnedSpace);
+  const backgroundSync = Promise.withResolvers<void>();
+  Reflect.set(node, "accountRegistryTail", backgroundSync.promise);
+
+  expect(await node.ensureOwnedSpaceHosted("secrets")).toBe(SECRETS);
+  expect(hostOwnedSpace).not.toHaveBeenCalled();
+  backgroundSync.resolve();
+});
+
+for (const [label, registry] of [
+  ["404s", { get: mock(async () => ({ ok: false as const, error: { code: "NOT_FOUND", message: "Space not found", service: "kv" } })) }],
+  ["throws", {
+    indexList: mock(async () => {
+      throw new Error("no such table: spaces");
+    }),
+    get: mock(async () => {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }),
+  }],
+] as const) {
+  test(`TC-994: an already hosted space whose registry read ${label} is not re-hosted`, async () => {
+    const node = makeNode();
+    stubAccountRegistry(node, registry);
+    const hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
+    Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+    // The background registry sync is still running and never finishes here.
+    Reflect.set(node, "accountRegistryTail", Promise.withResolvers<void>().promise);
+
+    const spaceId = await withFetch(nodeActivation(() => true), () => node.ensureOwnedSpaceHosted("secrets"));
+
+    expect(spaceId).toBe(SECRETS);
+    expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+  });
+}
+
+test("TC-994: a space the background sync hosts meanwhile is not hosted a second time", async () => {
+  const node = makeNode();
+  stubAccountRegistry(node, {});
+  let hosted = false;
+  const hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const backgroundSync = Promise.withResolvers<void>();
+  Reflect.set(node, "accountRegistryTail", backgroundSync.promise);
+
+  const spaceId = await withFetch(nodeActivation(() => hosted), async () => {
+    const ensured = node.ensureOwnedSpaceHosted("secrets");
+    await nextTasks();
+    expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+    // The registry sync hosts the space (its own single prompt), then settles.
+    hosted = true;
+    backgroundSync.resolve();
+    return ensured;
+  });
+
+  expect(spaceId).toBe(SECRETS);
+  expect(hostOwnedSpaceResult).not.toHaveBeenCalled();
+});
+
+test("TC-998: an unhosted space is hosted once after the background sync, then registered once", async () => {
+  const node = makeNode();
+  const order: string[] = [];
+  const register = mock(async () => {
+    order.push("register");
+    return { ok: true as const, data: {} };
+  });
+  stubAccountRegistry(node, { register });
+  let hosted = false;
+  const hostOwnedSpaceResult = mock(async () => {
+    order.push("host");
+    hosted = true;
+    return { success: true, status: 200 };
+  });
+  Reflect.set(Reflect.get(node, "auth"), "hostOwnedSpaceResult", hostOwnedSpaceResult);
+  const backgroundSync = Promise.withResolvers<void>();
+  Reflect.set(node, "accountRegistryTail", backgroundSync.promise.then(() => {
+    order.push("background sync");
+  }));
+
+  const spaceId = await withFetch(nodeActivation(() => hosted), async () => {
+    const ensured = node.ensureOwnedSpaceHosted("secrets");
+    await nextTasks();
+    expect(order).toEqual([]);
+    backgroundSync.resolve();
+    return ensured;
+  });
+
+  expect(spaceId).toBe(SECRETS);
+  expect(order).toEqual(["background sync", "host", "register"]);
   expect(register).toHaveBeenCalledTimes(1);
 });
 
@@ -219,7 +328,7 @@ test("ensureOwnedSpaceHosted hosts (does not throw) when the entire registry che
   (node as any).hostOwnedSpace = hostOwnedSpace;
 
   // Must not throw the cache/KV error: falls through to hosting.
-  const spaceId = await node.ensureOwnedSpaceHosted("secrets");
+  const spaceId = await withFetch(nodeActivation(() => false), () => node.ensureOwnedSpaceHosted("secrets"));
 
   expect(spaceId).toBe(SECRETS);
   expect(hostOwnedSpace).toHaveBeenCalledTimes(1);

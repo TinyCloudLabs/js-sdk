@@ -1224,11 +1224,15 @@ export class TinyCloudNode {
 
   /** Serializes account-registry writes for the active node instance. */
   private accountRegistryTail: Promise<void> = Promise.resolve();
-  /** Bounds best-effort registry work on the sign-in critical path. */
-  private accountRegistryDeadlineMs = 4_000;
+  /**
+   * Hang guard for the background registry sync. It is off the sign-in path,
+   * so it must outlast a slow but healthy sync (9–18 s on prod 1.20.2, TC-998).
+   */
+  private accountRegistryDeadlineMs = 30_000;
   private pendingAccountRegistrySync?: {
     session: TinyCloudSession;
     promise: Promise<void>;
+    controller: AbortController;
   };
 
   /**
@@ -1996,7 +2000,9 @@ export class TinyCloudNode {
     }
 
     // Do not replace the active session while its best-effort registry sync is
-    // still issuing writes with that session's authority.
+    // still issuing writes with that session's authority. That sync's remaining
+    // work belongs to the session being replaced, so stop it before draining.
+    this.pendingAccountRegistrySync?.controller.abort();
     await this.accountRegistryTail;
 
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
@@ -2076,13 +2082,24 @@ export class TinyCloudNode {
     }
 
     if (!bootstrapped) {
+      // Best-effort and off the critical path (TC-998); callers that need the
+      // registry written await waitForAccountRegistrySync().
       this.scheduleAccountRegistrySync();
-      // Drain the bounded best-effort queue before callers can issue their
-      // first KV write; on failure or deadline, its requests are already aborted.
-      await this.accountRegistryTail;
     }
 
     this.notificationHandler.success("Successfully signed in");
+  }
+
+  /**
+   * Wait for the account-registry sync that {@link signIn} starts in the
+   * background (account index, this app's manifest record, space list).
+   * Resolves once it has finished, failed or hit its hang guard; it never
+   * rejects, and failures are logged as warnings. `signIn()` does not wait for
+   * it, so call this only when you need the registry written, or before a first
+   * write against a SQLite-backed node older than 1.20.2 (TC-899).
+   */
+  async waitForAccountRegistrySync(): Promise<void> {
+    await this.accountRegistryTail;
   }
 
   private ownedSpaceId(name: string): string {
@@ -2810,17 +2827,17 @@ export class TinyCloudNode {
         clearTimeout(deadline);
       }
     });
-    this.pendingAccountRegistrySync = { session, promise };
-    const clearPendingSync = () => {
+    this.pendingAccountRegistrySync = { session, promise, controller };
+    const settle = () => {
+      clearTimeout(deadline);
       if (this.pendingAccountRegistrySync?.promise === promise) {
         this.pendingAccountRegistrySync = undefined;
       }
     };
-    void promise.then(clearPendingSync, clearPendingSync);
-    void promise.then(
-      () => clearTimeout(deadline),
-      () => clearTimeout(deadline),
-    );
+    void promise.then(settle, (error: unknown) => {
+      settle();
+      console.warn("TinyCloud account registry sync failed", error);
+    });
   }
 
   private enqueueAccountRegistryOperation(
@@ -2870,10 +2887,16 @@ export class TinyCloudNode {
     signal: AbortSignal,
   ): Promise<void> {
     const delays = [250, 1_000, 3_000];
+    // A newer sign-in superseding this sync is routine; only the hang guard warns.
+    const stopped = (detail: unknown) => {
+      if ((signal.reason as { name?: string } | undefined)?.name === "TimeoutError") {
+        console.warn("TinyCloud account registry sync stopped: deadline exceeded", detail);
+      }
+    };
     let lastError: unknown;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (signal.aborted) {
-        console.warn("TinyCloud account registry sync stopped: deadline exceeded", signal.reason);
+        stopped(signal.reason);
         return;
       }
       try {
@@ -2881,7 +2904,7 @@ export class TinyCloudNode {
         return;
       } catch (error) {
         if (signal.aborted) {
-          console.warn("TinyCloud account registry sync stopped: deadline exceeded", error);
+          stopped(error);
           return;
         }
         // Authorization verdicts are deterministic, not transient: retrying a
@@ -3144,13 +3167,17 @@ export class TinyCloudNode {
    * KV source of truth, fronted by a best-effort SQLite index): if the space is
    * already registered/hosted it returns the URI WITHOUT submitting a host
    * delegation, avoiding a redundant host-SIWE signature prompt for owners who
-   * already use the space. Only when the space is absent — or the registry
-   * check fails for any reason (e.g. a cold SQLite index reporting
-   * `no such table: spaces`) — does it fall through to {@link hostOwnedSpace}.
+   * already use the space. When the registry has no record, it asks the node
+   * through session activation (no signature): a hosted space the session's
+   * recap covers comes back `activated`. Only when neither says the space is
+   * hosted does it fall through to {@link hostOwnedSpace}, which asks for a
+   * signature. Before that, it lets the background account-registry sync
+   * finish (the sync hosts the account space itself) and asks the node again,
+   * so one sign-in never asks twice for the same space.
    *
-   * The registry check is purely an optimization: any failure falls back to
-   * hosting, and the host SIWE is idempotent server-side, so re-hosting an
-   * existing space remains a safe no-op. Must be called after {@link signIn}.
+   * A space the session's recap does not cover is in neither activation list,
+   * so for such a space a missing registry record still means hosting; the
+   * host SIWE is idempotent server-side. Must be called after {@link signIn}.
    *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
@@ -3160,17 +3187,36 @@ export class TinyCloudNode {
       throw new Error("Not signed in. Call signIn() first.");
     }
 
-    // signIn schedules its registry sync before returning. Let that operation
-    // finish before this explicit read/host/write sequence begins.
-    await this.accountRegistryTail;
-
     const spaceId = this.ownedSpaceId(name);
 
-    if (await this.isOwnedSpaceRegistered(spaceId)) {
+    if (await this.isOwnedSpaceRegistered(spaceId) || await this.isOwnedSpaceActivated(spaceId)) {
+      return spaceId;
+    }
+
+    await this.accountRegistryTail;
+    if (await this.isOwnedSpaceActivated(spaceId)) {
       return spaceId;
     }
 
     return this.hostOwnedSpace(name);
+  }
+
+  /**
+   * Whether the node reports `spaceId` hosted for the current session. Session
+   * activation lists hosted spaces the recap covers as `activated`; it needs no
+   * signature. Any failure, or a space outside the recap, is inconclusive and
+   * returns false.
+   */
+  private async isOwnedSpaceActivated(spaceId: string): Promise<boolean> {
+    const session = this.auth?.tinyCloudSession;
+    const host = this.hosts[0] ?? this.config.host;
+    if (!session || !host) return false;
+    try {
+      const activation = await activateSessionWithHost(host, session.delegationHeader);
+      return activation.success && activation.activated?.includes(spaceId) === true;
+    } catch {
+      return false;
+    }
   }
 
   /** Resolve and authenticate the owner encoded by an owned-space URI. */
