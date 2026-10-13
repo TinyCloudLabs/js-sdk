@@ -362,6 +362,8 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
   console.error(`\nOpen this URL in a browser to authenticate:\n`);
   console.error(`  ${authUrl}\n`);
 
+  // A previous paste in this process unref'd stdin; this read must keep the process alive.
+  process.stdin.ref?.();
   const rl = createInterface({
     input: process.stdin,
     output: process.stderr,
@@ -375,6 +377,9 @@ async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<De
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
+      // Closing readline only pauses stdin; an open pipe would keep the process
+      // alive after login until the writer closes it (TC-1025).
+      process.stdin.unref?.();
       void delegationFromInput(input, did, options).then(resolve, reject);
     });
     rl.on("close", () => {
