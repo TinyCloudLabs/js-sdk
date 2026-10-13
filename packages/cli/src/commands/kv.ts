@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { writePrivateOutput } from "../lib/private-output.js";
 import { ProfileManager } from "../config/profiles.js";
-import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes, formatTimeAgo } from "../output/formatter.js";
+import { outputJson, withSpinner, shouldOutputJson, formatTable } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -223,40 +223,70 @@ export function registerKvCommand(program: Command): void {
     .description("List keys")
     .option("--prefix <prefix>", "Filter by key prefix")
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
+    .option("--limit <n>", "Keys per page, 1-1000 (the node's default otherwise)")
+    .option("--cursor <cursor>", "Continue from a previous page's nextCursor")
+    .option("--all", "Follow nextCursor until the listing is complete")
     .action(async (options, cmd) => {
       try {
         if (options.prefix) assertAddressableKey(options.prefix);
+        const limit = options.limit === undefined ? undefined : Number(options.limit);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) {
+          throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000", ExitCode.USAGE_ERROR);
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
 
         const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-        const listOptions = options.prefix ? { prefix: options.prefix } : undefined;
-        const result = await withSpinner("Listing keys...", () => kv.list(listOptions)) as any;
-
-        if (!result.ok) {
-          await throwKvError(result.error, spaceUri, ctx.profile);
+        const keyList: string[] = [];
+        let cursor: string | undefined = options.cursor;
+        let truncated: boolean | undefined;
+        const seenCursors = new Set<string>();
+        for (;;) {
+          const result = await withSpinner("Listing keys...", () => kv.list({
+            ...(options.prefix ? { prefix: options.prefix } : {}),
+            ...(limit === undefined ? {} : { limit }),
+            ...(cursor === undefined ? {} : { cursor }),
+          }));
+          if (!result.ok) {
+            await throwKvError(result.error, spaceUri, ctx.profile);
+            break;
+          }
+          // One push per key: spreading a very large page overflows the call stack.
+          for (const key of result.data.keys) keyList.push(key);
+          truncated = result.data.truncated;
+          cursor = truncated === true ? result.data.nextCursor : undefined;
+          if (options.all && truncated === true && cursor === undefined) {
+            throw new CLIError("KV_LIST_CURSOR_MISSING", "The node reported more keys but no cursor to continue from, so the listing can't be completed.", ExitCode.ERROR);
+          }
+          if (!options.all || cursor === undefined) break;
+          // A node that hands back a cursor it already gave would loop forever (TC-719).
+          if (seenCursors.has(cursor)) {
+            throw new CLIError("KV_LIST_CURSOR_STALLED", "The node returned a list cursor it had already returned, so the listing can't be completed.", ExitCode.ERROR);
+          }
+          seenCursors.add(cursor);
         }
-
-        const rawData = result.data.data ?? result.data;
-        const keyList = Array.isArray(rawData) ? rawData : (rawData?.keys ?? []);
 
         if (shouldOutputJson()) {
           outputJson({
             keys: keyList,
             count: keyList.length,
             prefix: options.prefix ?? null,
+            // null when the node doesn't report truncation.
+            truncated: truncated ?? null,
+            nextCursor: cursor ?? null,
           });
         } else {
           if (keyList.length === 0) {
             process.stdout.write(theme.muted("No keys found.") + "\n");
           } else {
-            const rows = keyList.map((e: any) => [
-              e.key || e,
-              e.contentLength ? formatBytes(e.contentLength) : "—",
-              e.updatedAt ? formatTimeAgo(e.updatedAt) : "—",
-            ]);
+            const rows = keyList.map((key) => [key, "—", "—"]);
             process.stdout.write(formatTable(["Key", "Size", "Updated"], rows) + "\n");
+          }
+          if (cursor !== undefined) {
+            process.stdout.write(theme.muted(`More keys follow. Run again with --cursor ${cursor}, or use --all.`) + "\n");
+          } else if (truncated === true) {
+            process.stdout.write(theme.muted("More keys follow, but the node gave no cursor to continue from.") + "\n");
           }
         }
       } catch (error) {
