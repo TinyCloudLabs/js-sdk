@@ -979,11 +979,14 @@ describe("an OpenKey owner session without a signed proof is never used (TC-1053
 
 describe("a replica never syncs with an unverified owner session (TC-1059)", () => {
   // A real compact delegation that carries sync on notes/, saved as the profile's session with no SIWE proof.
+  // The built CLI runs under Bun here: tc replica needs built-in SQLite, which CI's Node 20 lacks.
   test.each([
     ["an owner-openkey profile", "owner-openkey", false],
     ["a delegate-session profile (control)", "delegate-session", true],
   ] as const)("%s", async (_label, posture, usable) => {
     const home = await mkdtemp(join(tmpdir(), "tc-unverified-replica-"));
+    const nodeBinary = process.env.NODE_BINARY;
+    process.env.NODE_BINARY = process.execPath;
     try {
       const seeded = await seedImportedProfile(home, "proofless", Math.floor(Date.now() / 1000) + 3600, undefined, {
         path: "notes/",
@@ -997,9 +1000,11 @@ describe("a replica never syncs with an unverified owner session (TC-1059)", () 
         await writeJsonAtomic(path, profile);
       });
       const result = await runBuiltCli(home, ["--json", "--profile", "proofless", "replica", "sync", "--prefix", "notes/"]);
-      if (usable) expect(result.error?.code).not.toBe("GRANT_MISSING");
+      if (usable) expect(result.error?.code).not.toBeOneOf(["GRANT_MISSING", "RUNTIME_UNSUPPORTED"]);
       else expect({ exitCode: result.exitCode, code: result.error?.code }).toEqual({ exitCode: 3, code: "GRANT_MISSING" });
     } finally {
+      if (nodeBinary === undefined) delete process.env.NODE_BINARY;
+      else process.env.NODE_BINARY = nodeBinary;
       await rm(home, { recursive: true, force: true });
     }
   }, 60_000);
