@@ -22,7 +22,12 @@ const recorded = {
   kvForSpace: [] as string[],
   stdoutWrites: [] as Uint8Array[],
   fileWrites: [] as Array<{ path: string; data: Uint8Array }>,
+  lists: [] as Array<Record<string, unknown>>,
 };
+
+// One list page per cursor; the first request has no cursor ("").
+type ListPage = { keys: string[]; truncated?: boolean; nextCursor?: string };
+let listPages: Record<string, ListPage> = {};
 
 function resetState(): void {
   recorded.outputs = [];
@@ -34,6 +39,8 @@ function resetState(): void {
   recorded.kvForSpace = [];
   recorded.stdoutWrites = [];
   recorded.fileWrites = [];
+  recorded.lists = [];
+  listPages = { "": { keys: [] } };
 }
 
 function toBytes(chunk: unknown): Uint8Array {
@@ -78,7 +85,10 @@ function makeKv(handle: string) {
       recorded.gets.push({ handle, key, options: "head" });
       return errorFor(key) ?? { ok: true, data: { headers: {} } };
     },
-    list: async () => ({ ok: true, data: { data: [] } }),
+    list: async (options: Record<string, unknown> = {}) => {
+      recorded.lists.push(options);
+      return { ok: true, data: listPages[String(options.cursor ?? "")] };
+    },
   };
 }
 
@@ -379,5 +389,72 @@ describe("CLI kv SPACE_NOT_HOSTED routing for reads", () => {
     expect(recorded.outputs).toEqual([]);
     expect(recorded.errors).toHaveLength(1);
     expect((recorded.errors[0] as { code: string }).code).toBe("SPACE_NOT_HOSTED");
+  });
+});
+
+describe("CLI kv list paging (TC-982)", () => {
+  beforeEach(resetState);
+
+  test("reports truncation and the next cursor of a partial page", async () => {
+    listPages = { "": { keys: ["a", "b"], truncated: true, nextCursor: "c1" } };
+
+    await runKv(["list", "--prefix", "p/", "--limit", "2"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.lists).toEqual([{ prefix: "p/", limit: 2 }]);
+    expect(recorded.outputs).toEqual([{ keys: ["a", "b"], count: 2, prefix: "p/", truncated: true, nextCursor: "c1" }]);
+  });
+
+  test("--cursor continues from a previous page", async () => {
+    listPages = { c1: { keys: ["c"], truncated: false } };
+
+    await runKv(["list", "--cursor", "c1"]);
+
+    expect(recorded.lists).toEqual([{ cursor: "c1" }]);
+    expect(recorded.outputs).toEqual([{ keys: ["c"], count: 1, prefix: null, truncated: false, nextCursor: null }]);
+  });
+
+  test("--all follows cursors until the listing is complete", async () => {
+    listPages = {
+      "": { keys: ["a", "b"], truncated: true, nextCursor: "c1" },
+      c1: { keys: ["c", "d"], truncated: true, nextCursor: "c2" },
+      c2: { keys: ["e"], truncated: false },
+    };
+
+    await runKv(["list", "--all", "--limit", "2"]);
+
+    expect(recorded.lists.map((options) => options.cursor)).toEqual([undefined, "c1", "c2"]);
+    expect(recorded.outputs).toEqual([{ keys: ["a", "b", "c", "d", "e"], count: 5, prefix: null, truncated: false, nextCursor: null }]);
+  });
+
+  test("--all stops with an error when the node repeats a cursor", async () => {
+    listPages = {
+      "": { keys: ["a"], truncated: true, nextCursor: "c1" },
+      c1: { keys: ["a"], truncated: true, nextCursor: "c1" },
+    };
+
+    await runKv(["list", "--all"]);
+
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "KV_LIST_CURSOR_STALLED" })]);
+  });
+
+  test("an older node that doesn't report truncation gives null, not false", async () => {
+    listPages = { "": { keys: ["a"] } };
+
+    await runKv(["list"]);
+
+    expect(recorded.outputs).toEqual([{ keys: ["a"], count: 1, prefix: null, truncated: null, nextCursor: null }]);
+  });
+
+  test("--limit outside 1-1000 is a usage error before authenticating", async () => {
+    await runKv(["list", "--limit", "0"]);
+    await runKv(["list", "--limit", "1001"]);
+
+    expect(recorded.errors).toEqual([
+      expect.objectContaining({ code: "USAGE_ERROR" }),
+      expect.objectContaining({ code: "USAGE_ERROR" }),
+    ]);
+    expect(recorded.lists).toEqual([]);
   });
 });
