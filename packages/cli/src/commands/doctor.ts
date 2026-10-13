@@ -4,6 +4,9 @@ import { DEFAULT_HOST } from "../config/constants.js";
 import { outputJson, shouldOutputJson, formatCheck, formatSection } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 import { handleError } from "../output/errors.js";
+import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
+import { signInAgainHint } from "../auth/session-expired.js";
+import { resolveProfilePosture } from "../config/types.js";
 
 interface DoctorResult {
   checks: Array<{ name: string; ok: boolean; detail?: string }>;
@@ -65,9 +68,15 @@ export function registerDoctorCommand(program: Command): void {
         let sessionDetail = "";
         if (profileOk && profileName) {
           try {
-            const session = await ProfileManager.getSession(profileName);
-            sessionOk = session !== null;
-            sessionDetail = sessionOk ? "active" : "no session — run tc auth login";
+            const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+            const { state, expiresAt } = storedSessionState(session);
+            sessionOk = sessionStateIsUsable(state);
+            if (state === "expired") {
+              const posture = resolveProfilePosture(await ProfileManager.getProfile(profileName));
+              sessionDetail = `expired ${expiresAt} — ${signInAgainHint(profileName, posture)}`;
+            } else {
+              sessionDetail = sessionOk ? "active" : "no session — run tc auth login";
+            }
           } catch {
             sessionDetail = "error reading session";
           }
@@ -84,7 +93,7 @@ export function registerDoctorCommand(program: Command): void {
             ? (await ProfileManager.getProfile(profileName)).host
             : globalOpts.host || DEFAULT_HOST;
           const start = Date.now();
-          const response = await fetch(`${host}/health`);
+          const response = await fetch(`${host}/healthz`);
           const latency = Date.now() - start;
           nodeReachable = response.ok;
           nodeDetail = nodeReachable
@@ -109,7 +118,7 @@ export function registerDoctorCommand(program: Command): void {
             spaceDetail = "error checking space";
           }
         } else {
-          spaceDetail = "skipped (no session)";
+          spaceDetail = "skipped (no active session)";
         }
         checks.push({ name: "Space", ok: spaceOk, detail: spaceDetail });
 
