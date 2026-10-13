@@ -3,7 +3,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { outputJson } from "../output/formatter.js";
 import { handleError } from "../output/errors.js";
-import { sessionExpiresAt, storedSessionState } from "../auth/scoped-login.js";
+import { storedSessionState } from "../auth/scoped-login.js";
 
 export function registerContextCommand(program: Command): void {
   program.command("context")
@@ -16,7 +16,6 @@ export function registerContextCommand(program: Command): void {
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
         const spaceId = await resolveSpaceUri(options.space, ctx.profile) ??
           (typeof session?.spaceId === "string" ? session.spaceId : profile.spaceId ?? null);
-        const expiresAt = sessionExpiresAt(session);
         let root = cmd;
         while (root.parent) root = root.parent;
         outputJson({
@@ -28,8 +27,7 @@ export function registerContextCommand(program: Command): void {
           host: ctx.host,
           spaceId,
           session: {
-            state: storedSessionState(session),
-            expiresAt,
+            ...storedSessionState(session),
             evidence: "local-metadata",
           },
           access: "not-tested",

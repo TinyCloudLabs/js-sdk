@@ -63,7 +63,6 @@ import {
   openKeyExpiryParam,
   withoutTrustFields,
   withVerifiedAuthority,
-  sessionExpiresAt,
   sessionStateIsUsable,
   storedSessionState,
   type StoredSessionState,
@@ -349,8 +348,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const posture = profile ? resolveProfilePosture(profile) : null;
         const operatorType = profile ? resolveProfileOperatorType(profile) : null;
 
-        const sessionState = storedSessionState(session);
-        const expiresAt = sessionExpiresAt(session);
+        const { state: sessionState, expiresAt } = storedSessionState(session);
         const authenticated = sessionStateIsUsable(sessionState);
 
         if (shouldOutputJson()) {
@@ -948,8 +946,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
         const profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
-        const sessionState = storedSessionState(session);
-        const expiresAt = sessionExpiresAt(session);
+        const { state: sessionState, expiresAt } = storedSessionState(session);
         const authenticated = sessionStateIsUsable(sessionState);
         const posture = resolveProfilePosture(profile);
         const operatorType = resolveProfileOperatorType(profile);

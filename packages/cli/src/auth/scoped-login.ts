@@ -124,12 +124,19 @@ export function sessionExpiresAt(session: Record<string, unknown> | null): strin
 
 export type StoredSessionState = "missing" | "expired" | "present" | "unknown-expiry";
 
-/** A stored session's state from its own expiry ({@link sessionExpiresAt}); local metadata only, never contacts the node. */
-export function storedSessionState(session: Record<string, unknown> | null): StoredSessionState {
-  if (session === null) return "missing";
-  const expiresAt = sessionExpiresAt(session);
-  if (expiresAt === null) return "unknown-expiry";
-  return Date.parse(expiresAt) <= Date.now() ? "expired" : "present";
+/**
+ * A stored session's state and expiry, judged the way commands restore it: a
+ * signed SIWE `Expiration Time` wins over unsigned expiry metadata, otherwise
+ * {@link sessionExpiresAt}. Local metadata only; never contacts the node.
+ */
+export function storedSessionState(session: Record<string, unknown> | null): { state: StoredSessionState; expiresAt: string | null } {
+  if (session === null) return { state: "missing", expiresAt: null };
+  const siweExpiry = typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : undefined;
+  const expiresAt = siweExpiry !== undefined && Number.isFinite(Date.parse(siweExpiry))
+    ? new Date(siweExpiry).toISOString()
+    : sessionExpiresAt(session);
+  if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
+  return { state: Date.parse(expiresAt) <= Date.now() ? "expired" : "present", expiresAt };
 }
 
 /** Whether commands still use a session in this state: unexpired, or with no recorded expiry to check. */
