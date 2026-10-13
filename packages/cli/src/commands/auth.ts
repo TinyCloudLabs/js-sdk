@@ -2064,6 +2064,11 @@ export async function refreshOpenKeySession(
       : {}),
   });
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
+  // The first verified login pins its signer as the profile's owner. Nothing
+  // yet binds the proof to this login attempt (TC-1058), so say who it is.
+  if (expectedOwner === undefined && verifiedOwner !== undefined) {
+    process.stderr.write(`Profile "${profileName}" now belongs to ${verifiedOwner}. If that isn't your OpenKey account, stop using this profile and create a new one with tc init.\n`);
+  }
 
   return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
 }

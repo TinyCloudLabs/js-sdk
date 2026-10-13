@@ -248,4 +248,41 @@ describe("browser callback login", () => {
       else Reflect.deleteProperty(process.stderr, "isTTY");
     }
   });
+
+  test("only OpenKey's origin, on the unguessable callback path, can deliver the delegation (TC-1058)", async () => {
+    const code = {
+      delegationHeader: { Authorization: "Bearer callback" },
+      delegationCid: "bafy-callback",
+      spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
+    };
+    const messages: string[] = [];
+    const error = spyOn(console, "error").mockImplementation((...args) => { messages.push(args.join(" ")); });
+    const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+    Object.defineProperty(process, "stdin", { configurable: true, value: new PassThrough() });
+    try {
+      let settled = false;
+      const flow = startAuthFlow("did:key:z6MkDelegate", { noPopup: true, openkeyHost: "https://openkey.test" })
+        .finally(() => { settled = true; });
+      while (!messages.some((message) => message.includes("/delegate?"))) await new Promise<void>((resolve) => setImmediate(resolve));
+      const authUrl = new URL(messages.join(" ").match(/https:\/\/openkey\.test\/delegate\?\S+/)![0]);
+      const callback = new URL(authUrl.searchParams.get("callback")!);
+      expect(callback.pathname).toMatch(/^\/callback\/[\w-]{20,}$/);
+
+      const post = (path: string, origin: string, body: string) =>
+        fetch(new URL(path, callback), { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body });
+      expect((await post("/callback", "https://openkey.test", JSON.stringify(code))).status).toBe(404);
+      expect((await post(callback.pathname, "https://attacker.test", JSON.stringify(code))).status).toBe(403);
+      expect((await post(callback.pathname, "https://openkey.test", "{not json")).status).toBe(400);
+      expect((await post(callback.pathname, "https://openkey.test", "{}")).status).toBe(400);
+      expect(settled).toBe(false);
+
+      const accepted = await post(callback.pathname, "https://openkey.test", JSON.stringify(code));
+      expect(accepted.status).toBe(200);
+      expect(accepted.headers.get("access-control-allow-origin")).toBe("https://openkey.test");
+      expect(await flow).toEqual(code);
+    } finally {
+      error.mockRestore();
+      if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
+    }
+  });
 });

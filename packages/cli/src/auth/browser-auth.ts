@@ -1,5 +1,6 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -257,37 +258,46 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
       }
     }
 
+    // Only OpenKey's page, which received this unguessable path in the
+    // approval URL, can deliver the delegation (TC-1058). Anything else is
+    // answered and ignored, so a stray or hostile request can't end the login.
+    const callbackPath = `/callback/${randomBytes(16).toString("base64url")}`;
+    const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
+    const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
+
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      if (req.method === "POST" && req.url === "/callback") {
+      const origin = req.headers.origin;
+      if (origin !== undefined && origin !== openKeyOrigin) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && req.url === callbackPath) {
         let body = "";
         req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
         req.on("end", () => {
+          let data: DelegationData;
           try {
-            const data = JSON.parse(body) as DelegationData;
-            const invalid = validateDelegationCallbackPayload(data);
-            if (invalid) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: invalid }));
-              settle({ error: new Error(`Invalid delegation payload: ${invalid}`) });
-              return;
-            }
-            // Send CORS headers and success response
-            res.writeHead(200, {
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*",
-            });
-            res.end(JSON.stringify({ success: true }));
-            settle({ data });
-          } catch (err) {
-            res.writeHead(400, { "Content-Type": "application/json" });
+            data = JSON.parse(body) as DelegationData;
+          } catch {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Invalid JSON" }));
-            settle({ error: new Error("Invalid delegation data received") });
+            return;
           }
+          const invalid = validateDelegationCallbackPayload(data);
+          if (invalid) {
+            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: invalid }));
+            return;
+          }
+          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+          settle({ data });
         });
-      } else if (req.method === "OPTIONS") {
+      } else if (req.method === "OPTIONS" && req.url === callbackPath) {
         // CORS preflight
         res.writeHead(204, {
-          "Access-Control-Allow-Origin": "*",
+          ...cors,
           "Access-Control-Allow-Methods": "POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
         });
@@ -305,7 +315,7 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
         return;
       }
       const port = addr.port;
-      const callbackUrl = `http://127.0.0.1:${port}/callback`;
+      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
