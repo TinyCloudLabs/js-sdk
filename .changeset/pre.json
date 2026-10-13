@@ -31,6 +31,7 @@
   "changesets": [
     "tc-1062-ctrlc-login",
     "tc-982-kv-list-paging",
-    "tinycloud-bin-alias"
+    "tinycloud-bin-alias",
+    "tinycloud-hint-name"
   ]
 }

@@ -225,10 +225,11 @@ var init_warnings = __esm({
 
 // src/output/formatter.ts
 import ora from "ora";
+import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
 function warningLine(warnings) {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with tc auth grants remove <cid>.`;
+  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`;
 }
 function outputError(code3, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
@@ -383,6 +384,7 @@ import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
+import { CLI_NAME as CLI_NAME3 } from "@tinycloud/operations/cli-name";
 import {
   buildSecretRequestUrl,
   isSafeRequestAccessRecovery,
@@ -439,7 +441,7 @@ function missingPrivateKeyError() {
     "AUTH_REQUIRED",
     `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
-    { hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey` }
+    { hint: `Sign in again with: ${CLI_NAME3} --profile ${profileName} auth login --method openkey` }
   );
 }
 function storageFullError(error, progress) {
@@ -530,7 +532,7 @@ function buildAuthHint(error) {
   if (!spec) return void 0;
   return [
     "The active session is missing a TinyCloud capability.",
-    `Request it with: tc auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
+    `Request it with: ${CLI_NAME3} auth request --cap '${spec.replaceAll("'", "'\\''")}'`,
     "Then retry the original command."
   ].join("\n");
 }
@@ -573,12 +575,12 @@ function buildNetworkHint() {
   const lines = [];
   lines.push(activeHost ? `Active profile "${activeName}" \u2192 ${activeHost}` : `Active profile "${activeName}"`);
   if (others.length === 0) {
-    lines.push(`No other profiles configured. Run \`tc profile create <name>\` or \`tc init\`.`);
+    lines.push(`No other profiles configured. Run \`${CLI_NAME3} profile create <name>\` or \`${CLI_NAME3} init\`.`);
   } else {
     lines.push(`Switch to a reachable profile:`);
     const longest = Math.max(...others.map((p) => p.name.length));
     for (const { name, host } of others) {
-      lines.push(`  tc profile switch ${name.padEnd(longest)}   # ${host}`);
+      lines.push(`  ${CLI_NAME3} profile switch ${name.padEnd(longest)}   # ${host}`);
     }
   }
   lines.push(`Or override per-command with --host or TC_HOST.`);
@@ -691,6 +693,7 @@ var init_types = __esm({
 });
 
 // src/lib/space.ts
+import { CLI_NAME as CLI_NAME5 } from "@tinycloud/operations/cli-name";
 function canonicalizeAddress(address) {
   const trimmed = address.trim();
   return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
@@ -732,7 +735,7 @@ function resolveAddress(profile, session) {
   }
   throw new CLIError(
     "ADDRESS_UNKNOWN",
-    `Cannot determine Ethereum address for profile "${profile.name}". Run \`tc auth login\` to refresh the session.`,
+    `Cannot determine Ethereum address for profile "${profile.name}". Run \`${CLI_NAME5} auth login\` to refresh the session.`,
     ExitCode.AUTH_REQUIRED
   );
 }
@@ -5681,6 +5684,7 @@ var init_permissions = __esm({
 
 // src/auth/session-expired.ts
 import { signInRecovery } from "@tinycloud/operations/recovery";
+import { CLI_NAME as CLI_NAME6 } from "@tinycloud/operations/cli-name";
 function signInAgainHint(profileName, posture) {
   const delegate = posture === "delegate-session";
   const { command } = signInRecovery(
@@ -5688,7 +5692,7 @@ function signInAgainHint(profileName, posture) {
     delegate ? "delegate-session" : posture === "local-owner-key" ? "local-owner-key" : "owner-openkey"
   );
   if (command === void 0) {
-    return delegate ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with tc auth login --method openkey --paste --manifest <manifest.json>.` : `Sign in again to profile ${JSON.stringify(profileName)} with tc auth login.`;
+    return delegate ? `Have the owner approve a new scoped login for profile ${JSON.stringify(profileName)} with ${CLI_NAME6} auth login --method openkey --paste --manifest <manifest.json>.` : `Sign in again to profile ${JSON.stringify(profileName)} with ${CLI_NAME6} auth login.`;
   }
   return delegate ? `Have the owner approve a new scoped login: ${command}. Pass the owner's code on stdin, newline-terminated.` : `Sign in again with: ${command}`;
 }
@@ -5726,6 +5730,7 @@ var init_delegation_expiry = __esm({
 });
 
 // src/lib/replication-log.ts
+import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
 import { dirname as dirname2, join as join4 } from "path";
 function appendReplicationEvent(root, event) {
@@ -5788,7 +5793,7 @@ function createReplicationEventSink(profileRoot, options) {
     }
     if (event.type === "replication.read" && (event.pendingState === "in_flight" || event.pendingState === "ambiguous") && !options.quiet && !pinnedNotices.has(event.key)) {
       pinnedNotices.add(event.key);
-      process.stderr.write(`[replication] ${event.key} reads from the network: an earlier write's outcome is unknown (${event.pendingState}${event.code ? `, ${event.code}` : ""}). Review: tc replica report
+      process.stderr.write(`[replication] ${event.key} reads from the network: an earlier write's outcome is unknown (${event.pendingState}${event.code ? `, ${event.code}` : ""}). Review: ${CLI_NAME7} replica report
 `);
     }
   };
@@ -7783,6 +7788,7 @@ var init_dist = __esm({
 
 // src/lib/replication-config.ts
 import { join as join5 } from "path";
+import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { profilePath, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { sqliteReplicaStorage } from "@tinycloud/node-sdk";
 function createCliReplicationConfig(profile, settings, output, enabled) {
@@ -7797,7 +7803,7 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
         "INVALID_REPLICATION_PREFIX",
         error instanceof Error ? error.message : String(error),
         ExitCode.USAGE_ERROR,
-        { hint: `Replace the saved replication prefix with \`tc auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` }
+        { hint: `Replace the saved replication prefix with \`${CLI_NAME8} auth login --replication-prefix ${replacement}\`; purging a replica alone does not change this profile setting.` }
       );
     }
   }
@@ -7843,6 +7849,7 @@ __export(sdk_exports, {
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
+import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
@@ -7865,7 +7872,7 @@ function signerJwkForProfile(profileName, sessionJwk, key) {
     `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
     {
-      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`
+      hint: `Sign in again with: ${CLI_NAME9} --profile ${profileName} auth login --method openkey`
     }
   );
 }
@@ -7952,7 +7959,7 @@ async function createSDKInstance(ctx, options) {
   if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${ctx.profile}". Run \`${CLI_NAME9} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -8071,7 +8078,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
-      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME9} --profile ${ctx.profile} context\`.`
     ));
     throw annotate(reported, note);
   };
@@ -8101,7 +8108,7 @@ async function restoreBeforeBootstrap(profileName, previousProfile) {
     });
   }
   if (failures.length === 0) return void 0;
-  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`${CLI_NAME9} --profile ${profileName} context\`.`;
 }
 function failureName(error) {
   if (error instanceof SyntaxError) return "a profile file is not valid JSON";
@@ -8125,7 +8132,7 @@ async function ensureAuthenticated(ctx, options) {
   if (!session) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `Not authenticated. Run \`tc auth login\` or \`tc init\` first.`,
+      `Not authenticated. Run \`${CLI_NAME9} auth login\` or \`${CLI_NAME9} init\` first.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -8162,6 +8169,7 @@ __export(host_exports, {
   spaceNameFromUri: () => spaceNameFromUri,
   unhostedSpaceError: () => unhostedSpaceError
 });
+import { CLI_NAME as CLI_NAME10 } from "@tinycloud/operations/cli-name";
 import {
   discoverLocalTinyCloudNode
 } from "@tinycloud/sdk-core";
@@ -8255,13 +8263,13 @@ async function unhostedSpaceError(error, spaceUri, profileName) {
   const owner = await isRootAuthority(spaceUri, profileName);
   const hint = owner ? [
     "You are the owner. Host it once:",
-    `  tc space host ${spaceName}`,
+    `  ${CLI_NAME10} space host ${spaceName}`,
     "Then retry."
   ].join("\n") : [
     "You are a delegate and CANNOT host this space \u2014 only its owner can.",
     "Emit a host request:",
-    `  tc space host-request ${spaceName} --emit ./host-request.json`,
-    "Send it to the owner; they run `tc space host` and confirm. Then retry."
+    `  ${CLI_NAME10} space host-request ${spaceName} --emit ./host-request.json`,
+    `Send it to the owner; they run \`${CLI_NAME10} space host\` and confirm. Then retry.`
   ].join("\n");
   const message = owner ? `Space '${spaceName}' (${spaceUri}) is not hosted.` : `Space '${spaceName}' (owner ${ownerDidFromSpaceUri(spaceUri) ?? spaceUri}) is not hosted.`;
   return new CLIError("SPACE_NOT_HOSTED", message, ExitCode.ERROR, { hint });
@@ -8286,6 +8294,7 @@ var init_host = __esm({
 
 // src/config/profiles.ts
 import { chmod as chmod2, lstat, readdir as readdir2, rm as rm2, rmdir } from "fs/promises";
+import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import { join as join6 } from "path";
 import {
   profilePath as profilePath2,
@@ -8371,7 +8380,7 @@ var init_profiles = __esm({
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`
+            `Profile "${name}" does not exist. Create it with \`${CLI_NAME11} init --name ${name}\`.`
           );
         }
         return profile;
@@ -8429,7 +8438,7 @@ var init_profiles = __esm({
         if (config.defaultProfile === name) {
           throw new CLIError(
             "PROFILE_DELETE_DEFAULT",
-            `Cannot delete the default profile "${name}". Change the default first with \`tc profile default <other>\`.`
+            `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME11} profile default <other>\`.`
           );
         }
         const kind = await lstat(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
@@ -8566,16 +8575,18 @@ var init_profiles = __esm({
 });
 
 // src/commands/courier.ts
-var TC_OPTIONS_BEFORE_COURIER = 'tc courier takes no tc options and does not use tc profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. tc courier init --host <url>.';
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
+var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME} courier takes no ${CLI_NAME} options and does not use ${CLI_NAME} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME} courier init --host <url>.`;
 
 // src/index.ts
 init_errors();
 import { readFileSync as readFileSync2 } from "fs";
-import { basename as basename3 } from "path";
+import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 import { Command } from "commander";
 
 // src/output/banner.ts
 init_formatter();
+import { CLI_NAME as CLI_NAME4 } from "@tinycloud/operations/cli-name";
 
 // src/output/taglines.ts
 var HOLIDAY_TAGLINES = [
@@ -8646,14 +8657,14 @@ function resolveCommitHash() {
 function formatBannerLine(version2) {
   const commit = resolveCommitHash();
   const tagline = pickTagline();
-  const versionPart = `tc v${version2}`;
+  const versionPart = `${CLI_NAME4} v${version2}`;
   const commitPart = commit ? ` (${commit})` : "";
   const separator = " \u2014 ";
   if (!isInteractive()) {
     return `${versionPart}${commitPart}${separator}${tagline}`;
   }
   return [
-    theme.brand("\u2601\uFE0F  tc"),
+    theme.brand(`\u2601\uFE0F  ${CLI_NAME4}`),
     " ",
     theme.muted(`v${version2}`),
     commit ? theme.dim(` (${commit})`) : "",
@@ -8674,6 +8685,9 @@ init_replication_registry();
 init_theme();
 init_formatter();
 init_profiles();
+
+// src/commands/share.ts
+import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
 
 // ../share-sdk/dist/index.js
 init_sha2();
@@ -17681,12 +17695,12 @@ function shareCliError(error, operation = "publish") {
     const profileName = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
-    const loginHint = localKey ? `\`tc ${profileHint}auth login --method local\`` : `\`tc ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`tc ${profileHint}enable share\`)`;
+    const loginHint = localKey ? `\`${CLI_NAME12} ${profileHint}auth login --method local\`` : `\`${CLI_NAME12} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME12} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`tc init --name publisher --key-only && tc --profile publisher enable share\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME12} init --name publisher --key-only && ${CLI_NAME12} --profile publisher enable share\``,
         5
       );
     }
@@ -18721,7 +18735,7 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name(basename3(process.argv[1] ?? "") === "tinycloud" ? "tinycloud" : "tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
+program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
@@ -18740,11 +18754,11 @@ program.hook("preAction", async (thisCommand) => {
       const profileName = opts.profile || config.defaultProfile;
       const hasProfile = await ProfileManager.profileExists(profileName);
       if (!hasProfile) {
-        process.stderr.write(theme.warn("\u26A0 No profile configured.") + " " + theme.muted("Run: tc init") + "\n\n");
+        process.stderr.write(theme.warn("\u26A0 No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME13} init`) + "\n\n");
       } else {
         const key = await ProfileManager.getKey(profileName);
         if (!key) {
-          process.stderr.write(theme.warn("\u26A0 No key found.") + " " + theme.muted("Run: tc init") + "\n\n");
+          process.stderr.write(theme.warn("\u26A0 No key found.") + " " + theme.muted(`Run: ${CLI_NAME13} init`) + "\n\n");
         }
       }
     } catch {
@@ -18791,14 +18805,14 @@ program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";
   return `
 ${theme.heading("Examples:")}
-  ${theme.command("tc init")}                              ${theme.muted("Set up a profile and generate keys")}
-  ${theme.command("tc auth login")}                        ${theme.muted("Authenticate via browser")}
-  ${theme.command('tc kv put greeting "Hello"')}           ${theme.muted("Store a value")}
-  ${theme.command("tc kv list")}                           ${theme.muted("List all keys")}
-  ${theme.command("tc secrets network init")}              ${theme.muted("Create the default secrets network")}
-  ${theme.command("tc account apps list")}                 ${theme.muted("List registered account apps")}
-  ${theme.command("tc delegation create --to did:pkh:...")}  ${theme.muted("Grant access to another user")}
-  ${theme.command("tc space list")}                        ${theme.muted("Show your spaces")}
+  ${theme.command(`${CLI_NAME13} init`)}                              ${theme.muted("Set up a profile and generate keys")}
+  ${theme.command(`${CLI_NAME13} auth login`)}                        ${theme.muted("Authenticate via browser")}
+  ${theme.command(`${CLI_NAME13} kv put greeting "Hello"`)}           ${theme.muted("Store a value")}
+  ${theme.command(`${CLI_NAME13} kv list`)}                           ${theme.muted("List all keys")}
+  ${theme.command(`${CLI_NAME13} secrets network init`)}              ${theme.muted("Create the default secrets network")}
+  ${theme.command(`${CLI_NAME13} account apps list`)}                 ${theme.muted("List registered account apps")}
+  ${theme.command(`${CLI_NAME13} delegation create --to did:pkh:...`)}  ${theme.muted("Grant access to another user")}
+  ${theme.command(`${CLI_NAME13} space list`)}                        ${theme.muted("Show your spaces")}
 
 ${theme.muted("Docs:")} ${theme.accent("https://docs.tinycloud.xyz/cli")}
 ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk")}
