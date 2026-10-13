@@ -266,15 +266,17 @@ async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise
     // Only OpenKey's page, which received this unguessable path in the
     // approval URL, can deliver the delegation (TC-1058). Browsers always send
     // Origin on this cross-origin POST, so a request without OpenKey's origin
-    // is refused. Anything else is answered and ignored, so a stray or hostile
-    // request can't end the login. This is not sender authentication: a local
+    // is refused. Structurally invalid requests are answered and ignored, so a
+    // stray one can't end the login. This is not sender authentication: a local
     // process that learns the path (it is in the printed URL and the browser's
-    // argv) can forge the header; the per-login OpenKey nonce closes that.
+    // argv) can forge the header and post a well-formed payload, which ends the
+    // login with a proof error at worst; the per-login OpenKey nonce closes that.
     const callbackPath = `/callback/${randomBytes(16).toString("base64url")}`;
     const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
     const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
 
-    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    // Check for stalled requests every second, so the timeouts below apply promptly.
+    const server = createServer({ connectionsCheckingInterval: 1_000 }, (req: IncomingMessage, res: ServerResponse) => {
       if (req.headers.origin !== openKeyOrigin) {
         res.writeHead(403);
         res.end();
