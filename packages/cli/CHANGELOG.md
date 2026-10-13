@@ -1,5 +1,40 @@
 # @tinycloud/cli
 
+## 1.2.2
+
+### Patch Changes
+
+- c20d7e2: `tc doctor` reports the session state again instead of "error reading session" for every profile with a session. An owner session with no signed OpenKey proof now shows "not usable (no signed OpenKey proof)" with the sign-in command.
+- afe7e56: `tc` commands now exit once they finish, even when the caller keeps stdin open (TC-1025). Most visibly, `tc auth login --paste` used to stay running after printing `authenticated: true` until a wrapper that wrote the code and kept its pipe open finally closed it. The CLI now releases stdin after the command settles. `tc courier` has its own entry point and is unchanged.
+- 00ad275: `tc doctor` no longer reports a healthy node as down (TC-1048). It probed `/health`, which TinyCloud nodes answer with 404, and now probes `/healthz`, as `tc node health` does. Its Session check now fails for an expired session and prints the command to sign in again, instead of reporting it as active.
+- 0e8ee33: **If a command now fails with `AUTH_REQUIRED` and `auth status` shows `session.state: "unverified"`, sign in again: `tc --profile <profile> auth login --method openkey`.** This happens to an OpenKey owner profile whose saved session has no signed OpenKey proof, either from the old unverified paste login or from an older `tc auth import` on an owner profile; for an import, re-import into a delegate-session profile instead. Sessions from any real OpenKey sign-in are unaffected.
+
+  `tc auth login --method openkey`, including `--paste`, now requires a SIWE proof signed for this profile's session key, and saves nothing without one (TC-1053). Before, a plain login (with no `--manifest`, `--owner` or `--expiry`) stored a pasted delegation that had no signature, reported `authenticated: true` and took the profile's `spaceId` from unverified input. Such a paste now fails with `OPENKEY_PROOF_INVALID` (exit 3). Real OpenKey logins always carry this proof and are unaffected.
+
+  The approved session's space must also belong to the account that signed it (`OPENKEY_SCOPE_MISMATCH`), and the saved session always signs with the profile's own key, never a key echoed by the callback.
+
+  A session without a signed proof on an OpenKey owner profile is now reported as `unverified` by `auth status`, `whoami`, `context` and `status`. Commands refuse it, printing the sign-in command, instead of sending it to the node. That covers both the CLI's own restore and the operations runtime behind `tc secrets` and the MCP server (`ownerSessionLacksProof` in `@tinycloud/operations/profile`). It applies to anything the old unverified login saved, and to legacy delegation imports on profiles with no recorded posture. Sign in again, or re-import into a delegate-session profile.
+
+  This doesn't yet tie the proof to this particular login attempt: on a profile with no pinned owner, any wallet's valid proof for the session key is still accepted (TC-1058).
+
+- 8eed117: The browser login's local callback is narrower (TC-1058). It now:
+  - listens on an unguessable `/callback/<random>` path;
+  - answers only requests whose `Origin` is OpenKey's (others, including requests with no `Origin`, get 403);
+  - refuses bodies over 1 MiB (413);
+  - ignores a structurally invalid or foreign request without ending the login;
+  - closes any held-open connection once the login settles, so a stray socket can't keep `tc` running.
+
+  This doesn't authenticate the sender: a local process that learns the path, which appears in the printed URL and the browser's command line, can forge the header and send a well-formed payload. At worst that ends the login with a proof error, because the CLI verifies OpenKey's signed proof before saving anything. Binding each approval to one login attempt needs an OpenKey nonce.
+
+  When a login (browser, paste or device) first pins a profile's owner and you didn't pass `--owner`, the CLI now prints that owner on stderr. Plain `auth login --method openkey` also reports `ownerDid` in its JSON.
+
+- c8f0137: An `unverified` OpenKey owner session (one with no signed OpenKey proof, see TC-1053) no longer blocks recovery (TC-1059). A scoped or device login replaces it without `--replace-session`, instead of failing with `SESSION_IN_USE`. `tc secrets` treats it like a missing session and offers the sign-in, rather than failing with a permission error.
+- 4c0ff89: `tc auth status` and `tc auth whoami` no longer report an expired session as signed in (TC-973). `authenticated` is now true only when the stored session has not expired, or has no recorded expiry. A signed SIWE `Expiration Time` takes precedence over unsigned expiry metadata, as it does when commands restore the session. Both commands also report `session: { state, expiresAt }` in their JSON, using the same evaluation as `tc context` (`missing`, `expired`, `present` or `unknown-expiry`); `tc context` now applies the same SIWE precedence to its `expiresAt`. Human output gains a `Session` line, and `auth status` prints the sign-in command when the session has expired. The exit status is still 0.
+- Updated dependencies [0e8ee33]
+  - @tinycloud/operations@0.5.2
+  - @tinycloud/node-sdk@3.2.2
+  - @tinycloud/sdk-core@3.2.2
+
 ## 1.2.2-beta.5
 
 ### Patch Changes
