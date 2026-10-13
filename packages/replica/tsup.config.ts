@@ -23,6 +23,7 @@ export default defineConfig([
     dts: true,
     clean: true,
     sourcemap: true,
+    noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
     splitting: false,
   },
   {
@@ -35,6 +36,8 @@ export default defineConfig([
     dts: true,
     clean: false,
     sourcemap: true,
+    // Raw browser consumers have no import map for sdk-services.
+    noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
     splitting: false,
   },
   {
