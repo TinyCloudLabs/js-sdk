@@ -1,6 +1,6 @@
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
@@ -33,9 +33,9 @@ function selectedShareProfile(): string | undefined {
 }
 
 // Ubuntu's iproute2 ships /usr/sbin/tc, so the CLI is also installed as `tinycloud`.
-// Help and usage show whichever name was invoked; everything else defaults to `tc`.
+// Help, usage and hints name whichever bin was invoked.
 program
-  .name(basename(process.argv[1] ?? "") === "tinycloud" ? "tinycloud" : "tc")
+  .name(CLI_NAME)
   .description("TinyCloud CLI — self-sovereign storage from the terminal")
   .version(version)
   .option("-p, --profile <name>", "Profile to use")
@@ -69,11 +69,11 @@ program.hook("preAction", async (thisCommand) => {
       const profileName = opts.profile || config.defaultProfile;
       const hasProfile = await ProfileManager.profileExists(profileName);
       if (!hasProfile) {
-        process.stderr.write(theme.warn("⚠ No profile configured.") + " " + theme.muted("Run: tc init") + "\n\n");
+        process.stderr.write(theme.warn("⚠ No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME} init`) + "\n\n");
       } else {
         const key = await ProfileManager.getKey(profileName);
         if (!key) {
-          process.stderr.write(theme.warn("⚠ No key found.") + " " + theme.muted("Run: tc init") + "\n\n");
+          process.stderr.write(theme.warn("⚠ No key found.") + " " + theme.muted(`Run: ${CLI_NAME} init`) + "\n\n");
         }
       }
     } catch {
@@ -126,14 +126,14 @@ program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";
   return `
 ${theme.heading("Examples:")}
-  ${theme.command("tc init")}                              ${theme.muted("Set up a profile and generate keys")}
-  ${theme.command("tc auth login")}                        ${theme.muted("Authenticate via browser")}
-  ${theme.command('tc kv put greeting "Hello"')}           ${theme.muted("Store a value")}
-  ${theme.command("tc kv list")}                           ${theme.muted("List all keys")}
-  ${theme.command("tc secrets network init")}              ${theme.muted("Create the default secrets network")}
-  ${theme.command("tc account apps list")}                 ${theme.muted("List registered account apps")}
-  ${theme.command("tc delegation create --to did:pkh:...")}  ${theme.muted("Grant access to another user")}
-  ${theme.command("tc space list")}                        ${theme.muted("Show your spaces")}
+  ${theme.command(`${CLI_NAME} init`)}                              ${theme.muted("Set up a profile and generate keys")}
+  ${theme.command(`${CLI_NAME} auth login`)}                        ${theme.muted("Authenticate via browser")}
+  ${theme.command(`${CLI_NAME} kv put greeting "Hello"`)}           ${theme.muted("Store a value")}
+  ${theme.command(`${CLI_NAME} kv list`)}                           ${theme.muted("List all keys")}
+  ${theme.command(`${CLI_NAME} secrets network init`)}              ${theme.muted("Create the default secrets network")}
+  ${theme.command(`${CLI_NAME} account apps list`)}                 ${theme.muted("List registered account apps")}
+  ${theme.command(`${CLI_NAME} delegation create --to did:pkh:...`)}  ${theme.muted("Grant access to another user")}
+  ${theme.command(`${CLI_NAME} space list`)}                        ${theme.muted("Show your spaces")}
 
 ${theme.muted("Docs:")} ${theme.accent("https://docs.tinycloud.xyz/cli")}
 ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk")}

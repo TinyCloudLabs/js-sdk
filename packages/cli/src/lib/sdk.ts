@@ -1,4 +1,5 @@
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
@@ -57,7 +58,7 @@ function signerJwkForProfile(
     `Profile "${profileName}" cannot restore its session because its private key material is missing.`,
     ExitCode.AUTH_REQUIRED,
     {
-      hint: `Sign in again with: tc --profile ${profileName} auth login --method openkey`,
+      hint: `Sign in again with: ${CLI_NAME} --profile ${profileName} auth login --method openkey`,
     },
   );
 }
@@ -201,7 +202,7 @@ export async function createSDKInstance(
   if (!key && !effectivePrivateKey && !(profile?.authMethod === "openkey" && session !== null)) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${ctx.profile}". Run \`${CLI_NAME} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED,
     );
   }
@@ -382,7 +383,7 @@ export async function bootstrapDelegatedSession(
       return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) =>
       // The lock or a read failed: the import's error stays the one reported.
-      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`tc --profile ${ctx.profile} context\`.`);
+      `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME} --profile ${ctx.profile} context\`.`);
     throw annotate(reported, note);
   };
 
@@ -418,7 +419,7 @@ async function restoreBeforeBootstrap(profileName: string, previousProfile: Prof
     });
   }
   if (failures.length === 0) return undefined;
-  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`tc --profile ${profileName} context\`.`;
+  return `Rolling back the provisional session of profile "${profileName}" failed too (${failures.join("; ")}); check \`${CLI_NAME} --profile ${profileName} context\`.`;
 }
 
 /**
@@ -469,7 +470,7 @@ export async function ensureAuthenticated(
   if (!session) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `Not authenticated. Run \`tc auth login\` or \`tc init\` first.`,
+      `Not authenticated. Run \`${CLI_NAME} auth login\` or \`${CLI_NAME} init\` first.`,
       ExitCode.AUTH_REQUIRED,
     );
   }

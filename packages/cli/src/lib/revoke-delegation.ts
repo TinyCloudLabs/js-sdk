@@ -1,4 +1,5 @@
 import type { PermissionEntry, PortableDelegation, TinyCloudNode } from "@tinycloud/node-sdk";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer } from "@tinycloud/operations/delegation-binding";
 import type { ProfileConfig } from "../config/types.js";
@@ -207,7 +208,7 @@ export async function revokeDelegationOnNode(params: {
       const profileDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId) ?? "unknown";
       throw new CLIError(
         "REVOKE_UNAUTHORIZED", "The node rejected this revocation: Unauthorized Revoker.", ExitCode.PERMISSION_DENIED,
-        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`tc --profile <profile-name> delegation revoke ${cid}\`.` },
+        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME} --profile <profile-name> delegation revoke ${cid}\`.` },
       );
     }
     throw cliErrorFromService(result.error);

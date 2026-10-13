@@ -1,4 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
@@ -14,7 +15,7 @@ export function assertNotLocalOwner(profileName: string, profile: ProfileConfig 
   if (profile === null || !isLocalOwnerProfile(profile)) return;
   throw new CLIError(
     "LOCAL_OWNER_PROFILE",
-    `Profile "${profileName}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`tc init --name publisher --key-only\`, then \`tc --profile publisher auth login --device --manifest ...\`.`,
+    `Profile "${profileName}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`${CLI_NAME} init --name publisher --key-only\`, then \`${CLI_NAME} --profile publisher auth login --device --manifest ...\`.`,
     ExitCode.USAGE_ERROR,
   );
 }
@@ -84,7 +85,7 @@ export function assertSessionReplaceable(
   if (problem !== undefined) {
     throw new CLIError(
       "PROFILE_STATE_INCONSISTENT",
-      `Profile "${profileName}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`tc --profile ${profileName} context\`, then pass --replace-session to replace this state, or use a new profile.`,
+      `Profile "${profileName}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`${CLI_NAME} --profile ${profileName} context\`, then pass --replace-session to replace this state, or use a new profile.`,
       ExitCode.ERROR,
     );
   }
@@ -105,7 +106,7 @@ export function assertSessionReplaceable(
   throw new CLIError(
     "SESSION_IN_USE",
     `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. ` +
-      "Keep the user's existing profiles: use a new profile name (`tc init --name publisher --key-only`, then `tc --profile publisher auth login --device --manifest ...`), or pass --replace-session to replace this session.",
+      `Keep the user's existing profiles: use a new profile name (\`${CLI_NAME} init --name publisher --key-only\`, then \`${CLI_NAME} --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
     ExitCode.USAGE_ERROR,
   );
 }
@@ -166,7 +167,7 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
     ) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
-        `Profile "${profileName}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`tc --profile ${profileName} context\` and run the login again if it is still needed.`,
+        `Profile "${profileName}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`${CLI_NAME} --profile ${profileName} context\` and run the login again if it is still needed.`,
         ExitCode.ERROR,
       );
     }
@@ -184,7 +185,7 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       throw new CLIError(
         "PROFILE_STATE_INCONSISTENT",
         `Saving the login for profile "${profileName}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). ` +
-          `The profile's key, session and settings may not match. Check \`tc --profile ${profileName} context\`, then run the login again with --replace-session, or use a new profile.`,
+          `The profile's key, session and settings may not match. Check \`${CLI_NAME} --profile ${profileName} context\`, then run the login again with --replace-session, or use a new profile.`,
         ExitCode.ERROR,
       );
     }

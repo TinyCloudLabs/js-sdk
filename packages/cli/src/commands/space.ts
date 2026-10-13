@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -76,10 +77,10 @@ export function registerSpaceCommand(program: Command): void {
 
 A delegate cannot host a space — only its owner (root authority) can. This
 emits a tinycloud.host.request artifact naming the space and its owner so you
-can hand it to the owner; they run \`tc space host <name>\` and confirm.
+can hand it to the owner; they run \`${CLI_NAME} space host <name>\` and confirm.
 
 If you ARE the owner of the resolved space, this refuses and tells you to host
-it directly with \`tc space host <name>\` (no request needed).
+it directly with \`${CLI_NAME} space host <name>\` (no request needed).
 `)
     .action(async (name: string, options, cmd) => {
       try {
@@ -94,7 +95,7 @@ it directly with \`tc space host <name>\` (no request needed).
         if (await isRootAuthority(spaceId, ctx.profile)) {
           throw new CLIError(
             "ALREADY_ROOT_AUTHORITY",
-            `You are the owner of ${spaceId}. Host it directly: tc space host ${spaceName}`,
+            `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME} space host ${spaceName}`,
             ExitCode.USAGE_ERROR,
           );
         }

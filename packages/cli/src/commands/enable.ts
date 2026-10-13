@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { loginWithDeviceAuthorization } from "../auth/device-auth.js";
 import { DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -10,7 +11,7 @@ export function registerEnableCommand(program: Command): void {
   const enable = program.command("enable").description("Enable a narrowly scoped TinyCloud service");
 
   enable.command("share")
-    .description("Approve Share publishing scope through OpenKey device authorization (same as `tc auth login --device --manifest builtin:share-publishing`). Use a dedicated profile, e.g. `tc init --name publisher --key-only && tc --profile publisher enable share`; keep existing profiles for their apps.")
+    .description(`Approve Share publishing scope through OpenKey device authorization (same as \`${CLI_NAME} auth login --device --manifest builtin:share-publishing\`). Use a dedicated profile, e.g. \`${CLI_NAME} init --name publisher --key-only && ${CLI_NAME} --profile publisher enable share\`; keep existing profiles for their apps.`)
     .option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .action(async (options, command) => {
       try {

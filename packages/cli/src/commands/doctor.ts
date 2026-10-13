@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { DEFAULT_HOST } from "../config/constants.js";
 import { outputJson, shouldOutputJson, formatCheck, formatSection } from "../output/formatter.js";
@@ -53,7 +54,7 @@ export function registerDoctorCommand(program: Command): void {
               const profile = await ProfileManager.getProfile(profileName);
               keyDetail = profile.did ? `${profile.did.slice(0, 20)}...` : "key found";
             } else {
-              keyDetail = "no key — run tc init";
+              keyDetail = `no key — run ${CLI_NAME} init`;
             }
           } catch {
             keyDetail = "error reading key";
@@ -77,7 +78,7 @@ export function registerDoctorCommand(program: Command): void {
             } else if (state === "unverified") {
               sessionDetail = `not usable (no signed OpenKey proof) — ${signInAgainHint(profileName, resolveProfilePosture(profile))}`;
             } else {
-              sessionDetail = sessionOk ? "active" : "no session — run tc auth login";
+              sessionDetail = sessionOk ? "active" : `no session — run ${CLI_NAME} auth login`;
             }
           } catch {
             sessionDetail = "error reading session";
@@ -115,7 +116,7 @@ export function registerDoctorCommand(program: Command): void {
             spaceOk = Boolean(profile.spaceId);
             spaceDetail = spaceOk
               ? `${profile.spaceId!.slice(0, 16)}...`
-              : "no space — run tc space create";
+              : `no space — run ${CLI_NAME} space create`;
           } catch {
             spaceDetail = "error checking space";
           }

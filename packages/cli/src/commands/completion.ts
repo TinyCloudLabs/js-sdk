@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 
 export function registerCompletionCommand(program: Command): void {
   const completion = program.command("completion").description("Generate shell completions");
@@ -29,7 +30,7 @@ export function registerCompletionCommand(program: Command): void {
 }
 
 function generateBashCompletion(): string {
-  return `# tc bash completion
+  return `# ${CLI_NAME} bash completion
 _tc_completions() {
   local cur prev commands subcommands
   COMPREPLY=()
@@ -54,12 +55,12 @@ _tc_completions() {
     COMPREPLY=( $(compgen -W "\${subcommands}" -- "\${cur}") )
   fi
 }
-complete -F _tc_completions tc
+complete -F _tc_completions ${CLI_NAME}
 `;
 }
 
 function generateZshCompletion(): string {
-  return `#compdef tc
+  return `#compdef ${CLI_NAME}
 
 _tc() {
   local -a commands
@@ -111,41 +112,41 @@ _tc
 }
 
 function generateFishCompletion(): string {
-  return `# tc fish completion
+  return `# ${CLI_NAME} fish completion
 set -l commands init auth kv space delegation share node profile completion
 
 # Disable file completion by default
-complete -c tc -f
+complete -c ${CLI_NAME} -f
 
 # Top-level commands
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
-complete -c tc -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
+complete -c ${CLI_NAME} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
 # Subcommands
-complete -c tc -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
-complete -c tc -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
-complete -c tc -n "__fish_seen_subcommand_from space" -a "list create info switch"
-complete -c tc -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
-complete -c tc -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
-complete -c tc -n "__fish_seen_subcommand_from node" -a "health version status"
-complete -c tc -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
-complete -c tc -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from space" -a "list create info switch"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from node" -a "health version status"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
+complete -c ${CLI_NAME} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
 
 # Global options
-complete -c tc -l profile -s p -d "Profile to use"
-complete -c tc -l host -s H -d "TinyCloud node URL"
-complete -c tc -l verbose -s v -d "Enable verbose output"
-complete -c tc -l no-cache -d "Disable caching"
-complete -c tc -l quiet -s q -d "Suppress non-essential output"
-complete -c tc -l replication -d "Enable read-through replication"
-complete -c tc -l no-replication -d "Disable replication"
-complete -c tc -l replication-debug -d "Write replication diagnostics to stderr"
+complete -c ${CLI_NAME} -l profile -s p -d "Profile to use"
+complete -c ${CLI_NAME} -l host -s H -d "TinyCloud node URL"
+complete -c ${CLI_NAME} -l verbose -s v -d "Enable verbose output"
+complete -c ${CLI_NAME} -l no-cache -d "Disable caching"
+complete -c ${CLI_NAME} -l quiet -s q -d "Suppress non-essential output"
+complete -c ${CLI_NAME} -l replication -d "Enable read-through replication"
+complete -c ${CLI_NAME} -l no-replication -d "Disable replication"
+complete -c ${CLI_NAME} -l replication-debug -d "Write replication diagnostics to stderr"
 `;
 }

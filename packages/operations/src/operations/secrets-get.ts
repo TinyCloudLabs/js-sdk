@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SecretReadResult } from "@tinycloud/node-sdk";
 
+import { CLI_NAME } from "../cli-name.js";
 import {
   type OperationContext,
   type CapabilityRequirement,
@@ -178,7 +179,7 @@ function classifySecretRead(
         approval: {
           kind: "openkey",
           requestId: "runtime-hint",
-          fallback: "tc auth grant <request-artifact>",
+          fallback: `${CLI_NAME} auth grant <request-artifact>`,
         },
       };
     case "node_unreachable":

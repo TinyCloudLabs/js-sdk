@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -79,7 +80,7 @@ function resolveAddress(profile: ProfileConfig, session: Record<string, unknown>
 
   throw new CLIError(
     "ADDRESS_UNKNOWN",
-    `Cannot determine Ethereum address for profile "${profile.name}". Run \`tc auth login\` to refresh the session.`,
+    `Cannot determine Ethereum address for profile "${profile.name}". Run \`${CLI_NAME} auth login\` to refresh the session.`,
     ExitCode.AUTH_REQUIRED,
   );
 }

@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ExitCode } from "../config/constants.js";
 import { CLIError, cliErrorFromService } from "../output/errors.js";
 import type { ProbeOutcome, StatusEnvelopeError } from "./probe-child.js";
@@ -14,8 +15,8 @@ const TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
 const RETRYABLE_STATUS_ERRORS: Record<string, true> = { NODE_UNREACHABLE: true, NODE_ERROR: true };
 
 export const EXPLICIT_KEY_HINT =
-  "tc secrets wait never signs in, and an explicit private key has no stored session. " +
-  "Use a local profile signed in once with tc --profile <profile> auth login --method local, without TC_PRIVATE_KEY.";
+  `${CLI_NAME} secrets wait never signs in, and an explicit private key has no stored session. ` +
+  `Use a local profile signed in once with ${CLI_NAME} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
 
 /** The production {@link WaitDependencies.sleep}: a timer that an abort cancels at once. */
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -116,7 +117,7 @@ export async function runSecretsWait(request: WaitRequest, deps: WaitDependencie
 
   const cancelled = (): CLIError => new CLIError(
     "CANCELLED",
-    "Interrupted: tc secrets wait stopped before the secrets were ready.",
+    `Interrupted: ${CLI_NAME} secrets wait stopped before the secrets were ready.`,
     ExitCode.CANCELLED,
     progress === undefined ? {} : { progress },
   );
@@ -283,7 +284,7 @@ function statusError(error: StatusEnvelopeError, profile: string, warnings: read
     if (recovery !== undefined) {
       const hint = recovery.command !== undefined
         ? `Sign in once with: ${recovery.command}, then retry.`
-        : `Sign in to profile "${profile}" once with tc auth login, then retry.`;
+        : `Sign in to profile "${profile}" once with ${CLI_NAME} auth login, then retry.`;
       return new CLIError("AUTH_REQUIRED", error.message, ExitCode.AUTH_REQUIRED, { hint, recovery, ...extra });
     }
   }
@@ -291,7 +292,7 @@ function statusError(error: StatusEnvelopeError, profile: string, warnings: read
     const recovery = recoveryOf(error, "complete_migration");
     const hint = recovery?.command !== undefined
       ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.`
-      : `Run tc auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
+      : `Run ${CLI_NAME} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
     return new CLIError("PROFILE_MIGRATION_REQUIRED", error.message, ExitCode.ERROR, {
       hint,
       ...(recovery === undefined ? {} : { recovery }),

@@ -2,6 +2,7 @@
 // lightweight node-sdk test doubles.
 import * as nodeSdk from "@tinycloud/node-sdk";
 
+import { CLI_NAME } from "./cli-name.js";
 import type { TinyCloudPosture } from "./contract.js";
 
 /**
@@ -334,7 +335,7 @@ export function ownerOfSpace(space: string | undefined): string | undefined {
 
 function putCommands(names: readonly string[], scope: string | undefined): string {
   return dedupe(names)
-    .map((name) => `tc secrets put ${name}${scope === undefined ? "" : ` --scope ${scope}`} --stdin`)
+    .map((name) => `${CLI_NAME} secrets put ${name}${scope === undefined ? "" : ` --scope ${scope}`} --stdin`)
     .join("; ");
 }
 

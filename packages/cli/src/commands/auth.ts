@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { spawn } from "node:child_process";
@@ -156,7 +157,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
-    .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`tc share publish\``)
+    .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
@@ -285,7 +286,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
   auth
     .command("logout")
-    .description("Clear the local session and remove local replicas. Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.")
+    .description(`Clear the local session and remove local replicas. Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME} delegation revoke <cid>\` to end access now.`)
     .option("--keep-replicas", "Keep this profile's local replicas")
     .action(async (options, cmd) => {
       try {
@@ -302,7 +303,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           authenticated: false,
           replicasRemoved,
           replicasKept: options.keepReplicas === true,
-          warning: "Logout is local; delegations and grants on the node stay valid until they expire. Use `tc delegation revoke <cid>` to end access now.",
+          warning: `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME} delegation revoke <cid>\` to end access now.`,
         });
       } catch (error) {
         return handleError(error);
@@ -457,7 +458,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (profile.authMethod === "openkey" || options.device) {
           const key = await ProfileManager.getKey(ctx.profile);
           if (!key) {
-            throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`tc --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
+            throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
           }
           const openkeyHost = resolveOpenKeyHost(profile);
           const grants: StagedOpenKeyGrant[] = [];
@@ -471,7 +472,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           const declined: PermissionEntry[] = [];
           for (const group of groupPermissionsBySpace(requested)) {
             const reason = permissionGrantReason(
-              "Grant requested TinyCloud permissions from `tc auth request --grant`.",
+              `Grant requested TinyCloud permissions from \`${CLI_NAME} auth request --grant\`.`,
               group,
             );
             const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
@@ -597,7 +598,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             kind: parsed.kind,
             requestId: parsed.requestId,
             requested: parsed.requested,
-            next: `tc auth retry ${parsed.requestId}`,
+            next: `${CLI_NAME} auth retry ${parsed.requestId}`,
           });
           return;
         }
@@ -1337,7 +1338,7 @@ export async function ensureDelegationAuthority(params: {
     if (!key) {
       throw new CLIError(
         "NO_KEY",
-        `No key found for profile "${params.ctx.profile}". Run \`tc --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
         ExitCode.AUTH_REQUIRED,
       );
     }
@@ -1652,7 +1653,7 @@ async function rotateAuthKey(
     if (!profile.privateKey) {
       throw new CLIError(
         "LOCAL_OWNER_KEY_REQUIRED",
-        `Profile "${profileName}" does not have a local owner private key. Run \`tc auth login --method local\` first.`,
+        `Profile "${profileName}" does not have a local owner private key. Run \`${CLI_NAME} auth login --method local\` first.`,
         ExitCode.AUTH_REQUIRED,
       );
     }
@@ -1967,7 +1968,7 @@ export async function refreshOpenKeySession(
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${profileName}". Run \`tc --profile ${profileName} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${profileName}". Run \`${CLI_NAME} --profile ${profileName} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED,
     );
   }

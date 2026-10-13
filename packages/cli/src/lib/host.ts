@@ -1,3 +1,4 @@
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   discoverLocalTinyCloudNode,
   type LocalNodeIdentityStore,
@@ -217,14 +218,14 @@ export async function unhostedSpaceError(
   const hint = owner
     ? [
         "You are the owner. Host it once:",
-        `  tc space host ${spaceName}`,
+        `  ${CLI_NAME} space host ${spaceName}`,
         "Then retry.",
       ].join("\n")
     : [
         "You are a delegate and CANNOT host this space — only its owner can.",
         "Emit a host request:",
-        `  tc space host-request ${spaceName} --emit ./host-request.json`,
-        "Send it to the owner; they run `tc space host` and confirm. Then retry.",
+        `  ${CLI_NAME} space host-request ${spaceName} --emit ./host-request.json`,
+        `Send it to the owner; they run \`${CLI_NAME} space host\` and confirm. Then retry.`,
       ].join("\n");
 
   const message = owner

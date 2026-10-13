@@ -1,7 +1,8 @@
 import { Command } from "commander";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 
 export const TC_OPTIONS_BEFORE_COURIER =
-  'tc courier takes no tc options and does not use tc profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. tc courier init --host <url>.';
+  `${CLI_NAME} courier takes no ${CLI_NAME} options and does not use ${CLI_NAME} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME} courier init --host <url>.`;
 
 /**
  * List `courier` in help and completion. `tc courier …` runs from `index.ts` with raw argv
@@ -11,7 +12,7 @@ export const TC_OPTIONS_BEFORE_COURIER =
 export function registerCourierCommand(program: Command): void {
   const courier = program
     .command("courier")
-    .description("Agent-to-agent threads over TinyCloud; run `tc courier --help` (beta)")
+    .description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME} courier --help\` (beta)`)
     .argument("[args...]")
     .allowUnknownOption()
     .helpOption(false);
