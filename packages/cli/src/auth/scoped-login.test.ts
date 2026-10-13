@@ -323,13 +323,14 @@ describe("scoped first login", () => {
     await expect(refreshOpenKeySession("scoped", host, { permissions: other, openKeyAcquisition: async () => proof() })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
 
     // A callback without a proof, on a profile with no recorded owner and no
-    // --expiry, contributes no authority fields at all.
+    // --expiry, is refused and saves nothing (TC-1053).
     await ProfileManager.clearSession("scoped");
     await ProfileManager.setProfile("scoped", ownerless);
     const { siwe: _siwe, signature: _signature, ...unproven } = valid;
-    await refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => ({ ...unproven, ...forged }) });
-    const legacy = await ProfileManager.getSession("scoped") as Record<string, unknown>;
-    for (const field of ["permissionsSource", "permissions", "ownerDid", "expiresAt"]) expect(legacy[field]).toBeUndefined();
+    await expect(refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => ({ ...unproven, ...forged }) }))
+      .rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+    expect(await ProfileManager.getProfile("scoped")).toEqual(ownerless);
   });
 
   test("restores profile, key and session when a commit write fails", async () => {
@@ -406,17 +407,11 @@ describe("scoped first login", () => {
     expect(await ProfileManager.getProfile("scoped")).toEqual(before);
   });
 
-  test("an unsigned SIWE's past Expiration Time does not make the saved session look expired", async () => {
-    const valid = await proof();
-    const { signature: _signature, ...unsigned } = valid;
-    const expired = valid.siwe.replace(/^Expiration Time: .+$/m, "Expiration Time: 2000-01-01T00:00:00.000Z");
-    await refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => ({ ...unsigned, siwe: expired }) });
-    const saved = await ProfileManager.getSession("scoped") as Record<string, unknown>;
-    expect(saved.siwe).toBeUndefined();
-    let calls = 0;
-    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => { calls++; return proof(); } }))
-      .rejects.toMatchObject({ code: "SESSION_IN_USE" });
-    expect(calls).toBe(0);
+  test("a callback with a SIWE but no signature is refused and saves nothing (TC-1053)", async () => {
+    const { signature: _signature, ...unsigned } = await proof();
+    await expect(refreshOpenKeySession("scoped", host, { openKeyAcquisition: async () => unsigned }))
+      .rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
 
   test("a session naming an owner beside a profile without one is inconsistent", async () => {

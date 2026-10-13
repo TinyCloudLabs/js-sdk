@@ -931,3 +931,46 @@ describe("auth status and whoami report an expired session as signed out (TC-973
     }
   }, 60_000);
 });
+
+describe("an OpenKey owner session without a signed proof is never used (TC-1053)", () => {
+  // A real, unexpired compact delegation for the profile's own key, with no
+  // SIWE proof: it restores for a delegate-session profile, so only the proof
+  // gate keeps an owner profile from using it.
+  test.each([
+    ["an owner-openkey profile", "owner-openkey", false],
+    ["a legacy profile with no recorded posture", undefined, false],
+    ["a delegate-session profile (control)", "delegate-session", true],
+  ] as const)("%s", async (_label, posture, usable) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-unverified-session-"));
+    try {
+      const seeded = await seedImportedProfile(home, "proofless", Math.floor(Date.now() / 1000) + 3600);
+      await seedImportedSession(home, "proofless", seeded);
+      await withTinyCloudStateRoot(home, async () => {
+        const path = profileConfigPath("proofless");
+        const profile: Record<string, unknown> = JSON.parse(await readFile(path, "utf8"));
+        if (posture === undefined) delete profile.posture;
+        else profile.posture = posture;
+        await writeJsonAtomic(path, profile);
+      });
+      requests.length = 0;
+      for (const command of [["auth", "status"], ["context"]]) {
+        const result = await runBuiltCli(home, ["--json", "--profile", "proofless", ...command]);
+        expect(JSON.parse(result.stdout).session.state === "unverified").toBe(!usable);
+      }
+      // The CLI restore path, and both operations runtimes: restored (`secrets wait`) and invocation (`secrets get`).
+      for (const command of [
+        ["kv", "get", "KEY"],
+        ["secrets", "wait", "KEY", "--timeout", "0", "--owner", seeded.ownerDid],
+        ["secrets", "get", "KEY", "--raw"],
+      ]) {
+        requests.length = 0;
+        const result = await runBuiltCli(home, ["--json", "--profile", "proofless", ...command]);
+        // The control restores: it gets past AUTH_REQUIRED (`secrets get` then stops locally for lack of a decrypt grant).
+        if (usable) expect(result.error?.code).not.toBe("AUTH_REQUIRED");
+        else expect({ exitCode: result.exitCode, code: result.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
+      }
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+});

@@ -267,7 +267,7 @@ describe("CLI status command", () => {
       spaceId: "tinycloud:pkh:eip155:1:0xabc:default",
     }));
     profiles.set("staging", makeProfile("staging"));
-    sessions.set("default", { siwe: futureSiwe });
+    sessions.set("default", { siwe: futureSiwe, signature: "0xsignature" });
     sessions.set("staging", { expiresAt: "2020-01-01T00:00:00.000Z" });
     keys.add("default");
     recaps.set(futureSiwe, [sessionPermission]);
@@ -370,7 +370,7 @@ describe("CLI status command", () => {
     jsonMode = false;
     profileNames = ["default"];
     profiles.set("default", makeProfile("default"));
-    sessions.set("default", { expiresAt: "2099-01-01T00:00:00.000Z" });
+    sessions.set("default", { expiresAt: "2099-01-01T00:00:00.000Z", siwe: "siwe-message", signature: "0xsignature" });
     delegations.set("default", [
       makeDelegation(
         "bafy-active",

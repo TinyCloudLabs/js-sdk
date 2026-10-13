@@ -564,16 +564,6 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
 }
 
-export function mergePrivateJwkIntoSession(session: Record<string, unknown>, key: object): Record<string, unknown> {
-  const sessionJwk = session.jwk;
-  if (!sessionJwk || typeof sessionJwk !== "object") return session;
-  const sessionJwkRecord = sessionJwk as Record<string, unknown>;
-  if (typeof sessionJwkRecord.d === "string" && sessionJwkRecord.d.length > 0) return session;
-  const privateParameter = (key as Record<string, unknown>).d;
-  if (typeof privateParameter !== "string" || privateParameter.length === 0) return session;
-  return { ...session, jwk: { ...sessionJwkRecord, d: privateParameter } };
-}
-
 /**
  * Device login for a profile: request `permissions`, verify the approval, and
  * only then persist key, session and the OpenKey owner posture, in one
