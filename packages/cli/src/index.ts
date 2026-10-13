@@ -1,5 +1,6 @@
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
@@ -31,8 +32,10 @@ function selectedShareProfile(): string | undefined {
   return process.env.TC_PROFILE;
 }
 
+// Ubuntu's iproute2 ships /usr/sbin/tc, so the CLI is also installed as `tinycloud`.
+// Help and usage show whichever name was invoked; everything else defaults to `tc`.
 program
-  .name("tc")
+  .name(basename(process.argv[1] ?? "") === "tinycloud" ? "tinycloud" : "tc")
   .description("TinyCloud CLI — self-sovereign storage from the terminal")
   .version(version)
   .option("-p, --profile <name>", "Profile to use")
@@ -56,8 +59,9 @@ program.hook("preAction", async (thisCommand) => {
 
   // Config guard — warn if not configured for auth-required commands
   const commandName = thisCommand.name();
-  const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
+  const isRootCommand = thisCommand === program;
+  const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
                     fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
