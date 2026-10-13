@@ -9,7 +9,9 @@ Use a new profile name if it already exists. Keep the user's existing profiles: 
 Use device login when the owner cannot open a browser on the machine running `tc`. The owner approves on their phone.
 
 ```bash
-TC="$(npm prefix --global)/bin/tc"
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
+[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tc"   # else a global npm install
+[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
 "$TC" profile list                         # pick a name that is not taken
 "$TC" init --name publisher --key-only
 "$TC" --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
@@ -60,7 +62,7 @@ Errors: `SCOPE_REJECTED` means OpenKey refuses that capability over device login
 On a machine with a browser, request the same manifest through the OpenKey browser flow:
 
 ```bash
-tc --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
+"$TC" --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
 ```
 
 `--paste` prints the approval URL on stderr and reads the owner's return code from stdin: a terminal paste, or piped text. End the code with a newline; a final line without one is also accepted. If stdin ends with no code, the command fails with `PASTE_CODE_MISSING` (exit 3), names the approval URL, and saves nothing. `--no-popup` prints the callback URL without opening a browser. The same signed-proof, owner, live-session, local-owner and commit-time checks apply, and the JSON result lists `permissions` (approved) and `declined` (unchecked). Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure. `--expiry` reaches OpenKey as `<seconds>s`; dates and lifetimes under a minute are refused before the browser opens.
@@ -75,13 +77,13 @@ An agent reads named secrets through its own profile. The owner approves a scope
 cat > agent-secrets.json <<'EOF'
 { "app_id": "my.agent", "name": "My agent", "space": "secrets", "secrets": { "OPENAI_API_KEY": true } }
 EOF
-tc init --name agent-secrets --key-only
-LOGIN=(tc --profile agent-secrets auth login --method openkey --paste --manifest agent-secrets.json
+"$TC" init --name agent-secrets --key-only
+LOGIN=("$TC" --profile agent-secrets auth login --method openkey --paste --manifest agent-secrets.json
   --owner did:pkh:eip155:1:0xOWNER_ADDRESS --expiry 7d)
 "${LOGIN[@]}" < /dev/null   # exits 3 with PASTE_CODE_MISSING; its stderr names the approval URL
 # Send the owner that URL. After they approve and send back the code:
 printf '%s\n' "$CODE" | "${LOGIN[@]}"
-tc --profile agent-secrets secrets get OPENAI_API_KEY --raw
+"$TC" --profile agent-secrets secrets get OPENAI_API_KEY --raw
 ```
 
 - The approval URL depends only on the profile's session key and the request, so the same command run again accepts the owner's code from stdin. Write the code followed by a newline; a final line without one is also accepted. Nothing is saved until a code verifies.
@@ -98,17 +100,19 @@ tc --profile agent-secrets secrets get OPENAI_API_KEY --raw
 When the secret does not exist yet, the agent sends the owner one message with a request link, redeems the consent short code if the owner approved a scoped login, then waits. Call the CLI by absolute path: a bare `tc` on `PATH` can be iproute2's `/usr/sbin/tc` (traffic control), not TinyCloud.
 
 ```bash
-TC_BIN="$(npm prefix --global)/bin/tc"
-"$TC_BIN" --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
+[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tc"   # else a global npm install
+[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
+"$TC" --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
 # One message to the owner: the url (plus the scoped-login approval URL above if the profile has no grant yet).
 # If the owner sends back a consent short code, redeem it first:
 printf '%s\n' "$CODE" | "${LOGIN[@]}"
-"$TC_BIN" --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
-"$TC_BIN" --profile agent-secrets secrets get OPENAI_API_KEY --raw
+"$TC" --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
+"$TC" --profile agent-secrets secrets get OPENAI_API_KEY --raw
 ```
 
 - `wait` never signs in: it needs a stored session and doesn't accept `TC_PRIVATE_KEY` (exit 3). Exit 3 carries `error.recovery.command`, the persistent login to run once.
-- After a CLI upgrade, run one normal command per profile first (for example `"$TC_BIN" --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
+- After a CLI upgrade, run one normal command per profile first (for example `"$TC" --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
 - Exit 8 means the owner has not added it yet: rerun `wait` without sending the link again. Exit 5 means the grant does not cover a name: `error.recovery.names` lists them. [REFERENCE.md](REFERENCE.md#asking-the-owner-for-a-secret-request-wait-manage) has the full exit table.
 - A local identity (local-owner profile, a profile with a stored `privateKey`, `--private-key`, `TC_PRIVATE_KEY`) owns its secrets and gets `LOCAL_OWNER_PROFILE` from `request`: store them with `secrets put NAME --stdin`.
 
@@ -117,7 +121,7 @@ printf '%s\n' "$CODE" | "${LOGIN[@]}"
 Login covers one space. Request further spaces on the logged-in profile:
 
 ```bash
-tc --profile PROFILE auth request --manifest FILE --grant --device
+"$TC" --profile PROFILE auth request --manifest FILE --grant --device
 ```
 
 `auth request --device` defaults to a 7-day lifetime (`--expiry` to change it, at most `30d`). Without `--device`, `--grant` opens the OpenKey browser flow. Each space's request adds `tinycloud.capabilities/read` on that space's root, which OpenKey requires; a request of only raw decrypt is placed in the profile's primary space. Browser grants require a signed proof for the profile's session key and owner. Only the permissions and expiry in that proof can be activated and stored; an older space-nested decrypt proof, missing or foreign-owner proof, broader grant, wrong space, or too-long expiry is refused without storing a delegation.
