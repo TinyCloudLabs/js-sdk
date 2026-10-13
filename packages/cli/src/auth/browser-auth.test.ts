@@ -151,7 +151,9 @@ describe("paste login", () => {
         jwk: { ...delegation.jwk, d: "private-key" },
       };
       expect(await pasteWithStdin(["sf23-22cs\n"], options)).toEqual(delegation);
-      expect(requests).toEqual(["/api/delegation-codes/sf23-22cs"]);
+      // OpenKey shows codes in upper case; the lookup uses its lower-case canonical form.
+      expect(await pasteWithStdin(["SF23-22CS\n"], options)).toEqual(delegation);
+      expect(requests).toEqual(["/api/delegation-codes/sf23-22cs", "/api/delegation-codes/sf23-22cs"]);
       await expect(pasteWithStdin(["sf23-22cs\n"], { ...options, did: "did:key:z6MkOther" }))
         .rejects.toThrow(/different CLI key/);
       await expect(pasteWithStdin(["sf23-22cs\n"], { ...options, jwk: { ...delegation.jwk, x: "wrong-key" } }))
