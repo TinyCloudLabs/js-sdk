@@ -14,7 +14,13 @@ This release has **Commander coverage tracked, not complete parity**:
 
 ## Calling the CLI
 
-`/usr/sbin/tc` (iproute2 traffic control) shadows TinyCloud's `tc` on many Linux hosts. Call the CLI by absolute path: `TC="$(npm prefix --global)/bin/tc"; "$TC" --version`.
+`/usr/sbin/tc` (iproute2 traffic control) shadows TinyCloud's `tc` on many Linux hosts. Call the CLI by path, preferring the private install from https://agents.tinycloud.xyz/cli (set `TC_BIN` to use another one):
+
+```bash
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # where agents.tinycloud.xyz/cli installs it
+[ -x "$TC" ] || TC="$(npm prefix --global)/bin/tc"   # a global npm install
+"$TC" --version
+```
 
 ## Global Options
 
@@ -157,13 +163,14 @@ A missing secret makes `tc secrets get` exit 4 (`NOT_FOUND`). For an identity th
 `/usr/sbin/tc` (iproute2 traffic control) can shadow TinyCloud's `tc` on `PATH`, so scripts call the CLI by absolute path:
 
 ```bash
-TC_BIN="$(npm prefix --global)/bin/tc"
-"$TC_BIN" --profile agent secrets request OPENAI_API_KEY --requester "agent@host" --json
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # where agents.tinycloud.xyz/cli installs it
+[ -x "$TC" ] || TC="$(npm prefix --global)/bin/tc"   # a global npm install
+"$TC" --profile agent secrets request OPENAI_API_KEY --requester "agent@host" --json
 # {"url":"https://secrets.tinycloud.xyz/request?owner=…&name=OPENAI_API_KEY&requester=…&v=1","names":["OPENAI_API_KEY"],"owner":"did:pkh:eip155:1:0x…"}
 # send the url to the owner once, then:
-"$TC_BIN" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json
-"$TC_BIN" --profile agent secrets get OPENAI_API_KEY --raw
-"$TC_BIN" secrets manage OPENAI_API_KEY --no-open --json   # {"url":"…","opened":false}: the replace/manage page
+"$TC" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json
+"$TC" --profile agent secrets get OPENAI_API_KEY --raw
+"$TC" secrets manage OPENAI_API_KEY --no-open --json   # {"url":"…","opened":false}: the replace/manage page
 ```
 
 - **`secrets request <NAME...> [--scope S | --app ID] [--owner DID] [--requester LABEL] [--open]`** prints `{url, names, scope?, owner}` and exits 0. It is offline: no session, no node request. 1–10 names (`^[A-Z][A-Z0-9_]*$`, ≤ 64, duplicates dropped). `--app ID` derives the scope from an app id (`xyz.tinycloud.feed` → `xyz-tinycloud-feed`); `--app` with `--scope` exits 2. `--requester` defaults to `user@host`. `--open` also opens the link; a failure to open only adds a `BROWSER_OPEN_FAILED` warning on stderr. Errors: 2 for `INVALID_SECRET_NAME`, `TOO_MANY_SECRET_NAMES`, `INVALID_SECRET_SCOPE`, `INVALID_REQUESTER`, `INVALID_OWNER`, `OWNER_MISMATCH`, `LOCAL_OWNER_PROFILE`; 3 for `OWNER_DID_UNKNOWN` (pass `--owner`).

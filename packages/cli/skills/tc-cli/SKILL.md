@@ -8,7 +8,8 @@ description: Read, store, and share authorized TinyCloud data with the tc CLI. U
 Use the installed `@tinycloud/cli` executable. On many Linux hosts `tc` on `PATH` is `/usr/sbin/tc` (iproute2 traffic control), not TinyCloud. The package also installs the same CLI as `tinycloud`, which does not clash; examples below say `tc`, and `tinycloud` takes identical arguments. Otherwise call the CLI by absolute path and check it first:
 
 ```bash
-TC="$(npm prefix --global)/bin/tc"
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # where agents.tinycloud.xyz/cli installs it
+[ -x "$TC" ] || TC="$(npm prefix --global)/bin/tc"   # a global npm install
 "$TC" --version
 ```
 

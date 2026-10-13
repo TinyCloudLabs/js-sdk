@@ -13,10 +13,12 @@ TinyCloud KV. You write only into your owner's `agents` space, under
 
 Courier ships inside the TinyCloud CLI as `tc courier`. On Linux, iproute2's
 `/usr/sbin/tc` (traffic control) can shadow the TinyCloud `tc` on PATH, so call
-the npm global bin when unsure:
+the CLI by its path when unsure:
 
 ```bash
-TC="$(npm prefix --global)/bin/tc"; "$TC" courier --help
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # where agents.tinycloud.xyz/cli installs it
+[ -x "$TC" ] || TC="$(npm prefix --global)/bin/tc"   # a global npm install
+"$TC" courier --help
 ```
 
 The standalone `courier` bin from `@tinycloud/courier` takes identical

@@ -9,7 +9,8 @@ Use a new profile name if it already exists. Keep the user's existing profiles: 
 Use device login when the owner cannot open a browser on the machine running `tc`. The owner approves on their phone.
 
 ```bash
-TC="$(npm prefix --global)/bin/tc"
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # where agents.tinycloud.xyz/cli installs it
+[ -x "$TC" ] || TC="$(npm prefix --global)/bin/tc"   # a global npm install
 "$TC" profile list                         # pick a name that is not taken
 "$TC" init --name publisher --key-only
 "$TC" --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
@@ -98,17 +99,18 @@ tc --profile agent-secrets secrets get OPENAI_API_KEY --raw
 When the secret does not exist yet, the agent sends the owner one message with a request link, redeems the consent short code if the owner approved a scoped login, then waits. Call the CLI by absolute path: a bare `tc` on `PATH` can be iproute2's `/usr/sbin/tc` (traffic control), not TinyCloud.
 
 ```bash
-TC_BIN="$(npm prefix --global)/bin/tc"
-"$TC_BIN" --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # where agents.tinycloud.xyz/cli installs it
+[ -x "$TC" ] || TC="$(npm prefix --global)/bin/tc"   # a global npm install
+"$TC" --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
 # One message to the owner: the url (plus the scoped-login approval URL above if the profile has no grant yet).
 # If the owner sends back a consent short code, redeem it first:
 printf '%s\n' "$CODE" | "${LOGIN[@]}"
-"$TC_BIN" --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
-"$TC_BIN" --profile agent-secrets secrets get OPENAI_API_KEY --raw
+"$TC" --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
+"$TC" --profile agent-secrets secrets get OPENAI_API_KEY --raw
 ```
 
 - `wait` never signs in: it needs a stored session and doesn't accept `TC_PRIVATE_KEY` (exit 3). Exit 3 carries `error.recovery.command`, the persistent login to run once.
-- After a CLI upgrade, run one normal command per profile first (for example `"$TC_BIN" --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
+- After a CLI upgrade, run one normal command per profile first (for example `"$TC" --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
 - Exit 8 means the owner has not added it yet: rerun `wait` without sending the link again. Exit 5 means the grant does not cover a name: `error.recovery.names` lists them. [REFERENCE.md](REFERENCE.md#asking-the-owner-for-a-secret-request-wait-manage) has the full exit table.
 - A local identity (local-owner profile, a profile with a stored `privateKey`, `--private-key`, `TC_PRIVATE_KEY`) owns its secrets and gets `LOCAL_OWNER_PROFILE` from `request`: store them with `secrets put NAME --stdin`.
 
