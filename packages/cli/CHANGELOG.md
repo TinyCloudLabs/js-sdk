@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.2.3-beta.0
+
+### Patch Changes
+
+- 40fab17: Ctrl-C now cancels `tc auth login --method openkey` in a terminal, in both browser and `--paste` mode (TC-1062). Before, the login's interactive code prompt swallowed it and the login kept waiting until its 5-minute timeout. It now stops with `CANCELLED` (exit 130) and saves nothing.
+- 9e8e4d1: `tc kv list` can now page through a prefix and say whether a listing is complete (TC-982). The new options:
+  - `--limit N` (1–1000) sets the page size;
+  - `--cursor C` continues from a previous page;
+  - `--all` follows cursors until the listing is complete, and stops with `KV_LIST_CURSOR_STALLED` if the node repeats a cursor.
+
+  `--json` output now includes `truncated` and `nextCursor`; both are `null` when the node doesn't report them. Human output says when more keys follow. The `Size` and `Updated` columns were always empty for a list and still are.
+
+- 024a95f: Install the CLI as `tinycloud` as well as `tc`, so it works on Linux hosts where iproute2's `/usr/sbin/tc` shadows `tc`. Help and usage show the invoked name.
+
 ## 1.2.2
 
 ### Patch Changes

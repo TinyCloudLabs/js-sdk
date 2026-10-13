@@ -432,14 +432,6 @@ function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
-function formatTimeAgo(date) {
-  const d = typeof date === "string" ? new Date(date) : date;
-  const seconds = Math.floor((Date.now() - d.getTime()) / 1e3);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
 var WARNING_CODE, WARNING_REASON, DELEGATION_CID, JSON_REQUESTED;
 var init_formatter = __esm({
   "src/output/formatter.ts"() {
@@ -20310,7 +20302,8 @@ async function startAuthFlow(did, options = {}) {
   }
   try {
     return await callbackFlow(did, options);
-  } catch {
+  } catch (error) {
+    if (error instanceof CLIError && error.code === "CANCELLED") throw error;
     if (process.stdin.isTTY) {
       console.error("Could not open browser. Falling back to manual paste mode.");
       return pasteFlow(did, options);
@@ -20555,6 +20548,7 @@ If the browser can't connect back, enter the short code or paste the full delega
             resolving = false;
           }
         });
+        rl.on("SIGINT", () => settle({ error: loginCancelled() }));
       }
     });
     timeout = setTimeout(() => {
@@ -20594,9 +20588,18 @@ Open this URL in a browser to authenticate:
         }
       ));
     });
+    rl.on("SIGINT", () => {
+      if (answered) return;
+      answered = true;
+      rl.close();
+      reject(loginCancelled());
+    });
     rl.setPrompt("Enter short code or paste full delegation code: ");
     rl.prompt();
   });
+}
+function loginCancelled() {
+  return new CLIError("CANCELLED", "Interrupted: tc auth login stopped before approval. No session was saved.", ExitCode.CANCELLED);
 }
 
 // src/auth/device-auth.ts
@@ -24459,36 +24462,63 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (options, cmd) => {
+  kv.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--limit <n>", "Keys per page, 1-1000 (the node's default otherwise)").option("--cursor <cursor>", "Continue from a previous page's nextCursor").option("--all", "Follow nextCursor until the listing is complete").action(async (options, cmd) => {
     try {
       if (options.prefix) assertAddressableKey(options.prefix);
+      const limit = options.limit === void 0 ? void 0 : Number(options.limit);
+      if (limit !== void 0 && (!Number.isInteger(limit) || limit < 1 || limit > 1e3)) {
+        throw new CLIError("USAGE_ERROR", "--limit must be an integer from 1 through 1000", ExitCode.USAGE_ERROR);
+      }
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const listOptions = options.prefix ? { prefix: options.prefix } : void 0;
-      const result = await withSpinner("Listing keys...", () => kv2.list(listOptions));
-      if (!result.ok) {
-        await throwKvError(result.error, spaceUri, ctx.profile);
+      const keyList = [];
+      let cursor = options.cursor;
+      let truncated;
+      const seenCursors = /* @__PURE__ */ new Set();
+      for (; ; ) {
+        const result = await withSpinner("Listing keys...", () => kv2.list({
+          ...options.prefix ? { prefix: options.prefix } : {},
+          ...limit === void 0 ? {} : { limit },
+          ...cursor === void 0 ? {} : { cursor }
+        }));
+        if (!result.ok) {
+          await throwKvError(result.error, spaceUri, ctx.profile);
+          break;
+        }
+        for (const key of result.data.keys) keyList.push(key);
+        truncated = result.data.truncated;
+        cursor = truncated === true ? result.data.nextCursor : void 0;
+        if (options.all && truncated === true && cursor === void 0) {
+          throw new CLIError("KV_LIST_CURSOR_MISSING", "The node reported more keys but no cursor to continue from, so the listing can't be completed.", ExitCode.ERROR);
+        }
+        if (!options.all || cursor === void 0) break;
+        if (seenCursors.has(cursor)) {
+          throw new CLIError("KV_LIST_CURSOR_STALLED", "The node returned a list cursor it had already returned, so the listing can't be completed.", ExitCode.ERROR);
+        }
+        seenCursors.add(cursor);
       }
-      const rawData = result.data.data ?? result.data;
-      const keyList = Array.isArray(rawData) ? rawData : rawData?.keys ?? [];
       if (shouldOutputJson()) {
         outputJson({
           keys: keyList,
           count: keyList.length,
-          prefix: options.prefix ?? null
+          prefix: options.prefix ?? null,
+          // null when the node doesn't report truncation.
+          truncated: truncated ?? null,
+          nextCursor: cursor ?? null
         });
       } else {
         if (keyList.length === 0) {
           process.stdout.write(theme.muted("No keys found.") + "\n");
         } else {
-          const rows = keyList.map((e) => [
-            e.key || e,
-            e.contentLength ? formatBytes(e.contentLength) : "\u2014",
-            e.updatedAt ? formatTimeAgo(e.updatedAt) : "\u2014"
-          ]);
+          const rows = keyList.map((key) => [key, "\u2014", "\u2014"]);
           process.stdout.write(formatTable(["Key", "Size", "Updated"], rows) + "\n");
+        }
+        if (cursor !== void 0) {
+          process.stdout.write(theme.muted(`More keys follow. Run again with --cursor ${cursor}, or use --all.`) + "\n");
+        } else if (truncated === true) {
+          process.stdout.write(theme.muted("More keys follow, but the node gave no cursor to continue from.") + "\n");
         }
       }
     } catch (error) {

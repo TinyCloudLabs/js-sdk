@@ -8571,6 +8571,7 @@ var TC_OPTIONS_BEFORE_COURIER = 'tc courier takes no tc options and does not use
 // src/index.ts
 init_errors();
 import { readFileSync as readFileSync2 } from "fs";
+import { basename as basename3 } from "path";
 import { Command } from "commander";
 
 // src/output/banner.ts
@@ -18720,7 +18721,7 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name("tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
+program.name(basename3(process.argv[1] ?? "") === "tinycloud" ? "tinycloud" : "tc").description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
@@ -18730,8 +18731,9 @@ program.hook("preAction", async (thisCommand) => {
     emitBanner(version);
   }
   const commandName = thisCommand.name();
-  const fullCommand = parentName && parentName !== "tc" ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = ["tc", "init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
+  const isRootCommand = thisCommand === program;
+  const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();
