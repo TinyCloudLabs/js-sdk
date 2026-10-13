@@ -34231,7 +34231,7 @@ async function revokeShare(input) {
   if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
   if (target === "bearer") {
     if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope });
+    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
   } else {
     if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
     if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
@@ -34243,11 +34243,14 @@ async function revokeShare(input) {
       nodeAudience: policyNodeAudience(input.record)
     });
   }
-  const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
+  let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
-    await input.records.update(input.record.shareId, (record2) => ({ ...record2, revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record2) => ({ ...record2, revokedAt: record2.revokedAt ?? revokedAt }));
+    revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== void 0) {
-    await input.records.put({ ...input.record, revokedAt });
+    const latest = await input.records.get(input.record.shareId);
+    revokedAt = latest?.revokedAt ?? revokedAt;
+    await input.records.put({ ...latest ?? input.record, revokedAt });
   }
   return { state: "revoked", target, delegationCid, revokedAt };
 }
@@ -36161,7 +36164,7 @@ function registerShareCommand(program) {
       return handleError(shareCliError(error, "notify"));
     }
   });
-  share.command("revoke <id>").description("Revoke addressed shares; report bearer retention honestly").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);

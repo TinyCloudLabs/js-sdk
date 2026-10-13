@@ -15988,7 +15988,7 @@ async function revokeShare(input) {
   if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
   if (target === "bearer") {
     if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope });
+    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
   } else {
     if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
     if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
@@ -16000,11 +16000,14 @@ async function revokeShare(input) {
       nodeAudience: policyNodeAudience(input.record)
     });
   }
-  const revokedAt = (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
+  let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
-    await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record) => ({ ...record, revokedAt: record.revokedAt ?? revokedAt }));
+    revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== void 0) {
-    await input.records.put({ ...input.record, revokedAt });
+    const latest = await input.records.get(input.record.shareId);
+    revokedAt = latest?.revokedAt ?? revokedAt;
+    await input.records.put({ ...latest ?? input.record, revokedAt });
   }
   return { state: "revoked", target, delegationCid, revokedAt };
 }
@@ -18034,7 +18037,7 @@ function registerShareCommand(program2) {
       return handleError(shareCliError(error, "notify"));
     }
   });
-  share.command("revoke <id>").description("Revoke addressed shares; report bearer retention honestly").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
@@ -18057,12 +18060,21 @@ function registerShareCommand(program2) {
 init_storage();
 init_profiles();
 init_constants();
+init_errors();
 init_session_expired();
 import { readFile as readFile4 } from "fs/promises";
 import { join as join8 } from "path";
 import { createHash } from "crypto";
 import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
-import { LocationRecordValidationError, LocationRegistryHttpError, revokePolicyRootV3 } from "@tinycloud/sdk-core";
+import { withoutBearer } from "@tinycloud/operations/delegation-binding";
+import {
+  LocationRecordValidationError,
+  LocationRegistryHttpError,
+  parseSignedCompactUcanAttenuation,
+  parseSignedSiweCacao,
+  revokePolicyRootV3,
+  signCompactUcanAuthorization
+} from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError } from "@tinycloud/node-sdk";
 function requiredKvAction(meta) {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return void 0;
@@ -18656,9 +18668,80 @@ function createShareAuthorityAdapters(input = {}) {
     return "delivered";
   }) };
   const revocation = {
-    revokeDelegation: input.revokeDelegation ?? (async (request) => {
-      const result = await (await authenticatedNode()).revokeDelegation(request.delegationCid);
-      if (!result.ok) throw new Error("share delegation revocation was rejected");
+    // The node authorizes a revocation signed by the delegation's delegator,
+    // or by the owner of a space it targets. A bearer link is minted by the
+    // session key, or by the owner wallet when it outlives the session, so a
+    // proofless session-key revocation covers the first, and a local owner
+    // key covers both. Without either key (a session-only profile that signed
+    // in again since, for example) the link cannot be revoked here.
+    revokeDelegation: input.revokeDelegation ?? (async ({ delegationCid, record }) => {
+      const node = await authenticatedNode();
+      const activeNode = await node.activeNodeIdentity();
+      if (record.target.origin !== activeNode.origin) throw new Error("share delegation revocation is not bound to the active owner node");
+      const linkUnavailable = new CLIError("SHARE_LINK_UNAVAILABLE", "this share's stored link could not be verified; nothing was revoked", ExitCode.NOT_FOUND);
+      const resource = `${record.target.spaceId}/kv/${record.resource.path}`;
+      let sessionIssued;
+      try {
+        const decoded = node.sharing.decodeLink(parseNativeShareUrl(record.link ?? ""));
+        const linkKey = decoded.keyDid.split("#", 1)[0];
+        const authorization2 = withoutBearer(decoded.delegation.authHeader ?? "");
+        if (authorization2.split(".").length === 3) {
+          const signed = parseSignedCompactUcanAttenuation(authorization2, delegationCid);
+          if (signed.payload.aud.split("#", 1)[0] !== linkKey || signed.payload.att[resource] === void 0) throw linkUnavailable;
+          sessionIssued = signed.payload.iss.split("#", 1)[0] === node.credentialHolderDid;
+        } else {
+          const signed = await parseSignedSiweCacao(authorization2, delegationCid);
+          const owner = /^tinycloud:pkh:(eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):/.exec(record.target.spaceId)?.[1];
+          if (owner === void 0 || signed.issuer.toLowerCase() !== `did:pkh:${owner}`.toLowerCase() || signed.audience !== linkKey || signed.attenuation[resource] === void 0) throw linkUnavailable;
+          sessionIssued = false;
+        }
+      } catch {
+        throw linkUnavailable;
+      }
+      if (delegationCid === node.session?.delegationCid) throw linkUnavailable;
+      let authorization;
+      if (sessionIssued) {
+        const now = Math.floor(Date.now() / 1e3);
+        authorization = (await signCompactUcanAuthorization({
+          issuerDid: node.sessionDid,
+          audienceDid: activeNode.nodeDid,
+          attenuation: { [`urn:cid:${delegationCid}`]: { "tinycloud.delegation/revoke": [{}] } },
+          facts: [{}],
+          proofs: [],
+          notBefore: now,
+          expiresAt: now + 60,
+          nonce: `urn:uuid:${crypto.randomUUID()}`,
+          sign: (bytes) => node.signSessionBytes(bytes)
+        })).authorization;
+      } else if (!node.isSessionOnly) {
+        authorization = await node.signOwnerRevocation(delegationCid);
+      } else {
+        throw new CLIError("SHARE_ISSUER_KEY_UNAVAILABLE", "the key that created this share link is not available to this profile; nothing was revoked", ExitCode.PERMISSION_DENIED);
+      }
+      const response = await fetchFn(`${activeNode.origin}/revoke`, { method: "POST", headers: { Authorization: authorization } });
+      const body = await response.text();
+      if (response.ok) {
+        let receipt;
+        try {
+          receipt = JSON.parse(body);
+        } catch {
+          receipt = void 0;
+        }
+        if (typeof receipt === "object" && receipt !== null && "revoked" in receipt && receipt.revoked === true && "cid" in receipt && receipt.cid === delegationCid) return;
+        throw new CLIError(
+          "SHARE_REVOKE_UNCONFIRMED",
+          `the node answered the share revocation with HTTP ${response.status} but did not confirm it; the link may already be revoked. Check whether it still opens before retrying`,
+          ExitCode.ERROR,
+          { status: response.status }
+        );
+      }
+      const nodeMessage = body.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
+      throw new CLIError(
+        "SHARE_REVOKE_REJECTED",
+        `the node rejected the share revocation (HTTP ${response.status}${nodeMessage === "" ? "" : `: ${nodeMessage}`}); nothing was revoked`,
+        ExitCode.NOT_FOUND,
+        { status: response.status }
+      );
     }),
     revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
       const node = await authenticatedNode();
