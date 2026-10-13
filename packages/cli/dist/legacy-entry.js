@@ -17797,6 +17797,7 @@ __export(sdk_exports, {
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
+import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -17828,11 +17829,15 @@ function signedLifetimePassed(delegation) {
   return expiry !== void 0 && expiry.getTime() <= Date.now();
 }
 async function restoreProfileSession(node, profileName2, profile, sessionData) {
+  const posture = profile === null ? void 0 : resolveProfilePosture(profile);
+  if (ownerSessionLacksProof(sessionData, profile)) {
+    throw sessionExpiredError(profileName2, posture);
+  }
   try {
     await node.restoreSession(sessionData);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
-      throw sessionExpiredError(profileName2, profile === null ? void 0 : resolveProfilePosture(profile));
+      throw sessionExpiredError(profileName2, posture);
     }
     throw error;
   }
@@ -20670,7 +20675,7 @@ async function localKeySignIn(options) {
 init_errors();
 init_constants();
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile as isLocalOwnerProfile2 } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile as isLocalOwnerProfile2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 
 // src/lib/duration.ts
 function parseDuration(input) {
@@ -20772,8 +20777,9 @@ function sessionExpiresAt(session) {
   if (typeof value === "string") return new Date(value).toISOString();
   return null;
 }
-function storedSessionState(session) {
+function storedSessionState(session, profile) {
   if (session === null) return { state: "missing", expiresAt: null };
+  if (ownerSessionLacksProof2(session, profile)) return { state: "unverified", expiresAt: null };
   const siweExpiry = typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : void 0;
   const expiresAt = siweExpiry !== void 0 && Number.isFinite(Date.parse(siweExpiry)) ? new Date(siweExpiry).toISOString() : sessionExpiresAt(session);
   if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
@@ -21494,15 +21500,6 @@ async function acquireDeviceDelegation(input) {
     });
   }
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
-}
-function mergePrivateJwkIntoSession(session, key) {
-  const sessionJwk = session.jwk;
-  if (!sessionJwk || typeof sessionJwk !== "object") return session;
-  const sessionJwkRecord = sessionJwk;
-  if (typeof sessionJwkRecord.d === "string" && sessionJwkRecord.d.length > 0) return session;
-  const privateParameter = key.d;
-  if (typeof privateParameter !== "string" || privateParameter.length === 0) return session;
-  return { ...session, jwk: { ...sessionJwkRecord, d: privateParameter } };
 }
 async function loginWithDeviceAuthorization(input) {
   const snapshot = await readProfileSnapshot(input.profileName);
@@ -22254,7 +22251,7 @@ function registerAuthCommand(program, options) {
       }
       const posture = profile ? resolveProfilePosture(profile) : null;
       const operatorType = profile ? resolveProfileOperatorType(profile) : null;
-      const { state: sessionState, expiresAt } = storedSessionState(session);
+      const { state: sessionState, expiresAt } = storedSessionState(session, profile);
       const authenticated = sessionStateIsUsable(sessionState);
       if (shouldOutputJson()) {
         outputJson({
@@ -22289,7 +22286,7 @@ function registerAuthCommand(program, options) {
         process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
         process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
         process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
-        if (sessionState === "expired") {
+        if (sessionState === "expired" || sessionState === "unverified") {
           process.stdout.write(`
 ${signInAgainHint(ctx.profile, posture ?? void 0)}
 `);
@@ -22741,9 +22738,9 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       const profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
-      const { state: sessionState, expiresAt } = storedSessionState(session);
-      const authenticated = sessionStateIsUsable(sessionState);
       const posture = resolveProfilePosture(profile);
+      const { state: sessionState, expiresAt } = storedSessionState(session, profile);
+      const authenticated = sessionStateIsUsable(sessionState);
       const operatorType = resolveProfileOperatorType(profile);
       if (shouldOutputJson()) {
         outputJson({
@@ -22790,6 +22787,8 @@ function describeSession(state2, expiresAt) {
       return `active until ${expiresAt}`;
     case "unknown-expiry":
       return "active (no recorded expiry)";
+    case "unverified":
+      return "not usable (no signed OpenKey proof)";
   }
 }
 async function emitPermissionRequestArtifact(artifact, emitOption) {
@@ -23534,15 +23533,13 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     verifiedOwner = sanitizedSession.ownerDid;
     declined = declinedPermissions(permissions, sanitizedSession.permissions, verifiedOwner);
   } else {
-    const carriesProof = typeof delegationData.siwe === "string" && typeof delegationData.signature === "string";
-    const merged = mergePrivateJwkIntoSession(delegationData, key);
-    if (carriesProof || expiry !== void 0 || expectedOwner !== void 0) {
-      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
-      verifiedOwner = signed.ownerDid;
-      sanitizedSession = withVerifiedAuthority(merged, signed);
-    } else {
-      sanitizedSession = Object.fromEntries(Object.entries(withoutTrustFields(merged)).filter(([name]) => name !== "siwe" && name !== "signature"));
+    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+    const spaceId = String(delegationData.spaceId);
+    if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
     }
+    verifiedOwner = signed.ownerDid;
+    sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
   }
   const ownerKeyPrimary = verifiedOwner === void 0 ? void 0 : openKeyPrimaryFlag(delegationData);
   const updatedProfile = withOwnerKeyPrimary({
@@ -23731,7 +23728,7 @@ function registerContextCommand(program) {
         host: ctx.host,
         spaceId,
         session: {
-          ...storedSessionState(session),
+          ...storedSessionState(session, profile),
           evidence: "local-metadata"
         },
         access: "not-tested"
@@ -36517,6 +36514,7 @@ init_permissions();
 import {
   NodeWasmBindings as NodeWasmBindings2
 } from "@tinycloud/node-sdk";
+import { ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
 var wasmBindings = null;
 function registerStatusCommand(program) {
   program.command("status").description("Show local TinyCloud profile, session, delegation, and permission state").action(async (_options, cmd) => {
@@ -36583,7 +36581,7 @@ async function inspectProfile(params) {
   ]);
   const hasPrivateKey = typeof profile?.privateKey === "string" && profile.privateKey.length > 0;
   const localKeyAuthenticated = profile?.authMethod === "local" && hasPrivateKey;
-  const sessionAuthenticated = session !== null && sessionExpired !== true;
+  const sessionAuthenticated = session !== null && sessionExpired !== true && !ownerSessionLacksProof3(session, profile);
   const authenticated = localKeyAuthenticated || sessionAuthenticated;
   const status = resolveStatus({
     exists: profile !== null,

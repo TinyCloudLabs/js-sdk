@@ -7843,6 +7843,7 @@ __export(sdk_exports, {
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
+import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -7874,11 +7875,15 @@ function signedLifetimePassed(delegation) {
   return expiry !== void 0 && expiry.getTime() <= Date.now();
 }
 async function restoreProfileSession(node, profileName, profile, sessionData) {
+  const posture = profile === null ? void 0 : resolveProfilePosture(profile);
+  if (ownerSessionLacksProof(sessionData, profile)) {
+    throw sessionExpiredError(profileName, posture);
+  }
   try {
     await node.restoreSession(sessionData);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
-      throw sessionExpiredError(profileName, profile === null ? void 0 : resolveProfilePosture(profile));
+      throw sessionExpiredError(profileName, posture);
     }
     throw error;
   }

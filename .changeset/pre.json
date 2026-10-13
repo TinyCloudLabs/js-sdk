@@ -31,6 +31,7 @@
   "changesets": [
     "bright-frogs-repair",
     "tc-1025-paste-exit",
+    "tc-1053-paste-proof",
     "tc-973-auth-status-expired"
   ]
 }
