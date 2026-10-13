@@ -1,5 +1,21 @@
 # @tinycloudlabs/web-sdk
 
+## 3.2.1
+
+### Patch Changes
+
+- 10359c5: `signIn()` no longer waits for the account-registry sync (TC-998). In 3.2.0, every app sign-in waited up to 4 s for it, and on production the sync never finished inside that window. The sync runs in the background again, as in 3.1.0, with a 30 s hang guard instead of the 4 s cap, so the app's registry record is written after sign-in. A new sign-in, or a successful `restoreSession()`, stops the replaced session's sync before swapping the session.
+
+  `ensureOwnedSpaceHosted()` no longer waits for the sync, and no longer asks for a second `tinycloud.space/host` approval for a space that is already hosted (TC-994). It trusts the sign-in activation, which lists every hosted space the session covers, and the spaces this session has hosted, before it falls back to the registry record. Concurrent hosts of the same space, for example the background sync and the app, share one approval.
+
+  Use the new `TinyCloudNode.waitForAccountRegistrySync()` when you need the registry written, or before a first write against a SQLite-backed node older than 1.20.2 (TC-899). Background sync failures are logged as warnings and never surface as unhandled rejections.
+
+- eda1f78: Repeat Node and CLI sign-ins no longer re-run the full account bootstrap (TC-999). On Node, the bootstrap completion marker was stored as `text/plain` and read back as a string, so it was rejected and every login ran the repair (about 53 s on production). A string marker is now parsed as JSON before validation; invalid JSON or a marker of the wrong shape still means "not completed" and never throws. Markers already written as `text/plain` are accepted, so existing accounts skip on their next sign-in.
+- Updated dependencies [10359c5]
+- Updated dependencies [eda1f78]
+  - @tinycloud/node-sdk@3.2.1
+  - @tinycloud/sdk-core@3.2.1
+
 ## 3.2.1-beta.1
 
 ### Patch Changes
