@@ -91,3 +91,16 @@ test('pending space error preserves no-space and gives resume and retry guidance
     }
   }
 });
+
+test('missing space error names the TinyCloud CLI Courier runs inside', () => {
+  for (const [prog, cli] of [['courier', 'tc'], ['tc courier', 'tc'], ['tinycloud courier', 'tinycloud']]) {
+    setProgramName(prog);
+    try {
+      const error = grant.noSpaceError({ host: 'https://node.example' });
+      assert.equal(error.code, 'no-space');
+      assert.equal(error.message, `Your TinyCloud "agents" space is not set up on https://node.example, so the approved grant can't be used yet. Courier will not create it. If OpenKey auto-sign didn't host it, sign in once at the Share view (https://share.tinycloud.xyz) or, from a wallet profile, run \`${cli} space host agents\`. Then run \`${prog} init --resume\`. No new approval is needed.`);
+    } finally {
+      setProgramName('courier');
+    }
+  }
+});

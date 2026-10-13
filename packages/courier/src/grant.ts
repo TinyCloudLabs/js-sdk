@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import { TinyCloudNode, NodeWasmBindings } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
-import { cmd } from './program.js';
+import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
 import { loadGrant, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
@@ -303,10 +303,10 @@ export function pendingSpaceError(profile: Profile): CourierError {
   );
 }
 
-function noSpaceError(profile: Profile): CourierError {
+export function noSpaceError(profile: Profile): CourierError {
   return new CourierError(
     'no-space',
-    `Your TinyCloud "${COURIER_SPACE}" space is not set up on ${profile.host}, so the approved grant can't be used yet. Courier will not create it. If OpenKey auto-sign didn't host it, sign in once at the Share view (https://share.tinycloud.xyz) or, from a wallet profile, run \`tc space host ${COURIER_SPACE}\`. Then run \`${cmd('init --resume')}\`. No new approval is needed.`,
+    `Your TinyCloud "${COURIER_SPACE}" space is not set up on ${profile.host}, so the approved grant can't be used yet. Courier will not create it. If OpenKey auto-sign didn't host it, sign in once at the Share view (https://share.tinycloud.xyz) or, from a wallet profile, run \`${tcCmd(`space host ${COURIER_SPACE}`)}\`. Then run \`${cmd('init --resume')}\`. No new approval is needed.`,
   );
 }
 
