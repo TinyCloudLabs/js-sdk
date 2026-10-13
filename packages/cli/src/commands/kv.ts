@@ -252,9 +252,13 @@ export function registerKvCommand(program: Command): void {
             await throwKvError(result.error, spaceUri, ctx.profile);
             break;
           }
-          keyList.push(...result.data.keys);
+          // One push per key: spreading a very large page overflows the call stack.
+          for (const key of result.data.keys) keyList.push(key);
           truncated = result.data.truncated;
           cursor = truncated === true ? result.data.nextCursor : undefined;
+          if (options.all && truncated === true && cursor === undefined) {
+            throw new CLIError("KV_LIST_CURSOR_MISSING", "The node reported more keys but no cursor to continue from, so the listing can't be completed.", ExitCode.ERROR);
+          }
           if (!options.all || cursor === undefined) break;
           // A node that hands back a cursor it already gave would loop forever (TC-719).
           if (seenCursors.has(cursor)) {
@@ -281,6 +285,8 @@ export function registerKvCommand(program: Command): void {
           }
           if (cursor !== undefined) {
             process.stdout.write(theme.muted(`More keys follow. Run again with --cursor ${cursor}, or use --all.`) + "\n");
+          } else if (truncated === true) {
+            process.stdout.write(theme.muted("More keys follow, but the node gave no cursor to continue from.") + "\n");
           }
         }
       } catch (error) {

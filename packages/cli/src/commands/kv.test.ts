@@ -439,6 +439,24 @@ describe("CLI kv list paging (TC-982)", () => {
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "KV_LIST_CURSOR_STALLED" })]);
   });
 
+  test("--all stops with an error when the node says truncated but gives no cursor", async () => {
+    listPages = { "": { keys: ["a"], truncated: true } };
+
+    await runKv(["list", "--all"]);
+
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "KV_LIST_CURSOR_MISSING" })]);
+  });
+
+  test("a very large page doesn't overflow the call stack", async () => {
+    listPages = { "": { keys: Array.from({ length: 200_000 }, (_, index) => `k${index}`), truncated: false } };
+
+    await runKv(["list"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.outputs).toEqual([expect.objectContaining({ count: 200_000, truncated: false })]);
+  });
+
   test("an older node that doesn't report truncation gives null, not false", async () => {
     listPages = { "": { keys: ["a"] } };
 
