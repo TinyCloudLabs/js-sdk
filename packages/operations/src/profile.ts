@@ -157,6 +157,22 @@ export function isLocalOwnerProfile(
     typeof profile.privateKey === "string";
 }
 
+/**
+ * An OpenKey owner session always carries OpenKey's signed SIWE proof. One
+ * without it, on a profile that resolves to `owner-openkey`, came from the
+ * unverified login TC-1053 removed or from a legacy import on an owner
+ * profile, so neither the CLI nor operations restore it or report it as
+ * signed in; the owner signs in again or re-imports into a delegate-session
+ * profile.
+ */
+export function ownerSessionLacksProof(
+  session: Readonly<{ siwe?: unknown; signature?: unknown }>,
+  profile: Readonly<{ posture?: unknown; authMethod?: unknown }> | null,
+): boolean {
+  return profile !== null && resolvePosture(profile) === "owner-openkey" &&
+    (typeof session.siwe !== "string" || typeof session.signature !== "string");
+}
+
 function profileNotFound(profile: string): Extract<InvocationContextResolution, { ok: false }> {
   return {
     ok: false,

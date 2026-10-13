@@ -1,5 +1,5 @@
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
@@ -8,7 +8,6 @@ import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
-import { ownerSessionLacksProof } from "./session-expired.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";

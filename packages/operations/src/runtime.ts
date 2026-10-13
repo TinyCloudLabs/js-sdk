@@ -15,7 +15,7 @@ import {
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { operationError, type OperationError } from "./errors.js";
-import { isLocalOwnerProfile, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
+import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
 import {
@@ -169,6 +169,12 @@ export async function createInvocationRuntime(
           "The selected profile does not have an active session.",
         ));
       }
+    } else if (ownerSessionLacksProof(activeSession, profile)) {
+      return failed(summary, operationError(
+        "AUTH_REQUIRED",
+        "The stored OpenKey session has no signed proof. Sign in again.",
+        { retryable: false, details: { recovery: signInRecovery(profileName, summary.posture) } },
+      ));
     } else {
       try {
         await node.restoreSession(activeSession);
@@ -295,6 +301,13 @@ async function createRestoredRuntime(
         "SESSION_NOT_FOUND",
         "The selected profile does not have an active session. This operation never signs in.",
         { details: { recovery: signInRecovery(profileName, summary.posture) } },
+      ));
+    }
+    if (ownerSessionLacksProof(activeSession, profile)) {
+      return failed(summary, operationError(
+        "AUTH_REQUIRED",
+        "The stored OpenKey session has no signed proof. Sign in again.",
+        { retryable: false, details: { recovery: signInRecovery(profileName, summary.posture) } },
       ));
     }
 

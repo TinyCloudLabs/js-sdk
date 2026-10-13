@@ -1,6 +1,5 @@
 import { signInRecovery } from "@tinycloud/operations/recovery";
 import { ExitCode } from "../config/constants.js";
-import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 
 /** Marks errors from {@link sessionExpiredError}; never output. */
@@ -57,16 +56,4 @@ export function withSignInHint(error: CLIError, profileName: string, posture: st
 /** Whether `error` came from {@link sessionExpiredError}, so a command can give its own sign-in guidance. */
 export function isSessionExpiredError(error: unknown): boolean {
   return error instanceof CLIError && error.metadata?.reason === SESSION_EXPIRED_REASON;
-}
-
-/**
- * An OpenKey owner session always carries OpenKey's signed SIWE proof. One
- * without it, on a profile that resolves to `owner-openkey`, came from the
- * unverified login TC-1053 removed or from a legacy import on an owner
- * profile, so it is never restored or reported as signed in; the owner signs
- * in again or re-imports into a delegate-session profile.
- */
-export function ownerSessionLacksProof(session: { siwe?: unknown; signature?: unknown }, profile: Pick<ProfileConfig, "posture" | "authMethod"> | null): boolean {
-  return profile !== null && resolveProfilePosture(profile) === "owner-openkey" &&
-    (typeof session.siwe !== "string" || typeof session.signature !== "string");
 }

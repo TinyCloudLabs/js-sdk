@@ -4,7 +4,8 @@ import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../c
 import { CLIError, wrapError } from "../output/errors.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
-import { ownerSessionLacksProof, sessionExpiredError } from "../auth/session-expired.js";
+import { sessionExpiredError } from "../auth/session-expired.js";
+import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { recordWarnings } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 

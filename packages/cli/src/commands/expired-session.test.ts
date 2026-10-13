@@ -933,24 +933,37 @@ describe("auth status and whoami report an expired session as signed out (TC-973
 });
 
 describe("an OpenKey owner session without a signed proof is never used (TC-1053)", () => {
-  test("status reports it unverified and commands refuse it before any node request", async () => {
+  // A real, unexpired compact delegation for the profile's own key, with no
+  // SIWE proof: it restores for a delegate-session profile, so only the proof
+  // gate keeps an owner profile from using it.
+  test.each([
+    ["an owner-openkey profile", "owner-openkey", false],
+    ["a legacy profile with no recorded posture", undefined, false],
+    ["a delegate-session profile (control)", "delegate-session", true],
+  ] as const)("%s", async (_label, posture, usable) => {
     const home = await mkdtemp(join(tmpdir(), "tc-unverified-session-"));
     try {
-      await seedProfile(home, "owner-openkey", "live");
-      // What the removed unverified paste login could save.
-      await withTinyCloudStateRoot(home, () => writeJsonAtomic(sessionPath("expired"), {
-        delegationHeader: { Authorization: "x" }, delegationCid: "bafy", spaceId: "s",
-      }));
+      const seeded = await seedImportedProfile(home, "proofless", Math.floor(Date.now() / 1000) + 3600);
+      await seedImportedSession(home, "proofless", seeded);
+      await withTinyCloudStateRoot(home, async () => {
+        const path = profileConfigPath("proofless");
+        const profile: Record<string, unknown> = JSON.parse(await readFile(path, "utf8"));
+        if (posture === undefined) delete profile.posture;
+        else profile.posture = posture;
+        await writeJsonAtomic(path, profile);
+      });
       requests.length = 0;
-      for (const command of [["auth", "status"], ["auth", "whoami"], ["context"]]) {
-        const result = await runBuiltCli(home, ["--json", "--profile", "expired", ...command]);
-        expect(JSON.parse(result.stdout)).toMatchObject({ session: { state: "unverified" } });
+      for (const command of [["auth", "status"], ["context"]]) {
+        const result = await runBuiltCli(home, ["--json", "--profile", "proofless", ...command]);
+        expect(JSON.parse(result.stdout).session.state === "unverified").toBe(!usable);
       }
-      const status = await runBuiltCli(home, ["--json", "--profile", "expired", "status"]);
-      expect(JSON.parse(status.stdout).profiles.find((p: { name: string }) => p.name === "expired"))
-        .toMatchObject({ authenticated: false, status: "signed-out" });
-      const read = await runBuiltCli(home, ["--json", "--profile", "expired", "kv", "get", "KEY"]);
-      expect({ exitCode: read.exitCode, code: read.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
+      // The CLI restore path, and the operations-backed path `secrets wait` uses.
+      for (const command of [["kv", "get", "KEY"], ["secrets", "wait", "KEY", "--timeout", "0", "--owner", seeded.ownerDid]]) {
+        requests.length = 0;
+        const result = await runBuiltCli(home, ["--json", "--profile", "proofless", ...command]);
+        if (usable) expect(requests.length).toBeGreaterThan(0);
+        else expect({ exitCode: result.exitCode, code: result.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
+      }
     } finally {
       await rm(home, { recursive: true, force: true });
     }

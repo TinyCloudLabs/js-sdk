@@ -18,7 +18,7 @@ import {
   permissionsFromDelegation,
   type StoredAdditionalDelegation,
 } from "../lib/permissions.js";
-import { ownerSessionLacksProof } from "../auth/session-expired.js";
+import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 
 interface StatusSummary {
   generatedAt: string;
