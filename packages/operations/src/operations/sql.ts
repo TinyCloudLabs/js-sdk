@@ -34,7 +34,7 @@ WHERE type IN ('table', 'view', 'index', 'trigger')
 ORDER BY type, name`;
 
 type SqlPrimitive = null | number | string;
-interface SqlBlob {
+export interface SqlBlob {
   readonly type: "blob";
   readonly base64: string;
   readonly byteLength: number;
@@ -127,7 +127,7 @@ const SqlInputValueSchema: z.ZodType<SqlInputValue> = z.union([
   z.string().max(MAX_MAX_BYTES),
   z.object({ type: z.literal("blob"), base64: Base64Schema }).strict(),
 ]);
-const SqlParamsSchema = z.array(SqlInputValueSchema).max(MAX_PARAMETERS).superRefine(
+export const SqlParamsSchema = z.array(SqlInputValueSchema).max(MAX_PARAMETERS).superRefine(
   (params, context) => {
     const totalBytes = params.reduce<number>(
       (total, value) => total + sqlInputValueBytes(value),
@@ -155,7 +155,7 @@ const RequiredSqlParamsSchema = z.array(SqlInputValueSchema).min(1).max(MAX_PARA
     }
   },
 );
-const SqlOutputValueSchema: z.ZodType<SqlOutputValue> = z.union([
+export const SqlOutputValueSchema: z.ZodType<SqlOutputValue> = z.union([
   z.null(),
   SafeNumberSchema,
   z.string(),
@@ -456,7 +456,7 @@ async function executeSqlDml(
   }
 }
 
-function isSingleReadQuery(sql: string): boolean {
+export function isSingleReadQuery(sql: string): boolean {
   const ast = parseSingleStatement(sql);
   return ast !== undefined && ast.type === "select";
 }
@@ -498,14 +498,14 @@ function countPositionalParameters(value: unknown): number {
   );
 }
 
-function decodeSqlInputValue(value: SqlInputValue): null | number | string | Uint8Array {
+export function decodeSqlInputValue(value: SqlInputValue): null | number | string | Uint8Array {
   if (isRecord(value) && value.type === "blob") {
     return new Uint8Array(Buffer.from(value.base64 as string, "base64"));
   }
   return value as null | number | string;
 }
 
-function normalizeQueryResult(
+export function normalizeQueryResult(
   value: unknown,
   maxRows: number,
   maxBytes: number,

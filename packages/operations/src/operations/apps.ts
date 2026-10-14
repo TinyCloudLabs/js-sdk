@@ -2,7 +2,9 @@ import { z } from "zod";
 import type { OperationContext, OperationDefinition, OperationExecutionOutcome, OperationExposure, TinyCloudPosture } from "../contract.js";
 import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_ROOT } from "../tc-apps.js";
-import { TC_APPS_RECORDS_RULES } from "../tc-apps/rules.generated.js";
+import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
+import { appsDatabase, appsQueryAuthority, checkCopyKinds, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
+import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
 import { appsAuthority, appsFailure, appsKv, appsSpace, jsonBytes, listAppsKeys, markAppsKindStale, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, catalogParts, isObject, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
@@ -22,6 +24,14 @@ const OpOutcomeSchema = z.object({
   etag: z.string().optional(), value: ObjectSchema.optional(), steps: z.array(z.enum(["written", "deleted"])).optional(), warnings: z.array(z.string()).optional(),
 }).strict();
 const WriteOutputSchema = z.object({ ops: z.array(OpOutcomeSchema) }).strict();
+const CopyKindSchema = z.object({ app: z.string().regex(/^[a-z0-9-]+$/).refine((app) => app !== "catalog" && app !== "index-stale"), kind: z.string().regex(/^[a-z0-9-]+$/) }).strict();
+const QueryInputSchema = z.object({ kinds: z.array(CopyKindSchema).min(1), sql: z.string().min(1).max(64 * 1024).refine(isSingleReadQuery, "SQL must be one SELECT or WITH query."), params: SqlParamsSchema.optional() }).strict();
+const QueryOutputSchema = z.union([
+  z.object({ kinds: z.array(CopyKindSchema.extend({ records: z.number().int().nonnegative() })), columns: z.array(z.string()), rows: z.array(z.array(SqlOutputValueSchema)), rowCount: z.number().int().nonnegative() }).strict(),
+  z.object({ outcome: z.literal("COPY_PARTIAL"), remaining: z.array(CopyKindSchema) }).strict(),
+]);
+type QueryInput = z.infer<typeof QueryInputSchema>;
+export type QueryOutput = z.infer<typeof QueryOutputSchema>;
 type ContextInput = z.infer<typeof ContextInputSchema>;
 export type ContextOutput = z.infer<typeof ContextOutputSchema>;
 type ReadInput = z.infer<typeof ReadInputSchema>;
@@ -35,7 +45,7 @@ const EXPOSURE: OperationExposure = {
 };
 
 export const appsOperationDefinitions: readonly (
-  OperationDefinition<ContextInput, ContextOutput> | OperationDefinition<ReadInput, ReadOutput> | OperationDefinition<WriteInput, WriteOutput>
+  OperationDefinition<ContextInput, ContextOutput> | OperationDefinition<ReadInput, ReadOutput> | OperationDefinition<WriteInput, WriteOutput> | OperationDefinition<QueryInput, QueryOutput>
 )[] = [
   {
     id: "tinycloud.apps.context", version: 1, title: "Personal apps context",
@@ -53,6 +63,11 @@ export const appsOperationDefinitions: readonly (
     input: WriteInputSchema, output: WriteOutputSchema, effects: ["destructive"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
     sensitivity: { input: ["/ops"], output: ["/ops"] }, authority: appsAuthority, execute: executeWrite,
   },
+  {
+    id: "tinycloud.apps.query", version: 1, title: "Query personal records", description: "Answer questions over many personal records using a fast, searchable copy. List every app and kind covered; the server checks and rebuilds their copy before running one SELECT or WITH query with bound params. COPY_PARTIAL means retry with the remaining kinds before answering.",
+    input: QueryInputSchema, output: QueryOutputSchema, effects: ["read"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
+    sensitivity: { input: ["/kinds", "/sql", "/params"], output: ["/kinds", "/rows", "/remaining"] }, authority: appsQueryAuthority, execute: executeQuery,
+  },
 ];
 
 async function executeContext(context: OperationContext, input: ContextInput): Promise<OperationExecutionOutcome<ContextOutput>> {
@@ -68,7 +83,7 @@ async function executeContext(context: OperationContext, input: ContextInput): P
       if (read.some((record) => "outcome" in record)) return { status: "error", error: operationError("NODE_ERROR", "A catalog record is missing or malformed. Read its key to inspect it.") };
       records = read as z.infer<typeof RecordSchema>[];
     }
-    return { status: "ok", output: { rules: TC_APPS_RECORDS_RULES, now: appsNow(timezone), timezone, catalog: { keys, ...(records === undefined ? {} : { records }) }, copy: await appsCopyState(context.summary.profile, appsSpace(context)) } };
+    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), timezone, catalog: { keys, ...(records === undefined ? {} : { records }) }, copy: await appsCopyState(context.summary.profile, appsSpace(context)) } };
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
 async function executeRead(context: OperationContext, input: ReadInput): Promise<OperationExecutionOutcome<ReadOutput>> {
@@ -82,6 +97,19 @@ async function executeRead(context: OperationContext, input: ReadInput): Promise
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
 
+async function executeQuery(context: OperationContext, input: QueryInput): Promise<OperationExecutionOutcome<QueryOutput>> {
+  const parsed = QueryInputSchema.safeParse(input);
+  if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "List valid app/kind names and supply one read-only SELECT or WITH query with bound parameters.") };
+  try {
+    const db = appsDatabase(context);
+    const unique = [...new Map(parsed.data.kinds.map((kind) => [`${kind.app}/${kind.kind}`, kind])).values()];
+    const checked = await checkCopyKinds(appsKv(context), db, unique);
+    if ("outcome" in checked) return { status: "ok", output: checked };
+    const result = await queryCopy(db, parsed.data.sql, (parsed.data.params ?? []).map(decodeSqlInputValue));
+    return { status: "ok", output: { ...checked, ...result, columns: [...result.columns], rows: result.rows.map((row) => [...row]) } };
+  } catch (error) { return { status: "error", error: appsFailure(error) }; }
+}
+
 async function executeWrite(context: OperationContext, input: WriteInput): Promise<OperationExecutionOutcome<WriteOutput>> {
   // Validate the entire batch before obtaining a handle or executing its first op.
   const parsed = WriteInputSchema.safeParse(input);
@@ -92,6 +120,8 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
   catch (error) { return { status: "error", error: appsFailure(error) }; }
   const ops: OpOutcome[] = [];
   const touched = new Map<string, OpOutcome[]>();
+  const rows = new Map<string, CopyRow>();
+  const refresh = new Set<string>();
   for (const op of parsed.data.ops) {
     const key = op.op === "move" ? op.to : op.key;
     let outcome: OpOutcome;
@@ -99,8 +129,10 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
     catch (error) { outcome = { key, outcome: appsFailure(error).code }; }
     ops.push(outcome);
     if (outcome.outcome === "ok" || outcome.steps?.includes("written")) {
-      const keys = op.op === "move" ? [op.from, op.to] : [op.key];
+      const keys = op.op === "move" ? [outcome.key, op.from] : [outcome.key];
+      if (op.op === "move" && !outcome.steps?.includes("deleted")) refresh.add(op.from);
       for (const changed of keys) {
+        if (!catalogParts(changed)) rows.set(changed, { k: changed, ...(changed === outcome.key && op.op !== "delete" && outcome.value ? { r: outcome.value } : {}) });
         const catalog = catalogParts(changed);
         const parts = catalog ?? recordParts(changed);
         if (parts.kind === undefined) continue;
@@ -111,9 +143,28 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
       }
     }
   }
-  // Step 2 deliberately leaves rebuilds to a client with the optional copy grant.
-  // Do not let upkeep failures erase a committed write's outcome.
+  // Upkeep must never erase committed outcomes or turn a refusal into an approval loop.
+  let synced = false;
+  let upkeepWarning: string | undefined;
+  try {
+    if (hasCopyAuthority(context)) {
+      for (const record of await readAppsRecords(kv, [...refresh])) {
+        if ("value" in record) rows.set(record.key, { k: record.key, r: record.value });
+        else if (record.outcome === "NOT_FOUND") rows.set(record.key, { k: record.key });
+        else throw new Error("A move source is malformed.");
+      }
+      await syncCopyRows(appsDatabase(context), [...rows.values()]);
+      synced = true;
+    }
+  } catch (error) {
+    const failure = appsFailure(error);
+    upkeepWarning = failure.details?.reason === "copy_unavailable"
+      ? "The record changed, but the fast copy needs the node team. Answer from records; do not retry or ask for another approval."
+      : `The record changed, but fast-copy upkeep failed (${failure.code}); its kind is marked stale.`;
+  }
   for (const [key, owners] of touched) {
+    if (upkeepWarning) for (const owner of owners) (owner.warnings ??= []).push(upkeepWarning);
+    if (synced && rows.size > 0) continue;
     try {
       const [app, kind] = key.split("/");
       await markAppsKindStale(kv, app!, kind!, appsNow(timezone));

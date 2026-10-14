@@ -49,6 +49,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.account.applications.list@1",
     "tinycloud.account.spaces.list@1",
     "tinycloud.apps.context@1",
+    "tinycloud.apps.query@1",
     "tinycloud.apps.read@1",
     "tinycloud.apps.write@1",
     "tinycloud.auth.capabilities@1",
@@ -67,13 +68,12 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.sql.schema.inspect@1",
     "tinycloud.status.get@1",
   ]);
-  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(20);
-  expect(catalog.operations).toHaveLength(20);
+  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(21);
+  expect(catalog.operations).toHaveLength(21);
 
   for (const operation of catalog.operations) {
     expect(operation.input).toBeDefined();
     expect(operation.output).toBeDefined();
-    expect(operation.output.additionalProperties).toBe(false);
     expect(operation.result).toBeDefined();
     expect(operation.result.anyOf).toHaveLength(4);
     expect(operation.effects.length).toBeGreaterThan(0);

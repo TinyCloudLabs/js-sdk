@@ -10,6 +10,7 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_account_applications_list` -> `tinycloud.account.applications.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_account_spaces_list` -> `tinycloud.account.spaces.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_apps_context` -> `tinycloud.apps.context@1`; surfaces: hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
+- `tinycloud_apps_query` -> `tinycloud.apps.query@1`; surfaces: hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_apps_read` -> `tinycloud.apps.read@1`; surfaces: hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_apps_write` -> `tinycloud.apps.write@1`; surfaces: hosted; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_auth_capabilities` -> `tinycloud.auth.capabilities@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.

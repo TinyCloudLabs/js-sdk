@@ -9,6 +9,7 @@ const expectedOperationIds = [
   "tinycloud.account.applications.list",
   "tinycloud.account.spaces.list",
   "tinycloud.apps.context",
+  "tinycloud.apps.query",
   "tinycloud.apps.read",
   "tinycloud.apps.write",
   "tinycloud.auth.capabilities",
