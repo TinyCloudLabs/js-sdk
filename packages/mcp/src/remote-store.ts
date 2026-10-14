@@ -3,11 +3,15 @@ import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/
 import { dirname, join } from "node:path";
 
 import {
+  InvalidRestoredSessionError,
+  RuntimeDelegationRejectedError,
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   isCapabilitySubset,
   principalDidEquals,
   siweRuntimeDelegation,
   type PermissionEntry,
+  type PortableDelegation,
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
@@ -85,6 +89,28 @@ export class ApprovalOwnerMismatchError extends Error {
   constructor() {
     super("This approval link was requested by a different TinyCloud account, so the delegation was not stored.");
     this.name = "ApprovalOwnerMismatchError";
+  }
+}
+
+/** The callback stages `/connect/callback` names when it refuses an approval. */
+export type ApprovalStage = "restore_approval" | "siwe_runtime_delegation" | "auth_import" | "activation";
+
+/**
+ * A callback stage refused the approval. `code` and `reason` are
+ * server-authored identifiers for diagnostics; the message and cause may quote
+ * callback or node data and are never sent or logged.
+ */
+export class ApprovalStageError extends Error {
+  readonly stage: ApprovalStage;
+  readonly code: string;
+  readonly reason: string | undefined;
+
+  constructor(stage: ApprovalStage, code: string, reason?: string, cause?: unknown) {
+    super(`The approval failed at ${stage} (${code}).`, { cause });
+    this.name = "ApprovalStageError";
+    this.stage = stage;
+    this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -229,16 +255,26 @@ export class RemoteTenantStore {
     // OpenKey returns a signed-login (CACAO) delegation. Every field is
     // projected from the verified SIWE; `tinycloud.auth.import` verifies it
     // again and checks it stays within the stored request.
-    const delegation = siweRuntimeDelegation(node, {
-      authorization: session.delegationHeader.Authorization,
-      cid: session.delegationCid,
-      spaceId: session.spaceId,
-      ownerAddress: session.address,
-      chainId: session.chainId,
-      siwe: session.siwe,
-      signature: session.signature,
-      host: this.#config.nodeHost,
-    });
+    let delegation: PortableDelegation;
+    try {
+      delegation = siweRuntimeDelegation(node, {
+        authorization: session.delegationHeader.Authorization,
+        cid: session.delegationCid,
+        spaceId: session.spaceId,
+        ownerAddress: session.address,
+        chainId: session.chainId,
+        siwe: session.siwe,
+        signature: session.signature,
+        host: this.#config.nodeHost,
+      });
+    } catch (error) {
+      throw new ApprovalStageError(
+        "siwe_runtime_delegation",
+        "DELEGATION_REJECTED",
+        error instanceof RuntimeDelegationRejectedError ? error.reason : undefined,
+        error,
+      );
+    }
     const result = await invokeOperation(
       "tinycloud.auth.import",
       1,
@@ -251,7 +287,16 @@ export class RemoteTenantStore {
         delegation,
       },
     );
-    if (result.status !== "ok") throw new Error("TinyCloud rejected the approved delegation.");
+    if (result.status === "error") {
+      const reason = result.error.details?.reason;
+      // Only a refused node activation carries a rejection reason on DELEGATION_REJECTED.
+      throw new ApprovalStageError(
+        result.error.code === "DELEGATION_REJECTED" && typeof reason === "string" ? "activation" : "auth_import",
+        result.error.code,
+        typeof reason === "string" ? reason : undefined,
+      );
+    }
+    if (result.status !== "ok") throw new ApprovalStageError("auth_import", "AUTHORITY_REQUIRED");
   }
 
   /**
@@ -265,11 +310,27 @@ export class RemoteTenantStore {
     tenant: TenantProfile,
     data: Record<string, unknown>,
   ): Promise<{ node: TinyCloudNode; session: CallbackSession }> {
-    const session = sessionFromCallback(data, tenant.jwk);
+    let session: CallbackSession;
+    try {
+      session = sessionFromCallback(data, tenant.jwk);
+    } catch (error) {
+      throw new ApprovalStageError("restore_approval", "CALLBACK_INCOMPLETE", undefined, error);
+    }
     const node = new TinyCloudNode({ host: this.#config.nodeHost });
-    await node.restoreSession(session);
+    try {
+      await node.restoreSession(session);
+    } catch (error) {
+      throw new ApprovalStageError(
+        "restore_approval",
+        error instanceof InvalidRestoredSessionError || error instanceof UnsupportedSessionRestoreError
+          ? error.code
+          : "SESSION_RESTORE_FAILED",
+        undefined,
+        error,
+      );
+    }
     if (!samePrincipal(node.sessionDid, tenant.sessionDid)) {
-      throw new Error("The approved delegation targets a different session.");
+      throw new ApprovalStageError("restore_approval", "SESSION_MISMATCH");
     }
     return { node, session };
   }

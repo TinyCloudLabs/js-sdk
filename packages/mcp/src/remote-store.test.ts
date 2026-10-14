@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { invokeOperation } from "@tinycloud/operations";
 
-import { ApprovalOwnerMismatchError, RemoteTenantStore } from "./remote-store.js";
+import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore } from "./remote-store.js";
 import {
   OTHER_OWNER_KEY,
   REQUESTER_KEY,
@@ -116,7 +116,7 @@ test("callbacks without the full signed proof are refused", async () => {
   for (const field of ["siwe", "signature", "address", "chainId"]) {
     const { [field]: _omitted, ...partial } = own;
     await expect(store.completeApproval(state, callbackRequest(partial)))
-      .rejects.toThrow("OpenKey returned an incomplete delegation.");
+      .rejects.toMatchObject({ stage: "restore_approval", code: "CALLBACK_INCOMPLETE" });
   }
   expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
 });
@@ -222,10 +222,13 @@ test("a delegation approval outside the stored request is not imported", async (
     space: "applications",
     abilities: { kv: { "agents/": ["tinycloud.kv/get"] } },
   });
-  await expect(store.completeApproval(
+  const outside = await store.completeApproval(
     new URL(decorated.approval.url).searchParams.get("state")!,
     callbackRequest(broader),
-  )).rejects.toThrow("TinyCloud rejected the approved delegation.");
+  ).catch((error: unknown) => error);
+  // Exceeding the stored request is refused after activation, so it carries no activation reason.
+  expect(outside).toBeInstanceOf(ApprovalStageError);
+  expect(outside).toMatchObject({ stage: "auth_import", code: "DELEGATION_REJECTED", reason: undefined });
   expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);
 
   // The same signed delegation planted in the store, with no binding or bound

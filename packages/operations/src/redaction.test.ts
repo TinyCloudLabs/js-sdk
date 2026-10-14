@@ -110,6 +110,23 @@ test("storage error details keep only well-formed account totals", () => {
   }
 });
 
+test("delegation rejection details keep only a known activation reason", () => {
+  const rejection = (reason: unknown) => redactOperationError(
+    { sensitivity },
+    {
+      code: "DELEGATION_REJECTED",
+      message: "The delegation was rejected by the TinyCloud runtime.",
+      retryable: false,
+      details: { reason, authorization: "raw-delegation-canary" },
+    },
+  );
+
+  expect(rejection("activation_rejected").details).toEqual({ reason: "activation_rejected" });
+  expect(rejection("proof_invalid").details).toEqual({ reason: "proof_invalid" });
+  expect(rejection("node said: reason-canary").details).toBeUndefined();
+  expect(JSON.stringify([rejection("activation_unauthenticated"), rejection("reason-canary")])).not.toContain("canary");
+});
+
 test("error details reject attacker values in safe mismatch fields", () => {
   const canaries = [
     "raw-jwk-private-key-canary",

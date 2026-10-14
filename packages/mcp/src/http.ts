@@ -9,9 +9,10 @@ import {
   type AuthInfo,
   type OAuthMetadata,
 } from "@modelcontextprotocol/server";
+import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
-import { ApprovalOwnerMismatchError, RemoteTenantStore, type RemoteStoreConfig } from "./remote-store.js";
+import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore, type RemoteStoreConfig } from "./remote-store.js";
 import { MCP_SERVER_NAME } from "./server.js";
 import { createJsonSchemaValidator, registerTinyCloudTools } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
@@ -113,10 +114,25 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
           return callbackCors(json({ success: true }), config.openkeyHost);
         } catch (error) {
           // Only fixed server-authored text reaches OpenKey; callback input is never echoed.
+          if (error instanceof ApprovalOwnerMismatchError) {
+            return callbackCors(json({ error: error.message, code: "approval_owner_mismatch" }, 403), config.openkeyHost);
+          }
+          // Stage, code and reason are identifiers, never callback, delegation or node text.
+          const stage = error instanceof ApprovalStageError ? error.stage : "unknown";
+          const code = error instanceof ApprovalStageError && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
+            ? error.code
+            : "UNKNOWN";
+          const reason = !(error instanceof ApprovalStageError) || error.reason === undefined
+            ? undefined
+            : RUNTIME_DELEGATION_REJECTIONS.find((known) => known === error.reason) ?? "unknown";
+          writeDiagnostic(`connect callback rejected: stage=${stage} code=${code}${reason === undefined ? "" : ` reason=${reason}`}`);
           return callbackCors(
-            error instanceof ApprovalOwnerMismatchError
-              ? json({ error: error.message, code: "approval_owner_mismatch" }, 403)
-              : json({ error: "TinyCloud could not accept this delegation." }, 400),
+            json({
+              error: stage,
+              code,
+              ...(reason === undefined ? {} : { reason }),
+              message: "TinyCloud could not accept this delegation.",
+            }, 400),
             config.openkeyHost,
           );
         }

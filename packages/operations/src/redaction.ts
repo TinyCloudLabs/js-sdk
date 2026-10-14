@@ -1,3 +1,5 @@
+import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
+
 import type {
   OperationContextSummary,
   OperationDefinition,
@@ -171,6 +173,11 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
   DELEGATION_HOST_MISMATCH: {
     expectedHost: safeOriginHost,
     artifactHost: safeOriginHost,
+  },
+  // `RuntimeDelegationRejectedError.reason` from validated activation.
+  DELEGATION_REJECTED: {
+    reason: (value) =>
+      RUNTIME_DELEGATION_REJECTIONS.some((reason) => reason === value) ? value : undefined,
   },
   STORAGE_QUOTA_EXCEEDED: {
     account: safeStorageAccount,

@@ -361,13 +361,16 @@ async function importRequestBoundDelegation(
         { host },
       );
     } catch (error) {
+      const reason = typeof error === "object" && error !== null && "reason" in error ? error.reason : undefined;
       // Validated activation read an expiry that has passed: the delegation expired, it was not otherwise refused.
-      if (typeof error === "object" && error !== null && "reason" in error && error.reason === "expired") {
-        return expiredDelegation();
-      }
+      if (reason === "expired") return expiredDelegation();
+      // The stable rejection reason (e.g. `activation_rejected` when the node's
+      // `/delegate` refused it) is diagnostic only; the redaction allowlist
+      // drops anything that is not a known reason.
       return operationFailure(
         "DELEGATION_REJECTED",
         "The delegation was rejected by the TinyCloud runtime.",
+        typeof reason === "string" ? { reason } : undefined,
       );
     }
 
