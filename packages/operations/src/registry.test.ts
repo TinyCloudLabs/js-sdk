@@ -2,17 +2,15 @@ import { expect, spyOn, test } from "bun:test";
 
 import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
-import { explorationOperationDefinitions } from "./operations/exploration.js";
-import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
-import { secretsStatusOperationDefinitions } from "./operations/secrets-status.js";
-import { sqlOperationDefinitions } from "./operations/sql.js";
-import { statusOperationDefinitions } from "./operations/status.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
 
 const expectedOperationIds = [
   "tinycloud.account.applications.list",
   "tinycloud.account.spaces.list",
+  "tinycloud.apps.context",
+  "tinycloud.apps.read",
+  "tinycloud.apps.write",
   "tinycloud.auth.capabilities",
   "tinycloud.auth.import",
   "tinycloud.auth.request",
@@ -36,14 +34,6 @@ test("registry contains exactly the reviewed v1 operations", () => {
   expect(definitions.map((definition) => definition.id).sort()).toEqual([...expectedOperationIds]);
   expect(definitions.every((definition) => definition.version === 1)).toBe(true);
   expect(new Set(definitions.map((definition) => definition.id)).size).toBe(definitions.length);
-  expect([
-    ...statusOperationDefinitions,
-    ...authOperationDefinitions,
-    ...explorationOperationDefinitions,
-    ...sqlOperationDefinitions,
-    ...secretsGetOperationDefinitions,
-    ...secretsStatusOperationDefinitions,
-  ]).toHaveLength(17);
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {

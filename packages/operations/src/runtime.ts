@@ -208,6 +208,7 @@ export async function createInvocationRuntime(
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
     const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
     const warnings: OperationWarning[] = [];
+    let replayedGrants = 0;
     // A local sign-in without a persisted session has a fresh session key.
     // Neither that key nor an explicit private-key override may inherit this
     // profile's stored grants.
@@ -217,6 +218,7 @@ export async function createInvocationRuntime(
         node as unknown as RuntimeDelegationActivator,
         { host: summary.host, migrate: true, resolveSpace },
       );
+      replayedGrants = replay.installed.length;
       for (const installed of replay.installed) {
         livePermissions.push(...installed.effectivePermissions);
       }
@@ -226,6 +228,7 @@ export async function createInvocationRuntime(
     const runtime: OperationRuntime = {
       node,
       granted: canonicalizeCapabilities(livePermissions),
+      replayedGrants,
       ...(warnings.length === 0 ? {} : { warnings }),
       localOwner: explicitPrivateKeyOverride || isLocalOwnerProfile(profile),
       skippedGrantReasons: warnings.map((warning) => warning.reason),
@@ -363,6 +366,7 @@ async function createRestoredRuntime(
     const runtime: OperationRuntime = {
       node,
       granted: canonicalizeCapabilities(livePermissions),
+      replayedGrants: replay.installed.length,
       ...(replay.warnings.length === 0 ? {} : { warnings: replay.warnings }),
       localOwner: isLocalOwnerProfile(profile),
       skippedGrantReasons: replay.warnings.map((warning) => warning.reason),

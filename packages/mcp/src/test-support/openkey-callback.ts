@@ -77,6 +77,8 @@ export async function openKeyCallbackBody(options: {
   readonly privateKey: string;
   readonly space: string;
   readonly abilities: Record<string, Record<string, string[]>>;
+  readonly issuedAt?: Date;
+  readonly expiresAt?: Date;
 }): Promise<Record<string, unknown>> {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(options.privateKey);
@@ -86,8 +88,8 @@ export async function openKeyCallbackBody(options: {
   )) as Record<string, unknown>;
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
-  const now = Date.now();
-  const expiry = new Date(now + 60 * 60_000).toISOString();
+  const now = options.issuedAt?.getTime() ?? Date.now();
+  const expiry = (options.expiresAt ?? new Date(now + 60 * 60_000)).toISOString();
   const prepared = wasm.prepareSession({
     abilities: options.abilities,
     address,

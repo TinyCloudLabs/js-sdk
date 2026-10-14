@@ -69,6 +69,8 @@ export interface OperationRuntime {
   readonly localOwner?: boolean;
   /** Internal, never projected: the reasons stored grants were skipped during replay. */
   readonly skippedGrantReasons?: readonly StoredGrantSkipReason[];
+  /** Successful stored-grant replays, for value-free hosted call diagnostics. */
+  readonly replayedGrants?: number;
 }
 
 /**
