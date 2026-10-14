@@ -29,6 +29,7 @@ export const TOOL_NAMES = [
   "tinycloud_apps_context",
   "tinycloud_apps_read",
   "tinycloud_apps_write",
+  "tinycloud_apps_query",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -301,6 +302,16 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     readOnlyHint: false,
     idempotentHint: false,
     destructiveHint: true,
+    openWorldHint: true,
+    surfaces: ["hosted"],
+  },
+  {
+    name: "tinycloud_apps_query",
+    operationId: "tinycloud.apps.query",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
     openWorldHint: true,
     surfaces: ["hosted"],
   },
