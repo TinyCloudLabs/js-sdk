@@ -138,14 +138,20 @@ test("pre-restore refusals log a distinct detail behind one uniform response", a
   await rm(join(store.tenantStateRoot("openkey-user-used"), ".tinycloud/profiles/agent/pending", `${used.split(".")[1]}.json`));
   const orphaned = await stateFor("openkey-user-orphaned");
   await rm(join(store.tenantStateRoot("openkey-user-orphaned"), ".tinycloud/profiles/agent/key.json"));
+  // A reset state volume: the whole tenant directory, pending file included, is gone.
+  const wiped = await stateFor("openkey-user-wiped");
+  await rm(store.tenantStateRoot("openkey-user-wiped"), { recursive: true });
   const [tenantId, nonce] = valid.split(".");
   const cases: Array<{ state?: string; body: string; detail: string }> = [
     { body: JSON.stringify({ token: CANARY }), detail: "state_missing" },
     { state: `${tenantId}.${nonce}.${CANARY}`, body: "{}", detail: "state_invalid" },
     { state: `${CANARY}.${"a".repeat(512)}`, body: "{}", detail: "state_invalid" },
     { state: expired, body: JSON.stringify({ token: CANARY }), detail: "state_expired" },
+    // The first attempt deleted the expired pending file, so a retry is not proof of replay.
+    { state: expired, body: JSON.stringify({ token: CANARY }), detail: "state_not_pending" },
     { state: used, body: JSON.stringify({ token: CANARY }), detail: "state_not_pending" },
     { state: orphaned, body: JSON.stringify({ token: CANARY }), detail: "tenant_missing" },
+    { state: wiped, body: JSON.stringify({ token: CANARY }), detail: "tenant_missing" },
     { state: valid, body: `{"token":"${CANARY}"`, detail: "body_invalid" },
     { state: valid, body: JSON.stringify([CANARY]), detail: "body_invalid" },
     { state: valid, body: JSON.stringify({ token: CANARY.repeat(20_000) }), detail: "body_invalid" },

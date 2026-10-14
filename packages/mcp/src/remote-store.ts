@@ -483,9 +483,20 @@ export class RemoteTenantStore {
       try {
         await rename(path, claimed);
       } catch (error) {
-        // No pending file to claim: already used, being processed, or never
-        // issued. Other filesystem failures stay unclassified.
+        // No pending file to claim. Other filesystem failures stay unclassified.
         if (!isRecord(error) || error.code !== "ENOENT") throw error;
+        // The state is signed by this server, so a missing tenant key means the
+        // tenant directory itself is gone (for example a reset state volume).
+        const tenantExists = await readJson<unknown>(this.#keyPath(stateRoot)).then(
+          (jwk) => jwk !== null,
+          () => true,
+        );
+        if (!tenantExists) {
+          throw new ApprovalRequestError("tenant_missing", "The TinyCloud delegate no longer exists.", error);
+        }
+        // Already used, being processed, or never issued. This is not proof of
+        // replay: retrying an expired link lands here too, because the first
+        // attempt deleted its pending file.
         throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.", error);
       }
     }
