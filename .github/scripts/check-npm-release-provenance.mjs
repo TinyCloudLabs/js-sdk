@@ -243,7 +243,8 @@ export async function check({
   view = npmView,
   packageExists = npmPackageExists,
   sleep = (ms) => delay(ms),
-  attempts = 6,
+  // npm can take minutes to show a fresh version (the first serialised run saw cli lag past 50 s): poll up to ~5 min.
+  attempts = 31,
   retryMs = 10_000,
   log = console.log,
 }) {
