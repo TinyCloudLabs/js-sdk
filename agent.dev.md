@@ -110,6 +110,9 @@ package, so the next run bumps past the stale version. A beta run also refuses t
 `master` has stable versions npm lacks (a stable release that did not finish publishing). A
 maintainer then re-dispatches the Stable Release, which publishes exactly those versions from their
 release commit and graduates nothing else in that run.
+Stable-release installs use the committed lockfile before selecting a release and during recovery.
+Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace
+version metadata and make the immutable release checkout fail the clean-tree publishing guard.
 
 ## Debugging
 
