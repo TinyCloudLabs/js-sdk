@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/operations",
-  "version": "0.5.4-beta.2",
+  "version": "0.6.0",
   "description": "TinyCloud shared operations contracts and runtime",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -59,6 +59,11 @@
       "import": "./dist/cli-name.js",
       "require": "./dist/cli-name.cjs"
     },
+    "./tc-apps": {
+      "types": "./dist/tc-apps.d.ts",
+      "import": "./dist/tc-apps.js",
+      "require": "./dist/tc-apps.cjs"
+    },
     "./operations.json": "./generated/operations.json"
   },
   "engines": {
@@ -70,7 +75,7 @@
     "coverage.json"
   ],
   "scripts": {
-    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts --entry src/secret-request.ts --entry src/recovery.ts --entry src/cli-name.ts",
+    "build": "tsup --entry src/index.ts --entry src/state.ts --entry src/artifacts.ts --entry src/cli-runtime.ts --entry src/profile.ts --entry src/secret-capabilities.ts --entry src/delegation-binding.ts --entry src/secret-request.ts --entry src/recovery.ts --entry src/cli-name.ts --entry src/tc-apps.ts",
     "clean": "rm -rf dist",
     "test": "bun scripts/test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json",
@@ -79,9 +84,9 @@
     "check:generated": "bun scripts/generate.ts --check"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.2.4-beta.0",
-    "@tinycloud/sdk-core": "3.2.3",
-    "@tinycloud/sdk-services": "3.2.3",
+    "@tinycloud/node-sdk": "3.2.5",
+    "@tinycloud/sdk-core": "3.2.5",
+    "@tinycloud/sdk-services": "3.2.5",
     "node-sql-parser": "5.4.0",
     "zod": "^3.22.0",
     "zod-to-json-schema": "^3.22.0"

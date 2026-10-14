@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,88 @@ test("keeps hosted delegates isolated by OAuth subject", async () => {
     operatorType: "agent",
     sessionDid: first.sessionDid,
   });
+});
+
+test("first operations and expired sessions receive account-bound reconnect links", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  const foreignOwner = await ownerDid(OTHER_OWNER_KEY);
+  for (const expired of [false, true]) {
+    const subject = expired ? "expired-account" : "new-account";
+    const stateRoot = await store.initializeTenant(subject);
+    if (expired) {
+      const clock = spyOn(Date, "now").mockReturnValue(Date.now() - 2 * 60 * 60_000);
+      let session: Record<string, unknown>;
+      try {
+        session = await openKeyCallbackBody({
+          tenantStateRoot: stateRoot, privateKey: REQUESTER_KEY, space: "account",
+          abilities: BOOTSTRAP_ABILITIES,
+        });
+      } finally {
+        clock.mockRestore();
+      }
+      await writeFile(join(stateRoot, ".tinycloud/profiles/agent/session.json"), JSON.stringify(session));
+    }
+    const result = await invokeOperation(
+      "tinycloud.kv.get", 1, { profile: "agent", stateRoot },
+      { space: "default", key: "record", representation: "json" },
+    );
+    expect(result).toMatchObject({
+      status: "error", error: { code: expired ? "AUTH_REQUIRED" : "SESSION_NOT_FOUND" },
+    });
+    const decorated = record(await store.decorateAuthorityResult(subject, [requester], result));
+    const details = record(record(decorated.error).details);
+    expect(Date.parse(String(details.expiresAt))).toBeGreaterThan(Date.now());
+    const state = new URL(String(details.approvalUrl)).searchParams.get("state")!;
+    const redirect = new URL(await store.approvalRedirect(state));
+    const permissions = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString());
+    expect(permissions.reason).toContain(requester);
+    expect(permissions.reason).not.toContain(foreignOwner);
+    expect(permissions.permissions).toEqual([
+      { service: "tinycloud.kv", space: "account", path: "spaces/", actions: BOOTSTRAP_ABILITIES.kv["spaces/"] },
+      { service: "tinycloud.kv", space: "account", path: "applications/", actions: BOOTSTRAP_ABILITIES.kv["applications/"] },
+    ]);
+    const foreign = await openKeyCallbackBody({
+      tenantStateRoot: stateRoot, privateKey: OTHER_OWNER_KEY, space: "account", abilities: BOOTSTRAP_ABILITIES,
+    });
+    await expect(store.completeApproval(state, callbackRequest(foreign)))
+      .rejects.toBeInstanceOf(ApprovalOwnerMismatchError);
+  }
+});
+
+test("tc-apps approvals explain exact capabilities and fall back for unrelated permissions", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  await store.initializeTenant("approval-account");
+  const records = {
+    service: "tinycloud.kv", space: "default", path: "xyz.tinycloud.agent-data/",
+    actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"],
+  };
+  const cases = [
+    { permissions: [records], matches: true },
+    { permissions: [{ ...records, path: "xyz.tinycloud.agent-data/other/" }], matches: false },
+    { permissions: [{ ...records, space: "other" }], matches: false },
+    { permissions: [{ ...records, service: "tinycloud.sql" }], matches: false },
+    { permissions: [{ ...records, actions: [...records.actions, "tinycloud.kv/metadata"] }], matches: false },
+  ];
+  for (const [index, { permissions, matches }] of cases.entries()) {
+    const result = record(await store.decorateAuthorityResult("approval-account", [requester], {
+      status: "authority_required", operation: {}, context: {},
+      request: { requestId: `request-${index}`, requested: permissions },
+      approval: { kind: "openkey" },
+    }));
+    const approval = record(result.approval);
+    const state = new URL(String(approval.url)).searchParams.get("state")!;
+    const redirect = new URL(await store.approvalRedirect(state));
+    const payload = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString());
+    if (matches) {
+      expect(payload.reason).toContain("Lets Claude keep your personal records");
+      expect(approval.fallback).not.toBe("Open the approval URL, then retry the same MCP tool.");
+    } else {
+      expect(payload.reason).toContain("Approve the exact capabilities requested");
+      expect(payload.reason).not.toContain("Lets Claude");
+    }
+  }
 });
 
 test("approval redirects send OpenKey only the public delegate key", async () => {

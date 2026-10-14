@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 const check = process.argv.includes("--check");
 const commands = [
+  ["bun", "scripts/generate-tc-apps-rules.ts", ...(check ? ["--check"] : [])],
   ["bun", "run", "--cwd", "packages/operations", check ? "check:generated" : "generate"],
   ["bun", "run", "--cwd", "packages/cli", check ? "check:generated" : "generate:reference"],
   ["bun", "run", "--cwd", "packages/mcp", check ? "check:generated" : "generate"],

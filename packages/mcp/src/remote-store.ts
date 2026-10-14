@@ -16,6 +16,7 @@ import {
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { invokeOperation } from "@tinycloud/operations";
+import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
 
 const PROFILE = "agent";
 const MAX_CALLBACK_BYTES = 256 * 1024;
@@ -156,6 +157,11 @@ export class RemoteTenantStore {
     return join(this.#config.stateDir, "tenants", this.#tenantId(subject));
   }
 
+  /** Prepare only this authenticated account's profile before its first operation. */
+  async initializeTenant(subject: string): Promise<string> {
+    return (await this.#ensureTenant(subject)).stateRoot;
+  }
+
   async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
     if (await this.#hasValidSession(tenant, ownerDids)) {
@@ -175,7 +181,26 @@ export class RemoteTenantStore {
     ownerDids: readonly string[],
     result: unknown,
   ): Promise<unknown> {
-    if (!isRecord(result) || result.status !== "authority_required") return result;
+    if (!isRecord(result)) return result;
+    if (result.status === "error" && isRecord(result.error) &&
+      (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "AUTH_REQUIRED")) {
+      // The operation has already established that it needs a new session.
+      // Bind this approval to the authenticated account, just like connect.
+      await this.#ensureTenant(subject);
+      const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
+      return {
+        ...result,
+        error: {
+          ...result.error,
+          details: {
+            ...(isRecord(result.error.details) ? result.error.details : {}),
+            approvalUrl: this.#connectUrl(pending),
+            expiresAt: pending.expiresAt,
+          },
+        },
+      };
+    }
+    if (result.status !== "authority_required") return result;
     const request = isRecord(result.request) ? result.request : undefined;
     const requestId = typeof request?.requestId === "string" ? request.requestId : undefined;
     const requested = Array.isArray(request?.requested)
@@ -190,7 +215,8 @@ export class RemoteTenantStore {
         kind: "openkey",
         requestId,
         url: this.#connectUrl(pending),
-        fallback: "Open the approval URL, then retry the same MCP tool.",
+        fallback: tcAppsApprovalMessage(requested) ??
+          "Open the approval URL, then retry the same MCP tool.",
       },
     };
   }
@@ -210,7 +236,8 @@ export class RemoteTenantStore {
         reason: [
           pending.kind === "bootstrap"
             ? "Connect this TinyCloud account to the hosted MCP delegate."
-            : "Approve the exact capabilities requested by the TinyCloud MCP operation.",
+            : tcAppsApprovalReason(pending.permissions) ??
+              "Approve the exact capabilities requested by the TinyCloud MCP operation.",
           // Owner DIDs come from the verified OpenKey access token of the MCP
           // client that created this link, never from the link itself.
           ...(pending.ownerDids.length === 0

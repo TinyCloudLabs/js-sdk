@@ -175,7 +175,9 @@ test.skipIf(!namespaces)("a reused PID in the same namespace reclaims its predec
   // the next (non-exec) Node child reuse the holder's PID in that namespace.
   const script = [
     "hostname abcdef012345 || exit 1",
-    '"$1" "$2" hold & holder=$!',
+    // Background jobs otherwise inherit /dev/null and release the holder immediately.
+    "exec 3<&0",
+    '"$1" "$2" hold <&3 & holder=$!',
     'wait "$holder" || :',
     'rm -f "$TC_HOME/inside"',
     'echo "$((holder-1))" > /proc/sys/kernel/ns_last_pid',

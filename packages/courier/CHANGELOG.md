@@ -1,5 +1,25 @@
 # @tinycloud/courier
 
+## 0.1.5
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.5
+
+## 0.1.5-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.5-beta.0
+
+## 0.1.4
+
+### Patch Changes
+
+- 079afb6: Release a new beta built from its version commit. npm's 0.5.4-beta.1 (operations) and 0.1.4-beta.1 (courier) came from b6038b10, a run whose version commit never landed (TC-1095).
+- 9704c99: The tc-cli and courier skills now find the CLI as `tinycloud` (`node_modules/.bin/tinycloud`, or `$(npm prefix --global)/bin/tinycloud`) and tell agents to run `tinycloud`, so relayed hints no longer reach iproute2's `/usr/sbin/tc`. Requires CLI 1.2.3 or later.
+  - @tinycloud/node-sdk@3.2.4
+
 ## 0.1.4-beta.2
 
 ### Patch Changes

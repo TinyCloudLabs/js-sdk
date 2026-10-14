@@ -5,6 +5,14 @@ entry when `agent.dev.md` or related agent workflow expectations change.
 
 ## 2026-10-14
 
+- Hosted personal apps now use canonical operations with CLI-compatible JSON
+  bytes, conditional writes and per-op outcomes. Rules are generated from pinned
+  published skill bytes; update instructions are in `agent.dev.md`. Hosted logs
+  are value-free, and write results must never be cut off by size caps or deadlines.
+- The hosted fast copy now checks KV counts and stale markers before SELECT/WITH
+  queries, rebuilds by kind, and syncs writes in byte-bounded chunks. A 409 is
+  nonretryable `copy_unavailable`; do not route it into another approval. Removed
+  the records-only rollout guidance after switching to the full pinned rules.
 - TC-1095: the Release workflow queues runs (`cancel-in-progress: false`), pushes the version
   commit before publishing, and publishes only from that commit.
   `.github/scripts/check-npm-release-provenance.mjs` fails the run when npm's copy of a current

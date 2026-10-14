@@ -38,6 +38,7 @@ jobs:
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
+          no-cache: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -199,6 +200,7 @@ jobs:
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
+          no-cache: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -207,7 +209,8 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - run: bun install
+      # Keep the checkout clean before selecting a previously pushed release.
+      - run: bun install --frozen-lockfile
 
       # Finish an unfinished stable release before versioning anything new
       # (TC-1095). If a previous stable run pushed its release commit but npm
@@ -270,7 +273,14 @@ jobs:
           }
           NODE
 
-      - run: bun install
+      - name: Install newly versioned dependencies
+        if: steps.unfinished.outputs.sha == ''
+        run: bun install
+
+      # Recovery publishes the existing commit, including its original lockfile.
+      - name: Install unfinished release dependencies
+        if: steps.unfinished.outputs.sha != ''
+        run: bun install --frozen-lockfile
 
       - name: Build
         run: bun run build:release

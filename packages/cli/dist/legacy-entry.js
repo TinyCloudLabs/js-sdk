@@ -10965,17 +10965,31 @@ var init_dist2 = __esm({
       }
       async applyMigrationsOnDbUnlocked(dbName, options) {
         return this.withTelemetry("migrations.apply", dbName, async () => {
-          const listed = await this.queryOnDb(
+          const probe = await this.queryOnDb(
             dbName,
-            `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
-            [options.namespace],
+            `SELECT name FROM sqlite_master WHERE type='table' AND name='${MIGRATIONS_TABLE}'`,
+            [],
             { signal: options.signal }
           );
-          const tableMissing = !listed.ok && (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND || isMissingTableError(listed.error.message));
-          if (!listed.ok && !tableMissing) return listed;
-          const appliedIds = new Set(
-            (listed.ok ? listed.data.rows : []).map((row) => rowValue(row, 0)).filter((id) => typeof id === "string")
-          );
+          let tableMissing = probe.ok ? probe.data.rows.length === 0 : probe.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND || isMissingTableError(probe.error.message);
+          if (!probe.ok && !tableMissing) return probe;
+          const appliedIds = /* @__PURE__ */ new Set();
+          if (!tableMissing) {
+            const listed = await this.queryOnDb(
+              dbName,
+              `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
+              [options.namespace],
+              { signal: options.signal }
+            );
+            tableMissing = !listed.ok && (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND || isMissingTableError(listed.error.message));
+            if (!listed.ok && !tableMissing) return listed;
+            if (listed.ok) {
+              for (const row of listed.data.rows) {
+                const id = rowValue(row, 0);
+                if (typeof id === "string") appliedIds.add(id);
+              }
+            }
+          }
           const skipped = options.migrations.filter((migration) => appliedIds.has(migration.id)).map((migration) => migration.id);
           const pending = options.migrations.filter((migration) => !appliedIds.has(migration.id));
           const applied = [];

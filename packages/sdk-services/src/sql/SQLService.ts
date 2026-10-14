@@ -370,28 +370,42 @@ export class SQLService extends BaseService implements ISQLService {
     options: SqlMigrationApplyOptions,
   ): Promise<Result<SqlMigrationApplyResponse>> {
     return this.withTelemetry("migrations.apply", dbName, async () => {
-      // Read before writing: an up-to-date database must open with a single
-      // read, because writes fail once the owner's storage is full (402) and
-      // read-only sessions cannot write at all.
-      const listed = await this.queryOnDb<{ id: string }>(
+      // Read before writing: up-to-date databases must open without writes,
+      // even when the owner's storage is full or the session is read-only.
+      // sqlite_master also exists in a fresh database, so bootstrap reads succeed.
+      const probe = await this.queryOnDb<{ name: string }>(
         dbName,
-        `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
-        [options.namespace],
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='${MIGRATIONS_TABLE}'`,
+        [],
         { signal: options.signal },
       );
-      // A node may answer for a database that was never created with either
-      // "no such table" or "database not found"; both mean nothing is applied.
-      const tableMissing =
-        !listed.ok &&
-        (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND ||
-          isMissingTableError(listed.error.message));
-      if (!listed.ok && !tableMissing) return listed;
+      // Keep compatibility with nodes that report missing databases/tables.
+      let tableMissing = probe.ok
+        ? probe.data.rows.length === 0
+        : probe.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND ||
+          isMissingTableError(probe.error.message);
+      if (!probe.ok && !tableMissing) return probe;
 
-      const appliedIds = new Set(
-        (listed.ok ? listed.data.rows : [])
-          .map((row) => rowValue(row, 0))
-          .filter((id): id is string => typeof id === "string"),
-      );
+      const appliedIds = new Set<string>();
+      if (!tableMissing) {
+        const listed = await this.queryOnDb<{ id: string }>(
+          dbName,
+          `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
+          [options.namespace],
+          { signal: options.signal },
+        );
+        tableMissing =
+          !listed.ok &&
+          (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND ||
+            isMissingTableError(listed.error.message));
+        if (!listed.ok && !tableMissing) return listed;
+        if (listed.ok) {
+          for (const row of listed.data.rows) {
+            const id = rowValue(row, 0);
+            if (typeof id === "string") appliedIds.add(id);
+          }
+        }
+      }
       const skipped = options.migrations
         .filter((migration) => appliedIds.has(migration.id))
         .map((migration) => migration.id);

@@ -110,6 +110,9 @@ package, so the next run bumps past the stale version. A beta run also refuses t
 `master` has stable versions npm lacks (a stable release that did not finish publishing). A
 maintainer then re-dispatches the Stable Release, which publishes exactly those versions from their
 release commit and graduates nothing else in that run.
+Stable-release installs use the committed lockfile before selecting a release and during recovery.
+Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace
+version metadata and make the immutable release checkout fail the clean-tree publishing guard.
 
 ## Debugging
 
@@ -135,3 +138,10 @@ release commit and graduates nothing else in that run.
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
+- Hosted personal apps live in `packages/operations/src/operations/apps.ts` and
+  `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
+  update it with `bun scripts/sync-tc-apps-rules.ts`, then
+  `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
+- Never add a response `deadlineMs` to personal-record writes: deadlines abandon
+  work rather than cancel it. Preserve per-op outcomes after any committed write,
+  including a partial move or failed derived-copy upkeep.
