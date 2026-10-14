@@ -1,5 +1,14 @@
 # @tinycloud/mcp
 
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [c13720c]
+- Updated dependencies [021330d]
+  - @tinycloud/node-sdk@3.2.3
+  - @tinycloud/operations@0.5.3
+
 ## 0.5.3-beta.1
 
 ### Patch Changes

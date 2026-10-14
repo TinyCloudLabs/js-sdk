@@ -1,5 +1,42 @@
 # @tinycloud/cli
 
+## 1.2.3
+
+### Patch Changes
+
+- 135b1ee: `tc kv list --cursor` with a cursor the node rejects now fails with `KV_LIST_CURSOR_INVALID` (exit 2) and a hint to start again without `--cursor`, instead of `NETWORK_ERROR` with a misleading "switch to a reachable profile" hint.
+- 11220b4: `tc share receive` on a revoked bearer link now fails with `SHARE_REVOKED` (exit 4, "This share link has been revoked by its sender.") instead of the generic `INVALID_ARGUMENT: share operation failed`.
+- 1a8a8a7: Skills resolve the CLI from the agents.tinycloud.xyz private install (`~/.local/share/tinycloud/cli`, or `TC_BIN`), falling back to a global npm install; tc-cli INSTALL.md points at agents.tinycloud.xyz for setup and skill installs.
+- 40fab17: Ctrl-C now cancels `tc auth login --method openkey` in a terminal, in both browser and `--paste` mode (TC-1062). Before, the login's interactive code prompt swallowed it and the login kept waiting until its 5-minute timeout. It now stops with `CANCELLED` (exit 130) and saves nothing.
+- c13720c: `tc share revoke <id>` now revokes public (anyone-with-the-link) shares. Before, the node refused the revocation with 403 and the link stayed readable until it expired. The command reports `revoked` only when the node confirms it; receiving the link then fails.
+  - **Error codes for bearer revokes.**
+    - `SHARE_ISSUER_KEY_UNAVAILABLE` (exit 5): the profile cannot sign for the link. Nothing is revoked.
+    - `SHARE_LINK_UNAVAILABLE` (exit 4): the stored link is missing, or it doesn't match the record. Nothing is revoked.
+    - `SHARE_REVOKE_REJECTED` (exit 4): the node refused. The message includes the node's reason, and nothing is revoked.
+    - `SHARE_REVOKE_UNCONFIRMED` (exit 1): the node answered without confirming. The link may already be revoked, history is not marked revoked, and you should check the link before retrying.
+  - **History.** Revoking an already revoked share keeps its original `revokedAt`.
+  - **Share SDK.** `ShareRevocationAdapter.revokeDelegation` now receives the share `record` next to `delegationCid` and `scope`, and `revokeShare` passes it. Adapters that ignore it still type-check, but code that calls `adapter.revokeDelegation(...)` directly must now pass `record`. `revokeShare` keeps an existing `revokedAt`.
+  - **sdk-core.** These are additions only:
+    - `parseSignedCompactUcanAttenuation` also returns the verified issuer as `payload.iss`.
+    - The new `parseSignedSiweCacao(authorization, expectedCid?)` verifies a wallet SIWE CACAO: size (64 KiB) and nesting (64) limits, the exact-bytes CID, canonical DAG-CBOR, the CACAO shape (integer version 1, no unknown or empty fields, safe-integer chain ID), the ReCap shape and statement, and the EIP-191 signature. It returns the issuer, audience, `expiresAt` and the ReCap attenuation. It does not enforce validity times; callers decide.
+  - **node-sdk.** The new `TinyCloudNode.signOwnerRevocation(cid)` signs a wallet (CACAO) revocation that the node's `POST /revoke` accepts from the space owner.
+
+- 9e8e4d1: `tc kv list` can now page through a prefix and say whether a listing is complete (TC-982). The new options:
+  - `--limit N` (1–1000) sets the page size;
+  - `--cursor C` continues from a previous page;
+  - `--all` follows cursors until the listing is complete, and stops with `KV_LIST_CURSOR_STALLED` if the node repeats a cursor.
+
+  `--json` output now includes `truncated` and `nextCursor`; both are `null` when the node doesn't report them. Human output says when more keys follow. The `Size` and `Updated` columns were always empty for a list and still are.
+
+- 024a95f: Install the CLI as `tinycloud` as well as `tc`, so it works on Linux hosts where iproute2's `/usr/sbin/tc` shadows `tc`. Help and usage show the invoked name.
+- 021330d: Hints, examples and completion scripts name the command you ran: `tinycloud …` when invoked as `tinycloud`, `tc …` otherwise. `@tinycloud/operations` exports `CLI_NAME` from `@tinycloud/operations/cli-name` for this. Courier's missing-space hint names the TinyCloud CLI it runs inside (`tinycloud space host agents` under `tinycloud courier`), and `tc` when run as the standalone `courier` bin.
+- Updated dependencies [c13720c]
+- Updated dependencies [021330d]
+  - @tinycloud/share-sdk@1.1.1
+  - @tinycloud/sdk-core@3.2.3
+  - @tinycloud/node-sdk@3.2.3
+  - @tinycloud/operations@0.5.3
+
 ## 1.2.3-beta.5
 
 ### Patch Changes

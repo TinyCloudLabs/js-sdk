@@ -1,5 +1,14 @@
 # @tinycloud/courier
 
+## 0.1.3
+
+### Patch Changes
+
+- 1a8a8a7: Skills resolve the CLI from the agents.tinycloud.xyz private install (`~/.local/share/tinycloud/cli`, or `TC_BIN`), falling back to a global npm install; tc-cli INSTALL.md points at agents.tinycloud.xyz for setup and skill installs.
+- 021330d: Hints, examples and completion scripts name the command you ran: `tinycloud …` when invoked as `tinycloud`, `tc …` otherwise. `@tinycloud/operations` exports `CLI_NAME` from `@tinycloud/operations/cli-name` for this. Courier's missing-space hint names the TinyCloud CLI it runs inside (`tinycloud space host agents` under `tinycloud courier`), and `tc` when run as the standalone `courier` bin.
+- Updated dependencies [c13720c]
+  - @tinycloud/node-sdk@3.2.3
+
 ## 0.1.3-beta.2
 
 ### Patch Changes
