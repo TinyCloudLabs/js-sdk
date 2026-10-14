@@ -357,8 +357,8 @@ describe("SQLService permissions", () => {
     ]);
     expect(bodies[0]).toEqual({
       action: "query",
-      sql: "SELECT id FROM __tinycloud_sql_migrations WHERE namespace = ? ORDER BY applied_at, id",
-      params: ["com.example.app"],
+      sql: "SELECT name FROM sqlite_master WHERE type='table' AND name='__tinycloud_sql_migrations'",
+      params: [],
     });
     expect(bodies[1].action).toBe("batch");
     expect(bodies[1].statements[0].sql).toContain("__tinycloud_sql_migrations");
@@ -415,6 +415,45 @@ describe("SQLService permissions", () => {
     expect(bodies.map((body) => body.action)).toEqual(["query", "batch", "batch"]);
   });
 
+  test("migrations.apply bootstraps a fresh database without any failing requests", async () => {
+    const bodies: any[] = [];
+
+    const service = new SQLService();
+    service.initialize(
+      createContext(async (_url, init) => {
+        const body = JSON.parse(init?.body as string);
+        bodies.push(body);
+
+        if (body.action === "query") {
+          if (body.sql === "SELECT name FROM sqlite_master WHERE type='table' AND name='__tinycloud_sql_migrations'") {
+            return response(true, 200, { columns: ["name"], rows: [], rowCount: 0 });
+          }
+          throw new Error(`Unexpected read on fresh database: ${body.sql}`);
+        }
+
+        return response(true, 200, {
+          results: body.statements.map(() => ({ changes: 1, lastInsertRowId: null })),
+        });
+      }, []),
+    );
+
+    const result = await service.db("fresh.db").migrations.apply({
+      namespace: "com.example.app",
+      migrations: [
+        { id: "001_initial", sql: ["CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY)"] },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.applied).toEqual(["001_initial"]);
+    }
+    expect(bodies[1].statements[0].sql).toContain("CREATE TABLE IF NOT EXISTS __tinycloud_sql_migrations");
+    expect(bodies[2].statements[0].sql).toContain("CREATE TABLE IF NOT EXISTS notes");
+    expect(bodies[2].statements[1].params[2]).toBe("001_initial");
+    expect(bodies.map((body) => body.action)).toEqual(["query", "batch", "batch"]);
+  });
+
   test("migrations.apply reuses an existing metadata table for a new namespace", async () => {
     const bodies: any[] = [];
 
@@ -423,6 +462,12 @@ describe("SQLService permissions", () => {
       createContext(async (_url, init) => {
         const body = JSON.parse(init?.body as string);
         bodies.push(body);
+
+        if (body.action === "query" && body.sql.includes("sqlite_master")) {
+          return response(true, 200, {
+            columns: ["name"], rows: [["__tinycloud_sql_migrations"]], rowCount: 1,
+          });
+        }
 
         if (body.action === "query") {
           return response(true, 200, { columns: ["id"], rows: [], rowCount: 0 });
@@ -448,8 +493,8 @@ describe("SQLService permissions", () => {
     if (result.ok) {
       expect(result.data.applied).toEqual(["001_initial"]);
     }
-    expect(bodies.map((body) => body.action)).toEqual(["query", "batch"]);
-    expect(bodies[1].statements[0].sql).toBe(
+    expect(bodies.map((body) => body.action)).toEqual(["query", "query", "batch"]);
+    expect(bodies[2].statements[0].sql).toBe(
       "CREATE TABLE IF NOT EXISTS other (id TEXT PRIMARY KEY)",
     );
   });
@@ -464,6 +509,12 @@ describe("SQLService permissions", () => {
       createContext(async (_url, init) => {
         const body = JSON.parse(init?.body as string);
         bodies.push(body);
+
+        if (body.action === "query" && body.sql.includes("sqlite_master")) {
+          return response(true, 200, {
+            columns: ["name"], rows: [["__tinycloud_sql_migrations"]], rowCount: 1,
+          });
+        }
 
         if (body.action === "query") {
           return response(true, 200, {
@@ -506,13 +557,19 @@ describe("SQLService permissions", () => {
         skipped: ["001_initial"],
       });
     }
-    // An up-to-date database is checked with one read and never written, so
+    expect(bodies[1]).toEqual({
+      action: "query",
+      sql: "SELECT id FROM __tinycloud_sql_migrations WHERE namespace = ? ORDER BY applied_at, id",
+      params: ["com.example.app"],
+    });
+    // An up-to-date database is checked with reads and never written, so
     // opening an app works on a full space and with a read-only session.
     expect(invokeCalls).toEqual([
       { service: "sql", path: "app.db", action: SQLAction.READ },
+      { service: "sql", path: "app.db", action: SQLAction.READ },
     ]);
     expect(invokeAnyCalls).toEqual([]);
-    expect(bodies.map((body) => body.action)).toEqual(["query"]);
+    expect(bodies.map((body) => body.action)).toEqual(["query", "query"]);
   });
 
   test("migrations.apply succeeds on a full space when nothing is pending", async () => {
@@ -523,6 +580,12 @@ describe("SQLService permissions", () => {
       createContext(async (_url, init) => {
         const body = JSON.parse(init?.body as string);
         bodies.push(body);
+
+        if (body.action === "query" && body.sql.includes("sqlite_master")) {
+          return response(true, 200, {
+            columns: ["name"], rows: [["__tinycloud_sql_migrations"]], rowCount: 1,
+          });
+        }
 
         if (body.action === "query") {
           return response(true, 200, {
@@ -555,7 +618,7 @@ describe("SQLService permissions", () => {
     if (result.ok) {
       expect(result.data.status).toBe("already_current");
     }
-    expect(bodies.map((body) => body.action)).toEqual(["query"]);
+    expect(bodies.map((body) => body.action)).toEqual(["query", "query"]);
   });
 
   test("migrations.apply reports a full space when a migration is pending", async () => {
@@ -563,6 +626,12 @@ describe("SQLService permissions", () => {
     service.initialize(
       createContext(async (_url, init) => {
         const body = JSON.parse(init?.body as string);
+
+        if (body.action === "query" && body.sql.includes("sqlite_master")) {
+          return response(true, 200, {
+            columns: ["name"], rows: [["__tinycloud_sql_migrations"]], rowCount: 1,
+          });
+        }
 
         if (body.action === "query") {
           return response(true, 200, { columns: ["id"], rows: [], rowCount: 0 });
