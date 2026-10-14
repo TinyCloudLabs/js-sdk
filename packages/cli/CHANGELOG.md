@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.2.3-beta.4
+
+### Patch Changes
+
+- 135b1ee: `tc kv list --cursor` with a cursor the node rejects now fails with `KV_LIST_CURSOR_INVALID` (exit 2) and a hint to start again without `--cursor`, instead of `NETWORK_ERROR` with a misleading "switch to a reachable profile" hint.
+
 ## 1.2.3-beta.3
 
 ### Patch Changes

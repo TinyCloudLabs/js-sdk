@@ -24503,6 +24503,14 @@ function registerKvCommand(program) {
           ...cursor === void 0 ? {} : { cursor }
         }));
         if (!result.ok) {
+          if (cursor !== void 0 && result.error.meta?.status === 400) {
+            throw new CLIError(
+              "KV_LIST_CURSOR_INVALID",
+              `The node rejected the list cursor (${result.error.message}).`,
+              ExitCode.USAGE_ERROR,
+              { hint: "Start the listing again without --cursor, or pass a nextCursor from a recent kv list." }
+            );
+          }
           await throwKvError(result.error, spaceUri, ctx.profile);
           break;
         }
