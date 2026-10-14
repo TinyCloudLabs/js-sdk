@@ -48,13 +48,20 @@ import {
   resolveSecretReferenceForOperation,
 } from "./secrets.js";
 
+/** Value-free counters; the caller owns this optional diagnostic sink. */
+export interface OperationMetrics {
+  replayedGrants: number;
+}
+
 /** The sole projection-facing execution API. */
 export async function invokeOperation(
   operationId: string,
   operationVersion: number,
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
+  metrics?: OperationMetrics,
 ): Promise<OperationResult<unknown>> {
+  if (metrics !== undefined) metrics.replayedGrants = 0;
   const target = normalizeInvocationTarget(invocationTarget);
   if (target === undefined) {
     return errorResult(
@@ -71,6 +78,9 @@ export async function invokeOperation(
       unknownInput,
     );
     if (isPreparedError(prepared)) return prepared.result;
+    if (metrics !== undefined) {
+      metrics.replayedGrants = prepared.runtimeResolution.context.runtime?.replayedGrants ?? 0;
+    }
     return withRuntimeWarnings(await executePreparedInvocation(prepared), prepared);
   });
   // Lazy like prepareInvocation's lookup: the packed root entrypoint stays

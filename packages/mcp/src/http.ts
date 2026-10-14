@@ -12,6 +12,7 @@ import {
 import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
+import { logToolCall } from "./logging.js";
 import {
   ApprovalOwnerMismatchError,
   ApprovalRequestError,
@@ -55,13 +56,13 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const handler = createMcpHandler(async ({ authInfo }) => {
     const identity = oauthIdentity(authInfo);
     const { subject, ownerDids } = identity;
-    const stateRoot = store.tenantStateRoot(subject);
+    const stateRoot = await store.initializeTenant(subject);
     const validator = createJsonSchemaValidator();
     const server = new McpServer(
       { name: MCP_SERVER_NAME, version: MCP_VERSION },
       {
         jsonSchemaValidator: validator,
-        instructions: "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged.",
+        instructions: "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first.",
       },
     );
     registerTinyCloudTools(server, {
@@ -192,16 +193,23 @@ function registerConnectTool(
       },
     },
     async () => {
-      const status = await store.connectStatus(identity.subject, identity.ownerDids);
-      return {
-        content: [{
-          type: "text" as const,
-          text: status.connected
-            ? "TinyCloud is connected."
-            : "TinyCloud approval is required; open approvalUrl, then call this tool again.",
-        }],
-        structuredContent: status,
-      };
+      const startedAt = performance.now();
+      let code = "INTERNAL_ERROR";
+      try {
+        const status = await store.connectStatus(identity.subject, identity.ownerDids);
+        code = status.connected ? "ok" : "authority_required";
+        return {
+          content: [{
+            type: "text" as const,
+            text: status.connected
+              ? "TinyCloud is connected."
+              : `TinyCloud approval is required. Open ${status.approvalUrl}, then call this tool again. This link expires at ${status.expiresAt}.`,
+          }],
+          structuredContent: status,
+        };
+      } finally {
+        logToolCall("tinycloud_connect", code, startedAt, 0);
+      }
     },
   );
 }

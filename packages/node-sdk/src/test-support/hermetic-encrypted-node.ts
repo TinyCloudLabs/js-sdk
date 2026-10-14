@@ -718,12 +718,19 @@ class LoopbackEncryptedNode {
         }
         this.observed.signedInvocation = true;
         this.observed.kvWrites += written.length;
-        return this.json({ written, count: written.length });
+        const response = this.json({ written, count: written.length });
+        if (writes.length === 1) {
+          const separator = writes[0]!.resource.lastIndexOf("/kv/");
+          const value = this.kvData.get(writes[0]!.resource.slice(0, separator).toLowerCase())!.get(written[0]!);
+          const bytes = value instanceof Uint8Array ? value : Buffer.from(JSON.stringify(value));
+          response.headers.set("etag", `"${createHash("sha256").update(bytes).digest("hex")}"`);
+        }
+        return response;
       }
-      const capability = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
+      const capabilities = Object.entries(payload.att ?? {}).flatMap(([resource, actions]) =>
         Object.keys(actions).map((action) => ({ resource, action }))
       ).filter(({ action }) => action === "tinycloud.kv/get" || action === "tinycloud.kv/list")
-        .find(({ resource, action }) => {
+        .filter(({ resource, action }) => {
           const separator = resource.lastIndexOf("/kv/");
           const boundary = separator >= 0
             ? separator
@@ -736,6 +743,34 @@ class LoopbackEncryptedNode {
             (hasExactCapability(payload, resource, action, this.delegationCids) ||
               this.authorizedByActivatedGrant(payload, resource, action));
         });
+      if (capabilities.length > 1 && capabilities.every(({ action }) => action === "tinycloud.kv/get")) {
+        const results = capabilities.map(({ resource, action }) => {
+          const separator = resource.lastIndexOf("/kv/");
+          const space = resource.slice(0, separator).toLowerCase();
+          const key = resource.slice(separator + 4);
+          const entries = this.kvData.get(space)!;
+          this.observed.signedInvocation = true;
+          this.observed.delegatedKvRead = true;
+          this.observed.kvReads += 1;
+          this.observed.delegatedKvResources.push(`${action}:${resource.toLowerCase()}`);
+          if (!entries.has(key)) {
+            return { key, ok: false, error: { code: "KV_NOT_FOUND", message: "Key not found" } };
+          }
+          const value = entries.get(key);
+          const bytes = value instanceof Uint8Array ? value : Buffer.from(JSON.stringify(value));
+          return {
+            key,
+            ok: true,
+            dataBase64: base64(bytes),
+            headers: {
+              "content-type": value instanceof Uint8Array ? "application/octet-stream" : "application/json",
+              etag: `"${createHash("sha256").update(bytes).digest("hex")}"`,
+            },
+          };
+        });
+        return this.json({ results });
+      }
+      const capability = capabilities[0];
       if (capability) {
         const separator = capability.resource.lastIndexOf("/kv/");
         const compactSeparator = capability.resource.endsWith("/kv")
@@ -755,10 +790,11 @@ class LoopbackEncryptedNode {
           }
           if (!entries.has(path)) return new Response("not found", { status: 404 });
           const value = entries.get(path);
-          if (value instanceof Uint8Array) {
-            return new Response(value, { headers: { "content-type": "application/octet-stream" } });
-          }
-          return this.json(value);
+          const bytes = value instanceof Uint8Array ? value : Buffer.from(JSON.stringify(value));
+          return new Response(bytes, { headers: {
+            "content-type": value instanceof Uint8Array ? "application/octet-stream" : "application/json",
+            etag: `"${createHash("sha256").update(bytes).digest("hex")}"`,
+          } });
         }
       }
 

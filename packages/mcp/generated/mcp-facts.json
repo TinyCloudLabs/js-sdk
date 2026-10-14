@@ -38,6 +38,57 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud_apps_context",
+      "surfaces": [
+        "hosted"
+      ],
+      "operationId": "tinycloud.apps.context",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_apps_read",
+      "surfaces": [
+        "hosted"
+      ],
+      "operationId": "tinycloud.apps.read",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud_apps_write",
+      "surfaces": [
+        "hosted"
+      ],
+      "operationId": "tinycloud.apps.write",
+      "operationVersion": 1,
+      "effects": [
+        "destructive"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
       "name": "tinycloud_auth_capabilities",
       "surfaces": [
         "local",

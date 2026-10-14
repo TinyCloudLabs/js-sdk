@@ -1,7 +1,4 @@
-/**
- * MCP has one structured result channel for a TinyCloud operation. Text is a
- * fixed, non-sensitive status line; it never serializes the operation result.
- */
+/** MCP preserves the canonical envelope; hosted clients also receive readable JSON. */
 export interface CanonicalOperationResult {
   readonly status: "ok" | "authority_required" | "setup_required" | "error";
   readonly [key: string]: unknown;
@@ -18,11 +15,19 @@ export interface RecoveryToolBinding {
   readonly operationId: string;
 }
 
+export interface McpToolResultOptions {
+  readonly surface?: "hosted" | "local";
+  readonly readOnly?: boolean;
+  /** Trusted operation identity from the tool binding, not operation output. */
+  readonly operationId?: string;
+}
+
 export function toMcpToolResult(
   result: unknown,
   bindings: readonly RecoveryToolBinding[] = [],
+  options: McpToolResultOptions = {},
 ): McpToolResult {
-  const canonical: CanonicalOperationResult = isCanonicalOperationResult(result)
+  let canonical: CanonicalOperationResult = isCanonicalOperationResult(result)
     ? withRecoveryTool(result, bindings)
     : {
       status: "error",
@@ -30,9 +35,35 @@ export function toMcpToolResult(
       context: {},
       error: { code: "INTERNAL_ERROR" },
     };
+  let serialized: string | undefined;
+  if (options.surface === "hosted") {
+    serialized = JSON.stringify(canonical);
+    if (options.readOnly === true && serialized.length > 100_000) {
+      const sql = options.operationId?.startsWith("tinycloud.sql.") ||
+        options.operationId === "tinycloud.apps.query";
+      canonical = {
+        status: "error",
+        operation: canonical.operation,
+        context: canonical.context,
+        error: {
+          code: sql ? "SQL_RESULT_LIMIT_EXCEEDED" : "KV_RESPONSE_TOO_LARGE",
+          message: sql
+            ? "The result exceeds 100,000 characters. Select fewer columns or rows, add a WHERE filter or a smaller LIMIT, or aggregate the data."
+            : "The result exceeds 100,000 characters. Request fewer keys, narrow the prefix, or use a smaller page size.",
+          retryable: false,
+        },
+      };
+      serialized = JSON.stringify(canonical);
+    }
+  }
 
   return {
-    content: [{ type: "text", text: resultSummary(canonical.status) }],
+    content: [{
+      type: "text",
+      text: resultSummary(canonical.status) +
+        (serialized !== undefined && !(options.operationId === "tinycloud.secrets.get" && canonical.status === "ok")
+          ? `\n${serialized}` : ""),
+    }],
     structuredContent: canonical,
   };
 }

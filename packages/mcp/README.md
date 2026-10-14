@@ -16,12 +16,26 @@ TinyCloud capabilities and never silently fall back to owner authority.
 ### Hosted Streamable HTTP
 
 Remote clients connect to one HTTPS endpoint and authenticate through OpenKey
-OAuth. The hosted server registers 16 tools: it adds `tinycloud_connect` and omits
-the local-only `tinycloud_secrets_status` and `tinycloud_auth_import`.
+OAuth. The hosted server registers 19 tools: it adds `tinycloud_connect` and three
+personal-record tools, and omits local-only `tinycloud_secrets_status` and `tinycloud_auth_import`.
 `tinycloud_connect` returns a short-lived browser approval URL on first use. Later
 `authority_required` results include the same one-click approval flow for the
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
+
+For personal records, ask naturally: “Log my weight: 80.5 kg today.”
+`tinycloud_apps_context` supplies the rules and catalog, `tinycloud_apps_read`
+reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
+moves or deletes records in ordered batches of up to ten operations. These tools
+are hosted-only and share the coding-agent skill's `xyz.tinycloud.agent-data/`
+records in the owner's `default` space. The owner approves that prefix once,
+not every key. The connector asks for the owner's city to store a timezone.
+
+Production requests 30-day grants and uses 15-minute approval links. Expired or
+missing sessions return a fresh link in `error.details`; expired grants use
+`authority_required`. Approvals are renewed by the owner, not automatically.
+The optional fast copy is not available through these tools yet; record writes
+mark changed kinds stale for clients that maintain one.
 
 Each approved delegation is stored with the request it was checked against.
 Replay verifies both compact UCAN and signed-login authority against that
@@ -77,7 +91,8 @@ to select another profile.
 
 ## Tools
 
-The local server exposes 17 tools. Hosted mode adds `tinycloud_connect` and
+The local server exposes 17 tools. Hosted mode adds `tinycloud_connect`,
+`tinycloud_apps_context`, `tinycloud_apps_read` and `tinycloud_apps_write`, and
 omits `tinycloud_secrets_status` (local/stdio only) and `tinycloud_auth_import`:
 
 - Local and authorization state: `tinycloud_status`,
@@ -108,6 +123,14 @@ Results use canonical structured envelopes with `ok`, `authority_required`,
 `setup_required`, or `error` status. Data operations plan authority for the
 exact space and key, prefix, or database supplied by the caller. Missing
 authority returns an exact, resumable request instead of widening access.
+
+Hosted text blocks contain the status and canonical JSON so clients that ignore
+`structuredContent` can read the result. Successful `tinycloud_secrets_get`
+values remain structured-only. Read-only results exceeding 100,000 characters
+return a nonretryable SQL/KV size error with narrowing guidance. Writes are never
+cut off by this cap, so a completed write is not misreported as a retryable failure.
+Call logs contain only tool name, outcome code, duration and successful replayed
+grant count—never keys, values, catalog text, SQL or parameters.
 
 KV and SQLite HTTP authorization refusals are nonretryable structured errors:
 plain 401 is `AUTH_REQUIRED`, 403 is `PERMISSION_DENIED`, and 401 naming a

@@ -6,6 +6,7 @@ import { addFormats, Ajv, AjvJsonSchemaValidator } from "@modelcontextprotocol/s
 import { invokeOperation } from "@tinycloud/operations";
 
 import { toMcpToolResult, type McpToolResult } from "./results.js";
+import { logToolCall } from "./logging.js";
 
 export const TOOL_NAMES = [
   "tinycloud_status",
@@ -25,6 +26,9 @@ export const TOOL_NAMES = [
   "tinycloud_sql_execute",
   "tinycloud_secrets_get",
   "tinycloud_secrets_status",
+  "tinycloud_apps_context",
+  "tinycloud_apps_read",
+  "tinycloud_apps_write",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -73,6 +77,7 @@ interface CatalogOperation {
 }
 
 interface OperationsCatalog {
+  readonly stableErrors: readonly string[];
   readonly operations: readonly CatalogOperation[];
 }
 
@@ -86,6 +91,9 @@ const packageRequire = createRequire(
 const generatedCatalog = packageRequire(
   "@tinycloud/operations/operations.json",
 ) as OperationsCatalog;
+const stableErrorCodes: Readonly<Record<string, true>> = Object.fromEntries(
+  generatedCatalog.stableErrors.map((code) => [code, true as const]),
+);
 
 export interface ToolBinding {
   readonly name: ToolName;
@@ -266,6 +274,36 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     // yet (TC-896), so status is local/stdio only.
     surfaces: ["local"],
   },
+  {
+    name: "tinycloud_apps_context",
+    operationId: "tinycloud.apps.context",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+    surfaces: ["hosted"],
+  },
+  {
+    name: "tinycloud_apps_read",
+    operationId: "tinycloud.apps.read",
+    operationVersion: 1,
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+    surfaces: ["hosted"],
+  },
+  {
+    name: "tinycloud_apps_write",
+    operationId: "tinycloud.apps.write",
+    operationVersion: 1,
+    readOnlyHint: false,
+    idempotentHint: false,
+    destructiveHint: true,
+    openWorldHint: true,
+    surfaces: ["hosted"],
+  },
 ] as const;
 
 export function createJsonSchemaValidator(): AjvJsonSchemaValidator {
@@ -318,19 +356,47 @@ export function registerTinyCloudTools(
         annotations,
       },
       async (input: unknown): Promise<McpToolResult> => {
-        const result = await invokeOperation(
-          binding.operationId,
-          binding.operationVersion,
-          invocationTargetForMcp(selection),
-          input,
-        );
-        const projected = selection.transformOperationResult === undefined
-          ? result
-          : await selection.transformOperationResult(result);
-        return toMcpToolResult(projected, TOOL_BINDINGS);
+        const startedAt = performance.now();
+        const metrics = { replayedGrants: 0 };
+        let code = "INTERNAL_ERROR";
+        try {
+          const result = await invokeOperation(
+            binding.operationId,
+            binding.operationVersion,
+            invocationTargetForMcp(selection),
+            input,
+            metrics,
+          );
+          const projected = selection.transformOperationResult === undefined
+            ? result
+            : await selection.transformOperationResult(result);
+          const response = toMcpToolResult(projected, TOOL_BINDINGS, {
+            surface: selection.surface,
+            readOnly: binding.readOnlyHint,
+            operationId: binding.operationId,
+          });
+          code = outcomeCode(response.structuredContent);
+          return response;
+        } finally {
+          if (selection.surface === "hosted") {
+            logToolCall(binding.name, code, startedAt, metrics.replayedGrants);
+          }
+        }
       },
     );
   }
+}
+
+function outcomeCode(result: McpToolResult["structuredContent"]): string {
+  if (result.status === "error") {
+    const error = result.error as { code?: unknown } | undefined;
+    return typeof error?.code === "string" && Object.hasOwn(stableErrorCodes, error.code) ? error.code : "INTERNAL_ERROR";
+  }
+  if (result.status !== "ok") return result.status;
+  const output = result.output as { outcome?: unknown; ops?: readonly { outcome?: unknown }[] } | undefined;
+  if (output?.outcome === "COPY_PARTIAL") return "COPY_PARTIAL";
+  if (Array.isArray(output?.ops) && output.ops.some((op) => op.outcome !== "ok")) return "PARTIAL";
+  return "ok";
 }
 
 export function toolBindingsForTest(): readonly ToolBinding[] {
