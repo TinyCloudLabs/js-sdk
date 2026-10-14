@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-core
 
+## 3.2.4
+
+### Patch Changes
+
+- @tinycloud/sdk-services@3.2.4
+
 ## 3.2.3
 
 ### Patch Changes

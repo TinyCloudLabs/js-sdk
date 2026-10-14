@@ -1,5 +1,21 @@
 # @tinycloud/cli
 
+## 1.2.4
+
+### Patch Changes
+
+- 016b878: Release the `space list` account-registry change in a new beta (the earlier 1.2.4-beta.1 build predates it).
+- 9704c99: The tc-cli and courier skills now find the CLI as `tinycloud` (`node_modules/.bin/tinycloud`, or `$(npm prefix --global)/bin/tinycloud`) and tell agents to run `tinycloud`, so relayed hints no longer reach iproute2's `/usr/sbin/tc`. Requires CLI 1.2.3 or later.
+- 0e82bce: `tc space list` no longer fails with `AUTH_REQUIRED` (exit 3) on sessions that lack `tinycloud.space/list`, which no OpenKey or local-key sign-in requests (TC-1083). It now lists the owner's spaces from the account registry (`account/spaces/`) when the session holds `tinycloud.kv/get` and `tinycloud.kv/list` on the account space's `spaces/` prefix, as local-key owner sessions do, and uses `tinycloud.space/list` only when the session holds it. The JSON output keeps `spaces` and `count`; registry entries carry `id`, `name`, `owner`, `type`, `permissions` and `status`.
+
+  A session with neither, such as a default OpenKey owner sign-in (which covers only the `default` space), now fails with `PERMISSION_DENIED` (exit 5) naming both capabilities, instead of a 401 that read as "not authenticated". Owners get the registry read with `tc auth request --grant --cap tinycloud.kv:account:spaces/:get,list`; delegates are told to request it from the owner.
+
+- Updated dependencies [b6038b1]
+- Updated dependencies [079afb6]
+  - @tinycloud/operations@0.5.4
+  - @tinycloud/node-sdk@3.2.4
+  - @tinycloud/sdk-core@3.2.4
+
 ## 1.2.4-beta.3
 
 ### Patch Changes
