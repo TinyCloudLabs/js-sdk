@@ -25,8 +25,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Test the guard
-        run: node --test .github/scripts/check-major-release-signoff.test.mjs
+      - name: Test the release guards
+        run: node --test .github/scripts/check-major-release-signoff.test.mjs .github/scripts/check-npm-release-provenance.test.mjs
 
       - name: Require sign-off for major bumps
         run: node .github/scripts/check-major-release-signoff.mjs pr "$BASE_SHA" "$HEAD_SHA"

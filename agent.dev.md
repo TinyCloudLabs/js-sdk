@@ -102,6 +102,15 @@ The `Major release guard` check fails a PR that adds a `major` changeset or rais
 without that sign-off. The Release workflow applies the same rule before publishing betas and before
 graduating them to stable (TC-615).
 
+Release runs queue and never cancel each other. Each run pushes its version commit to `master` and
+then publishes from that commit; if `master` moved first, the run fails without publishing and the
+next run releases the changesets. Before publishing, it fails if npm's copy of any current version
+was published before the commit that set that version (TC-1095). The fix is a new changeset for that
+package, so the next run bumps past the stale version. A beta run also refuses to start while
+`master` has stable versions npm lacks (a stable release that did not finish publishing). A
+maintainer then re-dispatches the Stable Release, which publishes exactly those versions from their
+release commit and graduates nothing else in that run.
+
 ## Debugging
 
 - Confirm `TC_TEST_SERVER` points at the node instance you intend to test.
