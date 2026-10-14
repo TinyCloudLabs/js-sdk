@@ -67,16 +67,7 @@ test("rejects untrusted browser origins", async () => {
 test("a refused callback names its stage and code without echoing the callback", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));
   const app = await testApp(stateDir);
-  // A second store over the same state mints the approval link the hosted app reads.
-  const store = new RemoteTenantStore({
-    stateDir,
-    stateSecret: "test-secret-that-is-at-least-thirty-two-bytes",
-    publicUrl: new URL("https://mcp.test/mcp"),
-    nodeHost: "https://node.tinycloud.test",
-    openkeyHost: "https://openkey.test",
-    approvalTtlSeconds: 300,
-    delegationExpiry: "1h",
-  });
+  const store = siblingStore(stateDir);
   const status = await store.connectStatus("openkey-user-a", [await ownerDid(REQUESTER_KEY)]);
   const state = encodeURIComponent(new URL(status.approvalUrl!).searchParams.get("state")!);
   const signed = await openKeyCallbackBody({
@@ -128,11 +119,66 @@ test("a refused callback names its stage and code without echoing the callback",
     { status: 400, body: { error: "unknown", code: "UNKNOWN", message: MESSAGE } },
   ]);
   expect(diagnostics).toEqual([
-    "[tinycloud-mcp-http] connect callback rejected: stage=restore_approval code=AUTH_EXPIRED\n",
-    "[tinycloud-mcp-http] connect callback rejected: stage=restore_approval code=CALLBACK_INCOMPLETE\n",
-    "[tinycloud-mcp-http] connect callback rejected: stage=unknown code=UNKNOWN\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=restore_approval code=AUTH_EXPIRED detail=none\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=restore_approval code=CALLBACK_INCOMPLETE detail=none\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=unknown code=UNKNOWN detail=body_invalid\n",
   ]);
   for (const secret of secrets) expect(diagnostics.join("")).not.toContain(secret);
+});
+
+test("pre-restore refusals log a distinct detail behind one uniform response", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));
+  const app = await testApp(stateDir);
+  const store = siblingStore(stateDir);
+  const stateFor = async (subject: string, ttlStore = store) =>
+    new URL((await ttlStore.connectStatus(subject)).approvalUrl!).searchParams.get("state")!;
+  const valid = await stateFor("openkey-user-a");
+  const expired = await stateFor("openkey-user-expired", siblingStore(stateDir, 0));
+  const used = await stateFor("openkey-user-used");
+  await rm(join(store.tenantStateRoot("openkey-user-used"), ".tinycloud/profiles/agent/pending", `${used.split(".")[1]}.json`));
+  const orphaned = await stateFor("openkey-user-orphaned");
+  await rm(join(store.tenantStateRoot("openkey-user-orphaned"), ".tinycloud/profiles/agent/key.json"));
+  const [tenantId, nonce] = valid.split(".");
+  const cases: Array<{ state?: string; body: string; detail: string }> = [
+    { body: JSON.stringify({ token: CANARY }), detail: "state_missing" },
+    { state: `${tenantId}.${nonce}.${CANARY}`, body: "{}", detail: "state_invalid" },
+    { state: `${CANARY}.${"a".repeat(512)}`, body: "{}", detail: "state_invalid" },
+    { state: expired, body: JSON.stringify({ token: CANARY }), detail: "state_expired" },
+    { state: used, body: JSON.stringify({ token: CANARY }), detail: "state_not_pending" },
+    { state: orphaned, body: JSON.stringify({ token: CANARY }), detail: "tenant_missing" },
+    { state: valid, body: `{"token":"${CANARY}"`, detail: "body_invalid" },
+    { state: valid, body: JSON.stringify([CANARY]), detail: "body_invalid" },
+    { state: valid, body: JSON.stringify({ token: CANARY.repeat(20_000) }), detail: "body_invalid" },
+  ];
+
+  const diagnostics: string[] = [];
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+    diagnostics.push(String(chunk));
+    return true;
+  });
+  const responses: string[] = [];
+  try {
+    for (const { state, body } of cases) {
+      const query = state === undefined ? "" : `?state=${encodeURIComponent(state)}`;
+      const response = await app.fetch(request(`/connect/callback${query}`, {
+        method: "POST",
+        headers: { origin: "https://openkey.test", "content-type": "application/json" },
+        body,
+      }));
+      expect(response.status).toBe(400);
+      responses.push(await response.text());
+    }
+  } finally {
+    stderr.mockRestore();
+  }
+
+  expect(responses).toEqual(cases.map(() => JSON.stringify({ error: "unknown", code: "UNKNOWN", message: MESSAGE })));
+  expect(diagnostics).toEqual(cases.map(({ detail }) =>
+    `[tinycloud-mcp-http] connect callback rejected: stage=unknown code=UNKNOWN detail=${detail}\n`));
+  for (const text of [...responses, ...diagnostics]) {
+    expect(text).not.toContain(CANARY);
+    expect(text).not.toContain(nonce!);
+  }
 });
 
 test("a callback reports only allowlisted rejection reasons and well-formed codes", async () => {
@@ -175,6 +221,19 @@ test("a callback reports only allowlisted rejection reasons and well-formed code
   expect(diagnostics.join("")).not.toContain(CANARY);
   expect(diagnostics).toHaveLength(3);
 });
+
+/** A second store over the hosted app's state mints the approval links the app reads. */
+function siblingStore(stateDir: string, approvalTtlSeconds = 300): RemoteTenantStore {
+  return new RemoteTenantStore({
+    stateDir,
+    stateSecret: "test-secret-that-is-at-least-thirty-two-bytes",
+    publicUrl: new URL("https://mcp.test/mcp"),
+    nodeHost: "https://node.tinycloud.test",
+    openkeyHost: "https://openkey.test",
+    approvalTtlSeconds,
+    delegationExpiry: "1h",
+  });
+}
 
 async function testApp(existingStateDir?: string): Promise<HostedMcpApp> {
   const stateDir = existingStateDir ?? await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));

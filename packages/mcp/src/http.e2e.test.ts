@@ -319,9 +319,9 @@ test("a refused delegation approval names its stage, code and reason, and never 
   });
 
   expect(diagnostics.filter((line) => line.startsWith("[tinycloud-mcp-http]"))).toEqual([
-    "[tinycloud-mcp-http] connect callback rejected: stage=siwe_runtime_delegation code=DELEGATION_REJECTED reason=proof_invalid\n",
-    "[tinycloud-mcp-http] connect callback rejected: stage=activation code=DELEGATION_REJECTED reason=activation_rejected\n",
-    "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_REJECTED\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=siwe_runtime_delegation code=DELEGATION_REJECTED reason=proof_invalid detail=none\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=activation code=DELEGATION_REJECTED reason=activation_rejected detail=none\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_REJECTED detail=none\n",
   ]);
   for (const secret of secrets) expect(diagnostics.join("")).not.toContain(secret);
   expect(await exists(join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);

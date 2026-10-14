@@ -12,7 +12,13 @@ import {
 import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
-import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore, type RemoteStoreConfig } from "./remote-store.js";
+import {
+  ApprovalOwnerMismatchError,
+  ApprovalRequestError,
+  ApprovalStageError,
+  RemoteTenantStore,
+  type RemoteStoreConfig,
+} from "./remote-store.js";
 import { MCP_SERVER_NAME } from "./server.js";
 import { createJsonSchemaValidator, registerTinyCloudTools } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
@@ -117,7 +123,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
           if (error instanceof ApprovalOwnerMismatchError) {
             return callbackCors(json({ error: error.message, code: "approval_owner_mismatch" }, 403), config.openkeyHost);
           }
-          // Stage, code and reason are identifiers, never callback, delegation or node text.
+          // Stage, code, reason and detail are identifiers, never callback, delegation or node text.
           const stage = error instanceof ApprovalStageError ? error.stage : "unknown";
           const code = error instanceof ApprovalStageError && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
             ? error.code
@@ -125,7 +131,12 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
           const reason = !(error instanceof ApprovalStageError) || error.reason === undefined
             ? undefined
             : RUNTIME_DELEGATION_REJECTIONS.find((known) => known === error.reason) ?? "unknown";
-          writeDiagnostic(`connect callback rejected: stage=${stage} code=${code}${reason === undefined ? "" : ` reason=${reason}`}`);
+          // Only the server log says which state, tenant or body check failed;
+          // the response stays uniform so a caller cannot probe a state.
+          const detail = error instanceof ApprovalRequestError ? error.detail : "none";
+          writeDiagnostic(
+            `connect callback rejected: stage=${stage} code=${code}${reason === undefined ? "" : ` reason=${reason}`} detail=${detail}`,
+          );
           return callbackCors(
             json({
               error: stage,
@@ -224,7 +235,8 @@ function canonicalResourceUrl(url: URL): URL {
 
 function requiredState(url: URL): string {
   const state = url.searchParams.get("state");
-  if (state === null || state.length > 512) throw new Error("Missing approval state.");
+  if (state === null) throw new ApprovalRequestError("state_missing", "Missing approval state.");
+  if (state.length > 512) throw new ApprovalRequestError("state_invalid", "Approval state is invalid.");
   return state;
 }
 
