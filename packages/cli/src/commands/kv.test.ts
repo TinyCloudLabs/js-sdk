@@ -87,7 +87,12 @@ function makeKv(handle: string) {
     },
     list: async (options: Record<string, unknown> = {}) => {
       recorded.lists.push(options);
-      return { ok: true, data: listPages[String(options.cursor ?? "")] };
+      const page = listPages[String(options.cursor ?? "")];
+      // The node answers a cursor it doesn't recognise with 400, which the SDK reports as NETWORK_ERROR.
+      if (page === undefined) {
+        return { ok: false, error: { code: "NETWORK_ERROR", service: "kv", message: "Failed to list keys: 400 - Invalid KV list cursor", meta: { status: 400 } } };
+      }
+      return { ok: true, data: page };
     },
   };
 }
@@ -412,6 +417,15 @@ describe("CLI kv list paging (TC-982)", () => {
 
     expect(recorded.lists).toEqual([{ cursor: "c1" }]);
     expect(recorded.outputs).toEqual([{ keys: ["c"], count: 1, prefix: null, truncated: false, nextCursor: null }]);
+  });
+
+  test("a cursor the node rejects is a usage error, not a network error", async () => {
+    listPages = { c1: { keys: ["c"], truncated: false } };
+
+    await runKv(["list", "--cursor", "bogus"]);
+
+    expect(recorded.outputs).toEqual([]);
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "KV_LIST_CURSOR_INVALID", exitCode: 2 })]);
   });
 
   test("--all follows cursors until the listing is complete", async () => {
