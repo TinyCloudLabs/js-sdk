@@ -3,6 +3,13 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-14
+
+- TC-1095: the Release workflow queues runs (`cancel-in-progress: false`), pushes the version
+  commit before publishing, and publishes only from that commit.
+  `.github/scripts/check-npm-release-provenance.mjs` fails the run when npm already holds one of
+  its new versions from other code; add a changeset for that package to bump past it.
+
 ## 2026-10-11
 
 - TC-834: `tc secrets request` / `wait` / `manage`. CLI error JSON may carry `error.setup`,
