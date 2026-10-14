@@ -38,6 +38,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.0
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('atlas/bun.lock') }}
 
       - name: Install
         run: bun install --frozen-lockfile

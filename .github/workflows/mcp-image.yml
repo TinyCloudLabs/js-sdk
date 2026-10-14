@@ -130,6 +130,8 @@ jobs:
         with:
           context: packages/mcp
           push: true
+          cache-from: type=gha,scope=mcp-image
+          cache-to: ${{ (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) && 'type=gha,mode=max,scope=mcp-image' || '' }}
           build-args: TINYCLOUD_MCP_VERSION=${{ needs.resolve.outputs.version }}
           tags: |
             ghcr.io/tinycloudlabs/tinycloud-mcp:${{ needs.resolve.outputs.version }}
