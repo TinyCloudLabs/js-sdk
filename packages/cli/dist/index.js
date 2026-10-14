@@ -18763,15 +18763,18 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const nativeReader = async (link2) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
+    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false }).sharing);
     const token = parseNativeShareUrl(link2);
-    const decoder = new TinyCloudNode2({ autoDiscoverLocalNode: false });
-    const decoded = decoder.sharing.decodeLink(token);
+    const decoded = sharing(void 0).decodeLink(token);
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const client = new TinyCloudNode2({ host: canonicalOrigin2(decoded.host, "owner node origin"), autoDiscoverLocalNode: false });
-    const received = await client.sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const received = await sharing(canonicalOrigin2(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
+    const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
+    if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
+      throw new CLIError("SHARE_REVOKED", "This share link has been revoked by its sender.", ExitCode.NOT_FOUND);
+    }
     if (!received.ok) throw new Error("native share could not be verified");
-    const value = await received.data.kv.get("", { binary: true });
-    if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
+    if (value === void 0 || !value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
     return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
   return {

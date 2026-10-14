@@ -30,6 +30,7 @@
   },
   "changesets": [
     "kv-list-invalid-cursor",
+    "share-receive-revoked",
     "skills-private-cli-path",
     "tc-1062-ctrlc-login",
     "tc-545-bearer-share-revoke",

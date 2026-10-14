@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.2.3-beta.5
+
+### Patch Changes
+
+- 11220b4: `tc share receive` on a revoked bearer link now fails with `SHARE_REVOKED` (exit 4, "This share link has been revoked by its sender.") instead of the generic `INVALID_ARGUMENT: share operation failed`.
+
 ## 1.2.3-beta.4
 
 ### Patch Changes
