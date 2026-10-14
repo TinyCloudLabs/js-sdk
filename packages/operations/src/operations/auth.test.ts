@@ -294,6 +294,37 @@ test("request-bound import rejects signed expiry during node activation", async 
   }
 });
 
+test("request-bound import carries the node activation rejection reason", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const upstreamCanary = "node-activation-response-canary";
+    const node = runtime.runtime.node as {
+      useRuntimeDelegation(delegation: unknown): Promise<void>;
+    };
+    // The node's `/delegate` re-activation answers 403, as TinyCloud does when it refuses a delegation.
+    node.useRuntimeDelegation = async () => {
+      throw Object.assign(
+        new Error(`Failed to activate runtime permission delegation: 403 ${upstreamCanary}`),
+        { cause: { success: false, status: 403, error: upstreamCanary } },
+      );
+    };
+
+    const delegation = await fixture.hermetic.mintDelegation();
+    const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "DELEGATION_REJECTED", details: { reason: "activation_rejected" } },
+    });
+    expect(JSON.stringify(result)).not.toContain(upstreamCanary);
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
 
 test("imports a real signed hostless delegation idempotently and a fresh runtime replays only its signed authority", async () => {
   const fixture = await createAuthRuntimeFixture();

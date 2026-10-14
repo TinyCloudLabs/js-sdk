@@ -3,11 +3,15 @@ import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/
 import { dirname, join } from "node:path";
 
 import {
+  InvalidRestoredSessionError,
+  RuntimeDelegationRejectedError,
   TinyCloudNode,
+  UnsupportedSessionRestoreError,
   isCapabilitySubset,
   principalDidEquals,
   siweRuntimeDelegation,
   type PermissionEntry,
+  type PortableDelegation,
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
@@ -85,6 +89,52 @@ export class ApprovalOwnerMismatchError extends Error {
   constructor() {
     super("This approval link was requested by a different TinyCloud account, so the delegation was not stored.");
     this.name = "ApprovalOwnerMismatchError";
+  }
+}
+
+/** The callback stages `/connect/callback` names when it refuses an approval. */
+export type ApprovalStage = "restore_approval" | "siwe_runtime_delegation" | "auth_import" | "activation";
+
+/**
+ * A callback stage refused the approval. `code` and `reason` are
+ * server-authored identifiers for diagnostics; the message and cause may quote
+ * callback or node data and are never sent or logged.
+ */
+export class ApprovalStageError extends Error {
+  readonly stage: ApprovalStage;
+  readonly code: string;
+  readonly reason: string | undefined;
+
+  constructor(stage: ApprovalStage, code: string, reason?: string, cause?: unknown) {
+    super(`The approval failed at ${stage} (${code}).`, { cause });
+    this.name = "ApprovalStageError";
+    this.stage = stage;
+    this.code = code;
+    this.reason = reason;
+  }
+}
+
+/** Why a callback was refused before its approval was read. */
+export type ApprovalRequestDetail =
+  | "state_missing"
+  | "state_invalid"
+  | "state_expired"
+  | "state_not_pending"
+  | "tenant_missing"
+  | "body_invalid";
+
+/**
+ * The callback's state, tenant or body was refused before the approval was
+ * read. `detail` is for server diagnostics only: callers get one uniform
+ * response so they cannot probe whether a state is valid.
+ */
+export class ApprovalRequestError extends Error {
+  readonly detail: ApprovalRequestDetail;
+
+  constructor(detail: ApprovalRequestDetail, message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = "ApprovalRequestError";
+    this.detail = detail;
   }
 }
 
@@ -169,11 +219,20 @@ export class RemoteTenantStore {
 
   async completeApproval(state: string, request: Request): Promise<void> {
     const length = Number(request.headers.get("content-length") ?? "0");
-    if (Number.isFinite(length) && length > MAX_CALLBACK_BYTES) throw new Error("Callback body is too large.");
+    if (Number.isFinite(length) && length > MAX_CALLBACK_BYTES) {
+      throw new ApprovalRequestError("body_invalid", "Callback body is too large.");
+    }
     const text = await request.text();
-    if (Buffer.byteLength(text) > MAX_CALLBACK_BYTES) throw new Error("Callback body is too large.");
-    const data = JSON.parse(text) as unknown;
-    if (!isRecord(data)) throw new Error("Callback body is invalid.");
+    if (Buffer.byteLength(text) > MAX_CALLBACK_BYTES) {
+      throw new ApprovalRequestError("body_invalid", "Callback body is too large.");
+    }
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch (error) {
+      throw new ApprovalRequestError("body_invalid", "Callback body is invalid.", error);
+    }
+    if (!isRecord(data)) throw new ApprovalRequestError("body_invalid", "Callback body is invalid.");
 
     const pending = await this.#readPending(state, true);
     try {
@@ -229,16 +288,26 @@ export class RemoteTenantStore {
     // OpenKey returns a signed-login (CACAO) delegation. Every field is
     // projected from the verified SIWE; `tinycloud.auth.import` verifies it
     // again and checks it stays within the stored request.
-    const delegation = siweRuntimeDelegation(node, {
-      authorization: session.delegationHeader.Authorization,
-      cid: session.delegationCid,
-      spaceId: session.spaceId,
-      ownerAddress: session.address,
-      chainId: session.chainId,
-      siwe: session.siwe,
-      signature: session.signature,
-      host: this.#config.nodeHost,
-    });
+    let delegation: PortableDelegation;
+    try {
+      delegation = siweRuntimeDelegation(node, {
+        authorization: session.delegationHeader.Authorization,
+        cid: session.delegationCid,
+        spaceId: session.spaceId,
+        ownerAddress: session.address,
+        chainId: session.chainId,
+        siwe: session.siwe,
+        signature: session.signature,
+        host: this.#config.nodeHost,
+      });
+    } catch (error) {
+      throw new ApprovalStageError(
+        "siwe_runtime_delegation",
+        "DELEGATION_REJECTED",
+        error instanceof RuntimeDelegationRejectedError ? error.reason : undefined,
+        error,
+      );
+    }
     const result = await invokeOperation(
       "tinycloud.auth.import",
       1,
@@ -251,7 +320,16 @@ export class RemoteTenantStore {
         delegation,
       },
     );
-    if (result.status !== "ok") throw new Error("TinyCloud rejected the approved delegation.");
+    if (result.status === "error") {
+      const reason = result.error.details?.reason;
+      // Only a refused node activation carries a rejection reason on DELEGATION_REJECTED.
+      throw new ApprovalStageError(
+        result.error.code === "DELEGATION_REJECTED" && typeof reason === "string" ? "activation" : "auth_import",
+        result.error.code,
+        typeof reason === "string" ? reason : undefined,
+      );
+    }
+    if (result.status !== "ok") throw new ApprovalStageError("auth_import", "AUTHORITY_REQUIRED");
   }
 
   /**
@@ -265,11 +343,27 @@ export class RemoteTenantStore {
     tenant: TenantProfile,
     data: Record<string, unknown>,
   ): Promise<{ node: TinyCloudNode; session: CallbackSession }> {
-    const session = sessionFromCallback(data, tenant.jwk);
+    let session: CallbackSession;
+    try {
+      session = sessionFromCallback(data, tenant.jwk);
+    } catch (error) {
+      throw new ApprovalStageError("restore_approval", "CALLBACK_INCOMPLETE", undefined, error);
+    }
     const node = new TinyCloudNode({ host: this.#config.nodeHost });
-    await node.restoreSession(session);
+    try {
+      await node.restoreSession(session);
+    } catch (error) {
+      throw new ApprovalStageError(
+        "restore_approval",
+        error instanceof InvalidRestoredSessionError || error instanceof UnsupportedSessionRestoreError
+          ? error.code
+          : "SESSION_RESTORE_FAILED",
+        undefined,
+        error,
+      );
+    }
     if (!samePrincipal(node.sessionDid, tenant.sessionDid)) {
-      throw new Error("The approved delegation targets a different session.");
+      throw new ApprovalStageError("restore_approval", "SESSION_MISMATCH");
     }
     return { node, session };
   }
@@ -333,10 +427,10 @@ export class RemoteTenantStore {
   }
 
   async #readTenant(tenantId: string): Promise<TenantProfile> {
-    if (!/^[a-f0-9]{64}$/.test(tenantId)) throw new Error("Approval state is invalid.");
+    if (!/^[a-f0-9]{64}$/.test(tenantId)) throw new ApprovalRequestError("state_invalid", "Approval state is invalid.");
     const stateRoot = join(this.#config.stateDir, "tenants", tenantId);
     const jwk = await readJson<Record<string, unknown>>(this.#keyPath(stateRoot));
-    if (jwk === null) throw new Error("The TinyCloud delegate no longer exists.");
+    if (jwk === null) throw new ApprovalRequestError("tenant_missing", "The TinyCloud delegate no longer exists.");
     return { stateRoot, jwk, sessionDid: didFromJwk(jwk) };
   }
 
@@ -374,26 +468,46 @@ export class RemoteTenantStore {
   async #readPending(state: string, consume: boolean): Promise<PendingApproval> {
     const [tenantId, nonce, signature] = state.split(".");
     if (tenantId === undefined || nonce === undefined || signature === undefined) {
-      throw new Error("Approval state is invalid.");
+      throw new ApprovalRequestError("state_invalid", "Approval state is invalid.");
     }
     const expected = this.#signState(tenantId, nonce);
     const supplied = Buffer.from(signature, "base64url");
     const expectedBytes = Buffer.from(expected, "base64url");
     if (supplied.length !== expectedBytes.length || !timingSafeEqual(supplied, expectedBytes)) {
-      throw new Error("Approval state is invalid.");
+      throw new ApprovalRequestError("state_invalid", "Approval state is invalid.");
     }
     const stateRoot = join(this.#config.stateDir, "tenants", tenantId);
     const path = this.#pendingPath(stateRoot, nonce);
     const claimed = `${path}.processing`;
-    if (consume) await rename(path, claimed);
+    if (consume) {
+      try {
+        await rename(path, claimed);
+      } catch (error) {
+        // No pending file to claim. Other filesystem failures stay unclassified.
+        if (!isRecord(error) || error.code !== "ENOENT") throw error;
+        // The state is signed by this server, so a missing tenant key means the
+        // tenant directory itself is gone (for example a reset state volume).
+        const tenantExists = await readJson<unknown>(this.#keyPath(stateRoot)).then(
+          (jwk) => jwk !== null,
+          () => true,
+        );
+        if (!tenantExists) {
+          throw new ApprovalRequestError("tenant_missing", "The TinyCloud delegate no longer exists.", error);
+        }
+        // Already used, being processed, or never issued. This is not proof of
+        // replay: retrying an expired link lands here too, because the first
+        // attempt deleted its pending file.
+        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.", error);
+      }
+    }
     try {
       const pending = await readJson<PendingApproval>(consume ? claimed : path);
       if (pending === null || pending.version !== 1 || pending.tenantId !== tenantId || pending.nonce !== nonce) {
-        throw new Error("Approval state is invalid or already used.");
+        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
       }
       if (new Date(pending.expiresAt).getTime() <= Date.now()) {
         await rm(consume ? claimed : path, { force: true });
-        throw new Error("Approval state has expired.");
+        throw new ApprovalRequestError("state_expired", "Approval state has expired.");
       }
       return pending;
     } catch (error) {
