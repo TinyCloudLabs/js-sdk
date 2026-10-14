@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.2.4-beta.2
+
+### Patch Changes
+
+- 016b878: Release the `space list` account-registry change in a new beta (the earlier 1.2.4-beta.1 build predates it).
+
 ## 1.2.4-beta.1
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @tinycloud/mcp
 
+## 0.5.4-beta.2
+
+### Patch Changes
+
+- 016b878: Release the retired-node-host tenant migration in a new beta (the earlier 0.5.4-beta.1 build predates it).
+
 ## 0.5.4-beta.1
 
 ### Patch Changes

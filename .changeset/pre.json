@@ -32,6 +32,8 @@
     "mcp-callback-diagnostics",
     "mcp-tenant-legacy-node-host",
     "replica-sdk-services-pin",
+    "republish-cli-528",
+    "republish-mcp-530",
     "skills-resolve-tinycloud-bin",
     "space-list-account-registry"
   ]
