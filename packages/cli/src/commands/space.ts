@@ -35,8 +35,10 @@ export function registerSpaceCommand(program: Command): void {
         // (OpenKey or local key) carries (TC-1083).
         const accountSpaceId = node.accountSpaceId;
         // `tinycloud.space/list` is invoked with the base session only, on its own space root.
+        // A walletless restored session (OpenKey owner or delegate) has no `node.spaceId`.
         const sessionCapabilities = node.getVerifiedSessionCapabilities();
-        const sessionSpace = node.spaceId?.slice(node.spaceId.lastIndexOf(":") + 1);
+        const sessionSpaceId = node.restorableSession?.spaceId;
+        const sessionSpace = sessionSpaceId?.slice(sessionSpaceId.lastIndexOf(":") + 1);
         let spaces: Array<{ id: string; name?: string; owner: string }>;
         if (accountSpaceId !== undefined && node.hasRuntimePermissions([{
           service: "tinycloud.kv",

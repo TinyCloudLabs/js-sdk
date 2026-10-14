@@ -13,10 +13,10 @@ interface HermeticFixture {
   owner: TinyCloudNode;
   accountSpaceId: string;
   applicationsSpaceId: string;
-  ownerRestorableSession: { jwk: Record<string, unknown>; verificationMethod: string; spaceId: string };
   requests(): readonly { method: string; path: string }[];
   invocations(): readonly { service: string; action: string; space: string; path: string }[];
-  allowOwnerSessionInvocations(): void;
+  ownerRestorableSession: { jwk: Record<string, unknown>; verificationMethod: string; spaceId: string; delegationCid: string };
+  allowInvocationProof(cid: string, options?: { spaceList?: boolean }): void;
   stop(): void;
 }
 // URL loading keeps the node-sdk fixture outside the CLI package's TypeScript rootDir.
@@ -28,7 +28,7 @@ const originalHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-space-list-"));
 process.env.TC_HOME = home;
 const fixture = await createHermeticEncryptedNode();
-fixture.allowOwnerSessionInvocations();
+fixture.allowInvocationProof(fixture.ownerRestorableSession.delegationCid);
 let node: TinyCloudNode = fixture.owner;
 mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => node }));
 // Command modules load after the SDK boundary mock, so they cannot be static imports.
@@ -53,6 +53,21 @@ const openKeyDefaultNode = await restoredOwnerNode({
     capabilities: { "": ["tinycloud.capabilities/read"] },
   },
 });
+// A walletless restored session (as an OpenKey owner or delegate profile restores)
+// whose signed recap holds tinycloud.space/list and no account-registry read.
+const spaceListNode = await restoredOwnerNode({
+  wasm,
+  signer,
+  sessionKey: fixture.ownerRestorableSession.jwk,
+  sessionDid: fixture.ownerRestorableSession.verificationMethod,
+  spaceId: wasm.makeSpaceId(await signer.getAddress(), 1, "default"),
+  host: fixture.host,
+  abilities: {
+    space: { "": ["tinycloud.space/list"] },
+    capabilities: { "": ["tinycloud.capabilities/read"] },
+  },
+});
+fixture.allowInvocationProof(spaceListNode.restorableSession!.delegationCid, { spaceList: true });
 
 async function writeProfile(posture: "owner-openkey" | "delegate-session"): Promise<void> {
   await ProfileManager.ensureConfigDir();
@@ -128,6 +143,25 @@ test("an owner session without tinycloud.space/list lists its spaces from the ac
     `tinycloud.kv/list ${fixture.accountSpaceId} spaces/`,
     `tinycloud.kv/get ${fixture.accountSpaceId} spaces/applications`,
   ]);
+});
+
+test("a walletless restored session holding tinycloud.space/list lists through the space/list fallback", async () => {
+  node = spaceListNode;
+  expect(spaceListNode.spaceId).toBeUndefined();
+  const before = fixture.invocations().length;
+
+  const result = await runSpaceList();
+
+  expect(result).toMatchObject({ exitCode: undefined, stderr: "" });
+  const address = await signer.getAddress();
+  expect(JSON.parse(result.stdout)).toEqual({
+    spaces: [
+      { id: wasm.makeSpaceId(address, 1, "secrets"), name: "secrets", owner: fixture.ownerDid, type: "owned", permissions: ["*"] },
+      { id: wasm.makeSpaceId(address, 1, "applications"), name: "applications", owner: fixture.ownerDid, type: "owned", permissions: ["*"] },
+    ],
+    count: 2,
+  });
+  expect(fixture.invocations().slice(before).map(({ action }) => action)[0]).toBe("tinycloud.space/list");
 });
 
 test("a default OpenKey owner session is refused naming the missing capabilities, without a doomed request", async () => {
