@@ -59,7 +59,8 @@ function repository(t) {
   return { dir, git, commit, released, repo: gitRepo(dir) };
 }
 
-// `npm view` stand-in: { "name@version": gitHead | null } (null = no gitHead).
+// `npm view` stand-in: { "name@version": gitHead | null | { gitHead, requires } }
+// (null = no gitHead; `requires` = the published [name, range] dependencies).
 // Versions not listed are unpublished; a package exists on npm if any of its
 // versions is listed.
 function registry(entries) {
@@ -69,7 +70,9 @@ function registry(entries) {
     calls.push(id);
     if (!(id in entries)) return { published: false };
     const value = entries[id];
-    return typeof value === "function" ? value() : { published: true, gitHead: value ?? undefined };
+    if (typeof value === "function") return value();
+    if (value && typeof value === "object") return { published: true, requires: [], ...value };
+    return { published: true, gitHead: value ?? undefined, requires: [] };
   };
   const packageExists = (name) => Object.keys(entries).some((id) => id.startsWith(`${name}@`));
   return { view, packageExists, calls, entries };
@@ -267,6 +270,76 @@ test("unpublished-stable: a new package npm has never seen is left to beta versi
   const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
   assert.deepEqual(await run(r, "unpublished-stable", npm), []);
   assert.ok(npm.calls.includes("@x/c@0.1.0"));
+});
+
+// A stable release that adds brand-new c@0.1.1, required exactly by a@1.0.1.
+// npm gets a@1.0.1 but never any version of c.
+function newPackageInStableRelease(t) {
+  const r = repository(t);
+  const release = r.commit(STABLE, {
+    ...a("1.0.1", { "@x/b": "2.0.0", "@x/c": "0.1.1" }),
+    "packages/c/package.json": manifest("@x/c", "0.1.1"),
+  });
+  r.commit("chore: enter beta pre-release mode [skip ci]", { ".changeset/pre.json": '{ "mode": "pre" }\n' });
+  const npm = registry({
+    "@x/a@1.0.0": r.released,
+    "@x/a@1.0.1": { gitHead: release, requires: [["@x/b", "2.0.0"], ["@x/c", "0.1.1"]] },
+    "@x/b@2.0.0": r.released,
+  });
+  return { r, release, npm };
+}
+
+test("unpublished-stable: a never-published package a stable release set still blocks an unrelated beta", async (t) => {
+  const { r, release, npm } = newPackageInStableRelease(t);
+  r.commit("fix(b)", { ".changeset/fix-b.md": '---\n"@x/b": patch\n---\n\nFix.\n' });
+  const failures = await run(r, "unpublished-stable", npm);
+  assert.deepEqual(failures.map(({ name, version, versionCommit }) => ({ name, version, versionCommit })), [
+    { name: "@x/c", version: "0.1.1", versionCommit: release },
+  ]);
+});
+
+test("unfinished-stable: a never-published package with a new changeset is finished at its released version", async (t) => {
+  const { r, release, npm } = newPackageInStableRelease(t);
+  r.commit("fix(c)", { ".changeset/fix-c.md": '---\n"@x/c": patch\n---\n\nFix.\n' });
+  const unfinished = unfinishedStableRelease({ repo: r.repo, view: npm.view, packageExists: npm.packageExists });
+  assert.equal(unfinished.releaseCommit, release);
+  assert.deepEqual(unfinished.missing.map(({ name, version }) => `${name}@${version}`), ["@x/c@0.1.1"]);
+
+  r.git("checkout", "--quiet", "--detach", release);
+  const logs = [];
+  assert.deepEqual(await run(r, "pre-publish", npm, { log: (line) => logs.push(line) }), []);
+  assert.deepEqual(logs.filter((line) => line.includes("will publish")), ["@x/c@0.1.1: not on npm; will publish from HEAD."]);
+  const finished = registry({ ...npm.entries, "@x/c@0.1.1": release });
+  assert.deepEqual(await run(r, "post-publish", finished), []);
+});
+
+test("pre-publish: a version on npm that requires an internal version nobody publishes fails", async (t) => {
+  const { r, npm } = newPackageInStableRelease(t);
+  // Suppose c had been versioned past 0.1.1 anyway: a@1.0.1 on npm still
+  // requires c@0.1.1, which this run does not publish.
+  r.commit(BETA, { "packages/c/package.json": manifest("@x/c", "0.1.2-beta.0") });
+  const failures = await run(r, "pre-publish", npm);
+  assert.deepEqual(failures.map(({ name, version, reason }) => ({ name, version, reason })), [
+    { name: "@x/a", version: "1.0.1", reason: "requires @x/c@0.1.1, which is not on npm and not published by this run" },
+  ]);
+});
+
+test("pre/post-publish: internal dependencies may be in this run's publish set, and must be on npm afterwards", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "workspace:*" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "pre-publish", npm), []);
+
+  // After publishing, a made it but b did not.
+  const partial = registry({
+    ...npm.entries,
+    "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] },
+  });
+  const failures = await run(r, "post-publish", partial, { sleep: async () => {}, attempts: 2, retryMs: 1 });
+  assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), [
+    "@x/b: not on npm after publish",
+    "@x/a: requires @x/b@2.0.1-beta.0, which is not on npm",
+  ]);
 });
 
 test("unfinished-stable: a partial stable release is finished from its release commit before anything else", async (t) => {

@@ -23,9 +23,11 @@
 // for those older versions.
 //
 // A stable release can push its release commit and then fail to publish some
-// versions. Master is then back in pre mode with stable versions npm lacks
-// ("missing stable versions"; packages npm has never seen are new, not missing,
-// and `changeset version` gives them a beta).
+// versions. Master is then back in pre mode with "missing stable versions":
+// non-prerelease versions npm lacks, for packages npm already has or whose
+// version a stable release commit set. A package npm has never seen, at a
+// version an ordinary commit set, is new, and `changeset version` gives it a
+// beta.
 //
 // Modes, run on the checked-out commit (HEAD), over every public workspace
 // package:
@@ -44,6 +46,10 @@
 //                       Versions npm lacks are about to be published from HEAD.
 //   post-publish        Every version must now be on npm and pass the rule.
 //                       Retries while the registry catches up.
+//
+// pre-publish and post-publish also require every exact internal dependency of
+// every current version (as published on npm, or as about to be published) to
+// be on npm, or in pre-publish, about to be published by this run.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -99,16 +105,22 @@ export function gitRepo(cwd = process.cwd()) {
   };
 }
 
-// npm view name@version -> { published: false } | { published: true, gitHead }
+// The consumer-facing requirements of a manifest: [name, range] pairs.
+function requirements(manifest) {
+  return ["dependencies", "peerDependencies", "optionalDependencies"].flatMap((field) =>
+    Object.entries(manifest?.[field] ?? {}),
+  );
+}
+
+// npm view name@version -> { published: false } | { published: true, gitHead, requires }
 export function npmView(name, version) {
-  const result = spawnSync("npm", ["view", `${name}@${version}`, "version", "gitHead", "--json"], {
-    encoding: "utf8",
-  });
+  const fields = ["version", "gitHead", "dependencies", "peerDependencies", "optionalDependencies"];
+  const result = spawnSync("npm", ["view", `${name}@${version}`, ...fields, "--json"], { encoding: "utf8" });
   const output = parseJson(result.stdout.trim() || "null");
   if (result.status === 0) {
     if (output === null) return { published: false };
-    if (typeof output === "string") return { published: true, gitHead: undefined };
-    return { published: true, gitHead: output?.gitHead || undefined };
+    if (typeof output === "string") return { published: true, gitHead: undefined, requires: [] };
+    return { published: true, gitHead: output?.gitHead || undefined, requires: requirements(output) };
   }
   if (output?.error?.code === "E404") return { published: false };
   throw new Error(`npm view ${name}@${version} failed: ${result.stderr.trim() || result.stdout.trim()}`);
@@ -129,8 +141,8 @@ function matchesWorkspace(pattern, dir) {
   return new RegExp(`^${escaped.join("[^/]+")}$`).test(dir);
 }
 
-// Public workspace packages at `rev`: { name, version, dir }.
-export function publicPackages(repo, rev) {
+// Workspace packages at `rev`: { name, version, dir, private, requires }.
+export function workspacePackages(repo, rev) {
   const root = parseJson(repo.show(rev, "package.json")) ?? {};
   const patterns = Array.isArray(root.workspaces) ? root.workspaces : root.workspaces?.packages ?? [];
   return repo
@@ -139,8 +151,27 @@ export function publicPackages(repo, rev) {
     .map((path) => path.slice(0, -"/package.json".length))
     .filter((dir) => patterns.some((pattern) => matchesWorkspace(pattern, dir)))
     .map((dir) => ({ dir, manifest: parseJson(repo.show(rev, `${dir}/package.json`)) }))
-    .filter(({ manifest }) => manifest?.name && manifest.version && manifest.private !== true)
-    .map(({ dir, manifest }) => ({ name: manifest.name, version: manifest.version, dir }));
+    .filter(({ manifest }) => manifest?.name)
+    .map(({ dir, manifest }) => ({
+      name: manifest.name,
+      version: manifest.version,
+      dir,
+      private: manifest.private === true,
+      requires: requirements(manifest),
+    }));
+}
+
+// Public workspace packages at `rev`.
+export function publicPackages(repo, rev) {
+  return workspacePackages(repo, rev).filter((pkg) => pkg.version && !pkg.private);
+}
+
+// The exact version a dependency range pins, if it pins one. `workspace:`
+// ranges resolve to the workspace's current version, as the workflow's
+// resolver does before publishing.
+function pinnedVersion(range, current) {
+  if (range.startsWith("workspace:")) return current;
+  return /^=?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+[0-9A-Za-z.-]+)?$/.exec(range.trim())?.[1];
 }
 
 function isPrerelease(version) {
@@ -174,12 +205,17 @@ export function provenance({ pkg, gitHead, head, repo }) {
   return verdict(false, "published from a commit before its version commit landed");
 }
 
-// Stable versions npm lacks, for packages npm already has.
+// Missing stable versions (see the header).
 export function missingStable({ repo, head, view = npmView, packageExists = npmPackageExists }) {
-  return publicPackages(repo, head)
-    .filter((pkg) => !isPrerelease(pkg.version))
-    .filter((pkg) => !view(pkg.name, pkg.version).published && packageExists(pkg.name))
-    .map((pkg) => ({ ...pkg, head, versionCommit: versionCommit(repo, head, pkg) }));
+  const missing = [];
+  for (const pkg of publicPackages(repo, head)) {
+    if (isPrerelease(pkg.version) || view(pkg.name, pkg.version).published) continue;
+    const commit = versionCommit(repo, head, pkg);
+    const setByStableRelease = commit !== undefined && STABLE_RELEASE_COMMIT.test(repo.subject(commit));
+    if (!setByStableRelease && !packageExists(pkg.name)) continue;
+    missing.push({ name: pkg.name, version: pkg.version, dir: pkg.dir, head, versionCommit: commit });
+  }
+  return missing;
 }
 
 // The stable release commit to finish publishing from, if any. All missing
@@ -220,16 +256,24 @@ export async function check({
   }
 
   const failures = [];
-  const fail = (pkg, fields) => failures.push({ ...pkg, head, ...fields });
+  const fail = (pkg, fields) =>
+    failures.push({ name: pkg.name, version: pkg.version, dir: pkg.dir, head, ...fields });
+  const packages = publicPackages(repo, head);
+  const registry = new Map();
+  const lookup = (name, version) => {
+    const id = `${name}@${version}`;
+    if (!registry.has(id)) registry.set(id, view(name, version));
+    return registry.get(id);
+  };
 
-  for (const pkg of publicPackages(repo, head)) {
+  for (const pkg of packages) {
     const id = `${pkg.name}@${pkg.version}`;
-    let npm = view(pkg.name, pkg.version);
-
+    let npm = lookup(pkg.name, pkg.version);
     for (let attempt = 1; mode === "post-publish" && !npm.published && attempt < attempts; attempt++) {
       log(`${id} is not on npm yet; retrying in ${retryMs / 1000}s (${attempt}/${attempts - 1}).`);
       await sleep(retryMs);
       npm = view(pkg.name, pkg.version);
+      registry.set(id, npm);
     }
     if (!npm.published) {
       if (mode === "pre-publish") log(`${id}: not on npm; will publish from HEAD.`);
@@ -240,6 +284,22 @@ export async function check({
     const verdict = provenance({ pkg, gitHead: npm.gitHead, head, repo });
     if (verdict.ok) log(`${id}: ${verdict.reason} (gitHead ${npm.gitHead}).`);
     else fail(pkg, { gitHead: npm.gitHead, versionCommit: verdict.versionCommit, reason: verdict.reason });
+  }
+
+  // Every exact internal dependency must resolve on npm (or, before
+  // publishing, be one of the versions this run publishes).
+  const workspace = new Map(workspacePackages(repo, head).map((pkg) => [pkg.name, pkg]));
+  for (const pkg of packages) {
+    const npm = registry.get(`${pkg.name}@${pkg.version}`);
+    for (const [name, range] of npm.published ? npm.requires ?? [] : pkg.requires) {
+      const dependency = workspace.get(name);
+      const version = dependency && pinnedVersion(range, dependency.version);
+      if (!version || lookup(name, version).published) continue;
+      const publishing = mode === "pre-publish" && !dependency.private && dependency.version === version;
+      if (publishing) continue;
+      const where = mode === "pre-publish" ? "not on npm and not published by this run" : "not on npm";
+      fail(pkg, { reason: `requires ${name}@${version}, which is ${where}` });
+    }
   }
   return failures;
 }

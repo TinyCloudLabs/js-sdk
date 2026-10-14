@@ -366,6 +366,8 @@ jobs:
       - name: Confirm npm has every current version
         run: node .github/scripts/check-npm-release-provenance.mjs post-publish
 
+      # Tag the commit that was published, not master's tip: a recovery run
+      # publishes an older release commit while master has moved on.
       - name: Create GitHub Release
         run: |
           VERSION=$(node -e "console.log(require('./packages/web-sdk/package.json').version)")
@@ -375,7 +377,8 @@ jobs:
             gh release create "v${VERSION}" \
               --title "v${VERSION}" \
               --generate-notes \
-              --target master
+              --target "$RELEASE_SHA"
           fi
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
