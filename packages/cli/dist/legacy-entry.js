@@ -36193,6 +36193,7 @@ function registerShareCommand(program) {
 
 // src/commands/space.ts
 init_profiles();
+init_types();
 init_formatter();
 init_errors();
 init_constants();
@@ -36200,6 +36201,7 @@ init_sdk();
 init_host();
 init_theme();
 import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
+import { ACCOUNT_REGISTRY_SPACE as ACCOUNT_REGISTRY_SPACE2 } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes8 } from "crypto";
 import { mkdir as mkdir5, writeFile as writeFile4 } from "fs/promises";
 import { dirname as dirname6 } from "path";
@@ -36214,21 +36216,52 @@ function registerSpaceCommand(program) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const result = await node.spaces.list();
-      if (!result.ok) {
-        throw cliErrorFromService(result.error);
+      const accountSpaceId = node.accountSpaceId;
+      const sessionCapabilities = node.getVerifiedSessionCapabilities();
+      const sessionSpaceId = node.restorableSession?.spaceId;
+      const sessionSpace = sessionSpaceId?.slice(sessionSpaceId.lastIndexOf(":") + 1);
+      let spaces;
+      if (accountSpaceId !== void 0 && node.hasRuntimePermissions([{
+        service: "tinycloud.kv",
+        space: accountSpaceId,
+        path: "spaces/",
+        actions: ["tinycloud.kv/get", "tinycloud.kv/list"]
+      }])) {
+        const result = await node.account.spaces.list();
+        if (!result.ok) throw cliErrorFromService(result.error);
+        spaces = result.data.map((s) => ({
+          id: s.spaceId,
+          name: s.name,
+          owner: s.ownerDid,
+          type: s.type,
+          permissions: s.permissions,
+          status: s.status,
+          registeredAt: s.registeredAt,
+          updatedAt: s.updatedAt,
+          expiresAt: s.expiresAt
+        }));
+      } else if (sessionCapabilities.length === 0 || sessionCapabilities.some((capability) => capability.service === "tinycloud.space" && capability.space === sessionSpace && capability.path === "" && capability.actions.includes("tinycloud.space/list"))) {
+        const result = await node.spaces.list();
+        if (!result.ok) throw cliErrorFromService(result.error);
+        spaces = result.data;
+      } else {
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        const cap = "tinycloud.kv:account:spaces/:get,list";
+        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME26} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME26} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
+        throw new CLIError(
+          "PERMISSION_DENIED",
+          `Listing spaces needs tinycloud.kv/get and tinycloud.kv/list on the account space's spaces/ registry (${accountSpaceId ?? ACCOUNT_REGISTRY_SPACE2}), or tinycloud.space/list. This session holds neither.`,
+          ExitCode.PERMISSION_DENIED,
+          { hint }
+        );
       }
       if (shouldOutputJson()) {
-        outputJson({ spaces: result.data, count: result.data.length });
+        outputJson({ spaces, count: spaces.length });
       } else {
-        if (result.data.length === 0) {
+        if (spaces.length === 0) {
           process.stdout.write(theme.muted("No spaces found.") + "\n");
         } else {
-          const rows = result.data.map((s) => [
-            s.id || s.spaceId || "\u2014",
-            s.name || "\u2014",
-            s.owner || "\u2014"
-          ]);
+          const rows = spaces.map((s) => [s.id, s.name || "\u2014", s.owner || "\u2014"]);
           process.stdout.write(formatTable(["Space ID", "Name", "Owner"], rows) + "\n");
         }
       }

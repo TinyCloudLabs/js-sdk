@@ -29,6 +29,10 @@
     "@tinycloud/sdk-services-test": "18.0.0"
   },
   "changesets": [
-    "replica-sdk-services-pin"
+    "mcp-callback-diagnostics",
+    "mcp-tenant-legacy-node-host",
+    "replica-sdk-services-pin",
+    "skills-resolve-tinycloud-bin",
+    "space-list-account-registry"
   ]
 }
