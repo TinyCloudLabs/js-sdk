@@ -1,5 +1,12 @@
 # @tinycloud/cli
 
+## 1.2.5-beta.1
+
+### Patch Changes
+
+- Updated dependencies [cfc9d1b]
+  - @tinycloud/operations@0.6.0-beta.1
+
 ## 1.2.5-beta.0
 
 ### Patch Changes

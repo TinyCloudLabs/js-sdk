@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "18.0.0"
   },
   "changesets": [
-    "fresh-sql-migration-probe"
+    "fresh-sql-migration-probe",
+    "hosted-personal-records"
   ]
 }
