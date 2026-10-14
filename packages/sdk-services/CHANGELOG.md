@@ -1,5 +1,11 @@
 # @tinycloudlabs/sdk-services
 
+## 3.2.5-beta.0
+
+### Patch Changes
+
+- 0b02662: Probe for the SQL migrations table before reading applied IDs so first sign-in on a fresh database avoids a failing request while up-to-date databases remain read-only.
+
 ## 3.2.4
 
 ## 3.2.3
