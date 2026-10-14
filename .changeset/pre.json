@@ -30,6 +30,7 @@
   },
   "changesets": [
     "fresh-sql-migration-probe",
+    "hosted-personal-records-copy",
     "hosted-personal-records"
   ]
 }
