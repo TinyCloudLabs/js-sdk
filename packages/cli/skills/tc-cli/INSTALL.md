@@ -4,9 +4,9 @@ agents.tinycloud.xyz serves every TinyCloud skill and pins the CLI version they'
 
 ## Install
 
-Follow https://agents.tinycloud.xyz/cli. It installs the pinned TinyCloud CLI into `~/.local/share/tinycloud/cli`, makes `tc` run it when nothing else on `PATH` is called `tc`, and installs this skill. Newer CLI releases also ship the same executable as `tinycloud`, an alternative name that takes identical arguments. The skill's first block finds the CLI there; set `TC_BIN` to use another one.
+Follow https://agents.tinycloud.xyz/cli. It installs the pinned TinyCloud CLI into `~/.local/share/tinycloud/cli` and installs this skill. Run the CLI as `tinycloud`, which needs CLI 1.2.3 or later; `tc` is its older name, and on many Linux hosts `tc` on `PATH` is iproute2's `/usr/sbin/tc` instead. The skill's first block finds the CLI there; set `TC_BIN` to use another one.
 
-To install this skill, or `courier` for `tc courier`, without the guide:
+To install this skill, or `courier` for `tinycloud courier`, without the guide:
 
 ```bash
 curl -fsSL https://agents.tinycloud.xyz/skills/install.js | node - cli --agent claude-code
@@ -18,8 +18,8 @@ Use `--agent codex` or `--agent opencode` for those clients. Skills go into `${C
 ## Check
 
 ```bash
-TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tc}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
-[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tc"   # else a global npm install
+TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
+[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tinycloud"   # else a global npm install
 [ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
 "$TC" --version
 ```
@@ -32,4 +32,4 @@ Run the install again. It installs the versions agents.tinycloud.xyz serves, whi
 
 ## Remove
 
-Delete the skill folders: `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/tc-cli` and `courier` for Claude Code, `~/.agents/skills/tc-cli` and `courier` for Codex and OpenCode. To remove the CLI, delete the `tc` link the setup made, if it points into `~/.local/share/tinycloud/cli`, then that folder. Removing the skill or CLI doesn't delete TinyCloud profiles or revoke data access.
+Delete the skill folders: `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/tc-cli` and `courier` for Claude Code, `~/.agents/skills/tc-cli` and `courier` for Codex and OpenCode. To remove the CLI, delete the `tc` or `tinycloud` link the setup made, if it points into `~/.local/share/tinycloud/cli`, then that folder. Removing the skill or CLI doesn't delete TinyCloud profiles or revoke data access.
