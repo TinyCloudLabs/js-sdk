@@ -47,7 +47,8 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - run: bun install
+      # The checkout's lockfile is used as committed; only the versioning step below may change it (TC-1155).
+      - run: bun install --frozen-lockfile
 
       - name: Check for pending changesets
         id: check
@@ -83,7 +84,14 @@ jobs:
         if: steps.check.outputs.pending != '0'
         run: |
           bun changeset version
-          bun install
+          # After a version bump bun 1.4 can need a second install to settle workspace dependency
+          # specs; commit a lockfile that a later install leaves unchanged (TC-1155).
+          for pass in 1 2 3; do
+            cp bun.lock "$RUNNER_TEMP/bun.lock.before"
+            bun install
+            cmp -s bun.lock "$RUNNER_TEMP/bun.lock.before" && break
+            if [ "$pass" = 3 ]; then echo "::error::bun.lock still changes after 3 installs"; exit 1; fi
+          done
           bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
@@ -273,9 +281,17 @@ jobs:
           }
           NODE
 
+      # Same lockfile settling as the beta job (TC-1155): the release commit must carry a lockfile
+      # that a later install leaves unchanged.
       - name: Install newly versioned dependencies
         if: steps.unfinished.outputs.sha == ''
-        run: bun install
+        run: |
+          for pass in 1 2 3; do
+            cp bun.lock "$RUNNER_TEMP/bun.lock.before"
+            bun install
+            cmp -s bun.lock "$RUNNER_TEMP/bun.lock.before" && break
+            if [ "$pass" = 3 ]; then echo "::error::bun.lock still changes after 3 installs"; exit 1; fi
+          done
 
       # Recovery publishes the existing commit, including its original lockfile.
       - name: Install unfinished release dependencies

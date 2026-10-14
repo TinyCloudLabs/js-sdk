@@ -335,7 +335,7 @@ test("pre/post-publish: internal dependencies may be in this run's publish set, 
     ...npm.entries,
     "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] },
   });
-  const failures = await run(r, "post-publish", partial, { sleep: async () => {}, attempts: 2, retryMs: 1 });
+  const failures = await run(r, "post-publish", partial, { sleep: async () => {}, waitMs: 1, firstRetryMs: 1 });
   assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), [
     "@x/b: not on npm after publish",
     "@x/a: requires @x/b@2.0.1-beta.0, which is not on npm",
@@ -419,32 +419,35 @@ test("post-publish: versions published from HEAD pass", async (t) => {
   assert.deepEqual(await run(r, "post-publish", npm), []);
 });
 
-test("post-publish: waits out registry lag with bounded retries", async (t) => {
+test("post-publish: waits out registry lag with backoff", async (t) => {
   const r = repository(t);
   const head = r.commit(BETA, a("1.0.1-beta.0"));
   let views = 0;
   const npm = registry({
-    "@x/a@1.0.1-beta.0": () => (++views < 3 ? { published: false } : { published: true, gitHead: head }),
+    "@x/a@1.0.1-beta.0": () => (++views < 4 ? { published: false } : { published: true, gitHead: head }),
     "@x/b@2.0.0": r.released,
   });
   const waits = [];
   const sleep = async (ms) => waits.push(ms);
-  assert.deepEqual(await run(r, "post-publish", npm, { sleep, attempts: 4, retryMs: 5 }), []);
-  assert.deepEqual(waits, [5, 5]);
+  assert.deepEqual(await run(r, "post-publish", npm, { sleep, waitMs: 1000, firstRetryMs: 5, maxRetryMs: 15 }), []);
+  assert.deepEqual(waits, [5, 10, 15]);
 });
 
-test("post-publish: a version that never appears fails after the last attempt", async (t) => {
+test("post-publish: a version that never appears fails once the shared budget is spent", async (t) => {
   const r = repository(t);
-  const head = r.commit(BETA, a("1.0.1-beta.0"));
-  const npm = registry({ "@x/b@2.0.0": r.released });
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
   const waits = [];
   const sleep = async (ms) => waits.push(ms);
-  const failures = await run(r, "post-publish", npm, { sleep, attempts: 3, retryMs: 5 });
-  assert.equal(npm.calls.filter((id) => id === "@x/a@1.0.1-beta.0").length, 3);
-  assert.deepEqual(waits, [5, 5]);
-  assert.deepEqual(failures, [
-    { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a", head, reason: "not on npm after publish" },
+  const failures = await run(r, "post-publish", npm, { sleep, waitMs: 40, firstRetryMs: 10, maxRetryMs: 20 });
+  // One budget for the run: a uses all 40 (10 + 20 + 10), so b gets a single look and no further wait.
+  assert.deepEqual(waits, [10, 20, 10]);
+  assert.equal(npm.calls.filter((id) => id === "@x/b@2.0.1-beta.0").length, 1);
+  assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), [
+    "@x/a: not on npm after publish",
+    "@x/b: not on npm after publish",
   ]);
+  assert.equal(failures[0].head, head);
 });
 
 test("cli: rejects an unknown mode or extra arguments", () => {
