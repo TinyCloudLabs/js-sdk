@@ -120,6 +120,8 @@ A concurrent local removal after revocation reports `removed: 0` as success. Oth
 "$TC" space switch myspace
 ```
 
+`space list` reads the owner's account registry (`account/spaces/`) when the session holds `tinycloud.kv/get` and `tinycloud.kv/list` on the account space's `spaces/` prefix, and falls back to `tinycloud.space/list` only when the session holds that. A session with neither (including the default OpenKey owner sign-in, which covers only the `default` space) fails with `PERMISSION_DENIED` (exit 5) naming both; an owner grants the registry read with `"$TC" auth request --grant --cap tinycloud.kv:account:spaces/:get,list`.
+
 ## Profiles
 
 Multiple identities/environments with isolated keys and sessions.

@@ -171,6 +171,8 @@ class LoopbackEncryptedNode {
   private readonly delegationCids = new Set<string>();
   private readonly revokedDelegationCids = new Set<string>();
   private readonly kvData = new Map<string, Map<string, unknown>>();
+  private readonly spaceListProofCids = new Set<string>();
+  private ownedSpaces: { id: string; name: string; owner: string }[] = [];
   private secretPresent = true;
   private refuseRootRawCidAuthority = false;
   private browserCredentialBoundary?: {
@@ -275,8 +277,13 @@ class LoopbackEncryptedNode {
     this.kvData.set(spaceId.toLowerCase(), new Map());
   }
 
-  allowInvocationProof(cid: string): void {
+  allowInvocationProof(cid: string, options: { spaceList?: boolean } = {}): void {
     this.delegationCids.add(cid);
+    if (options.spaceList) this.spaceListProofCids.add(cid);
+  }
+
+  configureOwnedSpaces(spaces: readonly { id: string; name: string; owner: string }[]): void {
+    this.ownedSpaces = [...spaces];
   }
 
   configureBrowserCredentialBoundary(ownerDid: string, credentialsSpaceId: string): void {
@@ -755,6 +762,19 @@ class LoopbackEncryptedNode {
         }
       }
 
+      // Only a session registered with `allowInvocationProof(cid, { spaceList: true })`
+      // holds tinycloud.space/list; any other space invocation is refused as the node does.
+      const spaceInvocation = invoked.find((invocation) => invocation.service === "space");
+      if (spaceInvocation) {
+        if (spaceInvocation.action === "tinycloud.space/list" &&
+          payload.prf?.some((cid) => this.spaceListProofCids.has(cid))) {
+          return this.json(this.ownedSpaces);
+        }
+        return new Response(
+          `Unauthorized Action: ${spaceInvocation.space}/space/${spaceInvocation.path} ${spaceInvocation.action}`,
+          { status: 401 },
+        );
+      }
       this.assertConfigured();
       const resource = `${this.spaceId}/kv/${SECRET_PATH}`;
       if (
@@ -1015,6 +1035,12 @@ export interface HermeticEncryptedNode {
   /** Whether the canary secret exists (as another client writing it would make it). */
   setSecretPresent(value: boolean): void;
   provisionKvSpace(spaceId: string): void;
+  /**
+   * Accept a session delegation as an invocation proof, as a node accepts an
+   * activated session. With `spaceList`, that session may also invoke
+   * `tinycloud.space/list`, which returns the owner's `secrets` and `applications` spaces.
+   */
+  allowInvocationProof(cid: string, options?: { spaceList?: boolean }): void;
   /** Serve the encrypted secret without minting a delegation, for grants authorized elsewhere. */
   provisionSecret(): void;
   createRestoredDelegate(): TinyCloudNode;
@@ -1085,6 +1111,10 @@ export async function createHermeticEncryptedNode(
     },
   ];
   transport.configureNetwork(spaceId, networkId);
+  transport.configureOwnedSpaces([
+    { id: spaceId, name: "secrets", owner: ownerDid },
+    { id: transport.wasm.makeSpaceId(ownerAddress, OWNER_CHAIN_ID, "applications"), name: "applications", owner: ownerDid },
+  ]);
   transport.setSecretPresent(options.secretPresent ?? true);
   transport.configureKv(accountSpaceId, {
     "spaces/applications": {
@@ -1239,6 +1269,7 @@ export async function createHermeticEncryptedNode(
     decryptRequests: () => transport.requestLog.filter((request) => request.path.endsWith("/decrypt")).length,
     setSecretPresent: (value) => transport.setSecretPresent(value),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
+    allowInvocationProof: (cid, proofOptions) => transport.allowInvocationProof(cid, proofOptions),
     provisionSecret: () => transport.configure({
       spaceId,
       networkId,
