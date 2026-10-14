@@ -1,0 +1,32 @@
+{
+  "mode": "pre",
+  "tag": "beta",
+  "initialVersions": {
+    "@tinycloud/manage-key-reference-clients": "0.0.8",
+    "@tinycloud/node-demo": "0.0.38",
+    "tinycloud-openkey-example-app": "0.0.36",
+    "openkey-vite": "0.0.34",
+    "tinycloud-web-sdk-example-app": "0.0.4",
+    "@tinycloud/bootstrap": "2.8.0",
+    "@tinycloud/cli": "1.2.5",
+    "@tinycloud/courier": "0.1.5",
+    "@tinycloud/mcp": "0.6.0",
+    "@tinycloud/node-sdk": "3.2.5",
+    "@tinycloud/operations": "0.6.0",
+    "@tinycloud/replica": "0.2.3",
+    "@tinycloud/sdk-core": "3.2.5",
+    "@tinycloud/sdk-rs": "1.0.0",
+    "@tinycloud/node-sdk-wasm": "1.7.7",
+    "@tinycloud/web-sdk-wasm": "1.7.6",
+    "@tinycloud/sdk-services": "3.2.5",
+    "@tinycloud/server": "2.5.6",
+    "@tinycloud/share-envelope": "1.1.0",
+    "@tinycloud/share-sdk": "1.1.1",
+    "@tinycloud/vfs": "0.2.6",
+    "@tinycloud/web-sdk": "3.2.5",
+    "@tinycloud/mcp-sdk-contract": "0.0.0",
+    "@tinycloud/operations-mcp-conformance": "0.0.0",
+    "@tinycloud/sdk-services-test": "18.0.1"
+  },
+  "changesets": []
+}
