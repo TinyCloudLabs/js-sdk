@@ -755,6 +755,14 @@ class LoopbackEncryptedNode {
         }
       }
 
+      // No fixture session holds tinycloud.space/*; answer as the node does.
+      const spaceInvocation = invoked.find((invocation) => invocation.service === "space");
+      if (spaceInvocation) {
+        return new Response(
+          `Unauthorized Action: ${spaceInvocation.space}/space/${spaceInvocation.path} ${spaceInvocation.action}`,
+          { status: 401 },
+        );
+      }
       this.assertConfigured();
       const resource = `${this.spaceId}/kv/${SECRET_PATH}`;
       if (
@@ -1015,6 +1023,8 @@ export interface HermeticEncryptedNode {
   /** Whether the canary secret exists (as another client writing it would make it). */
   setSecretPresent(value: boolean): void;
   provisionKvSpace(spaceId: string): void;
+  /** Accept the owner's own session as an invocation proof, as a node accepts an owner-signed session. */
+  allowOwnerSessionInvocations(): void;
   /** Serve the encrypted secret without minting a delegation, for grants authorized elsewhere. */
   provisionSecret(): void;
   createRestoredDelegate(): TinyCloudNode;
@@ -1239,6 +1249,7 @@ export async function createHermeticEncryptedNode(
     decryptRequests: () => transport.requestLog.filter((request) => request.path.endsWith("/decrypt")).length,
     setSecretPresent: (value) => transport.setSecretPresent(value),
     provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
+    allowOwnerSessionInvocations: () => transport.allowInvocationProof(ownerSession.delegationCid),
     provisionSecret: () => transport.configure({
       spaceId,
       networkId,

@@ -187,7 +187,8 @@ test.each([401, 403] as const)("space list HTTP %i from real SpaceService cannot
     invoke: () => ({ Authorization: "Bearer fixture" }),
     fetch: async () => new Response("session expired", { status }),
   });
-  node = { spaces };
+  // No account space and no signed recap: only the node can decide, so `space list` asks it.
+  node = { spaces, accountSpaceId: undefined, getVerifiedSessionCapabilities: () => [] };
   const result = await captureCommand("space", ["list"]);
   expect(result.exitCode).toBe(status === 401 ? 3 : 5);
   expect(result.error).toMatchObject({ code: status === 401 ? "AUTH_REQUIRED" : "PERMISSION_DENIED", meta: { status } });
