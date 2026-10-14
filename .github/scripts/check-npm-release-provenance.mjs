@@ -22,26 +22,37 @@
 // gitHead equal to the parent of a release-workflow version commit is accepted
 // for those older versions.
 //
+// A stable release can push its release commit and then fail to publish some
+// versions. Master is then back in pre mode with stable versions npm lacks
+// ("missing stable versions"; packages npm has never seen are new, not missing,
+// and `changeset version` gives them a beta).
+//
 // Modes, run on the checked-out commit (HEAD), over every public workspace
 // package:
 //
-//   unpublished-stable  Before a beta run versions anything: fail when a
-//                       non-prerelease version is missing from npm. In pre mode
-//                       `changeset publish` would publish it under the `beta`
-//                       dist-tag, leaving `latest` behind. This is what a stable
-//                       release that pushed but did not finish publishing
-//                       leaves behind.
+//   unpublished-stable  Before a beta run versions anything: fail when there
+//                       are missing stable versions. In pre mode `changeset
+//                       publish` would tag them `beta`, leaving `latest`
+//                       behind, and versioning could bump past them.
+//   unfinished-stable [<output-file>]
+//                       Before a stable run versions anything: if there are
+//                       missing stable versions, find the one stable release
+//                       commit that set them all and write `sha=<commit>` to
+//                       <output-file> (the workflow publishes from it). Fail
+//                       if no single release commit explains them.
 //   pre-publish         Every version npm already has must pass the rule above.
 //                       Versions npm lacks are about to be published from HEAD.
 //   post-publish        Every version must now be on npm and pass the rule.
 //                       Retries while the registry catches up.
 
 import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
-const MODES = ["unpublished-stable", "pre-publish", "post-publish"];
+const STABLE_RELEASE_COMMIT = /^chore: release stable packages\b/;
+const MODES = ["unpublished-stable", "unfinished-stable", "pre-publish", "post-publish"];
 
 function parseJson(source) {
   if (source === undefined) return undefined;
@@ -103,6 +114,14 @@ export function npmView(name, version) {
   throw new Error(`npm view ${name}@${version} failed: ${result.stderr.trim() || result.stdout.trim()}`);
 }
 
+// npm view name -> has npm ever had this package?
+export function npmPackageExists(name) {
+  const result = spawnSync("npm", ["view", name, "name", "--json"], { encoding: "utf8" });
+  if (result.status === 0) return true;
+  if (parseJson(result.stdout.trim() || "null")?.error?.code === "E404") return false;
+  throw new Error(`npm view ${name} failed: ${result.stderr.trim() || result.stdout.trim()}`);
+}
+
 function matchesWorkspace(pattern, dir) {
   const glob = pattern.replace(/\/+$/, "");
   if (!glob.includes("*")) return glob === dir;
@@ -155,28 +174,57 @@ export function provenance({ pkg, gitHead, head, repo }) {
   return verdict(false, "published from a commit before its version commit landed");
 }
 
+// Stable versions npm lacks, for packages npm already has.
+export function missingStable({ repo, head, view = npmView, packageExists = npmPackageExists }) {
+  return publicPackages(repo, head)
+    .filter((pkg) => !isPrerelease(pkg.version))
+    .filter((pkg) => !view(pkg.name, pkg.version).published && packageExists(pkg.name))
+    .map((pkg) => ({ ...pkg, head, versionCommit: versionCommit(repo, head, pkg) }));
+}
+
+// The stable release commit to finish publishing from, if any. All missing
+// stable versions must come from one stable release commit outside pre mode;
+// otherwise `problems` says why it cannot be finished automatically.
+export function unfinishedStableRelease({ repo, view = npmView, packageExists = npmPackageExists }) {
+  const head = repo.revParse("HEAD");
+  const missing = missingStable({ repo, head, view, packageExists });
+  const commits = [...new Set(missing.map((pkg) => pkg.versionCommit))];
+  if (missing.length === 0) return { missing, problems: [] };
+  const problems = [];
+  const [commit] = commits;
+  if (commits.length > 1 || !commit) {
+    problems.push(`the missing versions were not all set by one commit (${commits.map((c) => c ?? "unknown").join(", ")})`);
+  } else {
+    if (!STABLE_RELEASE_COMMIT.test(repo.subject(commit))) problems.push(`${commit} is not a stable release commit`);
+    if (parseJson(repo.show(commit, ".changeset/pre.json"))?.mode === "pre") problems.push(`${commit} is in pre mode`);
+  }
+  return { missing, problems, releaseCommit: problems.length ? undefined : commit };
+}
+
 export async function check({
   mode,
   repo,
   view = npmView,
+  packageExists = npmPackageExists,
   sleep = (ms) => delay(ms),
   attempts = 6,
   retryMs = 10_000,
   log = console.log,
 }) {
   const head = repo.revParse("HEAD");
+  if (mode === "unpublished-stable") {
+    return missingStable({ repo, head, view, packageExists }).map((pkg) => ({
+      ...pkg,
+      reason: "stable version not on npm; in pre mode `changeset publish` would tag it beta",
+    }));
+  }
+
   const failures = [];
   const fail = (pkg, fields) => failures.push({ ...pkg, head, ...fields });
 
   for (const pkg of publicPackages(repo, head)) {
     const id = `${pkg.name}@${pkg.version}`;
     let npm = view(pkg.name, pkg.version);
-
-    if (mode === "unpublished-stable") {
-      if (npm.published || isPrerelease(pkg.version)) continue;
-      fail(pkg, { reason: "stable version not on npm; in pre mode `changeset publish` would tag it beta" });
-      continue;
-    }
 
     for (let attempt = 1; mode === "post-publish" && !npm.published && attempt < attempts; attempt++) {
       log(`${id} is not on npm yet; retrying in ${retryMs / 1000}s (${attempt}/${attempts - 1}).`);
@@ -198,10 +246,14 @@ export async function check({
 
 const ADVICE = {
   "unpublished-stable":
-    "Master carries stable versions npm does not have, most likely from a stable release that pushed but did not\n" +
-    "finish publishing. A beta run would publish them under the `beta` dist-tag and leave `latest` behind, so\n" +
-    "nothing was versioned or published. Dispatch the Stable Release again: it publishes them under `latest`\n" +
-    "(and also graduates any betas merged since). For a new package, add a changeset so it gets a beta version.",
+    "Master carries stable versions npm does not have: a stable release pushed its release commit but did not finish\n" +
+    "publishing. A beta run would tag them `beta` and leave `latest` behind, so nothing was versioned or published.\n" +
+    "Dispatch the Stable Release: it publishes exactly these versions from their release commit and graduates nothing\n" +
+    "else in that run. The next push to master then resumes betas.",
+  "unfinished-stable":
+    "These stable versions are missing from npm, but cannot be finished automatically. A maintainer must check out\n" +
+    "the commit that set each version, build it, and run `changeset publish` there (no .changeset/pre.json, so the\n" +
+    "versions go to `latest`). Then dispatch the Stable Release again.",
   "pre-publish":
     "npm already has these versions, published before the commit that set them, so `changeset publish` would skip them.\n" +
     "Nothing was published. Add a changeset for each package so the next run bumps it past the stale version.",
@@ -210,23 +262,21 @@ const ADVICE = {
     "Check the publish log and `npm view <name>@<version> gitHead`.",
 };
 
-export function failureMessage(failures, mode) {
+export function failureMessage(failures, mode, problems = []) {
+  const missingOnly = mode === "unpublished-stable" || mode === "unfinished-stable";
   const lines = failures.map((failure) =>
     [
       `  ${failure.name}@${failure.version}: ${failure.reason}`,
-      ...(mode === "unpublished-stable"
-        ? []
-        : [
-            `    npm gitHead:    ${failure.gitHead ?? "(none)"}`,
-            `    version commit: ${failure.versionCommit ?? "(unknown)"}`,
-          ]),
+      ...(missingOnly ? [] : [`    npm gitHead:    ${failure.gitHead ?? "(none)"}`]),
+      `    version commit: ${failure.versionCommit ?? "(unknown)"}`,
       `    HEAD:           ${failure.head}`,
     ].join("\n"),
   );
-  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n\n${ADVICE[mode]}`;
+  const why = problems.length ? `\nWhy: ${problems.join("; ")}.\n` : "";
+  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n${why}\n${ADVICE[mode]}`;
 }
 
-function report(failures, mode) {
+function report(failures, mode, problems) {
   if (failures.length === 0) return;
   if (process.env.GITHUB_ACTIONS === "true") {
     for (const failure of failures) {
@@ -236,16 +286,29 @@ function report(failures, mode) {
       );
     }
   }
-  console.error(failureMessage(failures, mode));
+  console.error(failureMessage(failures, mode, problems));
   process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const args = process.argv.slice(2);
-  if (args.length === 1 && MODES.includes(args[0])) {
-    report(await check({ mode: args[0], repo: gitRepo() }), args[0]);
-  } else {
-    console.error(`usage: check-npm-release-provenance.mjs ${MODES.join("|")}`);
-    process.exitCode = 2;
+async function main([mode, output, ...rest]) {
+  const repo = gitRepo();
+  if (mode === "unfinished-stable" && rest.length === 0) {
+    const { missing, problems, releaseCommit } = unfinishedStableRelease({ repo });
+    if (missing.length === 0) return console.log("No stable versions are missing from npm.");
+    if (!releaseCommit) {
+      const reason = "stable version not on npm";
+      return report(missing.map((pkg) => ({ ...pkg, reason })), mode, problems);
+    }
+    for (const pkg of missing) console.log(`${pkg.name}@${pkg.version} is missing from npm; set by ${releaseCommit}.`);
+    console.log(`Finishing the stable release ${releaseCommit}; nothing new is versioned in this run.`);
+    if (output) appendFileSync(output, `sha=${releaseCommit}\n`);
+    return;
   }
+  if (MODES.includes(mode) && output === undefined) return report(await check({ mode, repo }), mode);
+  console.error(`usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>)`);
+  process.exitCode = 2;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main(process.argv.slice(2));
 }

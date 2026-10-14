@@ -71,8 +71,10 @@ jobs:
 
       # A stable release that pushed but did not finish publishing leaves
       # stable versions npm lacks. In pre mode `changeset publish` would tag
-      # them `beta`, so stop before versioning anything (TC-1095).
-      - name: Refuse to publish unfinished stable versions as beta
+      # them `beta`, and versioning could bump past them, so stop before
+      # versioning anything (TC-1095). Packages npm has never seen are new and
+      # are left to beta versioning.
+      - name: Refuse to run while a stable release is unfinished
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs unpublished-stable
 
@@ -207,17 +209,35 @@ jobs:
 
       - run: bun install
 
+      # Finish an unfinished stable release before versioning anything new
+      # (TC-1095). If a previous stable run pushed its release commit but npm
+      # lacks some of its versions, this run checks out that commit and
+      # publishes exactly those versions from it; nothing new graduates. The
+      # step fails if the missing versions do not come from one release commit.
+      - name: Find an unfinished stable release
+        id: unfinished
+        run: node .github/scripts/check-npm-release-provenance.mjs unfinished-stable "$GITHUB_OUTPUT"
+
+      - name: Check out the unfinished stable release
+        if: steps.unfinished.outputs.sha != ''
+        run: git checkout --quiet --detach "$RELEASE_SHA"
+        env:
+          RELEASE_SHA: ${{ steps.unfinished.outputs.sha }}
+
       # A package that would graduate at a higher major than it entered pre
       # mode needs a maintainer's `approve-major-release:` sign-off (TC-615).
       - name: Require sign-off for major releases
+        if: steps.unfinished.outputs.sha == ''
         run: node .github/scripts/check-major-release-signoff.mjs stable
 
       - name: Exit pre mode and version
+        if: steps.unfinished.outputs.sha == ''
         run: |
           bun changeset pre exit
           bun changeset version
 
       - name: Normalize unversioned private workspaces
+        if: steps.unfinished.outputs.sha == ''
         run: |
           node <<'NODE'
           const { execFileSync } = require('node:child_process');
@@ -262,9 +282,10 @@ jobs:
       # beta cycle, so master is never left outside pre mode. Publish from the
       # first commit: in pre mode `changeset publish` would use the beta
       # dist-tag. If the push fails, nothing is published; dispatch again.
-      # If the publish fails after the push, dispatch again too: the beta job
-      # refuses to run while master has stable versions npm lacks.
+      # If the publish fails after the push, dispatch again: the next run
+      # finishes this release first, and the beta job refuses to run until then.
       - name: Commit and push stable release
+        if: steps.unfinished.outputs.sha == ''
         id: release
         run: |
           git config user.name "github-actions[bot]"
@@ -340,7 +361,7 @@ jobs:
           bunx changeset publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
 
       - name: Confirm npm has every current version
         run: node .github/scripts/check-npm-release-provenance.mjs post-publish

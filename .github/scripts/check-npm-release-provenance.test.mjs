@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { check, failureMessage, gitRepo } from "./check-npm-release-provenance.mjs";
+import { check, failureMessage, gitRepo, unfinishedStableRelease } from "./check-npm-release-provenance.mjs";
 
 // Real git in a temporary repository; npm is always the injected `view`.
 const script = fileURLToPath(new URL("./check-npm-release-provenance.mjs", import.meta.url));
@@ -60,7 +60,8 @@ function repository(t) {
 }
 
 // `npm view` stand-in: { "name@version": gitHead | null } (null = no gitHead).
-// Versions not listed are unpublished.
+// Versions not listed are unpublished; a package exists on npm if any of its
+// versions is listed.
 function registry(entries) {
   const calls = [];
   const view = (name, version) => {
@@ -70,7 +71,8 @@ function registry(entries) {
     const value = entries[id];
     return typeof value === "function" ? value() : { published: true, gitHead: value ?? undefined };
   };
-  return { view, calls };
+  const packageExists = (name) => Object.keys(entries).some((id) => id.startsWith(`${name}@`));
+  return { view, packageExists, calls, entries };
 }
 
 const quiet = () => {};
@@ -78,7 +80,7 @@ const noSleep = () => {
   throw new Error("only post-publish waits");
 };
 const run = (r, mode, npm, options = {}) =>
-  check({ mode, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet, ...options });
+  check({ mode, repo: r.repo, view: npm.view, packageExists: npm.packageExists, sleep: noSleep, log: quiet, ...options });
 
 test("pre-publish: checks every public workspace package, publishes what npm lacks", async (t) => {
   const r = repository(t);
@@ -235,13 +237,16 @@ test("unpublished-stable: a stable release that pushed but did not publish block
   r.commit(STABLE, a("1.0.1"));
   r.commit("chore: enter beta pre-release mode [skip ci]", { ".changeset/pre.json": "{}\n" });
   r.commit(BETA, b("2.0.1-beta.0"));
-  const npm = registry({ "@x/b@2.0.0": r.released });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
   const failures = await run(r, "unpublished-stable", npm);
   assert.deepEqual(
     failures.map(({ name, version, reason }) => ({ name, version, reason })),
     [{ name: "@x/a", version: "1.0.1", reason: "stable version not on npm; in pre mode `changeset publish` would tag it beta" }],
   );
-  assert.match(failureMessage(failures, "unpublished-stable"), /Dispatch the Stable Release again/);
+  assert.match(
+    failureMessage(failures, "unpublished-stable"),
+    /Dispatch the Stable Release: it publishes exactly these versions from their release commit/,
+  );
 });
 
 test("unpublished-stable: published stable versions and unpublished betas pass", async (t) => {
@@ -249,6 +254,89 @@ test("unpublished-stable: published stable versions and unpublished betas pass",
   r.commit(BETA, a("1.0.1-beta.0"));
   const npm = registry({ "@x/b@2.0.0": r.released });
   assert.deepEqual(await run(r, "unpublished-stable", npm), []);
+});
+
+test("unpublished-stable: a new package npm has never seen is left to beta versioning", async (t) => {
+  const r = repository(t);
+  // New public package at a stable-shaped version with a pending changeset;
+  // `changeset version` will give it 0.1.1-beta.0.
+  r.commit("feat: new package", {
+    "packages/c/package.json": manifest("@x/c", "0.1.0"),
+    ".changeset/new-c.md": '---\n"@x/c": patch\n---\n\nNew.\n',
+  });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "unpublished-stable", npm), []);
+  assert.ok(npm.calls.includes("@x/c@0.1.0"));
+});
+
+test("unfinished-stable: a partial stable release is finished from its release commit before anything else", async (t) => {
+  const r = repository(t);
+  // The stable release sets a@1.0.1 (requiring exactly b@2.0.1) and b@2.0.1,
+  // pushes, and re-enters pre mode. Only a@1.0.1 reaches npm.
+  const release = r.commit(STABLE, { ...a("1.0.1", { "@x/b": "2.0.1" }), ...b("2.0.1") });
+  r.commit("chore: enter beta pre-release mode [skip ci]", { ".changeset/pre.json": '{ "mode": "pre" }\n' });
+  // A changeset for b merges before anyone notices.
+  r.commit("fix(b)", {
+    "packages/b/src/index.js": "export const b = 2;\n",
+    ".changeset/fix-b.md": '---\n"@x/b": patch\n---\n\nFix.\n',
+  });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/a@1.0.1": release, "@x/b@2.0.0": r.released });
+
+  // The beta run stops before versioning, naming the release commit.
+  const blocked = await run(r, "unpublished-stable", npm);
+  assert.deepEqual(blocked.map(({ name, version, versionCommit }) => ({ name, version, versionCommit })), [
+    { name: "@x/b", version: "2.0.1", versionCommit: release },
+  ]);
+
+  // The stable dispatch finds that release commit instead of versioning master.
+  const unfinished = unfinishedStableRelease({ repo: r.repo, view: npm.view, packageExists: npm.packageExists });
+  assert.equal(unfinished.releaseCommit, release);
+  assert.deepEqual(unfinished.problems, []);
+
+  // From the release commit, exactly b@2.0.1 is left to publish.
+  r.git("checkout", "--quiet", "--detach", release);
+  const logs = [];
+  assert.deepEqual(await run(r, "pre-publish", npm, { log: (line) => logs.push(line) }), []);
+  assert.deepEqual(logs.filter((line) => line.includes("will publish")), ["@x/b@2.0.1: not on npm; will publish from HEAD."]);
+
+  // After publishing it, the release is complete and betas resume on master.
+  const finished = registry({ ...npm.entries, "@x/b@2.0.1": release });
+  assert.deepEqual(await run(r, "post-publish", finished), []);
+  r.git("checkout", "--quiet", "master");
+  assert.deepEqual(await run(r, "unpublished-stable", finished), []);
+  assert.equal(unfinishedStableRelease({ repo: r.repo, view: finished.view, packageExists: finished.packageExists }).releaseCommit, undefined);
+});
+
+test("unfinished-stable: missing versions without one stable release commit need a maintainer", async (t) => {
+  const cases = {
+    "bumped by hand": (r) => r.commit("feat(a): bump by hand", a("1.0.1")),
+    "two commits": (r) => {
+      r.commit(STABLE, a("1.0.1"));
+      r.commit(STABLE, b("2.0.1"));
+    },
+    "pre mode": (r) => r.commit(STABLE, { ...a("1.0.1"), ".changeset/pre.json": '{ "mode": "pre" }\n' }),
+  };
+  for (const [name, setup] of Object.entries(cases)) {
+    const r = repository(t);
+    setup(r);
+    const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+    const { missing, problems, releaseCommit } = unfinishedStableRelease({
+      repo: r.repo,
+      view: npm.view,
+      packageExists: npm.packageExists,
+    });
+    assert.ok(missing.length > 0, name);
+    assert.equal(releaseCommit, undefined, name);
+    assert.equal(problems.length, 1, `${name}: ${problems.join("; ")}`);
+    assert.match(failureMessage(missing.map((pkg) => ({ ...pkg, reason: "stable version not on npm" })), "unfinished-stable", problems), /A maintainer must check out/);
+  }
+});
+
+test("unfinished-stable: nothing missing means a normal stable release", async (t) => {
+  const r = repository(t);
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  const result = unfinishedStableRelease({ repo: r.repo, view: npm.view, packageExists: npm.packageExists });
+  assert.deepEqual(result, { missing: [], problems: [] });
 });
 
 test("post-publish: versions published from HEAD pass", async (t) => {
@@ -287,9 +375,9 @@ test("post-publish: a version that never appears fails after the last attempt", 
 });
 
 test("cli: rejects an unknown mode or extra arguments", () => {
-  for (const args of [[], ["publish"], ["pre-publish", "HEAD"]]) {
+  for (const args of [[], ["publish"], ["pre-publish", "HEAD"], ["unfinished-stable", "out", "extra"]]) {
     const result = spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8" });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs unpublished-stable\|pre-publish\|post-publish/);
+    assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs unpublished-stable\|unfinished-stable\|pre-publish\|post-publish/);
   }
 });
