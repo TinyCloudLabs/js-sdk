@@ -19,6 +19,12 @@ import { invokeOperation } from "@tinycloud/operations";
 
 const PROFILE = "agent";
 const MAX_CALLBACK_BYTES = 256 * 1024;
+/**
+ * The node host hosted MCP tenants were created with until TC_HOST moved to
+ * `https://tee.node.tinycloud.xyz` (js-sdk 48eca361). Profiles keep the host
+ * they were created with, so tenants from that era still store it.
+ */
+const LEGACY_DEFAULT_NODE_HOST = "https://node.tinycloud.xyz";
 const BOOTSTRAP_PERMISSIONS: PermissionEntry[] = [
   {
     service: "tinycloud.kv",
@@ -408,7 +414,8 @@ export class RemoteTenantStore {
       sessionDid = didFromJwk(jwk);
     }
     const profilePath = this.#profilePath(stateRoot);
-    if (!(await fileExists(profilePath))) {
+    const profile = await readJson<Record<string, unknown>>(profilePath);
+    if (profile === null) {
       await secureWrite(profilePath, {
         name: PROFILE,
         host: this.#config.nodeHost,
@@ -422,6 +429,19 @@ export class RemoteTenantStore {
         authMethod: "openkey",
         openkeyHost: this.#config.openkeyHost,
       });
+    } else if (
+      typeof profile.host === "string" &&
+      profile.host.replace(/\/+$/, "") === LEGACY_DEFAULT_NODE_HOST &&
+      this.#config.nodeHost.replace(/\/+$/, "") !== LEGACY_DEFAULT_NODE_HOST
+    ) {
+      // The runtime already talks to TC_HOST, but `tinycloud.auth.import`
+      // checks the stored host, so a tenant left on the retired default
+      // refuses every authority approval. Any other stored host is a
+      // deliberate pin and keeps its DELEGATION_HOST_MISMATCH.
+      await secureWrite(profilePath, { ...profile, host: this.#config.nodeHost });
+      process.stderr.write(
+        `[tinycloud-mcp-http] tenant node host migrated: from=${LEGACY_DEFAULT_NODE_HOST} to=${new URL(this.#config.nodeHost).origin}\n`,
+      );
     }
     return { stateRoot, sessionDid, jwk };
   }
@@ -664,10 +684,6 @@ async function readJson<T>(path: string): Promise<T | null> {
     if (isRecord(error) && error.code === "ENOENT") return null;
     throw error;
   }
-}
-
-async function fileExists(path: string): Promise<boolean> {
-  return (await readJson<unknown>(path)) !== null;
 }
 
 async function reusablePending(

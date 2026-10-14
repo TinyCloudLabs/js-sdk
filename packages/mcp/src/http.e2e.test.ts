@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createServer, type Server } from "node:http";
-import { access, mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -329,6 +329,106 @@ test("a refused delegation approval names its stage, code and reason, and never 
   // The same approval, unrefused, still succeeds.
   expect(await postCallback(app, delegationUrl, approval)).toEqual({ status: 200, body: { success: true } });
 }, 60_000);
+
+test("a tenant created on the retired default node host is moved to TC_HOST, so its authority approval imports", async () => {
+  const outcome = await approveWithStoredHost("https://node.tinycloud.xyz");
+  expect(outcome.callback).toEqual({ status: 200, body: { success: true } });
+  expect(outcome.storedHost).toBe(outcome.nodeHost);
+  expect(outcome.diagnostics).toEqual([
+    `[tinycloud-mcp-http] tenant node host migrated: from=https://node.tinycloud.xyz to=${new URL(outcome.nodeHost).origin}\n`,
+  ]);
+  expect((await outcome.client.callTool({ name: "tinycloud_kv_get", arguments: outcome.kvGet })).structuredContent)
+    .toMatchObject({ status: "ok", output: { value: { name: "Ada", role: "operator" } } });
+}, 60_000);
+
+test("a tenant pinned to another node host still refuses its authority approval with DELEGATION_HOST_MISMATCH", async () => {
+  const outcome = await approveWithStoredHost("https://node.example.com");
+  expect(outcome.callback).toEqual({
+    status: 400,
+    body: {
+      error: "auth_import",
+      code: "DELEGATION_HOST_MISMATCH",
+      message: "TinyCloud could not accept this delegation.",
+    },
+  });
+  expect(outcome.storedHost).toBe("https://node.example.com");
+  expect(outcome.diagnostics).toEqual([
+    "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_HOST_MISMATCH detail=none\n",
+  ]);
+}, 60_000);
+
+/**
+ * The production shape: TC_HOST names the MCP's node, while the tenant
+ * profile on the state volume was created with `storedHost`. Runs bootstrap,
+ * a KV authority request and its signed approval callback.
+ */
+async function approveWithStoredHost(storedHost: string): Promise<{
+  nodeHost: string;
+  client: Client;
+  kvGet: Record<string, string>;
+  callback: { status: number; body: unknown };
+  storedHost: unknown;
+  diagnostics: string[];
+}> {
+  // The loopback node is outside this package's build graph, as above.
+  const hermeticModule = await import(new URL(
+    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  const previousHost = process.env.TC_HOST;
+  process.env.TC_HOST = hermetic.host;
+  resources.push(async () => {
+    if (previousHost === undefined) delete process.env.TC_HOST;
+    else process.env.TC_HOST = previousHost;
+  });
+  const { app, client, stateDir } = await startHostedMcp({
+    nodeHost: hermetic.host,
+    ownerDids: [hermetic.ownerDid],
+  });
+  const connect = await client.callTool({ name: "tinycloud_connect", arguments: {} });
+  const [tenantId] = await readdir(join(stateDir, "tenants"));
+  const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+  const profilePath = join(tenantStateRoot, ".tinycloud/profiles/agent/profile.json");
+  const created = JSON.parse(await readFile(profilePath, "utf8")) as Record<string, unknown>;
+  await writeFile(profilePath, JSON.stringify({ ...created, host: storedHost }));
+
+  const bootstrapUrl = String(record(connect.structuredContent).approvalUrl);
+  const bootstrap = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, bootstrapUrl),
+    tenantStateRoot,
+    privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await postCallback(app, bootstrapUrl, bootstrap)).toEqual({ status: 200, body: { success: true } });
+
+  const diagnostics: string[] = [];
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+    diagnostics.push(String(chunk));
+    return true;
+  });
+  resources.push(async () => stderr.mockRestore());
+  const kvGet = { space: "applications", key: "agents/demo/profile", representation: "json" };
+  const required = record((await client.callTool({ name: "tinycloud_kv_get", arguments: kvGet })).structuredContent);
+  expect(required).toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+  const delegationUrl = String(record(required.approval).url);
+  const approval = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, delegationUrl),
+    tenantStateRoot,
+    privateKey: hermetic.ownerPrivateKey,
+  });
+  const callback = await postCallback(app, delegationUrl, approval);
+  stderr.mockRestore();
+  return {
+    nodeHost: hermetic.host,
+    client,
+    kvGet,
+    callback,
+    storedHost: (JSON.parse(await readFile(profilePath, "utf8")) as Record<string, unknown>).host,
+    diagnostics: diagnostics.filter((line) => line.startsWith("[tinycloud-mcp-http]")),
+  };
+}
 
 interface HermeticNode {
   readonly host: string;
