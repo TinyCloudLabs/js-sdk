@@ -243,9 +243,11 @@ export async function check({
   view = npmView,
   packageExists = npmPackageExists,
   sleep = (ms) => delay(ms),
-  // npm can take minutes to show a fresh version (the first serialised run saw cli lag past 50 s): poll up to ~5 min.
-  attempts = 31,
-  retryMs = 10_000,
+  // npm's index can lag a successful publish by many minutes (web-sdk 3.2.5 showed up after ~17 min, TC-1155).
+  // Poll with backoff (10 s doubling, capped at 2 min) within one 30-minute budget shared by every package.
+  waitMs = 30 * 60_000,
+  firstRetryMs = 10_000,
+  maxRetryMs = 120_000,
   log = console.log,
 }) {
   const head = repo.revParse("HEAD");
@@ -267,12 +269,15 @@ export async function check({
     return registry.get(id);
   };
 
+  let waited = 0;
   for (const pkg of packages) {
     const id = `${pkg.name}@${pkg.version}`;
     let npm = lookup(pkg.name, pkg.version);
-    for (let attempt = 1; mode === "post-publish" && !npm.published && attempt < attempts; attempt++) {
-      log(`${id} is not on npm yet; retrying in ${retryMs / 1000}s (${attempt}/${attempts - 1}).`);
-      await sleep(retryMs);
+    for (let retryMs = firstRetryMs; mode === "post-publish" && !npm.published && waited < waitMs; retryMs *= 2) {
+      const wait = Math.min(retryMs, maxRetryMs, waitMs - waited);
+      log(`${id} is not on npm yet; retrying in ${Math.round(wait / 1000)}s (${Math.round(waited / 1000)}s of ${waitMs / 1000}s waited).`);
+      await sleep(wait);
+      waited += wait;
       npm = view(pkg.name, pkg.version);
       registry.set(id, npm);
     }
