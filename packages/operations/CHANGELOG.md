@@ -1,5 +1,19 @@
 # @tinycloud/operations
 
+## 0.6.0
+
+### Minor Changes
+
+- 527c91b: Add hosted personal-record queries through the optional fast, searchable copy. Check stale markers and KV/copy counts, rebuild kinds in byte-bounded sequential chunks, and resume remaining kinds with COPY_PARTIAL. Sync completed record writes and move steps without hiding their outcomes; mark kinds stale when upkeep cannot finish. A quarantined database returns nonretryable copy_unavailable for node-team repair. Ship the full pinned tc-apps rules and final hosted-tool documentation.
+- cfc9d1b: Add hosted personal-record context, batch reads and ordered conditional writes using the tc-apps catalog and CLI-compatible JSON bytes. Preserve ETags and partial move outcomes, enforce the default-space prefix, and generate guidance from a pinned published skill. Hosted results are readable in text-only MCP clients; secrets remain structured-only and large writes retain every outcome. Request 30-day grants with 15-minute approval links, recover expired sessions through OpenKey, and log only tool, outcome, duration and replayed-grant count.
+
+### Patch Changes
+
+- Updated dependencies [0b02662]
+  - @tinycloud/sdk-services@3.2.5
+  - @tinycloud/node-sdk@3.2.5
+  - @tinycloud/sdk-core@3.2.5
+
 ## 0.6.0-beta.2
 
 ### Minor Changes
