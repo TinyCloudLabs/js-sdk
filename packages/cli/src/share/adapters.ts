@@ -331,6 +331,8 @@ export function createShareAuthorityAdapters(input: {
   readonly deliver?: ShareDeliveryAdapter["deliver"];
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
   readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
+  /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
+  readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -793,15 +795,19 @@ export function createShareAuthorityAdapters(input: {
   };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
     const { TinyCloudNode } = await import("@tinycloud/node-sdk");
+    const sharing = input.nativeSharing ?? ((host: string | undefined) => new TinyCloudNode({ ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false }).sharing);
     const token = parseNativeShareUrl(link);
-    const decoder = new TinyCloudNode({ autoDiscoverLocalNode: false });
-    const decoded = decoder.sharing.decodeLink(token) as { readonly host?: unknown };
+    const decoded = sharing(undefined).decodeLink(token) as { readonly host?: unknown };
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const client = new TinyCloudNode({ host: canonicalOrigin(decoded.host, "owner node origin"), autoDiscoverLocalNode: false });
-    const received = await client.sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const received = await sharing(canonicalOrigin(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const value = received.ok ? await received.data.kv.get<Uint8Array>("", { binary: true }) : undefined;
+    // The owner Node answers a revoked link's read with `401 - delegation-revoked: <cid>`.
+    const failure = !received.ok ? received.error : value !== undefined && !value.ok ? value.error : undefined;
+    if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
+      throw new CLIError("SHARE_REVOKED", "This share link has been revoked by its sender.", ExitCode.NOT_FOUND);
+    }
     if (!received.ok) throw new Error("native share could not be verified");
-    const value = await received.data.kv.get<Uint8Array>("", { binary: true });
-    if (!value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
+    if (value === undefined || !value.ok || !(value.data.data instanceof Uint8Array)) throw new Error("native share content could not be read");
     return { bytes: value.data.data.slice(), filename: received.data.path.split("/").at(-1) || "share.md" };
   };
   return {
