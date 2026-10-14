@@ -19,9 +19,16 @@ const env = {
   GIT_COMMITTER_EMAIL: "test@example.com",
 };
 
+const BETA = "chore: beta version packages [skip ci]";
+const STABLE = "chore: release stable packages [skip ci]";
+
 const manifest = (name, version, extra = {}) =>
   `${JSON.stringify({ name, version, ...extra }, null, 2)}\n`;
-const root = `${JSON.stringify({ name: "root", private: true, workspaces: ["packages/a", "packages/b", "apps/*"] }, null, 2)}\n`;
+const root = `${JSON.stringify({ name: "root", private: true, workspaces: ["packages/*", "apps/*"] }, null, 2)}\n`;
+const a = (version, deps = { "@x/b": "2.0.0" }) => ({
+  "packages/a/package.json": manifest("@x/a", version, { dependencies: deps }),
+});
+const b = (version) => ({ "packages/b/package.json": manifest("@x/b", version) });
 
 function repository(t) {
   const dir = mkdtempSync(join(tmpdir(), "release-provenance-"));
@@ -39,20 +46,21 @@ function repository(t) {
     git("commit", "--quiet", "--allow-empty", "-m", message);
     return git("rev-parse", "HEAD");
   };
-  const base = commit("base", {
+  // The commit that set a@1.0.0 and b@2.0.0.
+  const released = commit("initial release", {
     "package.json": root,
-    "packages/a/package.json": manifest("@x/a", "1.0.0-beta.0", { dependencies: { "@x/b": "2.0.0-beta.0" } }),
+    ...a("1.0.0"),
     "packages/a/src/index.js": "export const a = 1;\n",
-    "packages/a/CHANGELOG.md": "# @x/a\n",
-    "packages/b/package.json": manifest("@x/b", "2.0.0-beta.0"),
+    ...b("2.0.0"),
     "packages/b/src/index.js": "export const b = 1;\n",
     "apps/demo/package.json": manifest("@x/demo", "0.0.1", { private: true }),
     "fixtures/pkg/package.json": manifest("@x/fixture", "9.9.9"),
   });
-  return { dir, git, commit, base, repo: gitRepo(dir) };
+  return { dir, git, commit, released, repo: gitRepo(dir) };
 }
 
 // `npm view` stand-in: { "name@version": gitHead | null } (null = no gitHead).
+// Versions not listed are unpublished.
 function registry(entries) {
   const calls = [];
   const view = (name, version) => {
@@ -67,197 +75,221 @@ function registry(entries) {
 
 const quiet = () => {};
 const noSleep = () => {
-  throw new Error("pre-publish must not wait");
+  throw new Error("only post-publish waits");
 };
+const run = (r, mode, npm, options = {}) =>
+  check({ mode, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet, ...options });
 
-// Version commit for @x/a only, with the edits `changeset version` makes.
-const bumpA = (version, extra = {}) => ({
-  "packages/a/package.json": manifest("@x/a", version, { dependencies: { "@x/b": "2.0.0-beta.0" }, ...extra }),
-  "packages/a/CHANGELOG.md": `# @x/a\n\n## ${version}\n`,
+test("pre-publish: checks every public workspace package, publishes what npm lacks", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, { ...a("1.0.1-beta.0") });
+  const npm = registry({ "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "pre-publish", npm), []);
+  // Private workspaces and package.json files outside the workspaces are skipped.
+  assert.deepEqual(npm.calls.sort(), ["@x/a@1.0.1-beta.0", "@x/b@2.0.0"]);
 });
 
-test("pre-publish: a bumped version npm does not have yet passes", async (t) => {
+test("pre-publish: npm's copy from the version commit, or a later commit, passes", async (t) => {
   const r = repository(t);
-  r.commit("version", bumpA("1.0.0-beta.1"));
-  const npm = registry({});
-  const failures = await check({ mode: "pre-publish", base: r.base, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
-  assert.deepEqual(failures, []);
-  assert.deepEqual(npm.calls, ["@x/a@1.0.0-beta.1"]);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  // Code merged without a changeset, and a package.json edit that keeps the
+  // version, neither move the version commit nor fail the check.
+  const later = r.commit("feat(a): no changeset", { "packages/a/src/index.js": "export const a = 2;\n" });
+  r.commit("chore(a): add a script", a("1.0.1-beta.0", { "@x/b": "2.0.0", "left-pad": "^1.0.0" }));
+  for (const gitHead of [version, later]) {
+    const npm = registry({ "@x/a@1.0.1-beta.0": gitHead, "@x/b@2.0.0": r.released });
+    assert.deepEqual(await run(r, "pre-publish", npm), [], gitHead);
+  }
 });
 
-test("pre-publish: only packages bumped in this run are checked", async (t) => {
+test("pre-publish: the old workflow's publish from the version commit's parent passes", async (t) => {
   const r = repository(t);
-  // b, the private app and the fixture all exist on npm from unrelated commits.
-  r.commit("feat: change b without a changeset", { "packages/b/src/index.js": "export const b = 2;\n" });
-  const npm = registry({ "@x/b@2.0.0-beta.0": "f".repeat(40), "@x/fixture@9.9.9": null });
-  const failures = await check({ mode: "pre-publish", base: r.base, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
-  assert.deepEqual(failures, []);
-  assert.deepEqual(npm.calls, []);
+  const trigger = r.commit("fix(a)", { "packages/a/src/index.js": "export const a = 2;\n" });
+  r.commit(BETA, a("1.0.1-beta.0"));
+  const logs = [];
+  const npm = registry({ "@x/a@1.0.1-beta.0": trigger, "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "pre-publish", npm, { log: (line) => logs.push(line) }), []);
+  assert.ok(
+    logs.includes(`@x/a@1.0.1-beta.0: published by the pre-TC-1095 workflow from its version commit's parent (gitHead ${trigger}).`),
+    logs.join("\n"),
+  );
+});
+
+test("pre-publish: the parent rule applies only to release-workflow version commits", async (t) => {
+  const r = repository(t);
+  const before = r.commit("fix(a)", { "packages/a/src/index.js": "export const a = 2;\n" });
+  r.commit("feat(a): bump the version by hand", a("1.0.1"));
+  const npm = registry({ "@x/a@1.0.1": before, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "pre-publish", npm);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].reason, "published from a commit before its version commit landed");
 });
 
 test("pre-publish: the 2026-10-14 scenario fails loudly", async (t) => {
   const r = repository(t);
-  // A cancelled run published @x/a@1.0.0-beta.1 from `published`, and its
-  // version commit never landed. Another PR then changed a, and this run's
-  // version commit computed the same number.
+  // A cancelled run published a@1.0.1-beta.0 from `published`; its version
+  // commit never landed. Another PR changed a, and the next version commit
+  // computed the same number.
   const published = r.git("rev-parse", "HEAD");
-  const trigger = r.commit("fix(a): later PR", { "packages/a/src/index.js": "export const a = 2;\n" });
-  const head = r.commit("version", bumpA("1.0.0-beta.1"));
-  const npm = registry({ "@x/a@1.0.0-beta.1": published });
-  const failures = await check({ mode: "pre-publish", base: trigger, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
+  r.commit("fix(a): later PR", { "packages/a/src/index.js": "export const a = 2;\n" });
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/a@1.0.1-beta.0": published, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "pre-publish", npm);
   assert.equal(failures.length, 1);
   assert.deepEqual(
-    { name: failures[0].name, version: failures[0].version, gitHead: failures[0].gitHead, head: failures[0].head },
-    { name: "@x/a", version: "1.0.0-beta.1", gitHead: published, head },
+    { ...failures[0] },
+    {
+      name: "@x/a",
+      version: "1.0.1-beta.0",
+      dir: "packages/a",
+      head: version,
+      gitHead: published,
+      versionCommit: version,
+      reason: "published from a commit before its version commit landed",
+    },
   );
-  assert.match(failures[0].reason, /packages\/a changed since npm's gitHead: packages\/a\/src\/index\.js/);
-
   const message = failureMessage(failures, "pre-publish");
-  assert.match(message, /@x\/a@1\.0\.0-beta\.1/);
-  assert.match(message, new RegExp(`npm gitHead: ${published}`));
-  assert.match(message, new RegExp(`HEAD: +${head}`));
-  assert.match(message, /Nothing was published/);
+  assert.match(message, /@x\/a@1\.0\.1-beta\.0: published from a commit before its version commit landed/);
+  assert.match(message, new RegExp(`npm gitHead: +${published}`));
+  assert.match(message, new RegExp(`version commit: +${version}`));
+  assert.match(message, new RegExp(`HEAD: +${version}`));
+  assert.match(message, /Nothing was published\. Add a changeset/);
 });
 
-test("pre-publish: a gitHead that is not an ancestor of HEAD fails", async (t) => {
+test("pre-publish: a rejected version stays rejected on the next run that bumps nothing", async (t) => {
+  const r = repository(t);
+  const published = r.git("rev-parse", "HEAD");
+  r.commit("fix(a)", { "packages/a/src/index.js": "export const a = 2;\n" });
+  r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/a@1.0.1-beta.0": published, "@x/b@2.0.0": r.released });
+  assert.equal((await run(r, "pre-publish", npm)).length, 1);
+
+  // Next push: an unrelated change, no version commit.
+  r.commit("docs: readme", { "README.md": "hi\n" });
+  const next = registry({ "@x/a@1.0.1-beta.0": published, "@x/b@2.0.0": r.released });
+  assert.equal((await run(r, "pre-publish", next)).length, 1);
+  assert.equal((await run(r, "post-publish", next)).length, 1);
+  assert.ok(next.calls.includes("@x/a@1.0.1-beta.0"));
+});
+
+test("pre-publish: an internal dependency change alone is not treated as equivalent", async (t) => {
+  const r = repository(t);
+  // npm's a@1.0.1-beta.0 was built while a still required b@2.0.0; the
+  // version commit requires b@2.0.1-beta.0. a's own files are unchanged.
+  r.commit("docs: readme", { "README.md": "hi\n" });
+  r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.1-beta.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": r.released });
+  const failures = await run(r, "pre-publish", npm);
+  assert.deepEqual(failures.map((failure) => failure.name), ["@x/a"]);
+});
+
+test("pre-publish: a change only in bundled sibling source is not treated as equivalent", async (t) => {
+  const r = repository(t);
+  // a bundles b's source (like operations bundling sdk-core). Only b/src changed.
+  const published = r.git("rev-parse", "HEAD");
+  r.commit("fix(b): bundled into a", { "packages/b/src/index.js": "export const b = 2;\n" });
+  r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/a@1.0.1-beta.0": published, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "pre-publish", npm);
+  assert.deepEqual(failures.map((failure) => failure.name), ["@x/a"]);
+});
+
+test("pre-publish: a gitHead outside HEAD's history fails", async (t) => {
   const r = repository(t);
   r.git("checkout", "--quiet", "-b", "abandoned");
-  const abandoned = r.commit("version on a branch that never landed", bumpA("1.0.0-beta.1"));
+  const abandoned = r.commit(BETA, { ...a("1.0.1-beta.0"), "packages/a/src/index.js": "export const a = 3;\n" });
   r.git("checkout", "--quiet", "master");
-  r.commit("version", bumpA("1.0.0-beta.1"));
+  r.commit(BETA, a("1.0.1-beta.0"));
   for (const gitHead of [abandoned, "0123456789abcdef0123456789abcdef01234567"]) {
-    const npm = registry({ "@x/a@1.0.0-beta.1": gitHead });
-    const failures = await check({ mode: "pre-publish", base: r.base, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
+    const npm = registry({ "@x/a@1.0.1-beta.0": gitHead, "@x/b@2.0.0": r.released });
+    const failures = await run(r, "pre-publish", npm);
     assert.equal(failures.length, 1, gitHead);
-    assert.equal(failures[0].reason, "npm's gitHead is not an ancestor of HEAD");
+    assert.equal(failures[0].reason, "npm's gitHead is not in HEAD's history");
   }
-});
-
-test("pre-publish: unchanged since an ancestor gitHead allows the skip", async (t) => {
-  const r = repository(t);
-  // Old ordering: npm's copy came from the trigger commit, built with the
-  // bumped versions in an uncommitted tree. Only CHANGELOG.md and version
-  // numbers (own and internal dependencies) differ.
-  r.commit("unrelated change outside a", { "README.md": "hi\n" });
-  const published = r.git("rev-parse", "HEAD");
-  r.commit("version", {
-    ...bumpA("1.0.0-beta.1", { dependencies: { "@x/b": "2.0.0-beta.1" } }),
-    "packages/b/package.json": manifest("@x/b", "2.0.0-beta.1"),
-  });
-  const logs = [];
-  const npm = registry({ "@x/a@1.0.0-beta.1": published });
-  const failures = await check({
-    mode: "pre-publish",
-    base: published,
-    repo: r.repo,
-    view: npm.view,
-    sleep: noSleep,
-    log: (line) => logs.push(line),
-  });
-  assert.deepEqual(failures, []);
-  assert.deepEqual(npm.calls.sort(), ["@x/a@1.0.0-beta.1", "@x/b@2.0.0-beta.1"]);
-  assert.ok(logs.includes(`@x/a@1.0.0-beta.1: on npm, unchanged since npm's gitHead ${published}.`), logs.join("\n"));
-});
-
-test("pre-publish: a package.json change beyond version numbers fails", async (t) => {
-  const r = repository(t);
-  r.commit("feat(a): new dependency", {
-    "packages/a/package.json": manifest("@x/a", "1.0.0-beta.0", {
-      dependencies: { "@x/b": "2.0.0-beta.0", "left-pad": "^1.0.0" },
-    }),
-  });
-  r.commit("version", bumpA("1.0.0-beta.1", { dependencies: { "@x/b": "2.0.0-beta.0", "left-pad": "^1.0.0" } }));
-  const npm = registry({ "@x/a@1.0.0-beta.1": r.base });
-  const failures = await check({ mode: "pre-publish", base: "HEAD^", repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].reason, "packages/a/package.json changed since npm's gitHead beyond version numbers");
 });
 
 test("pre-publish: a published version with no gitHead fails", async (t) => {
   const r = repository(t);
-  r.commit("version", bumpA("1.0.0-beta.1"));
-  const npm = registry({ "@x/a@1.0.0-beta.1": null });
-  const failures = await check({ mode: "pre-publish", base: r.base, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
+  const npm = registry({ "@x/a@1.0.0": null, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "pre-publish", npm);
   assert.equal(failures.length, 1);
   assert.equal(failures[0].reason, "npm records no gitHead for this version");
-  assert.match(failureMessage(failures, "pre-publish"), /npm gitHead: \(none\)/);
+  assert.match(failureMessage(failures, "pre-publish"), /npm gitHead: +\(none\)/);
 });
 
-test("pre-publish: no version change means nothing to check", async (t) => {
+test("pre-publish: the version commit is found through merge commits on the first-parent line", async (t) => {
   const r = repository(t);
-  const npm = registry({});
-  const failures = await check({ mode: "pre-publish", base: "HEAD", repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
-  assert.deepEqual(failures, []);
-  assert.deepEqual(npm.calls, []);
+  r.git("checkout", "--quiet", "-b", "feature");
+  r.commit("feat(a)", { "packages/a/src/index.js": "export const a = 2;\n" });
+  r.git("checkout", "--quiet", "master");
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  r.git("merge", "--quiet", "--no-ff", "--no-edit", "feature");
+  const npm = registry({ "@x/a@1.0.1-beta.0": version, "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "pre-publish", npm), []);
+});
+
+test("unpublished-stable: a stable release that pushed but did not publish blocks the next beta", async (t) => {
+  const r = repository(t);
+  // Stable release graduates a to 1.0.1 and re-enters pre mode; npm never got
+  // a@1.0.1. An unrelated beta for b is then versioned.
+  r.commit(STABLE, a("1.0.1"));
+  r.commit("chore: enter beta pre-release mode [skip ci]", { ".changeset/pre.json": "{}\n" });
+  r.commit(BETA, b("2.0.1-beta.0"));
+  const npm = registry({ "@x/b@2.0.0": r.released });
+  const failures = await run(r, "unpublished-stable", npm);
+  assert.deepEqual(
+    failures.map(({ name, version, reason }) => ({ name, version, reason })),
+    [{ name: "@x/a", version: "1.0.1", reason: "stable version not on npm; in pre mode `changeset publish` would tag it beta" }],
+  );
+  assert.match(failureMessage(failures, "unpublished-stable"), /Dispatch the Stable Release again/);
+});
+
+test("unpublished-stable: published stable versions and unpublished betas pass", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "unpublished-stable", npm), []);
 });
 
 test("post-publish: versions published from HEAD pass", async (t) => {
   const r = repository(t);
-  const head = r.commit("version", bumpA("1.0.0-beta.1"));
-  const npm = registry({ "@x/a@1.0.0-beta.1": head });
-  const failures = await check({ mode: "post-publish", base: r.base, repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
-  assert.deepEqual(failures, []);
+  const head = r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/a@1.0.1-beta.0": head, "@x/b@2.0.0": r.released });
+  assert.deepEqual(await run(r, "post-publish", npm), []);
 });
 
 test("post-publish: waits out registry lag with bounded retries", async (t) => {
   const r = repository(t);
-  const head = r.commit("version", bumpA("1.0.0-beta.1"));
+  const head = r.commit(BETA, a("1.0.1-beta.0"));
   let views = 0;
   const npm = registry({
-    "@x/a@1.0.0-beta.1": () => (++views < 3 ? { published: false } : { published: true, gitHead: head }),
+    "@x/a@1.0.1-beta.0": () => (++views < 3 ? { published: false } : { published: true, gitHead: head }),
+    "@x/b@2.0.0": r.released,
   });
   const waits = [];
-  const failures = await check({
-    mode: "post-publish",
-    base: r.base,
-    repo: r.repo,
-    view: npm.view,
-    sleep: async (ms) => waits.push(ms),
-    attempts: 4,
-    retryMs: 5,
-    log: quiet,
-  });
-  assert.deepEqual(failures, []);
+  const sleep = async (ms) => waits.push(ms);
+  assert.deepEqual(await run(r, "post-publish", npm, { sleep, attempts: 4, retryMs: 5 }), []);
   assert.deepEqual(waits, [5, 5]);
 });
 
 test("post-publish: a version that never appears fails after the last attempt", async (t) => {
   const r = repository(t);
-  const head = r.commit("version", bumpA("1.0.0-beta.1"));
-  const npm = registry({});
+  const head = r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/b@2.0.0": r.released });
   const waits = [];
-  const failures = await check({
-    mode: "post-publish",
-    base: r.base,
-    repo: r.repo,
-    view: npm.view,
-    sleep: async (ms) => waits.push(ms),
-    attempts: 3,
-    retryMs: 5,
-    log: quiet,
-  });
-  assert.equal(npm.calls.length, 3);
+  const sleep = async (ms) => waits.push(ms);
+  const failures = await run(r, "post-publish", npm, { sleep, attempts: 3, retryMs: 5 });
+  assert.equal(npm.calls.filter((id) => id === "@x/a@1.0.1-beta.0").length, 3);
   assert.deepEqual(waits, [5, 5]);
   assert.deepEqual(failures, [
-    { name: "@x/a", version: "1.0.0-beta.1", dir: "packages/a", gitHead: undefined, head, reason: "not on npm after publish" },
+    { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a", head, reason: "not on npm after publish" },
   ]);
 });
 
-test("post-publish: a version npm holds from other code fails", async (t) => {
-  const r = repository(t);
-  const published = r.git("rev-parse", "HEAD");
-  r.commit("fix(a)", { "packages/a/src/index.js": "export const a = 3;\n" });
-  r.commit("version", bumpA("1.0.0-beta.1"));
-  const npm = registry({ "@x/a@1.0.0-beta.1": published });
-  const failures = await check({ mode: "post-publish", base: "HEAD^", repo: r.repo, view: npm.view, sleep: noSleep, log: quiet });
-  assert.equal(failures.length, 1);
-  assert.match(failures[0].reason, /changed since npm's gitHead/);
-});
-
-test("cli: rejects an unknown mode or missing base", () => {
-  for (const args of [[], ["pre-publish"], ["publish", "HEAD"]]) {
+test("cli: rejects an unknown mode or extra arguments", () => {
+  for (const args of [[], ["publish"], ["pre-publish", "HEAD"]]) {
     const result = spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8" });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs/);
+    assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs unpublished-stable\|pre-publish\|post-publish/);
   }
 });

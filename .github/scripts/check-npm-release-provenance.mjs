@@ -2,35 +2,46 @@
 // Release provenance guard (TC-1095).
 //
 // The Release workflow pushes its version commit to master and then publishes
-// from that commit. `changeset publish` skips every `name@version` that npm
-// already has, and the skip is silent. On 2026-10-14 a cancelled run had
-// published @tinycloud/mcp, cli, operations and courier from b6038b10. The next
-// version commit (1a4993c3) gave newer code the same version numbers, and the
-// publish skipped them, so npm's builds lacked #528 and #530.
+// from that commit. `changeset publish` publishes every public workspace
+// version npm lacks and silently skips every version npm already has. On
+// 2026-10-14 a cancelled run had published @tinycloud/mcp, cli, operations and
+// courier from b6038b10 before its version commit landed. The next version
+// commit (1a4993c3) gave newer code the same numbers, and the publish skipped
+// them, so npm's builds lacked #528 and #530.
 //
-// Both modes run from the checked-out version commit (HEAD) and look only at
-// public workspace packages whose version differs between <base> and HEAD:
-// the packages this run is meant to publish.
+// The rule: npm's copy of name@version must be published from the commit that
+// set that version in package.json (its "version commit", found on HEAD's
+// first-parent history) or from a later commit on that history. A copy
+// published earlier was built before the version existed on master, which is
+// exactly the cancelled-run failure. The check compares commits, not files, so
+// changes merged without a changeset never trip it, and bundled sources outside
+// the package directory or changed dependency versions cannot slip past it.
 //
-//   pre-publish <base>   If npm already has name@version, fail unless npm's
-//                        gitHead is HEAD, or is an ancestor of HEAD and the
-//                        package directory has not changed since (ignoring
-//                        CHANGELOG.md and version numbers in package.json).
-//                        Otherwise `changeset publish` may skip it.
-//   post-publish <base>  Each package must now be on npm, published from HEAD
-//                        or passing the pre-publish check. Retries while the
-//                        registry catches up.
+// The release workflow before TC-1095 published from the version commit's
+// parent, with the version bump uncommitted, then committed that same tree. A
+// gitHead equal to the parent of a release-workflow version commit is accepted
+// for those older versions.
+//
+// Modes, run on the checked-out commit (HEAD), over every public workspace
+// package:
+//
+//   unpublished-stable  Before a beta run versions anything: fail when a
+//                       non-prerelease version is missing from npm. In pre mode
+//                       `changeset publish` would publish it under the `beta`
+//                       dist-tag, leaving `latest` behind. This is what a stable
+//                       release that pushed but did not finish publishing
+//                       leaves behind.
+//   pre-publish         Every version npm already has must pass the rule above.
+//                       Versions npm lacks are about to be published from HEAD.
+//   post-publish        Every version must now be on npm and pass the rule.
+//                       Retries while the registry catches up.
 
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const DEPENDENCY_FIELDS = [
-  "dependencies",
-  "devDependencies",
-  "peerDependencies",
-  "optionalDependencies",
-];
+const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
+const MODES = ["unpublished-stable", "pre-publish", "post-publish"];
 
 function parseJson(source) {
   if (source === undefined) return undefined;
@@ -39,6 +50,10 @@ function parseJson(source) {
   } catch {
     return undefined;
   }
+}
+
+function lines(output) {
+  return output ? output.split("\n").filter(Boolean) : [];
 }
 
 export function gitRepo(cwd = process.cwd()) {
@@ -51,11 +66,18 @@ export function gitRepo(cwd = process.cwd()) {
   };
   return {
     revParse: (rev) => ok(["rev-parse", "--verify", `${rev}^{commit}`]),
+    parent(rev) {
+      const result = run(["rev-parse", "--verify", "--quiet", `${rev}^1`]);
+      return result.status === 0 ? result.stdout.trim() : undefined;
+    },
+    subject: (rev) => ok(["log", "-1", "--format=%s", rev]),
     show(rev, path) {
       const result = run(["show", `${rev}:${path}`]);
       return result.status === 0 ? result.stdout : undefined;
     },
-    files: (rev) => ok(["ls-tree", "-r", "--name-only", rev]).split("\n").filter(Boolean),
+    files: (rev) => lines(ok(["ls-tree", "-r", "--name-only", rev])),
+    // First-parent commits reachable from `rev` that changed `path`, newest first.
+    history: (rev, path) => lines(ok(["log", "--first-parent", "--format=%H", rev, "--", path])),
     isAncestor(ancestor, rev) {
       if (run(["cat-file", "-e", `${ancestor}^{commit}`]).status !== 0) return false;
       const result = run(["merge-base", "--is-ancestor", ancestor, rev]);
@@ -63,19 +85,6 @@ export function gitRepo(cwd = process.cwd()) {
       if (result.status === 1) return false;
       throw new Error(`git merge-base --is-ancestor ${ancestor} ${rev} failed: ${result.stderr.trim()}`);
     },
-    changedFiles: (from, to, dir) =>
-      ok([
-        "diff",
-        "--name-only",
-        from,
-        to,
-        "--",
-        dir,
-        `:(exclude)${dir}/CHANGELOG.md`,
-        `:(exclude)${dir}/package.json`,
-      ])
-        .split("\n")
-        .filter(Boolean),
   };
 }
 
@@ -101,7 +110,8 @@ function matchesWorkspace(pattern, dir) {
   return new RegExp(`^${escaped.join("[^/]+")}$`).test(dir);
 }
 
-export function workspacePackages(repo, rev) {
+// Public workspace packages at `rev`: { name, version, dir }.
+export function publicPackages(repo, rev) {
   const root = parseJson(repo.show(rev, "package.json")) ?? {};
   const patterns = Array.isArray(root.workspaces) ? root.workspaces : root.workspaces?.packages ?? [];
   return repo
@@ -110,61 +120,43 @@ export function workspacePackages(repo, rev) {
     .map((path) => path.slice(0, -"/package.json".length))
     .filter((dir) => patterns.some((pattern) => matchesWorkspace(pattern, dir)))
     .map((dir) => ({ dir, manifest: parseJson(repo.show(rev, `${dir}/package.json`)) }))
-    .filter(({ manifest }) => manifest?.name);
-}
-
-// Public workspace packages whose version at `head` differs from `base`.
-export function bumpedPackages(repo, base, head) {
-  const workspaces = workspacePackages(repo, head);
-  return workspaces
-    .filter(({ manifest }) => manifest.private !== true && manifest.version)
-    .filter(({ dir, manifest }) => {
-      const before = parseJson(repo.show(base, `${dir}/package.json`));
-      return before?.version !== manifest.version;
-    })
+    .filter(({ manifest }) => manifest?.name && manifest.version && manifest.private !== true)
     .map(({ dir, manifest }) => ({ name: manifest.name, version: manifest.version, dir }));
 }
 
-// package.json without the numbers `changeset version` rewrites: the package's
-// own version and the versions of internal dependencies.
-function comparableManifest(source, internal) {
-  const manifest = parseJson(source);
-  if (!manifest) return undefined;
-  delete manifest.version;
-  for (const field of DEPENDENCY_FIELDS) {
-    for (const name of Object.keys(manifest[field] ?? {})) {
-      if (internal.has(name)) manifest[field][name] = "<workspace>";
-    }
-  }
-  return JSON.stringify(manifest);
+function isPrerelease(version) {
+  return version.split("+")[0].includes("-");
 }
 
-// Is the package at `head` the same build input as npm's copy from `gitHead`?
-export function provenance({ pkg, gitHead, head, repo, internal }) {
-  if (!gitHead) return { ok: false, reason: "npm records no gitHead for this version" };
-  if (gitHead === head) return { ok: true, reason: "published from HEAD" };
-  if (!repo.isAncestor(gitHead, head)) {
-    return { ok: false, reason: "npm's gitHead is not an ancestor of HEAD" };
+// The first-parent commit that set `dir`'s package.json to its version at `head`.
+export function versionCommit(repo, head, pkg) {
+  for (const commit of repo.history(head, `${pkg.dir}/package.json`)) {
+    const parent = repo.parent(commit);
+    const before = parent && parseJson(repo.show(parent, `${pkg.dir}/package.json`))?.version;
+    if (before !== pkg.version) return commit;
   }
-  const changed = repo.changedFiles(gitHead, head, pkg.dir);
-  if (changed.length) {
-    const shown = changed.slice(0, 10).join(", ");
-    const more = changed.length > 10 ? ` and ${changed.length - 10} more` : "";
-    return { ok: false, reason: `${pkg.dir} changed since npm's gitHead: ${shown}${more}` };
+  return undefined;
+}
+
+// Was npm's copy (built from `gitHead`) published from this version's commit
+// or a later one on HEAD's history?
+export function provenance({ pkg, gitHead, head, repo }) {
+  const version = versionCommit(repo, head, pkg);
+  const verdict = (ok, reason) => ({ ok, reason, versionCommit: version });
+  if (!gitHead) return verdict(false, "npm records no gitHead for this version");
+  if (!repo.isAncestor(gitHead, head)) return verdict(false, "npm's gitHead is not in HEAD's history");
+  if (!version) return verdict(false, `no commit on HEAD's first-parent history sets ${pkg.dir}/package.json to ${pkg.version}`);
+  if (repo.isAncestor(version, gitHead)) {
+    return verdict(true, gitHead === version ? "published from its version commit" : "published after its version commit");
   }
-  const path = `${pkg.dir}/package.json`;
-  if (
-    comparableManifest(repo.show(gitHead, path), internal) !==
-    comparableManifest(repo.show(head, path), internal)
-  ) {
-    return { ok: false, reason: `${path} changed since npm's gitHead beyond version numbers` };
+  if (gitHead === repo.parent(version) && RELEASE_COMMIT.test(repo.subject(version))) {
+    return verdict(true, "published by the pre-TC-1095 workflow from its version commit's parent");
   }
-  return { ok: true, reason: `unchanged since npm's gitHead ${gitHead}` };
+  return verdict(false, "published from a commit before its version commit landed");
 }
 
 export async function check({
   mode,
-  base,
   repo,
   view = npmView,
   sleep = (ms) => delay(ms),
@@ -173,49 +165,65 @@ export async function check({
   log = console.log,
 }) {
   const head = repo.revParse("HEAD");
-  const baseSha = repo.revParse(base);
-  const internal = new Set(workspacePackages(repo, head).map(({ manifest }) => manifest.name));
-  const packages = bumpedPackages(repo, baseSha, head);
   const failures = [];
+  const fail = (pkg, fields) => failures.push({ ...pkg, head, ...fields });
 
-  if (packages.length === 0) log(`No package versions changed between ${baseSha} and HEAD ${head}.`);
-
-  for (const pkg of packages) {
+  for (const pkg of publicPackages(repo, head)) {
     const id = `${pkg.name}@${pkg.version}`;
     let npm = view(pkg.name, pkg.version);
+
+    if (mode === "unpublished-stable") {
+      if (npm.published || isPrerelease(pkg.version)) continue;
+      fail(pkg, { reason: "stable version not on npm; in pre mode `changeset publish` would tag it beta" });
+      continue;
+    }
+
     for (let attempt = 1; mode === "post-publish" && !npm.published && attempt < attempts; attempt++) {
       log(`${id} is not on npm yet; retrying in ${retryMs / 1000}s (${attempt}/${attempts - 1}).`);
       await sleep(retryMs);
       npm = view(pkg.name, pkg.version);
     }
-
     if (!npm.published) {
-      if (mode === "pre-publish") log(`${id}: not on npm; will publish.`);
-      else failures.push({ ...pkg, gitHead: undefined, head, reason: "not on npm after publish" });
+      if (mode === "pre-publish") log(`${id}: not on npm; will publish from HEAD.`);
+      else fail(pkg, { reason: "not on npm after publish" });
       continue;
     }
 
-    const verdict = provenance({ pkg, gitHead: npm.gitHead, head, repo, internal });
-    if (verdict.ok) log(`${id}: on npm, ${verdict.reason}.`);
-    else failures.push({ ...pkg, gitHead: npm.gitHead, head, reason: verdict.reason });
+    const verdict = provenance({ pkg, gitHead: npm.gitHead, head, repo });
+    if (verdict.ok) log(`${id}: ${verdict.reason} (gitHead ${npm.gitHead}).`);
+    else fail(pkg, { gitHead: npm.gitHead, versionCommit: verdict.versionCommit, reason: verdict.reason });
   }
   return failures;
 }
 
+const ADVICE = {
+  "unpublished-stable":
+    "Master carries stable versions npm does not have, most likely from a stable release that pushed but did not\n" +
+    "finish publishing. A beta run would publish them under the `beta` dist-tag and leave `latest` behind, so\n" +
+    "nothing was versioned or published. Dispatch the Stable Release again: it publishes them under `latest`\n" +
+    "(and also graduates any betas merged since). For a new package, add a changeset so it gets a beta version.",
+  "pre-publish":
+    "npm already has these versions, published before the commit that set them, so `changeset publish` would skip them.\n" +
+    "Nothing was published. Add a changeset for each package so the next run bumps it past the stale version.",
+  "post-publish":
+    "Publishing finished, but npm does not show these versions as published from their version commit or later.\n" +
+    "Check the publish log and `npm view <name>@<version> gitHead`.",
+};
+
 export function failureMessage(failures, mode) {
-  const lines = failures.map(
-    (failure) =>
-      `  ${failure.name}@${failure.version}: ${failure.reason}\n` +
-      `    npm gitHead: ${failure.gitHead ?? "(none)"}\n` +
-      `    HEAD:        ${failure.head}`,
+  const lines = failures.map((failure) =>
+    [
+      `  ${failure.name}@${failure.version}: ${failure.reason}`,
+      ...(mode === "unpublished-stable"
+        ? []
+        : [
+            `    npm gitHead:    ${failure.gitHead ?? "(none)"}`,
+            `    version commit: ${failure.versionCommit ?? "(unknown)"}`,
+          ]),
+      `    HEAD:           ${failure.head}`,
+    ].join("\n"),
   );
-  const advice =
-    mode === "pre-publish"
-      ? "npm already has these versions, built from other code, so `changeset publish` would skip them.\n" +
-        "Nothing was published. Add a changeset for each package so the next run bumps it past the stale version."
-      : "Publishing finished, but npm does not show these versions as built from this version commit.\n" +
-        "Check the publish log and `npm view <name>@<version> gitHead`.";
-  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n\n${advice}`;
+  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n\n${ADVICE[mode]}`;
 }
 
 function report(failures, mode) {
@@ -233,11 +241,11 @@ function report(failures, mode) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [mode, base] = process.argv.slice(2);
-  if ((mode === "pre-publish" || mode === "post-publish") && base) {
-    report(await check({ mode, base, repo: gitRepo() }), mode);
+  const args = process.argv.slice(2);
+  if (args.length === 1 && MODES.includes(args[0])) {
+    report(await check({ mode: args[0], repo: gitRepo() }), args[0]);
   } else {
-    console.error("usage: check-npm-release-provenance.mjs pre-publish|post-publish <base>");
+    console.error(`usage: check-npm-release-provenance.mjs ${MODES.join("|")}`);
     process.exitCode = 2;
   }
 }

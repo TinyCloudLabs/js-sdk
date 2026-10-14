@@ -7,8 +7,9 @@ entry when `agent.dev.md` or related agent workflow expectations change.
 
 - TC-1095: the Release workflow queues runs (`cancel-in-progress: false`), pushes the version
   commit before publishing, and publishes only from that commit.
-  `.github/scripts/check-npm-release-provenance.mjs` fails the run when npm already holds one of
-  its new versions from other code; add a changeset for that package to bump past it.
+  `.github/scripts/check-npm-release-provenance.mjs` fails the run when npm's copy of a current
+  version was published before the commit that set it (add a changeset to bump past it), and stops a
+  beta run while `master` has stable versions npm lacks (re-dispatch the Stable Release).
 
 ## 2026-10-11
 

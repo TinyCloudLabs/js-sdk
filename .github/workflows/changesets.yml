@@ -28,10 +28,12 @@ jobs:
       contents: write
       id-token: write
     steps:
+      # The release PAT is not left in git config for install and build
+      # steps; only the push step below uses it.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_TOKEN }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -67,6 +69,13 @@ jobs:
           echo "## Current pre.json state:"
           cat .changeset/pre.json
 
+      # A stable release that pushed but did not finish publishing leaves
+      # stable versions npm lacks. In pre mode `changeset publish` would tag
+      # them `beta`, so stop before versioning anything (TC-1095).
+      - name: Refuse to publish unfinished stable versions as beta
+        if: steps.check.outputs.pending != '0'
+        run: node .github/scripts/check-npm-release-provenance.mjs unpublished-stable
+
       - name: Version and build
         if: steps.check.outputs.pending != '0'
         run: |
@@ -85,18 +94,21 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "chore: beta version packages [skip ci]"
-            if ! git push origin master; then
+            AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            echo "::add-mask::$AUTH"
+            if ! git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin master; then
               echo "::error title=Version commit not pushed::Could not push to master (it has probably moved past ${GITHUB_SHA}). Nothing was published; the run for the newer commit releases these changesets."
               exit 1
             fi
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: Setup Node for npm publish
         if: steps.check.outputs.pending != '0'
@@ -106,12 +118,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       # `changeset publish` silently skips versions npm already has. Fail
-      # instead when one of this run's versions is on npm from other code.
-      - name: Check npm for this run's versions
+      # instead when npm's copy of a current version was published before the
+      # commit that set it.
+      - name: Check npm before publishing
         if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/check-npm-release-provenance.mjs pre-publish "$BASE_SHA"
-        env:
-          BASE_SHA: ${{ steps.release.outputs.base }}
+        run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
 
       - name: Publish beta to npm
         if: steps.check.outputs.pending != '0'
@@ -155,17 +166,16 @@ jobs:
           # loop 403'd on sdk-core@2.1.0-beta.0 in the 2026-04-10 release after
           # PR #182, aborting before the wasm packages (which actually needed
           # publishing) were attempted. The check above fails the run instead
-          # when one of this run's versions is on npm from other code.
+          # when a version npm already has was published before its version
+          # commit.
           bunx changeset publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
-      - name: Confirm npm has this run's versions
+      - name: Confirm npm has every current version
         if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$BASE_SHA"
-        env:
-          BASE_SHA: ${{ steps.release.outputs.base }}
+        run: node .github/scripts/check-npm-release-provenance.mjs post-publish
 
   # Manual trigger: graduate betas to stable release
   stable:
@@ -176,11 +186,13 @@ jobs:
       contents: write
       id-token: write
     steps:
+      # The release PAT is not left in git config for install and build
+      # steps; only the push step below uses it.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: master
-          token: ${{ secrets.GH_TOKEN }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -250,12 +262,13 @@ jobs:
       # beta cycle, so master is never left outside pre mode. Publish from the
       # first commit: in pre mode `changeset publish` would use the beta
       # dist-tag. If the push fails, nothing is published; dispatch again.
+      # If the publish fails after the push, dispatch again too: the beta job
+      # refuses to run while master has stable versions npm lacks.
       - name: Commit and push stable release
         id: release
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git add .
           git commit -m "chore: release stable packages [skip ci]"
           RELEASE_SHA=$(git rev-parse HEAD)
@@ -263,11 +276,15 @@ jobs:
           bun changeset pre enter beta
           git add .
           git commit -m "chore: enter beta pre-release mode [skip ci]"
-          if ! git push origin master; then
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          if ! git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin master; then
             echo "::error title=Stable release not pushed::Could not push to master (it has probably moved). Nothing was published; dispatch the stable release again."
             exit 1
           fi
           git checkout --quiet --detach "$RELEASE_SHA"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: Setup Node for npm publish
         uses: actions/setup-node@v4
@@ -276,11 +293,10 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       # `changeset publish` silently skips versions npm already has. Fail
-      # instead when one of this run's versions is on npm from other code.
-      - name: Check npm for this run's versions
-        run: node .github/scripts/check-npm-release-provenance.mjs pre-publish "$BASE_SHA"
-        env:
-          BASE_SHA: ${{ steps.release.outputs.base }}
+      # instead when npm's copy of a current version was published before the
+      # commit that set it.
+      - name: Check npm before publishing
+        run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
 
       - name: Publish stable to npm
         run: |
@@ -326,10 +342,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
-      - name: Confirm npm has this run's versions
-        run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$BASE_SHA"
-        env:
-          BASE_SHA: ${{ steps.release.outputs.base }}
+      - name: Confirm npm has every current version
+        run: node .github/scripts/check-npm-release-provenance.mjs post-publish
 
       - name: Create GitHub Release
         run: |
