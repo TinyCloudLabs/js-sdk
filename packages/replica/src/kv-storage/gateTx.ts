@@ -57,8 +57,9 @@ export interface BrowserReplicaGateTx extends ReplicaGateTx<IDBTransaction, Brow
 
 export function createIndexedDbGateTx(
   open: KvDatabaseOpener,
-  options: { now?: () => number; onConsentExpired?: () => Promise<ReplicaDenyOutcome> } = {},
+  options: { now?: () => number; onConsentExpired: () => Promise<ReplicaDenyOutcome> },
 ): BrowserReplicaGateTx {
+  if (typeof options?.onConsentExpired !== "function") throw refusal("gate_unavailable");
   const now = options.now ?? Date.now;
   function checkedNow(): number {
     const at = now();
@@ -73,7 +74,7 @@ export function createIndexedDbGateTx(
       const tx = db.transaction([KV_STORE.gate, KV_STORE.device]);
       const gate = await requestAsPromise<BrowserGate | undefined>(tx.objectStore(KV_STORE.gate).get(ACCOUNT));
       if (gate === undefined || gate.principalHash === null) return null;
-      if (!Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
+      if (typeof gate.consentDeadline !== "number" || !Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
       const hash = await requestAsPromise<GateHmacRecord | undefined>(tx.objectStore(KV_STORE.device).get(GATE_HMAC_KEY));
       if (!validGateHmac(hash, gate)) throw refusal("gate_unavailable");
       return { incarnation: gate.incarnation, salt: gate.salt, lifecycleEpoch: gate.lifecycleEpoch, keyId: hash.keyId, accountKeyId: gate.accountKeyId, gateHmac: hash.hmac };
@@ -81,10 +82,10 @@ export function createIndexedDbGateTx(
   }
 
   async function expire(access: Pick<BrowserGateAccess, "stamp" | "incarnation">): Promise<void> {
-    if (options.onConsentExpired === undefined) throw refusal("gate_unavailable");
-    const flight = expiryFlight ?? options.onConsentExpired();
-    expiryFlight = flight;
+    let flight: Promise<ReplicaDenyOutcome> | undefined;
     try {
+      flight = expiryFlight ?? options.onConsentExpired();
+      expiryFlight = flight;
       const outcome = await flight;
       if (outcome.status !== "denied" && outcome.status !== "deleted" && outcome.status !== "stale") throw refusal("gate_unavailable");
       // `stale` can also mean the main clock has not reached the deadline. Verify that
@@ -96,8 +97,10 @@ export function createIndexedDbGateTx(
           (gate.incarnation === access.incarnation && (gate.lifecycleEpoch <= access.stamp.lifecycleEpoch || gate.principalHash !== null)))) {
         throw refusal("gate_unavailable");
       }
+    } catch {
+      throw refusal("gate_unavailable");
     } finally {
-      if (expiryFlight === flight) expiryFlight = undefined;
+      if (flight !== undefined && expiryFlight === flight) expiryFlight = undefined;
     }
   }
 
@@ -120,7 +123,7 @@ export function createIndexedDbGateTx(
               gate.lifecycleEpoch !== access.stamp.lifecycleEpoch || gate.principalHash === null) throw refusal("stamp_stale");
           if (gate.keyId !== access.keyId || gate.accountKeyId !== access.accountKeyId) throw refusal("stamp_stale");
           if (gate.principalHash !== access.principalHash) throw refusal("principal_mismatch");
-          if (!Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
+          if (typeof gate.consentDeadline !== "number" || !Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
           if (checkedNow() >= gate.consentDeadline) throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The account consent has expired.");
           const device = tx.objectStore(KV_STORE.device);
           const hash = await requestAsPromise<GateHmacRecord | undefined>(device.get(GATE_HMAC_KEY));

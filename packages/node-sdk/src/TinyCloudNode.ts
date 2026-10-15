@@ -1228,20 +1228,29 @@ export class TinyCloudNode {
     chainId: number;
     siweIssuedAt: string;
   }) => {
-    if (!this.config.replication?.enabled) return undefined;
-    const profileDir = this.config.replication.profileDir;
-    if (!profileDir) {
-      throw Object.assign(new Error("Replica sign-in requires replication.profileDir."), {
+    const replication = this.config.replication;
+    if (!replication?.enabled) return undefined;
+    const issuedAtMs = Date.parse(input.siweIssuedAt);
+    if (!Number.isSafeInteger(issuedAtMs) || issuedAtMs < 0) {
+      throw Object.assign(new Error("Replica sign-in requires a verified finite SIWE issued-at time."), {
         code: "REPLICA_GATED" as const,
-        gate: "gate_unavailable" as const,
+        gate: "not_established" as const,
       });
     }
-    const gate = await getNodeReplicationLoaders().gate();
-    const issuedAtMs = Date.parse(input.siweIssuedAt);
-    if (!Number.isFinite(issuedAtMs)) {
-      throw new Error("Replica sign-in requires a valid SIWE issued-at time.");
+    const principal = pkhDid(input.address, input.chainId);
+    if (replication.storage.kind === "indexeddb" && replication.storage.lifecycle?.kind === "indexeddb") {
+      return replication.storage.lifecycle.establishSessionStamp(principal, {
+        consentAnchor: { source: "siwe", at: issuedAtMs },
+      });
     }
-    return gate.establishSessionStamp(profileDir, pkhDid(input.address, input.chainId), { siweIssuedAt: issuedAtMs });
+    if (replication.storage.kind === "sqlite" && replication.profileDir) {
+      const gate = await getNodeReplicationLoaders().gate();
+      return gate.establishSessionStamp(replication.profileDir, principal, { siweIssuedAt: issuedAtMs });
+    }
+    throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
+      code: "REPLICA_GATED" as const,
+      gate: "gate_unavailable" as const,
+    });
   };
   private readonly replicationControl?: ReplicationControl;
   private _sql?: SQLService;
@@ -2030,11 +2039,10 @@ export class TinyCloudNode {
   }
 
   /**
-   * Get the space ID for this user.
-   * Available after signIn().
+   * Primary space of the signed-in or restored network session, including compact sessions.
    */
   get spaceId(): string | undefined {
-    return this.auth?.tinyCloudSession?.spaceId;
+    return this.auth?.tinyCloudSession?.spaceId ?? this._activeServiceSession?.spaceId;
   }
 
   /**
@@ -3794,13 +3802,14 @@ export class TinyCloudNode {
     );
     const stagedHost = resolvedHost ?? this.config.host!;
     let restoredNodeFeatures: string[] | undefined;
+    let replicaProtocolMismatch = false;
     if (this.config.replication?.enabled) {
       try {
         restoredNodeFeatures = (await checkNodeInfo(stagedHost, this.wasmBindings.protocolVersion())).features;
       } catch (error) {
-        // Offline restores may still serve an existing complete local replica.
-        // A protocol mismatch is not an offline condition and remains fatal.
-        if (!(error instanceof VersionCheckError)) throw error;
+        // Offline restores may serve complete local data; an incompatible node cannot.
+        // Neither replica-only preflight outcome invalidates the verified network session.
+        replicaProtocolMismatch = error instanceof VersionCheckError;
       }
     }
     // Never blend a metadata-light restore with the prior wallet identity.
@@ -3809,42 +3818,55 @@ export class TinyCloudNode {
     let replicationPrincipal: string | undefined;
     let compactReplicationSession: typeof this.replicationDelegateSession;
     let replicationScopeError: string | undefined;
+    let replicationScopeUnavailable = false;
     if (this.config.replication?.enabled) {
       if (stagedAddress !== undefined) {
         replicationPrincipal = pkhDid(stagedAddress, stagedChainId);
       } else {
-        const { replicationScopeFromSignedSession } = await getNodeReplicationLoaders().authority();
-        const signedScope = replicationScopeFromSignedSession({
-          delegationHeader: sessionData.delegationHeader,
-          delegationCid: sessionData.delegationCid,
-          verificationMethod: restoredVerificationMethod,
-          persistedSpace: sessionData.spaceId,
-        });
-        if (!signedScope) {
-          replicationScopeError = "Persisted space does not match the locally verified delegation scope.";
-        } else {
-          replicationPrincipal = signedScope.principal;
-          compactReplicationSession = {
+        try {
+          const { replicationScopeFromSignedSession } = await getNodeReplicationLoaders().authority();
+          const signedScope = replicationScopeFromSignedSession({
             delegationHeader: sessionData.delegationHeader,
             delegationCid: sessionData.delegationCid,
-            spaceId: signedScope.space,
             verificationMethod: restoredVerificationMethod,
-            jwk: stagedJwk as { [k: string]: unknown },
-          };
+            persistedSpace: sessionData.spaceId,
+          });
+          if (!signedScope) {
+            replicationScopeError = "Persisted space does not match the locally verified delegation scope.";
+          } else {
+            replicationPrincipal = signedScope.principal;
+            compactReplicationSession = {
+              delegationHeader: sessionData.delegationHeader,
+              delegationCid: sessionData.delegationCid,
+              spaceId: signedScope.space,
+              verificationMethod: restoredVerificationMethod,
+              jwk: stagedJwk as { [k: string]: unknown },
+            };
+          }
+        } catch {
+          replicationScopeUnavailable = true;
+          replicationScopeError = "Replica scope could not be verified for this network session.";
         }
       }
     }
     let replicaRestoreGate: ReplicaGateReason | undefined;
-    if (this.config.replication?.enabled) {
-      const profileDir = this.config.replication.profileDir;
-      if (profileDir === undefined) {
+    const replication = this.config.replication;
+    if (replication?.enabled) {
+      if (replicaProtocolMismatch) {
         replicaRestoreGate = "gate_unavailable";
       } else if (replicationPrincipal === undefined) {
-        replicaRestoreGate = "principal_mismatch";
+        replicaRestoreGate = replicationScopeUnavailable ? "gate_unavailable" : "principal_mismatch";
       } else {
         try {
-          const gate = await getNodeReplicationLoaders().gate();
-          await gate.restoreSessionStamp(profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
+          if (replication.storage.kind === "indexeddb") {
+            const lifecycle = replication.storage.lifecycle;
+            if (lifecycle?.kind !== "indexeddb") throw new Error("Browser replica lifecycle is unavailable.");
+            await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
+          } else {
+            if (!replication.profileDir) throw new Error("Replica profile directory is unavailable.");
+            const gate = await getNodeReplicationLoaders().gate();
+            await gate.restoreSessionStamp(replication.profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
+          }
         } catch (error) {
           replicaRestoreGate = replicaRestoreRefusal(error);
         }

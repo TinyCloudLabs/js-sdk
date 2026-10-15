@@ -30,7 +30,7 @@ import { ERASE_STORES, FIRST_INSTALL_KEY_PREFIX, KV_DATABASE, KV_STORE, kvPartit
 
 type Gate = BrowserGate;
 type Tx = IDBTransaction;
-type Stamp = { incarnation: string; lifecycleEpoch: number; consentDeadline: number };
+type Stamp = { incarnation: string; lifecycleEpoch: number; consentDeadline: number; principal: string };
 type DeleteOutcome = { status: "deleted" } | { status: "failed"; code: string };
 type Tombstone = { epoch: number; deniedAt: number };
 
@@ -266,6 +266,7 @@ async function transact<T>(db: IDBDatabase, stores: string[], mode: IDBTransacti
 }
 
 export interface BrowserReplicaLifecycle extends ReplicaLifecycleGate {
+  consentDeadline(stamp: ReplicaSessionStamp): number | null;
   expireConsent(): Promise<ReplicaDenyOutcome>;
 }
 
@@ -284,13 +285,21 @@ export function createIndexedDbLifecycle(options: {
     return at;
   }
 
-  const gateTx = createIndexedDbGateTx(openKvStore);
+  function deadlineOf(gate: Gate): number {
+    const deadline = gate.consentDeadline;
+    if (typeof deadline !== "number" || !Number.isSafeInteger(deadline) || deadline < 0) {
+      throw gatedError("gate_unavailable", "The account gate has no valid consent deadline.");
+    }
+    return deadline;
+  }
+
+  const gateTx = createIndexedDbGateTx(openKvStore, { now, onConsentExpired: expireConsent });
   let view: Stamp | undefined;
   let expiryTimer: Parameters<typeof clearTimeout>[0];
 
-  function adopt(gate: Gate): ReplicaSessionStamp {
+  function adopt(gate: Gate, principal: string): ReplicaSessionStamp {
     const stamp = { incarnation: gate.incarnation, lifecycleEpoch: gate.lifecycleEpoch };
-    view = { ...stamp, consentDeadline: gate.consentDeadline };
+    view = { ...stamp, consentDeadline: deadlineOf(gate), principal: principal.toLowerCase() };
     clearTimeout(expiryTimer);
     armExpiryTimer();
     return stamp;
@@ -319,9 +328,6 @@ export function createIndexedDbLifecycle(options: {
   }
 
   async function activeKeys(gate: Gate): Promise<{ hash: GateHmacRecord; account: AccountKeyRecord }> {
-    if (!Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) {
-      throw gatedError("gate_unavailable", "The account gate has no valid consent deadline.");
-    }
     const records = await withDatabase(openKvStore, false, async (db) => {
       const device = db.transaction(KV_STORE.device).objectStore(KV_STORE.device);
       const hash = await requestAsPromise<GateHmacRecord | undefined>(device.get(GATE_HMAC_KEY));
@@ -362,10 +368,11 @@ export function createIndexedDbLifecycle(options: {
 
   async function establishSessionStamp(principal: string, o: { consentAnchor: ReplicaConsentAnchor }): Promise<ReplicaSessionStamp> {
     return exclusive(GATE_LOCK, async () => {
-      if (logoutMarkerSet()) throw gatedError("logout_pending", "A logout is still pending on this origin.");
       const tombstone = readTombstone();
+      if (logoutMarkerSet()) throw gatedError("logout_pending", "A logout is still pending on this origin.");
       const anchor = o.consentAnchor;
-      if (anchor === undefined || !["siwe", "delegation_iat", "delegation_nbf"].includes(anchor.source) ||
+      if (anchor === undefined ||
+          (anchor.source !== "siwe" && anchor.source !== "delegation_iat" && anchor.source !== "delegation_nbf") ||
           !Number.isSafeInteger(anchor.at) || anchor.at < 0) {
         throw gatedError("not_established", "A verified finite consent anchor is required.");
       }
@@ -397,16 +404,16 @@ export function createIndexedDbLifecycle(options: {
         };
         if (!Number.isSafeInteger(created.consentDeadline)) throw gatedError("not_established", "The consent deadline is invalid.");
         await writeGate(created, current, { hash, account });
-        return adopt(created);
+        return adopt(created, principal);
       }
       const keys = await activeKeys(current);
       const principalHash = await gateHash(keys.hash.hmac, "principal", principal.toLowerCase());
       if (current.principalHash !== principalHash) throw gatedError("principal_mismatch", "The origin is bound to another account.");
-      if (checkedNow() >= current.consentDeadline) {
+      if (checkedNow() >= deadlineOf(current)) {
         await expireConsentLocked();
         throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The account consent has expired.");
       }
-      return adopt(current);
+      return adopt(current, principal);
     });
   }
 
@@ -414,6 +421,16 @@ export function createIndexedDbLifecycle(options: {
     const gate = await readGate();
     denyFloor(gate, readTombstone());
     if (gate === undefined || persisted === undefined) throw gatedError("not_established", "No session stamp is established for this origin.");
+    if (
+      typeof persisted !== "object" || persisted === null || Array.isArray(persisted) ||
+      Object.keys(persisted).length !== 2 ||
+      !Object.prototype.hasOwnProperty.call(persisted, "incarnation") ||
+      !Object.prototype.hasOwnProperty.call(persisted, "lifecycleEpoch") ||
+      typeof persisted.incarnation !== "string" || persisted.incarnation.length === 0 ||
+      !Number.isSafeInteger(persisted.lifecycleEpoch) || persisted.lifecycleEpoch < 0
+    ) {
+      throw gatedError("stamp_stale", "The persisted replica stamp is malformed.");
+    }
     if (persisted.incarnation !== gate.incarnation || persisted.lifecycleEpoch !== gate.lifecycleEpoch) {
       throw gatedError("stamp_stale", "The persisted session stamp is stale.");
     }
@@ -423,11 +440,12 @@ export function createIndexedDbLifecycle(options: {
     if (hash !== gate.principalHash) throw gatedError("principal_mismatch", "The origin is bound to another account.");
     if (logoutMarkerSet()) throw gatedError("logout_pending", "A logout is still pending on this origin.");
     if ((await readIntents()).length > 0) throw gatedError("purge_pending", "A purge is still pending on this origin.");
-    if (checkedNow() >= gate.consentDeadline) {
+    assertTombstoneWritable();
+    if (checkedNow() >= deadlineOf(gate)) {
       await expireConsent();
       throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The account consent has expired.");
     }
-    return adopt(gate);
+    return adopt(gate, principal);
   }
 
   async function activationAllowed(next: string): Promise<boolean> {
@@ -436,7 +454,7 @@ export function createIndexedDbLifecycle(options: {
       const gate = await readGate();
       denyFloor(gate, readTombstone());
       if (gate === undefined || gate.principalHash === null) return false;
-      if (checkedNow() >= gate.consentDeadline) {
+      if (checkedNow() >= deadlineOf(gate)) {
         await expireConsent();
         return false;
       }
@@ -455,9 +473,9 @@ export function createIndexedDbLifecycle(options: {
     if (view.incarnation !== stamp.incarnation || view.lifecycleEpoch !== stamp.lifecycleEpoch) {
       return { status: "gated", gate: "stamp_stale" };
     }
-    if (logoutMarkerSet()) return { status: "gated", gate: "logout_pending" };
     try {
       const tombstone = readTombstone();
+      if (logoutMarkerSet()) return { status: "gated", gate: "logout_pending" };
       if (tombstone === null && stamp.lifecycleEpoch !== 0) return { status: "gated", gate: "gate_unavailable" };
       if (tombstone !== null && stamp.lifecycleEpoch < tombstone.epoch) return { status: "gated", gate: "stamp_stale" };
       if (checkedNow() >= view.consentDeadline) return { status: "consent_expired", code: "CONSENT_EXPIRED" };
@@ -465,6 +483,12 @@ export function createIndexedDbLifecycle(options: {
     } catch {
       return { status: "gated", gate: "gate_unavailable" };
     }
+  }
+
+  function consentDeadline(stamp: ReplicaSessionStamp): number | null {
+    return view !== undefined && checkDelivery(stamp).status === "allow"
+      ? view.consentDeadline
+      : null;
   }
 
   function deliverable(stamp: ReplicaSessionStamp): boolean {
@@ -530,6 +554,7 @@ export function createIndexedDbLifecycle(options: {
           const next: Gate = {
             ...current,
             principalHash: null,
+            consentDeadline: null,
             lifecycleEpoch: plan.tombstone.epoch,
             deniedAt: plan.tombstone.deniedAt,
           };
@@ -581,15 +606,18 @@ export function createIndexedDbLifecycle(options: {
     const gate = await readGate();
     const floor = denyFloor(gate, readTombstone());
     if (gate === undefined || gate.principalHash === null) return { status: "stale" };
-    if (!Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) {
-      throw gatedError("gate_unavailable", "The account gate has no valid consent deadline.");
-    }
-    if (checkedNow() < gate.consentDeadline) return { status: "stale" };
+    if (checkedNow() < deadlineOf(gate)) return { status: "stale" };
     const stamp = { incarnation: gate.incarnation, lifecycleEpoch: gate.lifecycleEpoch };
     view = undefined;
     clearTimeout(expiryTimer);
     const result = await advanceDeny(gate, floor);
-    if (result.status === "denied" || result.status === "deleted") options.onConsentExpired?.(stamp);
+    if (result.status === "denied" || result.status === "deleted") {
+      try {
+        options.onConsentExpired?.(stamp);
+      } catch {
+        // An observer cannot undo a committed denial or relabel it as an unguarded gate.
+      }
+    }
     return result;
   }
 
@@ -602,9 +630,12 @@ export function createIndexedDbLifecycle(options: {
   }
 
   async function deny(input: ReplicaDenyInput): Promise<ReplicaDenyOutcome> {
-    // The in-memory flip happens before the first await, so this tab stops serving immediately.
-    view = undefined;
-    clearTimeout(expiryTimer);
+    // Disable this tab before the first await, but never clear a successor's view
+    // when a delayed sign-out from a previous account arrives.
+    if (view?.principal === input.principal.toLowerCase()) {
+      view = undefined;
+      clearTimeout(expiryTimer);
+    }
     try {
       return await exclusive(GATE_LOCK, () => denyLocked(input));
     } catch (error) {
@@ -662,6 +693,7 @@ export function createIndexedDbLifecycle(options: {
           if (deleted.status === "deleted") {
             try {
               localStorage.removeItem(REPLICA_LOGOUT_MARKER);
+              if (localStorage.getItem(REPLICA_LOGOUT_MARKER) !== null) throw new Error("The logout marker was not cleared.");
             } catch {
               failed.push({ id: "marker", code: "STORAGE_ERROR" });
             }
@@ -707,6 +739,7 @@ export function createIndexedDbLifecycle(options: {
     recover,
     expireConsent,
     checkDelivery,
+    consentDeadline,
     establishSessionStamp,
     restoreSessionStamp,
     activationAllowed,

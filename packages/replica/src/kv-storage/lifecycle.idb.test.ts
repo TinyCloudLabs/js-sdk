@@ -12,6 +12,7 @@ import { injectDenyFailure } from "./testing.js";
 
 const principal = "did:pkh:eip155:1:0x00000000000000000000000000000000000000aa";
 const tombstoneKey = "tinycloud-replica:deny-tombstone";
+const markerKey = "tinycloud-replica:logout-pending";
 const entries = new Map<string, string>();
 const storage = {
   getItem: (key: string) => entries.get(key) ?? null,
@@ -102,9 +103,12 @@ describe("origin deny tombstone", () => {
     expect((await lifecycle.deny({ reason: "sign_out", principal })).status).toBe("denied");
     expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
     const after = (await openKvDatabase({ create: false }))!;
-    const device = after.transaction(KV_STORE.device).objectStore(KV_STORE.device);
+    const afterTx = after.transaction([KV_STORE.device, KV_STORE.gate]);
+    const device = afterTx.objectStore(KV_STORE.device);
     expect(await requestAsPromise(device.get("gateHmac"))).toBeUndefined();
     expect(await requestAsPromise(device.get("accountKey"))).toBeUndefined();
+    expect(await requestAsPromise(afterTx.objectStore(KV_STORE.gate).get("account")))
+      .toMatchObject({ principalHash: null, consentDeadline: null });
     after.close();
   });
 
@@ -125,6 +129,26 @@ describe("origin deny tombstone", () => {
     expect((await lifecycle.expireConsent()).status).toBe("denied");
   });
 
+  test("a malformed persisted stamp cannot enable the replica", async () => {
+    const lifecycle = createIndexedDbLifecycle();
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    const restored = createIndexedDbLifecycle();
+    const malformed = { ...stamp, forged: true };
+    await expect(restored.restoreSessionStamp(principal, malformed))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(restored.deliverable(stamp)).toBe(false);
+  });
+
+  test("a peer's cached deadline cannot authorize mint after another tab denies", async () => {
+    const first = createIndexedDbLifecycle();
+    const stamp = await first.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    const peer = createIndexedDbLifecycle();
+    await peer.restoreSessionStamp(principal, stamp);
+    expect(peer.consentDeadline(stamp)).not.toBeNull();
+    expect((await first.deny({ reason: "sign_out", principal })).status).toBe("denied");
+    expect(peer.consentDeadline(stamp)).toBeNull();
+  });
+
   test("seven-day expiry shreds keys at an injected clock and fences old stamps", async () => {
     const clock = { ms: Date.now() };
     const notifications: string[] = [];
@@ -137,12 +161,15 @@ describe("origin deny tombstone", () => {
     const gate = await requestAsPromise<{ consentDeadline: number }>(db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get("account"));
     db.close();
     expect(gate.consentDeadline).toBe(clock.ms + CONSENT_WINDOW_MS);
+    expect(lifecycle.consentDeadline(stamp)).toBe(gate.consentDeadline);
     clock.ms = gate.consentDeadline;
     expect(lifecycle.checkDelivery(stamp)).toEqual({ status: "consent_expired", code: "CONSENT_EXPIRED" });
+    expect(lifecycle.consentDeadline(stamp)).toBeNull();
     expect(lifecycle.deliverable(stamp)).toBe(false);
     expect((await lifecycle.expireConsent()).status).toBe("denied");
     expect((await lifecycle.expireConsent()).status).toBe("stale");
     expect(lifecycle.checkDelivery(stamp)).toEqual({ status: "gated", gate: "stamp_stale" });
+    expect(lifecycle.consentDeadline(stamp)).toBeNull();
     expect(notifications).toEqual([stamp.incarnation]);
     expect(JSON.parse(entries.get(tombstoneKey)!)).toEqual({ epoch: stamp.lifecycleEpoch + 1, deniedAt: clock.ms });
     const after = (await openKvDatabase({ create: false }))!;
@@ -151,6 +178,19 @@ describe("origin deny tombstone", () => {
     expect(await requestAsPromise(device.get("accountKey"))).toBeUndefined();
     after.close();
     await expect(lifecycle.restoreSessionStamp(principal, stamp)).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+  });
+
+  test("a failed expiry observer cannot relabel committed key destruction as unguarded", async () => {
+    const clock = { ms: Date.now() };
+    const lifecycle = createIndexedDbLifecycle({
+      now: () => clock.ms,
+      onConsentExpired: () => { throw new Error("observer failed"); },
+    });
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } });
+    clock.ms += CONSENT_WINDOW_MS;
+    expect((await lifecycle.expireConsent()).status).toBe("denied");
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+    expect(lifecycle.deliverable(stamp)).toBe(false);
   });
 
   test("startup recovery shreds keys when the browser was closed at the deadline", async () => {
@@ -169,7 +209,7 @@ describe("origin deny tombstone", () => {
     const clock = { ms: Date.now() };
     const lifecycle = createIndexedDbLifecycle({ now: () => clock.ms });
     const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } });
-    const gateTx = createIndexedDbGateTx((create) => openKvDatabase({ create }), { now: () => clock.ms });
+    const gateTx = createIndexedDbGateTx((create) => openKvDatabase({ create }), { now: () => clock.ms, onConsentExpired: () => lifecycle.expireConsent() });
     const snapshot = (await gateTx.snapshot())!;
     const access = {
       stamp,
@@ -192,7 +232,7 @@ describe("origin deny tombstone", () => {
     const main = { ms: Date.now() };
     const lifecycle = createIndexedDbLifecycle({ now: () => main.ms });
     const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: main.ms } });
-    const snapshotTx = createIndexedDbGateTx((create) => openKvDatabase({ create }));
+    const snapshotTx = createIndexedDbGateTx((create) => openKvDatabase({ create }), { onConsentExpired: () => lifecycle.expireConsent() });
     const snapshot = (await snapshotTx.snapshot())!;
     const worker = { ms: main.ms + CONSENT_WINDOW_MS };
     const gateTx = createIndexedDbGateTx(
@@ -312,7 +352,7 @@ describe("origin deny tombstone", () => {
   test("missing active HMAC or account key refuses restore and guarded reads", async () => {
     const lifecycle = createIndexedDbLifecycle();
     const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
-    const gateTx = createIndexedDbGateTx((create) => openKvDatabase({ create }));
+    const gateTx = createIndexedDbGateTx((create) => openKvDatabase({ create }), { onConsentExpired: () => lifecycle.expireConsent() });
     const snapshot = (await gateTx.snapshot())!;
     const access = {
       stamp,
@@ -353,6 +393,9 @@ describe("origin deny tombstone", () => {
     expect(second.incarnation).not.toBe(first.incarnation);
     expect(second.lifecycleEpoch).toBe(first.lifecycleEpoch + 1);
     await expect(lifecycle.restoreSessionStamp(firstPrincipal, first)).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(lifecycle.deliverable(second)).toBe(true);
+    expect((await lifecycle.deny({ reason: "sign_out", principal: firstPrincipal })).status).toBe("stale");
+    expect(lifecycle.deliverable(second)).toBe(true);
   });
 
   test("deny records every opaque pending key and clears all first/grant-install anchors", async () => {
@@ -380,16 +423,20 @@ describe("origin deny tombstone", () => {
   });
 
   test("a missing or corrupt tombstone blocks a previously denied gate and delivery", async () => {
-    const lifecycle = createIndexedDbLifecycle();
-    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    const clock = { ms: Date.now() };
+    const lifecycle = createIndexedDbLifecycle({ now: () => clock.ms });
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } });
     expect((await lifecycle.deny({ reason: "sign_out", principal })).status).toBe("denied");
-    const fresh = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() + 1000 } });
+    clock.ms += 2;
+    const fresh = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } });
     expect(lifecycle.deliverable(fresh)).toBe(true);
     entries.delete(tombstoneKey);
     expect(lifecycle.deliverable(fresh)).toBe(false);
-    await expect(lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() + 1000 } })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    await expect(lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
     entries.set(tombstoneKey, "{broken");
     expect(lifecycle.deliverable(fresh)).toBe(false);
+    entries.set(markerKey, "1");
+    expect(lifecycle.checkDelivery(fresh)).toEqual({ status: "gated", gate: "gate_unavailable" });
     await expect(lifecycle.restoreSessionStamp(principal, stamp)).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
   });
 
@@ -406,7 +453,15 @@ describe("origin deny tombstone", () => {
     }
     const recorded = entries.get(tombstoneKey);
     expect(recorded).toBeDefined();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { ...storage, removeItem: (key: string) => { if (key !== markerKey) storage.removeItem(key); } },
+    });
+    expect((await lifecycle.recover({ signal: new AbortController().signal })).failed).toContainEqual({ id: "marker", code: "STORAGE_ERROR" });
+    expect(entries.has(markerKey)).toBe(true);
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
     expect((await lifecycle.recover({ signal: new AbortController().signal })).failed).toEqual([]);
+    expect(entries.has(markerKey)).toBe(false);
     expect(entries.get(tombstoneKey)).toBe(recorded);
     await expect(createIndexedDbLifecycle().establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: JSON.parse(recorded!).deniedAt } })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
   });
@@ -461,6 +516,19 @@ describe("origin deny tombstone", () => {
     const gate = await requestAsPromise<{ lifecycleEpoch: number }>(db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get("account"));
     db.close();
     expect(gate.lifecycleEpoch).toBe(stamp.lifecycleEpoch);
+  });
+
+  test("restore refuses a readable but unwritable deny floor", async () => {
+    const first = createIndexedDbLifecycle();
+    const stamp = await first.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: Date.now() } });
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { ...storage, setItem: () => { throw new Error("storage denied"); } },
+    });
+    const restored = createIndexedDbLifecycle();
+    await expect(restored.restoreSessionStamp(principal, stamp))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(restored.deliverable(stamp)).toBe(false);
   });
 
   test("establish refuses a readable but unwritable tombstone store", async () => {

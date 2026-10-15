@@ -2,4 +2,4 @@
 "@tinycloud/replica": patch
 ---
 
-Add the profile gate file (`profile-gate`) and browser lifecycle gate: sign-in stamp, restore validation, deny, and ordered purge with startup recovery. Browser denial now survives IndexedDB deletion through an origin-wide `localStorage` tombstone, refuses missing Web Locks, and clears durable grant-install anchors for denied identities.
+Add profile and browser replica lifecycle gates with strict persisted-stamp validation, origin-wide denial tombstones, mandatory serialization, private browser HMAC/account keys, and seven-day consent crypto-shredding. Browser denial records opaque purge intents, erases device/install anchors, and preserves the deny floor through database deletion and v1 migration. A refused replica stamp no longer rejects a valid Node network-session restore; replication remains gated.

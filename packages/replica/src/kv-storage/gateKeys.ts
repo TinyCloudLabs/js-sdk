@@ -4,7 +4,7 @@ import type { ReplicaAccountGate } from "@tinycloud/sdk-services/kv/replication"
 export interface BrowserGate extends ReplicaAccountGate {
   keyId: string;
   accountKeyId: string;
-  consentDeadline: number;
+  consentDeadline: number | null;
 }
 
 export interface GateHmacRecord {
@@ -28,6 +28,7 @@ export const GATE_HMAC_KEY = "gateHmac";
 export const ACCOUNT_KEY = "accountKey";
 
 const HEX = "0123456789abcdef";
+const ENCODER = new TextEncoder();
 
 function hex(bytes: Uint8Array): string {
   let value = "";
@@ -54,7 +55,7 @@ export async function newAccountKey(incarnation: string, lifecycleEpoch: number,
 
 /** Domain separation prevents one identifier class from revealing another's HMAC. */
 export async function gateHash(key: CryptoKey, domain: "principal" | "identity" | "partition" | "lookup", material: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`${domain}\0${material}`);
+  const bytes = ENCODER.encode(`${domain}\0${material}`);
   return hex(new Uint8Array(await crypto.subtle.sign("HMAC", key, bytes)));
 }
 
