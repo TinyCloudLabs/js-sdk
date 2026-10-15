@@ -35,6 +35,7 @@ import { generateNonce, SiweMessage } from "siwe";
 
 import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
+import type { ReplicaGateReason } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
@@ -1180,6 +1181,21 @@ function accountIndexWarningDiagnostic(error: unknown): { status?: number; code?
   return diagnostic;
 }
 
+function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
+  if (error !== null && typeof error === "object" && "code" in error && error.code === "REPLICA_GATED" && "gate" in error) {
+    switch (error.gate) {
+      case "not_established":
+      case "stamp_stale":
+      case "principal_mismatch":
+      case "purge_pending":
+      case "logout_pending":
+      case "gate_unavailable":
+        return error.gate;
+    }
+  }
+  return "gate_unavailable";
+}
+
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
   private static nodeDefaults?: NodeDefaults;
@@ -1205,6 +1221,7 @@ export class TinyCloudNode {
   private replicationRuntimeInstance?: ReplicationRuntime;
   private replicationDelegateSession?: Pick<TinyCloudSession, "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk">;
   private replicationScopeError?: string;
+  private replicaRestoreGate?: ReplicaGateReason;
   /** Mints the replica session stamp on each fresh sign-in (TC-858 §4.1). Undefined when replication is off. */
   private readonly establishReplicaStamp = async (input: {
     address: string;
@@ -1626,6 +1643,16 @@ export class TinyCloudNode {
       this.replicationRuntime = runtime;
       this.replicationControl = {
         status: async () => {
+          const gate = this.replicaRestoreGate;
+          if (gate) return this.config.replication!.prefixes.map((prefix) => ({
+            prefix,
+            state: "gated" as const,
+            gate,
+            errorCode: "REPLICA_GATED",
+            pending: { inFlight: 0, committed: 0, ambiguous: 0 },
+            pinned: [],
+            lagMs: null,
+          }));
           const status = await runtime.then((ready) => ready.control.status());
           const scopeError = this.replicationScopeError;
           if (!scopeError) return status;
@@ -1642,7 +1669,15 @@ export class TinyCloudNode {
             lagMs: null,
           }));
         },
-        sync: async (input) => (await runtime).control.sync(input),
+        sync: async (input) => {
+          if (this.replicaRestoreGate) {
+            throw Object.assign(new Error("Replica restore is gated."), {
+              code: "REPLICA_GATED" as const,
+              gate: this.replicaRestoreGate,
+            });
+          }
+          return (await runtime).control.sync(input);
+        },
         purge: (input) => {
           const instance = this.replicationRuntimeInstance;
           return instance
@@ -2164,6 +2199,7 @@ export class TinyCloudNode {
     this._bootstrapStatus = { skipped: false };
     this.replicationDelegateSession = undefined;
     this.replicationScopeError = undefined;
+    this.replicaRestoreGate = undefined;
     this._serviceGraph = this.createServiceGraphLifetime();
     oldGraph.retire();
     // A fresh core: the retired one must not be notified by a later sign-in.
@@ -2277,6 +2313,7 @@ export class TinyCloudNode {
     // sign-in leaves the existing graph untouched.
     this.replicationDelegateSession = undefined;
     this.replicationScopeError = undefined;
+    this.replicaRestoreGate = undefined;
     if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     this.assertSessionEpoch(epoch, "Sign-in");
     const oldGraph = this._serviceGraph;
@@ -3797,20 +3834,21 @@ export class TinyCloudNode {
         }
       }
     }
+    let replicaRestoreGate: ReplicaGateReason | undefined;
     if (this.config.replication?.enabled) {
-      // Fail closed: the persisted stamp must match this profile's gate for the verified principal.
       const profileDir = this.config.replication.profileDir;
       if (profileDir === undefined) {
-        throw Object.assign(new Error("Replica restore requires replication.profileDir."), {
-          code: "REPLICA_GATED" as const,
-          gate: "gate_unavailable" as const,
-        });
+        replicaRestoreGate = "gate_unavailable";
+      } else if (replicationPrincipal === undefined) {
+        replicaRestoreGate = "principal_mismatch";
+      } else {
+        try {
+          const gate = await getNodeReplicationLoaders().gate();
+          await gate.restoreSessionStamp(profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
+        } catch (error) {
+          replicaRestoreGate = replicaRestoreRefusal(error);
+        }
       }
-      if (replicationPrincipal === undefined) {
-        throw new InvalidRestoredSessionError(replicationScopeError ?? "Replica restore requires a verified principal.");
-      }
-      const gate = await getNodeReplicationLoaders().gate();
-      await gate.restoreSessionStamp(profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
     }
     const stagedNodeDid = stagedAddress
       ? pkhDid(stagedAddress, stagedChainId)
@@ -3916,6 +3954,7 @@ export class TinyCloudNode {
     }
     this.replicationDelegateSession = compactReplicationSession;
     this.replicationScopeError = replicationScopeError;
+    this.replicaRestoreGate = replicaRestoreGate;
     if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     if (epoch !== this.sessionEpoch) {
       oldGraph.retire();
@@ -3931,7 +3970,9 @@ export class TinyCloudNode {
         detail: replicationScopeError,
       });
     }
-    await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
+    if (!replicaRestoreGate) {
+      await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
+    }
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
     if (epoch !== this.sessionEpoch) {
       if (attempt === this.latestSessionAttempt) await this.endSession();
