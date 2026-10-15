@@ -22,6 +22,7 @@ export type {
   ReplicaDevice,
   ReplicaGatedSpec,
   ReplicaGatedStorage,
+  ReplicaInspectedStatus,
   ReplicaGrantInfo,
   ReplicaPeerCommit,
   ReplicaState,
@@ -38,8 +39,12 @@ export type {
 } from "./types";
 export type {
   ReplicaAccountGate,
+  ReplicaBrowserGateAccess,
+  ReplicaBrowserGateSnapshot,
+  ReplicaClock,
   ReplicaDenyInput,
   ReplicaDenyOutcome,
+  ReplicaDeliveryDecision,
   ReplicaEraseReport,
   ReplicaGateAccess,
   ReplicaGateSnapshot,
@@ -51,6 +56,7 @@ export type {
   ReplicaLifecycleGate,
   ReplicaPartitionEraser,
   ReplicaPartitionIndexEntry,
+  ReplicaPrivateGateHash,
   ReplicaPurgeIntent,
   ReplicaSessionStamp,
   ReplicaStampedReply,
@@ -58,6 +64,7 @@ export type {
 } from "./lifecycle";
 export type {
   ReplicaAdmitHook,
+  ReplicaBrowserPageAdmission,
   ReplicaPageAdmission,
   ReplicaQuotaLedger,
   ReplicaQuotaSpec,

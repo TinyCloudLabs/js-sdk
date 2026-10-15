@@ -97,6 +97,7 @@ export type {
   ReplicaAuthorityState,
   ReplicaCoverage,
   ReplicaDevice,
+  ReplicaInspectedStatus,
   ReplicaGrantInfo,
   ReplicaState,
   ReplicaStatusEntry,

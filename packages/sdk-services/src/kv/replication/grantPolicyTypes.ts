@@ -6,13 +6,13 @@
 
 /** Where the consent anchor came from, in fallback order. */
 export type ReplicaConsentSource =
-  /** SIWE `issuedAt` of the sign-in that granted replication. */
+  /** `issuedAt` of a validated signed SIWE. */
   | "siwe"
-  /** Compact delegated session: the delegation's `iat`. */
+  /** `iat` of the independently verified owner-authorizing proof, never a child leaf's new timestamp. */
   | "delegation_iat"
-  /** Compact delegated session without `iat`: its `nbf`. */
+  /** `nbf` of that same owner proof; a leaf signature alone is insufficient. */
   | "delegation_nbf"
-  /** Neither: the persisted time this identity's first grant was installed (storage-owned). */
+  /** Neither: persisted first grant install time, for expiry only; never session establishment. */
   | "first_install";
 
 /**
@@ -39,10 +39,11 @@ export interface ReplicaGrantPolicy {
   /** Validated: 0 < grantTtlMs ≤ MAX_GRANT_TTL_MS. */
   grantTtlMs: number;
   /**
-   * From `ReplicationAuthority.consentAnchor()`, clamped. Null means the session has neither SIWE
-   * nor delegation `iat`/`nbf`; storage then uses its persisted first-install time (source
-   * `first_install`), keyed by identity, persisted on the first install, surviving partition
-   * reset, purge and reinstall, and cleared only by `deny`.
+   * From `ReplicationAuthority.consentAnchor()`: validated SIWE `issuedAt`, else the independently
+   * verified owner-authorizing proof's signed `iat`, else its `nbf` (never a fresh child leaf
+   * minted under an old owner grant). Null means no verified source; storage uses persisted
+   * first-install time only to bound grant expiry, never as a freshness proof for a session
+   * stamp. That anchor survives partition reset, purge and reinstall and is cleared only by `deny`.
    */
   consentAnchor: ReplicaConsentAnchor | null;
 }

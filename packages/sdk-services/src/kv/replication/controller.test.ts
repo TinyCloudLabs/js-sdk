@@ -6,7 +6,7 @@ import { canonicalReplicationIdentity } from "./identity";
 import { createKVReplication } from "./controller";
 import { encodeTcr1 } from "./listLocal";
 import { createMemoryPendingStore } from "./memoryPendingStore";
-import type { KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
 import { RequestTimeoutError, wrapError } from "../../errors";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
@@ -31,7 +31,7 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   beforePendingRead?: () => void | Promise<void>;
   afterPendingRead?: () => void | Promise<void>;
   statusImpl?: (call: number) => Promise<LocalReplicaStatus> | LocalReplicaStatus;
-  inspectStatus?: (signal: AbortSignal) => Promise<LocalReplicaStatus | undefined>;
+  inspectStatus?: (signal: AbortSignal) => Promise<LocalReplicaStatus | ReplicaInspectedStatus | undefined>;
   prefixes?: string[];
   nodeFeatures?: readonly string[];
   allowSecrets?: boolean;
@@ -428,6 +428,24 @@ describe("pending record evidence boundaries", () => {
     });
     expect(inspections).toBe(1);
 });
+
+  test("redacted inspection never reports ready or invents authority and grant", async () => {
+    const env = setup({
+      inspectStatus: async () => ({
+        redacted: true,
+        coverage: "complete",
+        syncedThroughEpoch: 3,
+        counts: { keys: 2, contentMissing: 0, tombstones: 0 },
+        bytes: 48,
+      }),
+    });
+    const [entry] = await env.controller.status();
+    expect(entry).toMatchObject({ state: "idle", redacted: true, counts: { keys: 2 }, bytes: 48 });
+    expect(entry).not.toHaveProperty("authority");
+    expect(entry).not.toHaveProperty("grant");
+    expect(entry).not.toHaveProperty("lastError");
+    expect(env.counters().opens).toBe(0);
+  });
 
   test("persisted status inspection is cancelled and settled by close", async () => {
     const { promise: started, resolve: startedResolve } = Promise.withResolvers<void>();

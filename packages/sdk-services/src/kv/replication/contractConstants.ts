@@ -1,8 +1,8 @@
 /**
  * Frozen constants of the shared replica contract (TC-858 Phase 2, see CONTRACT.md).
  *
- * Exported from `@tinycloud/sdk-services/kv/replication` only, never from the package root,
- * so web bundles that don't replicate never carry them.
+ * Exported via `@tinycloud/sdk-services/kv/replication/contractConstants`, never from the
+ * package root, so web bundles without replication do not import this module.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -45,6 +45,8 @@ export const DEFAULT_MIN_FREE_BYTES = 64 * 1024 * 1024;
 
 /** The single per-origin IndexedDB database of the browser `KVReplicaStorage` adapter. */
 export const REPLICA_KV_DATABASE = "tinycloud-replica-kv";
+/** Origin database schema: v2 destructively replaces v1 plaintext replica-owned stores. */
+export const REPLICA_KV_SCHEMA_VERSION = 2;
 
 /**
  * Object-store names in {@link REPLICA_KV_DATABASE}. Every store uses out-of-line keys (no
@@ -53,19 +55,19 @@ export const REPLICA_KV_DATABASE = "tinycloud-replica-kv";
  * gate (S3) and quota ledger (S5).
  */
 export const REPLICA_KV_STORES = {
-  /** Data: partition meta, key `partitionId`. */
+  /** Data: partition meta (opaque fences, sealed config/grants), private gate-HMAC partition id. */
   meta: "meta",
-  /** Data: entries, key `[partitionId, key]`. */
+  /** Data: sealed KV entries, key `[privatePartitionId, accountHmac(path)]`. */
   entries: "entries",
-  /** Data: content blobs, key `[partitionId, blake3Hex]`. */
+  /** Data: AES-GCM content blobs, key `[privatePartitionId, accountHmac(hash)]`. */
   blobs: "blobs",
-  /** Data: identity-scoped `PendingWriteState`, key `identityKeyHash`. */
+  /** Data: AES-sealed pending state, key private gate-HMAC `identityKeyHash`. */
   pending: "pending",
-  /** Data: owner-minted device per origin, key `"device"`. */
+  /** Data: sealed owner device, private nonextractable key records and opaque install anchors. */
   device: "device",
   /** Control: the account gate, singleton key `"account"`, value `ReplicaAccountGate`. */
   gate: "gate",
-  /** Control: partition index, key `partitionId`, value `ReplicaPartitionIndexEntry`. */
+  /** Control: partition index keyed by private `partitionId`; nonunique `byLookupId` index. */
   partitions: "partitions",
   /** Control: purge intents, key `ReplicaPurgeIntent.id`, value `ReplicaPurgeIntent`. */
   purgeIntents: "purgeIntents",
@@ -82,7 +84,7 @@ export const REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone";
 /** BroadcastChannel name used for lifecycle nudges and peer-commit notifications. */
 export const REPLICA_KV_CHANNEL = "tinycloud-replica-kv";
 
-/** Web Lock name prefix for pending-write read-modify-write; suffix is the identity key hash. */
+/** Web Lock name prefix for pending-write read-modify-write; suffix is the private gate-HMAC identity id. */
 export const REPLICA_PENDING_LOCK_PREFIX = "tinycloud-replica-kv:pending:";
 
 /** Node/CLI gate file name. CLI places it at `<profile>/replica-gate.json`. */

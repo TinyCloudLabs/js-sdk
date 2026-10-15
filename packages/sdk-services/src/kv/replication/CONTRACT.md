@@ -1,4 +1,4 @@
-# Shared replica contract (TC-858 Phase 2), rev 2
+# Shared replica contract (TC-858 Phase 2), rev 3
 
 This document is normative for every `KVReplicaStorage` adapter: the browser IndexedDB adapter (`@tinycloud/replica/kv-storage`) and the node/CLI SQLite adapter (`@tinycloud/node-sdk`). Both implement the **same** interfaces. They differ only in where state is stored and how a transaction is realised, and each section has "Browser" and "Node/CLI" notes for that. The types live in this directory:
 
@@ -24,6 +24,50 @@ The new fields are optional in the Phase 1 types only so existing callers and te
 Conventions:
 - Instants are milliseconds since the Unix epoch, durations are milliseconds and sizes are bytes, unless a field says ISO string.
 - Errors are `Error & { code: string }`. Gate refusals also carry `gate`.
+
+### Browser at-rest threat model
+
+**In scope:** a raw scan of **replica-owned** `tinycloud-replica-kv` IndexedDB
+stores, their secondary index keys and replica-owned origin localStorage keys
+MUST find no literal value content, KV keys, path prefixes, device DIDs or
+account identifiers. Blobs, entries, pending state and sensitive meta fields
+are AES-GCM-sealed; searchable IDs use nonextractable private HMAC keys (§1).
+The adapter enforces `allowSecrets === false` and rejects secrets/vault prefixes **and root `/`**, which
+could include them, in the package itself. A stale tab after deny or account switch is
+fenced before replica delivery. Browser sign-out, switch and 7-day consent expiry delete
+account and gate keys before background purge, making stranded ciphertext unavailable to
+a **fresh page/worker** with no old CryptoKey reference.
+
+**Baseline exemption:** the pre-existing web-sdk `BrowserSessionStorage` stores the address,
+signed SIWE and session-key JWK in origin Storage (`sdk-core/storage.schema.ts`,
+`web-sdk/BrowserSessionStorage.ts`). A signed-in session can be restored without a wallet
+prompt; those non-replica keys/records are explicitly outside the replica raw scan.
+
+**Out of scope:** an attacker who reads the browser profile while that signed-in session
+is valid can also obtain the persisted session and its usable key; nonextractable IDB
+`CryptoKey`s are NOT guaranteed protected from a raw browser-profile reader, nor can a
+previously retained in-memory CryptoKey be revoked. Same-origin hostile JS with an active
+session, OS/browser compromise and an offline profile dump are not claims of confidentiality
+beyond the signed-in-session baseline. Use OS disk encryption. Post-GA P3 may offer an
+opt-in user/hardware-bound locked copy; it is not part of TC-858 Phase 2.
+
+**Replica-owned localStorage:** only `REPLICA_LOGOUT_MARKER =
+"tinycloud-replica:logout-pending"` (numeric timestamp marker),
+`REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone"` (numeric
+`{epoch, deniedAt}`), and the transient `:probe` suffix while testing writability. No
+account, prefix, key or ciphertext is stored there. The tombstone persists through
+crypto-shred; it is not an encryption key. A failed key-deletion transaction falls back
+to database deletion or the logout marker; the marker blocks all replica serving and
+reports that shredding has not been proven.
+
+**Acceptance observation:** S6 scans all replica-owned IDB stores and the keys above. To
+prove crypto-shred it leaves a ciphertext row stranded, closes the old page/worker and
+drops old CryptoKey references, then opens a **fresh page/worker in the SAME
+BrowserContext and origin** (not a new isolated context). The stranded ciphertext must
+remain, `device["accountKey"]` and `device["gateHmac"]` must be absent, and the new
+page cannot decrypt it. On switch, newly generated keys must fail AES-GCM authentication
+on the old ciphertext. This proves durable-state shredding, not revocation of keys already
+retained by hostile live JavaScript.
 
 ## 1. `KVReplicaStorage` and handles
 
@@ -58,86 +102,164 @@ Every page commit, repair batch, GC pass and the completion run through `Replica
 - browser: one per origin, in the `device` store, rotated by `deny` (§2);
 - node: `device.jwk` per identity. It is durably deleted by the erase of the identity's `pending` intent (§2).
 
-**Identifiers.** Every salted id uses `SaltedHash(salt, material)`: lowercase hex HMAC-SHA-256, keyed with the base64url-decoded per-incarnation `salt`, over the UTF-8 `material`. It is implemented once in `@tinycloud/replica` `src/profile-gate/saltedHash.ts` and shared by both platforms.
-- The principal hash (both platforms) is over the lower-cased principal DID.
-- Browser `partitionId` is over `replicationIdentityKey(identity) + "\n" + prefix + "\n" + deviceDid`.
-- Browser `identityKeyHash` is over `replicationIdentityKey(identity)`.
+**Identifiers and keys.** Browser `gateHash(key, domain, material)` is lowercase-hex
+HMAC-SHA-256 of UTF-8 `${domain}\0${material}`, keyed by the **nonextractable**
+per-incarnation `device["gateHmac"].hmac`, never the public gate `salt` alone.
+Domains are `principal`, `identity`, `partition` and `lookup`:
+- `principalHash`: `gateHash(key, "principal", lowerCasePrincipalDid)`;
+- `identityKeyHash`: `gateHash(key, "identity", replicationIdentityKey(identity))`;
+- `partitionId`: `gateHash(key, "partition", replicationIdentityKey(identity) +
+  "\n" + prefix + "\n" + deviceDid)`;
+- `lookupId`: `gateHash(key, "lookup", replicationIdentityKey(identity) +
+  "\n" + prefix)`, **independent of the sealed owner device DID**.
 
-The browser `replicaId` in events is the salted `partitionId`. Salted ids die with the incarnation.
+`lookupId` maps to one or more opaque partition IDs; `ownerDevice` distinguishes
+the adapter-owned device (`spec.device === undefined`) from injected devices.
+Events use `partitionId` as `replicaId`. Before account establishment the gate
+key can name the account without account content keys; after denial it is
+deleted, while intents/index entries retain only the already-derived ids
+needed for erasure. Web Lock names use private hashes. Node/CLI's
+`SaltedHash(salt, material)` remains lowercase-hex HMAC-SHA-256 with the
+base64url-decoded per-incarnation salt for principal hashes. Node's existing
+unsalted SHA-256 base32 identity directory name remains a known node exposure.
 
-**Browser ordering rule.** `SaltedHash` is async, so it is **never** awaited inside an open IndexedDB transaction:
-1. `snapshot()` runs before any transaction and returns `{ incarnation, salt, lifecycleEpoch }`.
-2. The salted ids are derived **outside any transaction**.
-3. `run(scope, { stamp, principal, incarnation, partitionId?, identityKeyHash? }, fn)` runs. Its **first IDB request** reads the gate record and compares the incarnation (and therefore the salt), the stamp and the principal hash. Any mismatch throws `stamp_stale` (or the matching gate reason), and nothing is written.
+**Browser key hierarchy** (`device` store, no raw key exports):
+- `device["gateHmac"] = { v: 1, incarnation, keyId, hmac }`, with a 128-bit random `keyId`
+  and nonextractable HMAC-SHA-256 `CryptoKey`;
+- `device["accountKey"] = { v: 1, incarnation, lifecycleEpoch, principalHash, keyId,
+  aesGcm, hmac }`, with a separate nonextractable AES-GCM-256 `CryptoKey` and
+  nonextractable HMAC-SHA-256 `CryptoKey` for account path/hash/CID indexes.
 
-Raw identity inputs are never persisted; only stored salted ids are.
+The gate key is generated with a new gate (or freshly after denial); account keys are
+generated only with verified fresh establishment and committed with the active gate. A
+restored session may use them only if incarnation, epoch, principalHash and keyId match;
+missing/mismatched keys fail closed (`REPLICA_GATED`, `gate_unavailable`), never regenerate
+from a restored stamp. Both records are deleted on every deny/switch/consent expiry
+**before** background purge; new keys are generated only after old intents drain and
+fresh consent establishes. Nonextractable IDB keys block direct JS export, **not** a raw
+browser-profile reader (§ Browser at-rest threat model).
 
-Node/CLI keeps its existing unsalted SHA-256 base32 directory names, which is a **known node exposure**: a filesystem reader can test candidate identities.
+**Browser transaction order.** WebCrypto awaits never occur after opening an IDB
+transaction: `snapshot()` first → derive gate/account HMAC identifiers and AES-seal
+payloads **outside** any transaction → `run(scope, access, fn)`. The first IDB request
+reads the gate and checks incarnation, stamp, keyId, consent deadline and precomputed
+principal hash before `fn`. A mismatch aborts with no writes. No raw identity, path,
+prefix, value, grant, or owner JWK enters a replica-owned data/control row.
 
 **`purge(target)`** erases without opening, minting or syncing:
-- it covers the deduplicated union of the stored device and `target.sessionDeviceDid`;
-- it is exempt from the gate (erasure is always allowed);
-- erasing a partition removes its index entry;
-- handles opened earlier reject `RESET_REQUIRED`. This is detected by tombstone/generation, never by unlinking, because POSIX keeps unlinked files readable.
+- browser derives `lookupId` and target principal hash from the current gate
+  key snapshot **outside** an IDB transaction, then rechecks
+  incarnation/keyId/principal hash in the erase transaction and selects
+  owner-device rows plus the exact partition ID for
+  `target.sessionDeviceDid` if supplied; other injected-device partitions
+  are never erased by this targeted purge. Node uses its stored owner device
+  plus the provided session device, with the same deduplicated semantics;
+- erasure itself is exempt from the serving gate. After deny/key shred,
+  replay uses stored opaque intents/index IDs, never regenerating a key or
+  decrypting the sealed device to find an owner. A missing key with existing
+  unknown partitions fails closed rather than falsely reporting purge;
+- erasing a partition removes its index entry. Handles opened earlier reject
+  `RESET_REQUIRED`, detected by tombstone/generation, not unlinking (POSIX
+  keeps unlinked files readable).
 
-**`inspectStatus(spec, { signal })`** is bounded, read-only and cancellable. It never creates anything. It is **ungated** (it has no stamp), which is a **known metadata exposure**: counts, bytes, grant CIDs and times, never values or keys.
+**`inspectStatus(spec, { signal })`** is bounded, read-only and cancellable,
+never creating storage. It is **ungated** (no stamp), a known metadata
+exposure. Browser derives the opaque `lookupId` from a current private gate
+key snapshot, selects only `ownerDevice` from the nonunique index and MUST
+NOT acquire the account key or decrypt. With no gate key after deny, it
+returns `undefined`, not a fabricated status or newly minted key. Otherwise
+it returns `ReplicaInspectedStatus { redacted: true }` with opaque control
+counts, bytes, coverage and epoch only, omitting grant/authority/errors;
+node/CLI may return a full `LocalReplicaStatus` with existing grant CIDs/times.
+Neither returns values, plaintext keys, prefixes or account identifiers.
+Controller status preserves `redacted` and never infers `ready` or `revoked`
+from it; unknown is not `null`/absent.
+
+The browser branch maps only `meta.coverageCode`, `syncedThroughEpoch`,
+`keys/contentMissing/tombstones` and `contentBytes` to those fields (§4);
+`purged` and `generation/revision` remain opaque controls, never a guessed
+authority state.
 
 **Status additions:**
 - `persisted: boolean | null`. Browser: `navigator.storage.persist()`; node omits it.
 - `purgePending: boolean`.
 
 **Pending writes.** `pendingWrites(identity, { stamp })` returns a durable store (`durable: true`) scoped by identity. On an open failure it surfaces `STORAGE_ERROR` and never substitutes memory.
-- The store is bound to its stamp, and callers cache stores per identity **and** stamp.
-- Every `read`, `readExisting` and `update` (append, settle, remove, clear, flush) runs through `ReplicaGateTx.run` with `{ stamp, principal, incarnation, identityKeyHash }`.
-- **Browser:** the `pending` store, keyed by the salted `identityKeyHash`. The store's `update(mutate)` closure runs on the **main thread**, so the pending store uses a main-thread `ReplicaGateTx` (§2). Read-modify-write is serialised across tabs like this:
-  1. `snapshot()`;
-  2. derive `identityKeyHash`;
+- The store is bound to its stamp, and callers cache stores per identity **and** stamp. With a gate, no stamp is `REPLICA_GATED` (`not_established`).
+- Every `read`, `readExisting` and `update` (append, settle, remove, clear, flush) checks the gate **before accessing the pending file or store**. Deny makes an in-flight flush fail closed.
+- **Browser:** the `pending` store is keyed by **private gate-HMAC**
+  `identityKeyHash`. Its `update(mutate)` closure runs on the **main thread**, so the
+  pending store uses a main-thread `ReplicaGateTx` (§2). Read-modify-write is serialised
+  across tabs:
+  1. `snapshot()` obtains the current key record and incarnation before any transaction;
+  2. derive `identityKeyHash` asynchronously outside a transaction;
   3. take the Web Lock `REPLICA_PENDING_LOCK_PREFIX + identityKeyHash`;
-  4. `run` with the snapshot's `incarnation`.
+  4. `run` re-checks incarnation, stamp and keyId **as its first IDB request** before
+     reading or mutating the pending row.
 
-  A changed incarnation or stamp fails closed (`stamp_stale`).
-- Node/CLI: `pending.json` under the identity directory. Updates hold the profile lock; reads follow the node read rule (§2).
+  A changed key, incarnation or stamp fails closed (`stamp_stale`); no raw identity appears
+  in the Web Lock name. If `navigator.locks` is absent or its request fails, no update
+  occurs: `REPLICA_GATED` (`gate_unavailable`), never an unlocked fallback.
+- **Node/CLI:** `pending.json` under the identity directory is **not** a SQLite store. Both `read` and `readExisting`, including a missing file, take the mandatory profile lock, validate the gate, pending intent and identity generation, then read the file while still locked. `update` takes the same lock across gate check, identity verification, read, mutation, atomic temp-file write, rename and durability sync; no directory/file is created before the check. In-process update queues serialize before acquiring the profile lock. The lock is required when replication is on; a missing/unavailable lock fails closed (`gate_unavailable`), never silently falls back to single-process locking. Deny and pending erase take this same lock. See the node file tombstone ordering in §2.
 
 **Peer commits.** `spec.onPeerCommit` is called when **another** tab or process commits a sync for the partition (browser: the worker's `committed` message on `REPLICA_KV_CHANNEL`). It is never called for the handle's own commits, and it must not throw. The controller emits `replication.sync` with `trigger: "peer"` and `origin: "peer"`, and does not sync.
 
-**Error precedence:** `REPLICA_GATED`, then `RESET_REQUIRED`, then `GRANT_*` / `CONSENT_EXPIRED`, then storage and network codes.
+**Error precedence:** `REPLICA_GATED` for an already denied/stale stamp; an active browser consent deadline reaches `CONSENT_EXPIRED` before `GRANT_EXPIRED`; then `RESET_REQUIRED` for erased handles, other `GRANT_*`, storage and network codes. The typed deadline transition (§2) is observable even if the timer denies before an adapter read.
 
 ## 2. Lifecycle and epoch gate
 
 ### State
 
-**Account gate** `ReplicaAccountGate { incarnation, salt, principalHash, lifecycleEpoch, deniedAt }`. It holds no plaintext principal.
-- `incarnation` and `salt` are random, created with the gate store, and replaced when it is recreated.
-- Browser `lifecycleEpoch` has an origin-wide floor outside the deletable database. Each committed
-  deny advances it by one, including a deny whose IDB commit fails and falls back to database
-  deletion. Node/CLI epochs never decrease within an incarnation.
-- `deniedAt` is the millisecond time of the last committed deny and never decreases: a browser
-  deny uses `max(Date.now(), previous deniedAt + 1)`.
+**Account gate** `ReplicaAccountGate` stores incarnation, a private gate-key identifier,
+principal hash, lifecycle epoch, deniedAt and browser consent deadline. It holds no plaintext
+principal. Node retains a random public salt for its existing hash/layout (a known node
+exposure); browser private HMAC key records are in `device` (§1).
+- `incarnation` and browser gate key are random, created with the gate store and replaced
+  when it is recreated. The account keys are minted only on a verified fresh establishment.
+- Browser `lifecycleEpoch` has an origin-wide floor outside the deletable database. Each
+  committed deny advances it by one, including a deny whose IDB commit fails and falls back
+  to database deletion. Node/CLI epochs never decrease within an incarnation.
+- `deniedAt` never decreases: browser deny uses `max(now(), previous deniedAt + 1)`.
+- Browser `consentDeadline` is a **durable finite millisecond instant** computed as the verified
+  fresh consent anchor + `CONSENT_WINDOW_MS` at establishment. It is required when the gate
+  has an active principal, never refreshed by restore, renewal or same-principal establish;
+  any earlier effective consent deadline observed at install lowers it. An absent, malformed
+  or non-finite active deadline fails closed. Deny clears it only after the expiry decision
+  and associated key deletion commit. Node's existing SIWE clock path is unchanged.
 
-**Partition index** `{ partitionId, principalHash, identityKeyHash, createdAt }`. It holds no principal, prefix or device in clear. A partition is registered with `indexPartition` inside the `run` transaction that creates it, and removed with `unindexPartition` inside its erase.
+**Partition index** `{ partitionId, principalHash, identityKeyHash, lookupId,
+ownerDevice, createdAt }`. Browser ids are private gate-HMAC outputs; only
+`ownerDevice` is a nonsecret boolean. The nonunique `byLookupId` index maps
+an opaque identity+prefix target to one or more stored partition ids without
+persisting the raw principal, prefix or device DID. `indexPartition` registers
+each partition inside the `run` transaction that creates it;
+`unindexPartition` removes it in the erase transaction.
 
-**Purge intents** are `partition` intents (id = `partitionId`) and `pending` intents (id = `"pending:" + identityKeyHash`), each carrying `principalHash`. A partition or identity with an outstanding intent is unreadable.
+**Purge intents** are `partition` intents (id = `partitionId`) and `pending` intents (id =
+`"pending:" + identityKeyHash`), each carrying the stored opaque `principalHash`. A
+partition or identity with an outstanding intent is unreadable.
 
 | | Browser | Node/CLI |
 | -- | -- | -- |
-| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv` | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall }`, where `principalHash` is `SaltedHash` hex. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
+| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv`; gate carries opaque hashes/keyId and durable consent deadline, no raw principal | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall, pendingGenerations }`, where `principalHash` is `SaltedHash` hex and `pendingGenerations: { [identityKeyHash]: non-negative integer }` persists pending-file tombstone generations. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
 | First-install anchors | `device` store, key `"firstInstall:" + identityKeyHash` | the gate file's `firstInstall: { [identityKeyHash]: ms }` |
 | Cross-tab/process signal | `localStorage` marker `REPLICA_LOGOUT_MARKER`; durable `REPLICA_DENY_TOMBSTONE`; BroadcastChannel `REPLICA_KV_CHANNEL`; the `storage` event | the gate file, checked by `run` |
 | Session stamp persisted in | sdk-core `PersistedSessionData.replicaStamp` (S3 adds it to the zod schema: `incarnation: string`, `lifecycleEpoch: non-negative int`), next to the SIWE | the profile's persisted session record |
 
 **Browser deny floor.** `REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone"` holds
-`{\"epoch\": <positive safe integer>, \"deniedAt\": <non-negative safe integer ms>}` in origin
+`{"epoch": <positive safe integer>, "deniedAt": <non-negative safe integer ms>}` in origin
 `localStorage`. The origin Web Lock `tinycloud-replica-kv:gate` serializes establish, deny and
 startup recovery; without `navigator.locks`, no mutation runs. Under the lock, each mutation
 re-reads the gate and tombstone. Deny synchronously writes the next floor **before** the IDB
-deny transaction or fallback `deleteDatabase`. A new gate after deletion uses a new incarnation
-and salt but starts at `tombstone.epoch`, with `deniedAt` preserved. Establish compares SIWE
-`issuedAt` (milliseconds) strictly after the maximum of gate and tombstone `deniedAt`; it
-never rounds down. An absent tombstone is valid only before the first deny; unreadable,
-unwritable or malformed storage, a denied gate with a missing floor, or a gate behind the
-tombstone epoch fails closed (`gate_unavailable`). Restore and delivery also consult the floor.
-When the tombstone advances,
-old in-memory stamps are not deliverable in any tab, even before IDB deletion completes.
+deny transaction or fallback `deleteDatabase`. A new gate after deletion uses a new
+incarnation and gate-HMAC key but starts at `tombstone.epoch`, with `deniedAt` preserved.
+Establish compares a finite, independently verified consent anchor (§3), in milliseconds and without rounding
+down, strictly after the maximum of gate and tombstone `deniedAt`. An absent tombstone is
+valid only before the first deny; unreadable, unwritable or malformed storage, a denied
+gate with a missing floor, or a gate behind the tombstone epoch fails closed
+(`gate_unavailable`). Restore and delivery also consult the floor.
+When the tombstone advances, old in-memory stamps are not deliverable in any tab, even
+before IDB deletion completes.
 
 **The gate is mandatory with replication on.**
 - `indexedDbReplicaStorage()` MUST expose `lifecycle`, and the web runtime refuses storage without it with `RUNTIME_UNSUPPORTED`.
@@ -151,14 +273,30 @@ old in-memory stamps are not deliverable in any tab, even before IDB deletion co
 
 No `IDBTransaction` and no closure ever crosses postMessage. `ReplicaLifecycleGate` is the main-thread facade.
 
+**Node/CLI locking:** the profile lock is mandatory for lifecycle mutations and every guarded
+mutation, including pending JSON. Missing or unavailable locking fails closed
+(`REPLICA_GATED`, `gate_unavailable`); the Phase 1 optional `guard`/single-process path is
+never selected with replication on.
+
 ### Session stamp
 
 `ReplicaSessionStamp { incarnation, lifecycleEpoch }` is bound to one session object for its whole life.
-- **Fresh sign-in only:** `establishSessionStamp(principal, { siweIssuedAt })`.
+- **Fresh authenticated session only:** `establishSessionStamp(principal, { consentAnchor })`.
+  The required anchor is finite and clamped at capture: a validated signed SIWE `issuedAt`, or
+  the **owner-authorizing proof's** signed `iat` then `nbf` in an independently verified compact
+  delegation chain. A child leaf freshly minted from a pre-deny owner grant is **not** fresh
+  owner consent; its `iat`/`nbf` must not reset the anchor. Leaf signature, CID, audience and
+  space checks alone do not prove owner consent; an arbitrary did:key leaf with empty `prf`
+  cannot establish. The current compact fixture's `nbf=0` is not a post-deny freshness proof.
+  Never derive establishment from an unverified JWT claim, local receipt time, `Date.now()` or
+  `first_install` storage fallback. A session lacking the proof or finite anchor is
+  `REPLICA_GATED` (`not_established`): replication remains off and KV uses the network; no SIWE
+  is invented. A restored session with a matching persisted stamp instead uses restore.
   1. Rejects `logout_pending` or `purge_pending` **before any gate mutation**.
-  2. Rejects `stamp_stale` when `siweIssuedAt ≤ max(gate.deniedAt, tombstone.deniedAt)`.
-     A SIWE minted before the last deny can't establish, including after database deletion;
-     clock rollback is accepted, as in §3.
+  2. Rejects `not_established` for missing proof, absent/non-finite/`first_install` anchors;
+     rejects `stamp_stale` when `consentAnchor.at ≤ max(gate.deniedAt, browser
+     tombstone.deniedAt)`. A pre-deny credential cannot establish after deny or database
+     deletion. Clock rollback remains the accepted Phase 2 risk (§3).
   3. Then, by gate principal:
      - null → set it, with no epoch bump (deny already bumped);
      - equal → return the current stamp (tabs of one account share it);
@@ -184,13 +322,22 @@ No `IDBTransaction` and no closure ever crosses postMessage. `ReplicaLifecycleGa
 - sync completion;
 - every pending-store `read`/`readExisting`/`update`.
 
-`run(scope, access, fn)` opens the transaction itself over `scope.stores` **plus every control store** (`gate`, `partitions`, `purgeIntents`, `quota`). Its first request reads the gate and asserts `access`:
-- stamp;
-- principal hash;
-- `access.incarnation`;
-- intents covering the stored `partitionId` / `identityKeyHash`.
-
-Then it runs `fn(tx)`. The assert is internal to `run`; there is no public `assert`. `access` carries the raw principal (hashed by the gate) and the **stored** salted ids (derived by the caller from `snapshot()`).
+`run(scope, access, fn)` opens its own transaction over `scope.stores` plus
+`gate`, `device`, `partitions`, `purgeIntents` and `quota`. The **first IDB
+request** reads the gate. All following control reads verify the current
+gate-HMAC and account-key records, incarnation, stamp, required browser
+`keyId`/`accountKeyId`, precomputed `principalHash` and intents covering
+`partitionId` / `identityKeyHash` **before any data request or `fn(tx)`**. A
+stale stamp/key/principal is gated before checking an active deadline; an
+active browser deadline is checked before signed/effective grant expiry.
+The assert is internal to `run`, with no public `assert`. Browser callers
+derive `principalHash` and stored opaque ids asynchronously from
+`ReplicaBrowserGateSnapshot.gateHmac` **before** the IDB transaction; raw
+principal and WebCrypto promises never enter it. Browser
+`ReplicaGateTx<IDBTransaction, ReplicaBrowserGateAccess>` requires both
+key IDs at compile time. Node callers precompute `SaltedHash` principalHash
+before the guarded operation, then recheck the gate's incarnation/salt/stamp
+under the profile lock or SQLite read transaction.
 
 **Browser completion:** `readwrite` transactions use `{ durability: "strict" }`. `run` resolves only on the transaction's `oncomplete`; an abort or error rejects.
 
@@ -200,9 +347,9 @@ The assert refuses with `REPLICA_GATED`, aborts, and never runs `fn` when:
 - an intent covers `partitionId` or `identityKeyHash` (`purge_pending`);
 - the gate can't be read (`gate_unavailable`).
 
-**Node/CLI transaction semantics:**
-- **Mutations** (page commit, `installGrant`, pending update, GC, repair) hold the **profile lock** across the gate check and the SQLite commit.
-- **Guarded reads** take no profile lock. They run inside a SQLite read transaction that checks the gate (gate-file stat of mtime, size and inode, re-read on change) **and** the partition's **tombstone row**. A read that began before the tombstone commit linearises before the deny.
+**Node/CLI guarded operations:**
+- **SQLite mutations** (page commit, `installGrant`, GC, repair) hold the profile lock across gate check and SQLite commit. **SQLite reads** take no profile lock; in one SQLite read transaction they check the gate (gate-file stat of mtime, size and inode; re-read on change) and the partition tombstone row. A read beginning before the tombstone commit linearises before deny.
+- **Pending JSON is different:** it has no SQLite transaction or tombstone row. All pending reads and updates take the profile lock across the gate check and file access (§1). A store binds the current identity generation on its first successful guarded access. Deny atomically advances `pendingGenerations[identityKeyHash]` **with** the corresponding pending intent in the gate file. Erase then durably removes `pending.json` and the owner device record before clearing the intent by atomic gate-file rename. A missing file or generation starts at zero; stale bound stores reject `RESET_REQUIRED` after erase (unless a gate refusal takes precedence). Replay of an existing intent never increments the generation again. The intent blocks reads throughout, including after a crash. Fresh stores opened after activation bind the new generation; old stores cannot resurrect erased writes. There is no lock-free gate-check-then-file-read window.
 
 **Gated results:** `open`, `get`, `list`, `status`, `grant()`, `installGrant`, `sync` and pending-store calls reject `REPLICA_GATED`. Nothing is read, created or written, and a sync's current page aborts with the epoch unchanged. `RESET_REQUIRED` is reserved for handles whose partition was **erased** after they opened.
 
@@ -216,60 +363,116 @@ When the pending store is gated, the whole controller becomes `gated` for that s
 
 ### Delivery and stale replies
 
-`deliverable(stamp)` is synchronous and takes a **required** stamp. No stamp means not deliverable; `if (stamp && !deliverable(stamp))` is wrong.
-- Browser: the `localStorage` marker, origin deny tombstone and this tab's gate view.
-- Node/CLI: this process's view.
+`checkDelivery(stamp): ReplicaDeliveryDecision` is the **synchronous, reason-bearing**
+main-thread preflight before open, installGrant, get/list, sync or replica-derived events:
+- `{ status: "allow" }` only for a current stamp and `now() < gate.consentDeadline`;
+- `{ status: "consent_expired", code: "CONSENT_EXPIRED" }` when an active browser gate's
+  deadline has elapsed, even if the signed UCAN expired earlier. The controller records this
+  transition once per active stamp/replica, emits `replication.grant` action
+  `consent_deadline_reached` code `CONSENT_EXPIRED`, starts a single scoped
+  `deny({ reason: "consent_expired", principal })`, then dispatches network KV. It never
+  delivers replica bytes or exposes an adapter exception to the read caller;
+- `{ status: "gated", gate }` when already denied/stale/missing (including when the timer
+  won the race). Subsequent reads use network fallback `replica_gated` /
+  `REPLICA_GATED`, normally `stamp_stale`.
 
-The main thread calls it before:
-- handing any **replica-served** value to a caller: get values, list keys, and replica-derived event fields (`replication.divergence` `localOnly`, `localEtag`);
-- every open, `installGrant` and sync request.
+An active controller's expiry timer uses the existing `ReplicationScheduler` and the same
+injected clock to run that transition even with no read; its event de-duplicates against a
+racing worker `CONSENT_EXPIRED`. Startup recovery before any controller exists instead
+reports `consentExpired: true` and commits denial; no fictional grant event is emitted.
+If the timer wins, an ensuing read is gated, not required to see a worker exception.
 
-Worker replies carrying replica-served data are stamped (`ReplicaStampedReply`). Deliver only if `reply.stamp` deep-equals `handle.stamp` **and** `deliverable(reply.stamp)`. A reply without a stamp is dropped.
+`deliverable(stamp)` is the synchronous **boolean reply fence** (`checkDelivery(stamp).status
+=== "allow"`), with a required stamp. Browser checks localStorage marker/tombstone and the
+in-memory gate deadline; node checks its process view. No stamp means not deliverable.
+Worker replies carrying replica-served data are stamped (`ReplicaStampedReply`): deliver only
+if `reply.stamp` deep-equals `handle.stamp` **and** `deliverable(reply.stamp)`. A reply without
+a stamp is dropped. This includes get bytes, list keys and replica-derived divergence fields.
 
 ### Sign-out and account switch
 
-1. **Deny.** `deny({ reason, principal, next? })` flips this tab's or process's in-memory view **before its first await**, whatever the outcome.
-   - If `principal` doesn't match the gate, the caller is stale. It disables itself in memory and the gate is untouched (`stale`).
+1. **Deny.** `deny({ reason, principal, next? })` (`reason` includes `consent_expired`) flips
+   this tab's or process's in-memory view **before its first await**, whatever the outcome.
+   - If `principal` doesn't match the gate, the caller is stale. It disables itself in memory
+     and the gate is untouched (`stale`).
    - Otherwise one commit:
-     - moves the gate: principal null (sign-out) or `next` (switch), `lifecycleEpoch + 1`, `deniedAt`;
-     - records intents for every indexed partition and pending record of that principal;
-     - clears its `first_install` anchors and browser `grantInstall:<identityKeyHash>:<cid>`
-       anchors for each denied identity;
-     - deletes the owner `device` record. It is rotated: a new one is created on the next activation.
-       - **Browser:** this happens in the same IndexedDB transaction.
-       - **Node exception:** the gate file and the device record can't commit atomically. Step 1 commits the epoch, the intents and the `firstInstall` clearing in the gate file. The device record is then **durably deleted by the erase of the identity's `pending` intent, before that intent clears**. Replay after a crash is idempotent. Denial is still immediate, because the in-memory view flips first and every guarded transaction checks the gate.
+     - clears the gate principal/hash on **every** scoped deny, including account switch, bumps
+       `lifecycleEpoch + 1` and records `deniedAt`; browser clears `consentDeadline`.
+       `next` identifies the intended successor for sequencing only; it is never stored
+       under the old HMAC key. A fresh authenticated B session establishes a new account
+       key/principal only **after** old intents are erased.
+     - records intents for every indexed partition and pending record of that principal; node
+       advances each pending identity's generation in this **same gate-file write**;
+     - clears its `first_install` anchors and browser
+       `"grantInstall:" + identityKeyHash + ":" + accountHmac(cid)` anchors for each
+       denied identity; no raw CID appears in the browser store key;
+     - **Browser:** deletes account AES-GCM key(s), gate-HMAC key and owner device in the SAME
+       IDB deny transaction, durably before any background erase; no key is re-created until
+       a verified fresh establishment. The localStorage deny floor is written first, so stale
+       tabs stop delivery before that IDB transaction.
+     - **Node exception:** gate file and device record cannot commit atomically. Step 1 commits
+       epoch, intents, pending generations and firstInstall clearing; the device record is
+       durably deleted by the identity's pending-intent erase before intent clear. Replay is
+       idempotent. Denial is immediate because every guarded operation checks the gate.
 
    Outcomes:
    - `denied`.
    - `stale`.
-   - `deleted` (browser): the commit failed, and `deleteDatabase(REPLICA_KV_DATABASE)` succeeded. Every connection closes on `onversionchange`, and a recreated database has a new incarnation and salt.
+   - `deleted` (browser): the commit failed, and `deleteDatabase(REPLICA_KV_DATABASE)` succeeded. Every connection closes on `onversionchange`; a recreated database has a new incarnation and gate-HMAC key.
    - `marker` (browser): the delete failed or stayed blocked, and `REPLICA_LOGOUT_MARKER` was set. The marker blocks activation and delivery everywhere. Every load retries the delete, and the marker is cleared only once the delete succeeds.
    - `unguarded`: nothing could be written, so **cross-tab denial is not guaranteed**. This tab serves nothing. The docs state the limitation.
 2. **Drain.** This tab's handles are cancelled and closed. Others are refused from their next transaction and nudged over the BroadcastChannel and the `storage` event.
-3. **Erase.** `erasePending()` erases each intent in its own exempt transaction: `erasePartition` / `eraseIdentityPending`, `unindexPartition`, `accountErase` and `clearIntent`. Replay is idempotent: erasing a missing or tombstoned partition succeeds.
-   - **Browser:** all of it is in one transaction.
-   - **Node order:**
+3. **Erase.** `erasePending()` processes intents under the profile lock / browser erase transaction: `erasePartition` / `eraseIdentityPending`, `unindexPartition`, `accountErase` and `clearIntent`. Replay is idempotent: erasing a missing or tombstoned partition succeeds.
+   - **Browser:** all of it is in one exempt transaction.
+   - **Node partition order:**
      1. gate epoch bump + intent (step 1, atomic rename);
-     2. a SQLite transaction that writes the tombstone and deletes rows;
+     2. a SQLite transaction that writes the partition tombstone and deletes rows;
      3. commit;
      4. unlink files;
      5. clear the intent (atomic rename).
 
-     The erase must be durable before the intent clears.
-4. **Activate** (switch only). `activationAllowed(next)` requires that:
-   - `gate.principalHash` matches `next` (or null followed by `establishSessionStamp`);
-   - no intent of a previous principal remains;
-   - no marker is set.
-
-   Until then, B's KV goes to the network.
+     The partition erase must be durable before the intent clears.
+   - **Node pending identity order:** intent and generation bump in step 1's atomic gate-file rename → unlink `pending.json` and owner `device.jwk` and sync the directory under the profile lock → clear intent durably. Replay sees the already advanced generation, retries deletion, and does not advance it twice. A missing file is success, never permission to read before intent clear.
+4. **Activate** (switch only). `activationAllowed(next)` requires a **non-null**
+   gate principal hash computed under the **current** gate key matching `next`, no old
+   intent and no marker. A null gate returns false; only `establishSessionStamp` on a
+   **fresh authenticated session** can set it after the old purge and mint new keys.
+   Until then, B's KV goes to the network. Old-key `nextHash` is never reused.
 
 **`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Erasure continues in the background.
 
 **Startup.** `recover()` runs before anything binds:
-1. the browser retries the pending delete if the marker is set;
-2. then every outstanding intent is erased.
+1. browser retries a pending database delete if the marker is set;
+2. before any v1→v2 upgrade, under the origin gate Web Lock it probes the v1
+   gate read-only, validates and preserves the maximum legacy denial epoch/time
+   and localStorage tombstone (§ Appendix); an unreadable floor fails closed;
+3. browser checks the durable consent deadline with the shared clock. If elapsed,
+   it runs scoped `deny({ reason: "consent_expired", principal })` and durably
+   deletes both encryption keys before any replica read/open, then schedules
+   erase. `ReplicaEraseReport.consentExpired` is true only after that key-deletion
+   commit; failures leave the gate closed;
+4. every outstanding intent is erased.
 
-It never rejects; leftovers show as `purgePending`.
+It never rejects; leftovers show as `purgePending`. A browser closed through the
+deadline cannot delete keys while closed; the next load checks before serving.
+
+**Clock seam.** `ReplicaClock = () => number` returns ms. Production defaults to `Date.now`.
+S3's main-thread `createIndexedDbLifecycle({ now })` and `ReplicaGateTx` receive the
+same test clock as S4's existing `ReplicationScheduler.now()` and S1's worker host
+`createKvWorkerHost({ ...wasmWorkerDeps, now: () => clockMs })`. There is **no public**
+`indexedDbReplicaStorage({ now })` option and no production function/closure crossing
+postMessage. The test-only worker clock wire is exactly:
+- main → worker `{ testOnly: "setClock", at: number }`;
+- worker → main ACK `{ testOnly: "clockSet", at: number }`.
+
+The fixture worker factory retains its worker; `advanceClock(at)` waits for the matching
+ACK before reads. `WorkerConnection` ignores the id-less ACK. Main and worker use the
+same injected millisecond value for establish, deny (`deniedAt` floor), first install,
+grant install/serve, every guarded read and the active consent timer. Node's SIWE clock
+is unchanged. A synthetic browser jump to +7d persists a future `deniedAt`; real-node
+SIWE issued at the unchanged wall time cannot re-establish in that fixture. Never relax the
+strict post-deny anchor check to make a test pass: test re-consent separately with real time
+or a separately validated future signed SIWE if supported.
 
 ## 3. Grant duration and renewal
 
@@ -278,17 +481,34 @@ It never rejects; leftovers show as `purgePending`.
 With replication on, the controller **always** passes `KVReplicaSpec.grantPolicy = { grantTtlMs, consentAnchor }`, and adapters reject `open` without it.
 
 **Consent anchor** (`ReplicationAuthority.consentAnchor()`), in fallback order:
-1. the SIWE `issuedAt` (`siwe`);
-2. the compact delegation's `iat` (`delegation_iat`);
-3. then its `nbf` (`delegation_nbf`);
-4. otherwise `null`, and storage uses its persisted `first_install` time.
+1. the validated, signed SIWE `issuedAt` (`siwe`);
+2. the **owner-authorizing proof's** signed `iat` (`delegation_iat`) after independent proof-chain
+   validation; never a child leaf's newly minted timestamp;
+3. then that same owner proof's `nbf` (`delegation_nbf`);
+4. otherwise `null`, and storage uses its persisted `first_install` time **only to bound grant
+   expiry**, never to establish a session stamp.
 
 **Anchor invariants:**
-- `at` is finite ms.
+- `at` is finite ms. SIWE is parsed from the verified signed message; delegation `iat`/`nbf`
+  comes from the independently verified owner-authorizing proof. Leaf signature/CID/audience
+  alone are insufficient, and a delegate cannot refresh consent by minting a new child under
+  an old owner grant.
 - Second-based sources are converted ×1000 **exactly once**, at the authority.
-- Every anchor passes `clampConsentAnchor(anchor, now)` **at capture**. It clamps to ≤ now; a non-finite value gives `null`, and the next source is used.
+- Every anchor passes `clampConsentAnchor(anchor, now)` **at capture**. It clamps to ≤ now; a
+  non-finite value gives `null`, and the next source is used.
 - Renewals never re-anchor.
-- `first_install` is keyed by identity. It survives partition reset, purge, revocation and reinstall, and is cleared **only by `deny`** (§2). An unreadable anchor **fails closed**: no serving and no mint.
+- `first_install` is keyed by identity. It survives partition reset, purge, revocation and
+  reinstall, and is cleared **only by `deny`** (§2). An unreadable anchor **fails closed**:
+  no serving and no mint. It is not an independent proof of a fresh sign-in; absent verified
+  recency, `establishSessionStamp` refuses `not_established` and the session uses network KV.
+
+**Current compact-session boundary.** Restored compact sessions persist only the leaf token
+and parent CID(s), not the owner proof bytes. A leaf with `prf=[oldOwnerCid]` can be minted with
+a fresh `nbf` from authority predating deny. Until an API supplies and independently verifies
+the owner-authorizing proof and its finite signed issuance/`nbf`, `consentAnchor()` returns
+`null` for compact sessions. They cannot establish a new stamp and use network KV; a matching
+persisted stamp still restores via `restoreSessionStamp`. Tests must reject both a fresh child
+under an old owner proof and a chain whose owner timestamp is unavailable.
 
 **Consent deadline** = `anchor.at + CONSENT_WINDOW_MS` (7 d).
 
@@ -302,12 +522,19 @@ effectiveGrantExpiry({ signedExpiresAt, installedAt, grantTtlMs, consentDeadline
 `installedAt` comes from the storage clock at the **first** install of that grant CID. It is stored keyed by CID and set once: re-installing doesn't refresh it, and recompute-at-open uses the stored value. The adapter stores the effective expiry with the grant and **recomputes it at open** from the current policy, which caps grants restored from an older policy.
 
 **Serve checks fail closed,** inside the read transaction:
-- Serving requires `now < effectiveExpiresAt` **and** `now < consentDeadline`. Each check is a refusal on `!(now < bound)`, so `NaN` refuses.
-- A missing or non-finite stored bound refuses.
-- A refusal throws `GRANT_EXPIRED`, or `CONSENT_EXPIRED` for the deadline (§1). The read goes to the network with `grant_expired`.
-- Expiry blocks reads; it does not erase.
+- Browser gate checks its durable consent deadline **before** signed/effective grant expiry.
+  At `!(now < consentDeadline)` (including non-finite/missing), it refuses `CONSENT_EXPIRED`
+  without returning value bytes or list keys and triggers scoped expiry denial/crypto-shred
+  outside the read transaction. A shorter signed `exp` does not hide the 7-day event.
+- Otherwise serving requires `now < effectiveExpiresAt`. A missing or non-finite stored
+  bound refuses `GRANT_EXPIRED`. The controller falls through to a **network result** with
+  `replication.read` reason `grant_expired`, code `CONSENT_EXPIRED` or `GRANT_EXPIRED`;
+  it does not surface a raw adapter exception to the read caller.
+- Browser expiry is **destructive**: account and gate keys are deleted before purge. Node/CLI
+  expiry blocks reads but does not erase; its existing SIWE clock path is unchanged.
 
-**Clock rollback is an accepted risk for Phase 2.** Local bounds use `Date.now()`. The node-enforced signed `exp` still bounds every network use.
+**Clock rollback is an accepted risk for Phase 2.** Production clocks use `Date.now()`. The
+node-enforced signed `exp` still bounds network use.
 
 **Every grant path:**
 
@@ -324,9 +551,19 @@ effectiveGrantExpiry({ signedExpiresAt, installedAt, grantTtlMs, consentDeadline
 - It renews only through the session-key derivation path of `delegateTo`, never with a wallet prompt.
 - On refusal or offline, the current grant serves until its effective expiry.
 
-**Events** (`replication.grant`, keyed by an opaque `replicaId`): `minted`, `renewed`, `renewal_refused`, `renewal_deferred`, `capped`, `expired` and `consent_deadline_reached` (`CONSENT_EXPIRED`).
+**Events** (`replication.grant`, keyed by `replicaId`): `minted`, `renewed`,
+`renewal_refused`, `renewal_deferred`, `capped`, `expired` and
+`consent_deadline_reached` (`CONSENT_EXPIRED`). An active controller emits the deadline
+transition **once per stamp and replica**, whether main-thread preflight, worker refusal or
+controller timer observes it first; later `stamp_stale` does not duplicate it. A startup
+expiry before a controller exists is observable via `recover().consentExpired` and
+`replication.lifecycle` `denied` with `reason: "consent_expired"` when runtime listeners
+are present; no synthetic per-replica grant event is required.
 
-**After the deadline:** no mint, no renewal and no local reads. Network reads continue. A fresh sign-in re-anchors.
+**After the deadline:** browser keys are crypto-shredded, then content purged. No mint,
+renewal or local read. Network reads continue. Re-consent requires a fresh verified
+owner-backed anchor, new keys, fresh install and **full resync**; no old ciphertext is reused.
+Node/CLI continue to block reads without automatic erase.
 
 S4 implements `effectiveGrantExpiry`, `consentDeadlineMs`, `mintRemainingMs`, `needsSilentRenewal` and `clampConsentAnchor` in `grantPolicy.ts`.
 
@@ -345,12 +582,58 @@ Both are forwarded as `KVReplicaSpec.quota`.
 | Seam | `ReplicaQuotaLedger<IDBTransaction>` | `ReplicaAdmitHook` (the `admit` option), run inside `applyPage`'s mutation under the profile lock |
 | Free-space floor | `freeBytes()` (`navigator.storage.estimate()`), read just before the transaction | not applied |
 
-**Admission,** inside the page transaction, before any write:
-1. `admitPage(tx, { partitionId, blobBytes, entries, freeBytes })` checks the projected size (blobs + per-entry overhead + repair headroom) against `maxBytes` and the floor. On refusal it rejects `STORAGE_BUDGET`.
-2. The page writes.
-3. `accountCommit(tx, { partitionId, deltaBytes })` runs in the same transaction.
+**Browser persisted-row metric:** v2 `entries` rows use out-of-line key
+`[opaquePid, accountHmac(path)]` and value
+`{ pid, hashId?, v: 1, iv: Uint8Array, bytes: Uint8Array, size: number }`;
+`blobs` rows use `[opaquePid, accountHmac(hash)]` and
+`{ pid, v: 1, iv, bytes, size }`. A `meta` row uses key `opaquePid` and value
+`{ pid, revision, generation, coverageCode, syncedThroughEpoch, keys,
+contentMissing, tombstones, contentBytes, purged, v: 1, iv, bytes, size }`:
+all named controls except `pid`, `coverageCode: 0 | 1 | 2`, `purged: boolean`
+and `v` are finite numeric fields. `coverageCode` maps 0 = empty,
+1 = bootstrapping, 2 = complete. `revision`/`generation` support guarded CAS
+and tombstones; counts/epoch/`contentBytes` support redacted inspection.
+Config, grant, authority, cursor, error and lease holder/token/serial/times
+are sealed in `bytes`, not exposed in the numeric control row.
 
-Erase calls `accountErase` in the erase transaction.
+`bytes` contains AES-GCM ciphertext (including its 16-byte tag). Plain
+key/path/hash/content/config/grant/cursor/error values live **only inside**
+sealed bytes; `hashId` is an opaque account-HMAC value. `size` is the exact
+application-encoded persisted row metric, never plaintext length or an
+arbitrary per-entry estimate. IDB engine/page/allocation overhead is
+unobservable and excluded. `navigator.storage.estimate()` is approximate
+and origin-wide: it supplies the separate free-space floor, not row usage.
+
+`kv-storage/sealed.ts` defines `measureSealedRow(key: IDBValidKey, sealedRow)` (read-only
+test export) as the **one** metric:
+4-byte length + UTF-8 JSON encoding of the primary key; 2-byte object frame;
+for every persisted field, 1-byte delimiter + UTF-8 field name; `pid` and
+optional `hashId` each add 4-byte length + UTF-8 value; `v` and
+`coverageCode` each add one byte; `purged` adds one byte; every other
+numeric field (`revision`, `generation`, `syncedThroughEpoch`, `keys`,
+`contentMissing`, `tombstones`, `contentBytes`, **and `size`**) adds a fixed
+eight bytes; `iv` and `bytes` each add 4-byte length + raw bytes. The
+`bytes` ciphertext includes its 16-byte AES-GCM authentication tag. Fixed
+eight-byte `size` avoids recursive decimal-length accounting. The same
+helper measures final presealed rows, old stored rows and GC/erase removals;
+it does not claim IDB filesystem bytes.
+
+Pre-seal new rows **outside** the transaction. In each guarded write
+transaction check keyId/fence, read and measure old stored rows, compute a
+single signed **net** `deltaBytes` from their `size` values and the final
+presealed rows, then `admitPage(tx, { partitionId, deltaBytes, freeBytes })`
+**before any put**. `STORAGE_BUDGET` aborts without page writes.
+`accountCommit(tx, { partitionId, deltaBytes })` uses that **exact same**
+number in the same transaction. This applies to page changes, replacements,
+repair, GC and **every sealed meta mutation**, including lease/status writes;
+none may bypass the ledger. Negative deltas release space and are not refused
+solely because free space is below the floor. No WebCrypto await may keep the
+IDB transaction open. The node `ReplicaAdmitHook` retains its blob-byte/entry
+input semantics.
+
+Erase measures the same stored row metric for blobs, entries and meta, then
+calls `accountErase(tx, { partitionId, bytes })` in the erase transaction;
+once the partition index is gone replay subtracts nothing.
 
 **Outcomes:**
 - `STORAGE_BUDGET`: admission refused the page.
@@ -361,12 +644,12 @@ Both stop the sync (`class: "storage"`) with the epoch unchanged. Committed cont
 ## 5. Options, status and events
 
 - **Options:** `ReplicationOptions` adds `grantTtlMs?`, `maxBytes?` and `minFreeBytes?`. `ResolvedReplicationOptions.grantTtlMs` stays optional until S4 wires the default.
-- **Status:** `persisted?`, `purgePending?` and `gate?`; `ReplicaState` adds `gated`; `ReplicationReason` adds `replica_gated`.
+- **Status:** `persisted?`, `purgePending?` and `gate?`; `ReplicaInspectedStatus` is a discriminated redacted browser-only inspection branch; `ReplicaState` adds `gated`; `ReplicationReason` adds `replica_gated`.
 - **Events:**
   - `replication.sync` adds `trigger: "peer"`, `origin?: "peer"` and `class: "lifecycle"`.
   - New `replication.grant` (§3).
   - New `replication.lifecycle`: `denied`, `deny_stale`, `deny_failed`, `database_deleted`, `marker_set`, `marker_cleared`, `unguarded`, `drained`, `erased`, `erase_failed`, `activation_blocked`, `activated` and `recovered`, with an optional `replicaId`, `reason`, `gate`, `partitions`, `remaining` and `code`.
-- **Identifiers:** `replication.grant` and `replication.lifecycle` carry **no account identifiers**: no `space`, no prefix and no principal. They use only the opaque `replicaId` (browser: the salted partition id; node: the replica hash). The existing `replication.read`, `write`, `sync`, `state` and `divergence` events carry `space` and keys, as in Phase 1. That is a baseline limitation, not covered by this claim.
+- **Identifiers:** `replication.grant` and `replication.lifecycle` carry no **raw** account identifiers (`space`, prefix or principal), only `replicaId` (browser: private gate-HMAC partition id; node: replica hash). This is not a claim of browser-profile confidentiality or secrecy for existing event types. Existing `replication.read`, `write`, `sync`, `state` and `divergence` events still carry `space` and keys as a Phase 1 baseline limitation.
 - **In-repo consumers updated:**
   - sdk-services `diagnostics.ts` allowlists;
   - `TelemetryEvents` (`REPLICATION_GRANT`, `REPLICATION_LIFECYCLE`);
@@ -378,14 +661,53 @@ One IndexedDB database per origin, `REPLICA_KV_DATABASE` = `tinycloud-replica-kv
 
 | Store (`REPLICA_KV_STORES`) | Owner | Key | Guarded by `run` |
 | -- | -- | -- | -- |
-| `meta` | adapter (S1) | `partitionId` | yes |
-| `entries` | adapter | `[partitionId, key]` | yes |
-| `blobs` | adapter | `[partitionId, blake3Hex]` | yes |
-| `pending` | adapter | `identityKeyHash` | yes |
-| `device` | adapter (deny deletes `"device"` and first-install entries) | `"device"`; `"firstInstall:" + identityKeyHash` | yes |
-| `gate` | lifecycle (S3) | `"account"` | control |
-| `partitions` | lifecycle | `partitionId` | control |
-| `purgeIntents` | lifecycle | `ReplicaPurgeIntent.id` | control |
-| `quota` | ledger (S5) | ledger-defined | control |
+| `meta` | adapter (S1) | private gate-HMAC `partitionId`; v2 numeric/opaque inspection and CAS controls plus AES-sealed config/grants/authority/cursor/errors/lease (§4) | yes |
+| `entries` | adapter | `[partitionId, accountHmac(path)]`; AES-sealed path, entry metadata and hash | yes |
+| `blobs` | adapter | `[partitionId, accountHmac(hash)]`; AES-GCM ciphertext and sealed hash | yes |
+| `pending` | adapter | private gate-HMAC `identityKeyHash`; AES-sealed identity, keys and pending state | yes |
+| `device` | adapter/lifecycle | `"device"` (AES-sealed owner JWK); `"gateHmac"` and `"accountKey"` nonextractable key records; `"firstInstall:" + identityKeyHash` numeric ms; `"grantInstall:" + identityKeyHash + ":" + accountHmac(cid)` numeric ms | guarded data; deny exempt |
+| `gate` | lifecycle (S3) | `"account"`: opaque hashes, finite consent deadline, epoch/incarnation/keyId | control |
+| `partitions` | lifecycle | private `partitionId`, private principal/identity/lookup hashes, `ownerDevice` boolean; nonunique `byLookupId` secondary index | control |
+| `purgeIntents` | lifecycle | private `ReplicaPurgeIntent.id` and stored opaque ids | control |
+| `quota` | ledger (S5) | opaque partition id and numeric byte accounting | control |
 
-The adapter's schema upgrade creates every store. The RC1 per-partition databases (`tinycloud-replica/<id>`) remain for `openReplica`, untouched.
+The v2 `entries`, `blobs` and `meta` values have the sealed envelopes and persisted
+`size` field specified in §4. `kv-storage/sealed.ts:measureSealedRow` is the
+canonical key-plus-row metric for admission, every meta write, repair/GC and erase;
+it excludes unobservable IDB engine/page allocation.
+
+**Destructive v1→v2 migration.** `REPLICA_KV_SCHEMA_VERSION = 2`. V1 contains
+plaintext replica-owned rows incompatible with the sealed/HMAC v2 schema.
+`create: false` opens with no requested version and returns `null` for v1,
+without upgrading, reading plaintext or mutating it. Before **any** `create:
+true` open under the origin gate Web Lock, lifecycle makes a versionless,
+read-only probe of v1's gate and validates `lifecycleEpoch`/`deniedAt`. It
+persists the component-wise maximum of that denial and the existing
+`REPLICA_DENY_TOMBSTONE` into localStorage **before** dropping v1's gate; a
+malformed/unreadable/unwritable floor fails closed with no activation. The
+following `onupgradeneeded` versionchange **atomically deletes every v1
+replica-owned data/control object store** and recreates all v2 stores (§ table),
+including key records, pending state and quota. A blocked or aborted upgrade
+is unavailable, never a v1 plaintext read/decrypt fallback or partial v2.
+V1 stamps fail restore (new incarnation); only a new session with verified
+owner consent later than the preserved deny floor may establish fresh keys
+and full resync. No key is regenerated merely to read stranded v1 rows.
+Old v1 connections close on `versionchange`; the worker, pending, inspection
+and restore paths cannot request `create: true` ahead of lifecycle. The
+low-level database opener is not a public bypass. The RC1 per-partition
+databases (`tinycloud-replica/<id>`) remain untouched.
+
+Migration acceptance scans every replica-owned v2 store **and secondary index
+keys** (including `byLookupId`) for zero legacy plaintext rows, literal
+prefixes/device DIDs/account IDs and no old key record, including after a
+denied legacy gate.
+The numeric localStorage denial tombstone survives and wins over pre-deny
+SIWE on subsequent load; no migration success is inferred from an isolated
+new BrowserContext.
+
+Browser exact GET uses the account-HMAC path index. LIST scans the opaque partition rows,
+decrypts sealed path/entry payloads outside the IDB transaction, then filters by prefix,
+sorts, applies `after` and pages; a stamped reply still passes the main-thread delivery
+check. Page changes are AES-GCM-sealed and indexed before opening the guarded commit
+transaction, which atomically writes ciphertext and quota accounting. No WebCrypto await
+may let that IDB transaction auto-commit.
