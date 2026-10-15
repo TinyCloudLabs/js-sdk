@@ -624,8 +624,8 @@ node-enforced signed `exp` still bounds network use.
 | -- | -- |
 | Fresh mint | `mint(deviceDid, prefix, signal, { expiryMs })`, where `expiryMs = mintRemainingMs(…) = min(grantTtlMs, consentDeadline − now)`. It is a **duration**, forwarded as `delegateTo(…, { expiry: expiryMs })`. No mint when it is `≤ 0` (`CONSENT_EXPIRED`) |
 | Session grant reused directly | installed only if within policy. Otherwise it's replaced by a derived capped grant (`canRenew`), or its effective expiry is enforced locally (`capped`) |
-| Compact delegated / `sessionOnly` | effective expiry enforced locally; no silent renewal |
-| Installed grant reused at open | only if the stored `effectiveExpiresAt` is ahead and `now < consentDeadline` |
+| Compact delegated / `sessionOnly` | no plan, mint or silent renewal. A **matching restored stamp** can use an already installed, independently verified active grant for the same identity/device partition and covered prefix while its effective expiry and applicable consent deadline (browser: durable gate) remain valid, even if `sessionGrant(prefix)` refuses. No matching stamp/valid installed grant means network-only; a leaf never establishes fresh consent |
+| Installed grant reused at open | only if its stored effective authority is `valid`, it covers the prefix, its `effectiveExpiresAt` is ahead and `now <` the applicable consent deadline |
 | Restored from an older policy | recomputed at open; capped locally |
 
 **Silent renewal.** `needsSilentRenewal(…)` is true when the remaining lifetime is **strictly** below `RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt)` (exactly 25% remaining does not renew) and `now < consentDeadline`. It is false for non-finite inputs.

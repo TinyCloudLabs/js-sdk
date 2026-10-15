@@ -373,8 +373,12 @@ export type AuthorityRefusal = {
 };
 export interface ReplicationAuthority {
   /**
-   * Restrict this authority to the current session's grant. When true, the controller MUST NOT
-   * consult the plan, mint a grant, or treat an installed storage grant as serving authority.
+   * Compact delegated/session-only authority: never consult `plan`, mint or silently renew.
+   * A matching persisted session stamp MAY serve a previously installed, independently
+   * verified active grant in its own identity/device partition while the grant's effective
+   * expiry and durable gate deadline remain valid, even if `sessionGrant(prefix)` now refuses.
+   * Without that stamp and stored valid grant, use network KV. A stored grant never
+   * establishes fresh consent or changes the session's own authority.
    */
   sessionOnly?: boolean;
   sessionGrant(
