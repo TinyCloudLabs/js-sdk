@@ -69,6 +69,7 @@ import {
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
   type StorageFullEvent,
+  type ReplicationEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
@@ -263,24 +264,19 @@ async function recoveredBrowserReplication(
   let timeoutId: ReturnType<typeof setTimeout>;
   const unavailable = (code: string, remaining?: number): void => {
     try {
-      replication.onEvent?.({
+      const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
         type: "replication.lifecycle", at: new Date().toISOString(), action: "unguarded",
-        reason: "startup", gate: "gate_unavailable", code, ...(remaining === undefined ? {} : { remaining }),
-      });
+        reason: "startup", gate: "gate_unavailable", code,
+      };
+      if (remaining !== undefined) event.remaining = remaining;
+      replication.onEvent?.(event);
     } catch { /* Observability cannot prevent a network session. */ }
   };
-  const recovery = Promise.resolve().then(() => lifecycle.recover({ signal: abort.signal })).then(
-    (report) => {
-      const failed = report.failed;
-      const remaining = report.remaining;
-      if (timedOut && (failed.length > 0 || remaining > 0)) {
-        unavailable(failed[0]?.code ?? "RECOVERY_INCOMPLETE", remaining);
-      }
-      return report;
-    },
-  ).catch(() => {
-    if (timedOut) unavailable("STORAGE_ERROR");
-    return null;
+  const recovery = (async () => lifecycle.recover({ signal: abort.signal }))().catch(() => null);
+  void recovery.then((result) => {
+    if (timedOut && (!result || result.failed.length > 0 || result.remaining > 0)) {
+      unavailable(result?.failed[0]?.code ?? (result ? "RECOVERY_INCOMPLETE" : "STORAGE_ERROR"), result?.remaining);
+    }
   });
   const timeout = new Promise<null>((resolve) => {
     timeoutId = setTimeout(() => {
@@ -480,9 +476,7 @@ export class TinyCloudWeb {
       try {
         getNodeReplicationLoaders();
       } catch {
-        throw new Error(
-          "TinyCloudWeb replication requires registerReplicationLoaders({ runtime, authority, gate }) from @tinycloud/web-sdk before construction.",
-        );
+        throw new Error("Call registerReplicationLoaders from @tinycloud/web-sdk before constructing TinyCloudWeb with replication enabled.");
       }
     }
     this.config = config;
@@ -908,12 +902,6 @@ export class TinyCloudWeb {
     }));
   }
 
-  private restoredSessionCoversConfiguredManifest(node: TinyCloudNode): boolean {
-    const permissions = this.configuredManifestPermissions(node);
-    return permissions.length === 0 || node.hasRuntimePermissions(permissions);
-  }
-
-
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
@@ -927,7 +915,8 @@ export class TinyCloudWeb {
     if (restored.status === "restored" && restored.session) {
       const node = await this.ensureNode();
       assertNotSignedOut();
-      if (this.restoredSessionCoversConfiguredManifest(node)) {
+      const permissions = this.configuredManifestPermissions(node);
+      if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
         assertNotSignedOut();
         return restored.session;
       }
