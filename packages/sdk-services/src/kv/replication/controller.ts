@@ -7,7 +7,7 @@ import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, emp
 import { localGet, type LocalGetResponse } from "./localResponse";
 import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
-import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 
 const CLOSE_TIMEOUT_MS = 3_000;
 const STATUS_REFRESH_TIMEOUT_MS = CLOSE_TIMEOUT_MS;
@@ -639,7 +639,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     emit({ type: "replication.read", op: r.op, space: r.space, key: r.path, replica: null, source: "network", reason: "NETWORK_REQUESTED", outcome: r.outcome, latencyMs: r.latencyMs, stalenessMs: null, coverage: null, authority: null });
   }
 
-  async function inspectPersistedStatus(prefix: string): Promise<{ missing: boolean; local?: LocalReplicaStatus; errorCode?: string }> {
+  async function inspectPersistedStatus(prefix: string): Promise<{ missing: boolean; local?: LocalReplicaStatus | ReplicaInspectedStatus; errorCode?: string }> {
     if (!storage.inspectStatus || isClosed || purgeInProgress) return { missing: false };
     const sessionGrant = authority.sessionGrant(prefix);
     const device = "refused" in sessionGrant ? undefined : sessionGrant.device;
@@ -681,7 +681,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       }
       const records = snapshot.records.filter((r) => kvPrefixCovers(prefix, r.key));
       const opened = replicas.get(prefix);
-      let local: LocalReplicaStatus | undefined;
+      let local: LocalReplicaStatus | ReplicaInspectedStatus | undefined;
       if (opened?.handle) {
         try { local = await opened.handle.status(); }
         catch { /* A generation-fenced or unavailable handle has no live status. */ }
@@ -690,23 +690,24 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (!local && !opened?.opening && !opened?.authorityRevoked) inspected = await inspectPersistedStatus(prefix);
       local ??= inspected.local;
       if (inspected.missing && !opened?.reason && !opened?.authorityRevoked && !opened?.opening && !isClosed) return undefined;
-      const revoked = opened?.authorityRevoked === true || local?.authority.state === "revoked";
+      const full = local && !("redacted" in local) ? local : undefined;
+      const revoked = opened?.authorityRevoked === true || full?.authority.state === "revoked";
       const rootUnsupported = opened?.lastError === "REPLICATION_ROOT_UNSUPPORTED";
-      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : rootUnsupported ? "unavailable" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : local?.coverage === "complete" && local.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
+      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : rootUnsupported ? "unavailable" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : full?.coverage === "complete" && full.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
       return {
         prefix,
         state,
         ...(opened?.reason ? { reason: opened.reason } : inspected.errorCode ? { reason: "replica_unavailable" as const } : {}),
         ...(inspected.errorCode ?? opened?.lastError ? { errorCode: inspected.errorCode ?? opened?.lastError } : {}),
         ...(local ?? {}),
-        ...(revoked ? { authority: { state: "revoked" as const, expiresAt: local?.authority.expiresAt ?? null } } : {}),
+        ...(revoked ? { authority: { state: "revoked" as const, expiresAt: full?.authority.expiresAt ?? null } } : {}),
         pending: {
           inFlight: records.filter((r) => r.state === "in_flight").length,
           committed: records.filter((r) => r.state === "committed").length,
           ambiguous: records.filter((r) => r.state === "ambiguous").length,
         },
         pinned: pinnedKeys(snapshot, prefix, scheduler.now()),
-        lagMs: local?.lastSyncAt ? scheduler.now() - Date.parse(local.lastSyncAt) : null,
+        lagMs: full?.lastSyncAt ? scheduler.now() - Date.parse(full.lastSyncAt) : null,
       };
     }));
     return entries.filter((entry): entry is ReplicaStatusEntry => entry !== undefined);

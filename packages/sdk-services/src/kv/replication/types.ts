@@ -125,6 +125,22 @@ export interface LocalReplicaStatus {
   purgePending?: boolean;
 }
 
+/**
+ * Ungated browser inspection returns only opaque, unsealed numeric controls from the
+ * v2 meta row: coverageCode, syncedThroughEpoch, keys/contentMissing/tombstones and
+ * contentBytes. It must not acquire the account key or decrypt grant, authority, cursor,
+ * errors or KV payload. `redacted: true` distinguishes unknown from absent/revoked.
+ */
+export interface ReplicaInspectedStatus {
+  redacted: true;
+  coverage: ReplicaCoverage;
+  syncedThroughEpoch: number;
+  counts: LocalReplicaStatus["counts"];
+  bytes: number;
+  persisted?: boolean | null;
+  purgePending?: boolean;
+}
+
 export interface ReplicaDevice {
   did: string;
   jwk: object;
@@ -242,12 +258,12 @@ export interface KVReplicaStorage {
   readonly kind: "sqlite" | "indexeddb";
   open(spec: KVReplicaSpec): Promise<KVReplicaHandle>;
   /**
-   * Read an existing replica's durable status without creating or mutating storage or waiting
-   * for a mutation guard. Missing replicas return undefined. Implementations must honor abort.
-   * Ungated (it carries no stamp): a known metadata exposure (counts, bytes, grant CIDs, times),
-   * never values or keys.
+   * Read an existing replica's durable status without creating/mutating storage or waiting for a
+   * mutation guard. Missing replicas return undefined; abort is honored. Ungated (no stamp):
+   * browser returns a discriminated, redacted control-only status without acquiring the account
+   * key or decrypting data; node/CLI may expose existing grant CIDs/times. Known metadata exposure.
    */
-  inspectStatus?(spec: KVReplicaSpec, options: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined>;
+  inspectStatus?(spec: KVReplicaSpec, options: { signal: AbortSignal }): Promise<LocalReplicaStatus | ReplicaInspectedStatus | undefined>;
   /**
    * Erases replicas for the identity and prefix across the deduplicated union of the adapter's
    * stored device (if any) and `sessionDeviceDid`. A missing stored device never skips the
@@ -263,13 +279,16 @@ export interface KVReplicaStorage {
    *
    * With a `lifecycle` gate, the store is bound to `options.stamp` for its whole life (callers
    * cache stores per identity AND stamp). Every `read`, `readExisting` and `update` (append,
-   * settle, remove, clear, flush) runs through `ReplicaGateTx.run` with `{ stamp, principal:
-   * identity.principal, incarnation, identityKeyHash }` before touching or initializing storage
-   * (browser: on the main thread, ids derived from `snapshot()` outside any transaction, under the
-   * Web Lock named from that snapshot); a refusal
-   * rejects REPLICA_GATED and reads/writes nothing. A store obtained without a stamp rejects every
-   * call with REPLICA_GATED `not_established`. So after `deny`, a stale tab, worker or process can
-   * neither read nor refill the signed-out identity's pending state.
+   * settle, remove, clear, flush) checks stamp, principal, incarnation and identity intent
+   * (plus browser keyId) before touching storage; missing stamps refuse REPLICA_GATED
+   * `not_established`. Browser derives private gate-HMAC ids asynchronously from `snapshot()`
+   * before an IDB transaction, locks on that opaque identity id, then calls main-thread
+   * `ReplicaGateTx.run`, whose first control request verifies the snapshot/keyId. Node's
+   * identity-scoped `pending.json` is not SQLite: both reads and mutations take the mandatory
+   * profile lock across gate/generation check and file access; mutations durably rename
+   * before releasing it.
+   * The identity generation advances atomically with a deny intent, so stale stores cannot
+   * refill erased pending writes (CONTRACT.md §2). Missing locks fail closed.
    */
   pendingWrites?(
     identity: ReplicationIdentity,
@@ -318,8 +337,8 @@ export interface PendingWriteStore {
   readonly durable: boolean;
   readonly identity: ReplicationIdentity;
   /**
-   * Consistent lock-free snapshot, e.g. a read of an atomic file replacement. Gated (see
-   * `KVReplicaStorage.pendingWrites`).
+   * Consistent gated snapshot. Browser: guarded IDB read; node/CLI: mandatory profile lock
+   * across gate check and pending.json read (not an unlocked atomic-file snapshot).
    */
   read(): Promise<PendingWriteState>;
   /**
@@ -362,8 +381,10 @@ export interface ReplicationAuthority {
     options?: { expiryMs?: number },
   ): Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   /**
-   * Consent anchor of the session that granted replication: SIWE `issuedAt`, else the compact
-   * delegation's `iat`, else `nbf`; null when none (storage falls back to first install).
+   * Finite consent anchor from validated signed SIWE `issuedAt`, or the independently verified
+   * owner-authorizing compact proof's signed `iat`/`nbf` (never its child leaf). Null if the
+   * proof or its timestamp is unavailable: compact leaf CID/prf alone is insufficient. Storage
+   * may use `first_install` only to bound expiry; null cannot establish a fresh session stamp.
    */
   consentAnchor?(): ReplicaConsentAnchor | null;
   /** False for sessions that can't derive (compact delegated / sessionOnly): no silent renewal. */
@@ -526,6 +547,8 @@ export interface PinnedKey {
   likelyOrphaned: boolean;
 }
 export interface ReplicaStatusEntry extends Partial<LocalReplicaStatus> {
+  /** True when only opaque, ungated durable controls were inspected; no authority is known. */
+  redacted?: boolean;
   prefix: string;
   state: ReplicaState;
   reason?: ReplicationReason;
@@ -653,12 +676,13 @@ export type ReplicationEvent =
     }
   | {
       /**
-       * Grant lifetime and renewal (CONTRACT.md §3). Carries no account identifiers: no `space`,
-       * no prefix, no principal.
+       * Grant lifetime and renewal (CONTRACT.md §3). Carries no raw account fields (`space`,
+       * prefix or principal). This does not claim confidentiality against a raw browser-profile
+       * reader who also has the persisted signed-in session.
        */
       type: "replication.grant";
       at: string;
-      /** Opaque replica id: browser salted partition id; node replica hash. */
+      /** Replica id: browser private gate-HMAC partition id; node replica hash. */
       replicaId: string;
       action:
         | "minted"
@@ -679,10 +703,10 @@ export type ReplicationEvent =
       expiryMs?: number;
     }
   | {
-      /** Sign-out / account-switch lifecycle (CONTRACT.md §2). Carries no account identifiers. */
+      /** Sign-out / switch / consent-expiry lifecycle (CONTRACT.md §2). No raw account fields. */
       type: "replication.lifecycle";
       at: string;
-      /** Opaque replica id when the step concerns one partition (same scheme as `replication.grant`). */
+      /** Replica id when the step concerns one partition (same scheme as `replication.grant`). */
       replicaId?: string;
       action:
         | "denied"
@@ -699,7 +723,7 @@ export type ReplicationEvent =
         | "activation_blocked"
         | "activated"
         | "recovered";
-      reason?: "sign_out" | "account_switch" | "startup";
+      reason?: "sign_out" | "account_switch" | "consent_expired" | "startup";
       gate?: ReplicaGateReason;
       /** Partitions/intents affected by this step. */
       partitions?: number;
