@@ -227,6 +227,14 @@ describe("PersistedSessionDataSchema", () => {
       });
       expect(result.success).toBe(false);
     });
+
+    it("rejects unknown keys in replicaStamp instead of stripping them", () => {
+      const result = PersistedSessionDataSchema.safeParse({
+        ...validPersistedSessionData,
+        replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 0, principal: "did:pkh:eip155:1:0xabc" },
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   describe("address validation", () => {

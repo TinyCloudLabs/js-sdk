@@ -110,7 +110,7 @@ export const PersistedSessionDataSchema = z.object({
     .object({
       incarnation: z.string().min(1),
       lifecycleEpoch: z.number().int().nonnegative(),
-    })
+    }).strict()
     .optional(),
 });
 
