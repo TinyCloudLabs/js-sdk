@@ -1063,6 +1063,29 @@ describe("resolveManifest — end-to-end composition", () => {
     });
   });
 
+  it("encodes an account-scoped space list permission without granting other space actions", () => {
+    const resolved = resolveManifest({
+      app_id: "xyz.tinycloud.account",
+      name: "TinyCloud Account",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [{
+        service: "tinycloud.space",
+        space: "account",
+        path: "",
+        actions: ["list"],
+        skipPrefix: true,
+      }],
+    });
+
+    expect(resourceCapabilitiesToSpaceAbilitiesMap(resolved.resources)).toEqual({
+      account: {
+        capabilities: { "": ["tinycloud.capabilities/read"] },
+        space: { "": ["tinycloud.space/list"] },
+      },
+    });
+  });
+
   it("includes delegation revocation in the consolidated session request", () => {
     const resolved = resolveManifest({
       app_id: "com.feed.app",
