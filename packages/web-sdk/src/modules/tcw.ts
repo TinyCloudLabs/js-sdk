@@ -683,6 +683,16 @@ export class TinyCloudWeb {
       : { status: "missing", data: null };
   }
 
+  private trackRestoreAddress(address: string): void {
+    this.pendingRestoreAddresses.set(address, (this.pendingRestoreAddresses.get(address) ?? 0) + 1);
+  }
+
+  private untrackRestoreAddress(address: string): void {
+    const count = this.pendingRestoreAddresses.get(address)!;
+    if (count === 1) this.pendingRestoreAddresses.delete(address);
+    else this.pendingRestoreAddresses.set(address, count - 1);
+  }
+
   async restoreSession(address?: string): Promise<SessionRestoreResult> {
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
@@ -697,19 +707,21 @@ export class TinyCloudWeb {
     if (this.signOutInFlight > 0 || this.persistedRestoreBlocked) {
       return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
     }
+    // An explicit address is known before resolveRestoreAddress's first await.
+    // Sign-out must see it even when storage has no activeAddress() hook.
+    if (address) this.trackRestoreAddress(address);
 
     const restoreAddress = await this.resolveRestoreAddress(address);
     if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
+      if (address) this.untrackRestoreAddress(address);
       return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
     }
     if (!restoreAddress) {
+      if (address) this.untrackRestoreAddress(address);
       this._sessionRestoreStatus = "missing";
       return { status: "missing" };
     }
-    this.pendingRestoreAddresses.set(
-      restoreAddress,
-      (this.pendingRestoreAddresses.get(restoreAddress) ?? 0) + 1,
-    );
+    if (!address) this.trackRestoreAddress(restoreAddress);
 
     this._sessionRestoreStatus = "restoring";
     try {
@@ -744,9 +756,7 @@ export class TinyCloudWeb {
         error: err instanceof Error ? err : new Error(String(err)),
       };
     } finally {
-      const count = this.pendingRestoreAddresses.get(restoreAddress)!;
-      if (count === 1) this.pendingRestoreAddresses.delete(restoreAddress);
-      else this.pendingRestoreAddresses.set(restoreAddress, count - 1);
+      this.untrackRestoreAddress(restoreAddress);
     }
   }
 

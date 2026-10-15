@@ -661,6 +661,28 @@ test("signOut() clears an explicit pending restore address even without activeAd
   expect(tcw.session()).toBeUndefined();
 });
 
+test("signOut() clears an explicit restore started in the same turn", async () => {
+  const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
+  let stored: typeof persisted | null = persisted;
+  const storage = {
+    save: mock(async () => undefined),
+    load: mock(async () => stored),
+    clear: mock(async () => { stored = null; }),
+  };
+  const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = node;
+
+  const restoring = tcw.restoreSession(address);
+  await tcw.signOut();
+
+  expect((await restoring).status).toBe("restore-failed");
+  expect(storage.clear).toHaveBeenCalledWith(address);
+  expect(stored).toBeNull();
+  expect((await tcw.restoreSession(address)).status).toBe("missing");
+  expect(tcw.session()).toBeUndefined();
+});
+
 test("signIn() starting during signOut() cannot reload the session being cleared", async () => {
   const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
   const entries = new Map<string, string>();
