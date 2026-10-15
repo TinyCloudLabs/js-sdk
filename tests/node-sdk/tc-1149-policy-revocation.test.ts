@@ -582,6 +582,19 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect(await ownerRead(independent)).toBe("unrelated after revoke");
   }, 30_000);
 
+  test("rejects malformed target DIDs before accepting a scoped key tombstone", async () => {
+    const f = await fixture();
+    const spaceId = f.resource.split("/kv/", 1)[0]!;
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "unchanged")).status).toBe(200);
+    for (const targetDid of ["did:key:", "did:Bad:recipient"]) {
+      const signed = await signedKeyRevocation(targetDid, f.ownerKey, f.nodeDid, { kind: "space", spaceId });
+      expect((await postKeyRevocation(signed)).status).toBe(400);
+    }
+    const control = await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get");
+    expect(control.status).toBe(200);
+    expect(await control.text()).toBe("unchanged");
+  }, 30_000);
+
   test("committed key-revoke receipt is stable across self-revoke retries, while nonce conflicts and unrelated signers are rejected", async () => {
     const f = await fixture();
     const requestNonce = nonce();
