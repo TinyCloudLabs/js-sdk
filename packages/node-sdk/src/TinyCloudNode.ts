@@ -541,6 +541,22 @@ function exactVerifiedRecap(verified: { verifiedRecap?: unknown }): WasmRecapEnt
   }));
 }
 
+/** A fresh session manager and its ready "default" session key. */
+function createDefaultSessionKey(wasm: IWasmBindings): { manager: ISessionManager; keyId: string; jwk: object } {
+  const manager = wasm.createSessionManager();
+  // Use the binding's "default" key, creating it if the binding did not.
+  let keyId = "default";
+  let jwkStr = manager.jwk(keyId);
+  if (!jwkStr) {
+    keyId = manager.createSessionKey(keyId);
+    jwkStr = manager.jwk(keyId);
+  }
+  if (!jwkStr) {
+    throw new Error("Failed to get session key JWK");
+  }
+  return { manager, keyId, jwk: JSON.parse(jwkStr) };
+}
+
 /** One replaceable set of services bound to a single host/session authority. */
 class ServiceGraphLifetime {
   private readonly abortController = new AbortController();
@@ -603,7 +619,7 @@ class ServiceGraphLifetime {
 
   assertActive(): void {
     if (this.retired) {
-      throw new Error("Service graph has been retired by session replacement.");
+      throw new Error("Service graph has been retired: its session was replaced or signed out.");
     }
   }
 
@@ -1609,24 +1625,10 @@ export class TinyCloudNode {
     }
 
     // Always create session manager and session key immediately
-    this.sessionManager = this.wasmBindings.createSessionManager();
-
-    // Try to use "default" key, create if it doesn't exist
-    const defaultKeyId = "default";
-    let jwkStr = this.sessionManager.jwk(defaultKeyId);
-    if (jwkStr) {
-      // Key already exists, reuse it
-      this.sessionKeyId = defaultKeyId;
-    } else {
-      // Create new key
-      this.sessionKeyId = this.sessionManager.createSessionKey(defaultKeyId);
-      jwkStr = this.sessionManager.jwk(this.sessionKeyId);
-    }
-
-    if (!jwkStr) {
-      throw new Error("Failed to get session key JWK");
-    }
-    this.sessionKeyJwk = JSON.parse(jwkStr);
+    const sessionKey = createDefaultSessionKey(this.wasmBindings);
+    this.sessionManager = sessionKey.manager;
+    this.sessionKeyId = sessionKey.keyId;
+    this.sessionKeyJwk = sessionKey.jwk;
 
     this._serviceGraph = this.createServiceGraphLifetime();
 
@@ -1641,11 +1643,32 @@ export class TinyCloudNode {
     // Initialize notification handler
     this.notificationHandler = config.notificationHandler ?? new SilentNotificationHandler();
 
-    // Initialize SharingService for receive-only access (no session required)
-    // This allows session-only users to receive sharing links without signIn()
-    // Full capabilities (generate) are added after signIn()
+    this._sharingService = this.createReceiveOnlySharing();
+
+    // Set up wallet/auth if signer or privateKey is provided
+    if (config.signer) {
+      this.signer = config.signer;
+      this.setupAuth(config);
+    } else if (config.privateKey) {
+      if (!TinyCloudNode.nodeDefaults) {
+        throw new Error(
+          "privateKey requires PrivateKeySigner. Either provide a signer in config, " +
+          "or import from '@tinycloud/node-sdk' (not '/core') for automatic Node.js defaults."
+        );
+      }
+      this.signer = TinyCloudNode.nodeDefaults.createSigner(config.privateKey, this._chainId);
+      this.setupAuth(config);
+    }
+  }
+
+  /**
+   * SharingService for receive-only access (no session required), bound to the
+   * current service graph. This lets session-only users receive sharing links
+   * without signIn(); full capabilities (generate) are added after signIn().
+   */
+  private createReceiveOnlySharing(): SharingService {
     const receiveOnlyGraph = this._serviceGraph;
-    this._sharingService = new SharingService({
+    return new SharingService({
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -1676,21 +1699,6 @@ export class TinyCloudNode {
         return kvService;
       },
     });
-
-    // Set up wallet/auth if signer or privateKey is provided
-    if (config.signer) {
-      this.signer = config.signer;
-      this.setupAuth(config);
-    } else if (config.privateKey) {
-      if (!TinyCloudNode.nodeDefaults) {
-        throw new Error(
-          "privateKey requires PrivateKeySigner. Either provide a signer in config, " +
-          "or import from '@tinycloud/node-sdk' (not '/core') for automatic Node.js defaults."
-        );
-      }
-      this.signer = TinyCloudNode.nodeDefaults.createSigner(config.privateKey, this._chainId);
-      this.setupAuth(config);
-    }
   }
 
   /**
@@ -2002,6 +2010,73 @@ export class TinyCloudNode {
    */
   get restorableSession(): TinyCloudSession | undefined {
     return this.currentTinyCloudSession();
+  }
+
+  /**
+   * Sign out and end the session on this instance.
+   *
+   * Pending work for the session is aborted, the persisted session is cleared
+   * from the configured session storage, every service built for the session
+   * is retired, and the session key is replaced. Afterwards the instance holds
+   * no session authority: session accessors return `undefined` and service
+   * calls fail with "Not signed in" until {@link signIn} or
+   * {@link restoreSession}.
+   */
+  async signOut(): Promise<void> {
+    // Like signIn and restoreSession: stop the leaving session's background
+    // registry sync and let its in-flight writes drain first.
+    this.pendingAccountRegistrySync?.controller.abort();
+    await this.accountRegistryTail;
+
+    // Aborts pending service operations and clears the persisted session.
+    await this.tc?.signOut();
+
+    const sessionKey = createDefaultSessionKey(this.wasmBindings);
+    const oldGraph = this._serviceGraph;
+    this.sessionManager = sessionKey.manager;
+    this.sessionKeyId = sessionKey.keyId;
+    this.sessionKeyJwk = sessionKey.jwk;
+    // Adopting no session returns the authorization to its constructed state.
+    this.auth?.installRestoredSession(
+      sessionKey.manager,
+      undefined,
+      this.explicitHost ? [this.explicitHost] : undefined,
+    );
+    this._address = undefined;
+    this._restoredTcSession = undefined;
+    this._restoredNodeFeatures = undefined;
+    this._activeServiceSession = undefined;
+    this._serviceContext = undefined;
+    this._kv = undefined;
+    this._sql = undefined;
+    this._duckdb = undefined;
+    this._hooks = undefined;
+    this._vault = undefined;
+    this._encryption = undefined;
+    this._baseVaults.clear();
+    this._baseSecrets.clear();
+    this._secrets.clear();
+    this._account = undefined;
+    this._publicKV = undefined;
+    this._delegationManager = undefined;
+    this._spaceService = undefined;
+    this.runtimePermissionGrants = [];
+    this._recapOperationsCache = undefined;
+    this.confirmedHostedSpaceIds.clear();
+    this.hostedOwnedSpaceIds.clear();
+    this.cancelOwnedSpaceHosts();
+    this.replicationDelegateSession = undefined;
+    this.replicationScopeError = undefined;
+    if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
+
+    // Services captured from the session fail from here on; receiving shared
+    // links keeps working without a session, as before sign-in.
+    this._serviceGraph = this.createServiceGraphLifetime();
+    oldGraph.retire();
+    this.tc?.retireServices();
+    this._capabilityRegistry = new CapabilityKeyRegistry();
+    this._keyProvider = new WasmKeyProvider({ sessionManager: this.sessionManager });
+    this._sharingService = this.createReceiveOnlySharing();
   }
 
   /**

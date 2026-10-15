@@ -786,9 +786,18 @@ export class TinyCloudWeb {
     };
   };
 
+  /**
+   * Sign out: clear the persisted session and end the session on this
+   * instance. Afterwards session accessors return `undefined` and service
+   * calls fail with "Not signed in" until the next sign-in or restore.
+   */
   signOut = async (): Promise<void> => {
+    // Resolves the address from the live session, so it runs first.
     await this.clearPersistedSession();
+    await this._node?.signOut();
     this.resetSessionScopedCaches();
+    this._credentialsService = undefined;
+    this._shareReceiverService = undefined;
     this.notificationHandler.cleanup?.();
   };
 
