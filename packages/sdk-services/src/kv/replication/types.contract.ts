@@ -7,6 +7,9 @@ import type {
   ReplicaGrantInfo,
   ReplicationReason,
 } from "../../index";
+import type { KVReplicaSpec, ReplicationAuthority, ReplicaStatusEntry } from "./types";
+import type { ReplicaGateTx, ReplicaSessionStamp } from "./lifecycle";
+import type { ReplicaQuotaLedger } from "./quota";
 
 type Assert<T extends true> = T;
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -42,3 +45,14 @@ type _PendingStoreDurabilityIsBoolean = Assert<Equal<PendingWriteStore["durable"
 type _UnprovenSinceStartIsAReason = Assert<
   "REPLICA_UNPROVEN_SINCE_START" extends ReplicationReason ? true : false
 >;
+// Phase 2 contract: every addition is optional so Phase 1 adapters and callers still conform.
+type _StampIsOptionalOnSpec = Assert<Equal<HasRequiredKey<KVReplicaSpec, "stamp">, false>>;
+type _StampFields = Assert<Equal<keyof ReplicaSessionStamp, "incarnation" | "lifecycleEpoch">>;
+type _PurgePendingOptional = Assert<Equal<HasRequiredKey<LocalReplicaStatus, "purgePending">, false>>;
+type _MintExpiryIsDuration = Assert<
+  Equal<NonNullable<Parameters<ReplicationAuthority["mint"]>[3]>["expiryMs"], number | undefined>
+>;
+type _GatedIsAState = Assert<"gated" extends ReplicaStatusEntry["state"] ? true : false>;
+type _GatedIsAReason = Assert<"replica_gated" extends ReplicationReason ? true : false>;
+type _GateAssertTakesTx = Assert<Equal<Parameters<ReplicaGateTx<"tx">["assert"]>[0], "tx">>;
+type _LedgerAdmitTakesTx = Assert<Equal<Parameters<ReplicaQuotaLedger<"tx">["admitPage"]>[0], "tx">>;

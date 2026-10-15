@@ -61,8 +61,11 @@ export interface ReplicaGatedError extends Error {
 /** Every partition ever created in this gate's scope. */
 export interface ReplicaPartitionIndexEntry {
   partitionId: string;
-  /** `replicationIdentityKey(identity)`. */
-  identityKey: string;
+  /**
+   * Browser: lowercase hex SHA-256 of `replicationIdentityKey(identity)`. Node/CLI: the existing
+   * identity directory name (SHA-256 base32). Opaque outside the adapter that produced it.
+   */
+  identityKeyHash: string;
   principal: string;
   prefix: string;
   deviceDid: string;
@@ -73,7 +76,7 @@ export interface ReplicaPartitionIndexEntry {
 /** A partition (or an identity's pending-write record) that must be erased before anything reads it. */
 export type ReplicaPurgeIntent =
   | { id: string; kind: "partition"; partitionId: string; principal: string; recordedAt: number }
-  | { id: string; kind: "pending"; identityKey: string; principal: string; recordedAt: number };
+  | { id: string; kind: "pending"; identityKeyHash: string; principal: string; recordedAt: number };
 
 export interface ReplicaDenyInput {
   /** `sign_out` clears the principal; `account_switch` sets `next`. */
@@ -106,8 +109,8 @@ export interface ReplicaEraseReport {
  */
 export interface ReplicaGateTx<Tx> {
   /**
-   * First call in every guarded transaction (open, read, grant install, page commit, sync
-   * completion). Rejects with {@link ReplicaGatedError}; the caller aborts the transaction.
+   * First call in every guarded transaction (open, get, list, status, grant install, page commit,
+   * sync completion). Rejects with {@link ReplicaGatedError}; the caller aborts the transaction.
    */
   assert(tx: Tx, access: ReplicaGateAccess): Promise<void>;
   /** Registers a partition in the index, in the transaction that creates it. Idempotent. */
@@ -127,7 +130,7 @@ export interface ReplicaPartitionEraser<Tx> {
    */
   erasePartition(tx: Tx, partitionId: string): Promise<{ bytes: number }>;
   /** Removes the identity's pending-write state. */
-  eraseIdentityPending(tx: Tx, identityKey: string): Promise<void>;
+  eraseIdentityPending(tx: Tx, identityKeyHash: string): Promise<void>;
 }
 
 /**
