@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pkhDid } from "@tinycloud/sdk-core";
@@ -64,12 +65,24 @@ function profileDir(): string {
   return dir;
 }
 
+function profileGuard(dir: string): <T>(section: () => Promise<T>) => Promise<T> {
+  const lock = join(dir, ".replica-test-profile-lock");
+  return async (section) => {
+    await mkdir(lock);
+    try {
+      return await section();
+    } finally {
+      await rmdir(lock);
+    }
+  };
+}
+
 function replicatedNode(dir?: string): TinyCloudNode {
   return new TinyCloudNode({
     host: RESTORE_HOST,
     signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
     wasmBindings: new NodeWasmBindings(),
-    replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: dir },
+    replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: dir, profileGuard: dir ? profileGuard(dir) : undefined },
   });
 }
 
@@ -87,6 +100,31 @@ describe("replica gate: restore", () => {
     expect(node.address).toBe(proof.address);
     expect(node.spaceId).toBe(proof.spaceId);
     expect(await node.replication!.status()).toEqual([]);
+  });
+
+  test("keeps a verified network restore when replica runtime binding fails", async () => {
+    class FailingRuntime extends StubRuntime {
+      override async bind() { throw new Error("replica runtime unavailable"); }
+    }
+    registerReplicationLoaders({
+      ...loaders(),
+      runtime: async () => ({ ReplicationRuntime: FailingRuntime }) as never,
+    });
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = replicatedNode(dir);
+
+    await node.restoreSession({ ...proof, replicaStamp });
+    expect(node.address).toBe(proof.address);
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({
+      state: "gated",
+      gate: "gate_unavailable",
+      errorCode: "REPLICA_GATED",
+    });
   });
 
   test("restores the network session but gates a stamp that predates sign-out", async () => {
@@ -237,6 +275,26 @@ describe("replica gate: sign-out", () => {
     const after = readGateFile(dir);
     expect(after.principalHash).toBeNull();
     expect(after.lifecycleEpoch).toBe(before.lifecycleEpoch + 1);
+  });
+
+  test("refuses an unlocked profile denial while still ending the network session", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: dir },
+    });
+    await node.restoreSession({ ...proof, replicaStamp });
+    const before = readGateFile(dir);
+
+    await expect(node.signOut()).rejects.toThrow("Replica gate was not denied");
+    expect(node.restorableSession).toBeUndefined();
+    expect(readGateFile(dir)).toEqual(before);
   });
 
   test("throws when the gate cannot be denied", async () => {
