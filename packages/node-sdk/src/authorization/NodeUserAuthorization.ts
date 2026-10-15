@@ -257,11 +257,7 @@ export interface NodeUserAuthorizationConfig {
    * Mints the replica session stamp on each fresh sign-in (TC-858 §4). Returns
    * `undefined` when replication is off, so the persisted session carries no stamp.
    */
-  establishReplicaStamp?: (input: {
-    address: string;
-    chainId: number;
-    siweIssuedAt: string;
-  }) => Promise<PersistedSessionData["replicaStamp"]>;
+  establishReplicaStamp?: (session: TinyCloudSession) => Promise<PersistedSessionData["replicaStamp"]>;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -1513,11 +1509,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       signature,
     };
 
-    const replicaStamp = await this.establishReplicaStamp?.({
-      address,
-      chainId,
-      siweIssuedAt: prepared.siwe?.match(/Issued At: (.+)/)?.[1] ?? "",
-    });
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     // Persist session with TinyCloud-specific data
     const persistedData: PersistedSessionData = {
       address,
@@ -1777,11 +1769,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
     const createdAt = issuedAtMatch?.[1] ?? new Date().toISOString();
 
-    const replicaStamp = await this.establishReplicaStamp?.({
-      address,
-      chainId,
-      siweIssuedAt: issuedAtMatch?.[1] ?? "",
-    });
+    const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     // Persist session with TinyCloud-specific data
     const persistedData: PersistedSessionData = {
       address,

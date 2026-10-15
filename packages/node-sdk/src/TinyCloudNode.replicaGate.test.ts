@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +14,9 @@ import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signe
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
 // @ts-ignore node-sdk moduleResolution "node" cannot read replica exports (see replica-contract.ts)
 import * as replicaGate from "@tinycloud/replica/profile-gate";
+import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
+import { KV_DATABASE } from "../../replica/src/kv-storage/schema";
+import { requestAsPromise } from "../../replica/src/browser/idb";
 
 const RESTORE_HOST = "http://127.0.0.1:1";
 const OTHER_ADDRESS = "0x000000000000000000000000000000000000dEaD";
@@ -84,6 +88,40 @@ function replicatedNode(dir?: string): TinyCloudNode {
     wasmBindings: new NodeWasmBindings(),
     replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: dir, profileGuard: dir ? profileGuard(dir) : undefined },
   });
+}
+
+async function withBrowserOrigin<T>(run: (
+  lifecycle: ReturnType<typeof createIndexedDbLifecycle>,
+  entries: Map<string, string>,
+) => Promise<T>): Promise<T> {
+  const names = ["indexedDB", "IDBKeyRange", "localStorage", "navigator"] as const;
+  const previous = names.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
+  const entries = new Map<string, string>();
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: fakeIndexedDB });
+  Object.defineProperty(globalThis, "IDBKeyRange", { configurable: true, value: fakeIDBKeyRange });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => { entries.set(key, value); },
+      removeItem: (key: string) => { entries.delete(key); },
+    },
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: (_name: string, section: () => Promise<unknown>) => section() } },
+  });
+  try {
+    await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
+    return await run(createIndexedDbLifecycle(), entries);
+  } finally {
+    await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
+    for (let i = 0; i < names.length; i++) {
+      const descriptor = previous[i];
+      if (descriptor) Object.defineProperty(globalThis, names[i], descriptor);
+      else Reflect.deleteProperty(globalThis, names[i]);
+    }
+  }
 }
 
 describe("replica gate: restore", () => {
@@ -253,6 +291,115 @@ describe("replica gate: restore", () => {
     await node.restoreSession(proof);
 
     expect(node.address).toBe(proof.address);
+  });
+});
+
+describe("browser replica gate without a profile directory", () => {
+  test("restores the exact IndexedDB stamp and shreds both keys on sign-out", async () => {
+    await withBrowserOrigin(async (lifecycle, entries) => {
+      const proof = await signedRestorableSession();
+      const principal = pkhDid(proof.address, proof.chainId);
+      const stamp = await lifecycle.establishSessionStamp(principal, {
+        consentAnchor: { source: "siwe", at: Date.parse(proof.siwe.match(/Issued At: (.+)/)![1]!) },
+      });
+      let boundStamp: unknown;
+      class CapturingRuntime extends StubRuntime {
+        override async bind(input: unknown) { boundStamp = (input as { stamp?: unknown }).stamp; }
+      }
+      registerReplicationLoaders({
+        ...loaders(),
+        runtime: async () => ({ ReplicationRuntime: CapturingRuntime }) as never,
+        gate: async () => { throw new Error("Browser restore must not load the file gate."); },
+      });
+      const browserStorage = {
+        kind: "indexeddb" as const,
+        lifecycle,
+        async open() { throw new Error("Browser restore must not open a partition."); },
+        async purge() {},
+      };
+      const node = new TinyCloudNode({
+        host: RESTORE_HOST,
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+        replication: { enabled: true, prefixes: ["notes/"], storage: browserStorage },
+      });
+
+      await node.restoreSession({ ...proof, replicaStamp: stamp });
+      expect(boundStamp).toEqual(stamp);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+      await node.signOut();
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      expect(JSON.parse(entries.get("tinycloud-replica:deny-tombstone")!)).toMatchObject({ epoch: stamp.lifecycleEpoch + 1 });
+      expect(node.address).toBeUndefined();
+    });
+  });
+
+  test("failed startup recovery gates restore but still forwards sign-out denial", async () => {
+    await withBrowserOrigin(async (lifecycle, entries) => {
+      const proof = await signedRestorableSession();
+      const stamp = await lifecycle.establishSessionStamp(pkhDid(proof.address, proof.chainId), {
+        consentAnchor: { source: "siwe", at: Date.parse(proof.siwe.match(/Issued At: (.+)/)![1]!) },
+      });
+      const unavailable = {
+        ...lifecycle,
+        restoreSessionStamp: async () => { throw Object.assign(new Error("Startup recovery failed."), { code: "REPLICA_GATED", gate: "gate_unavailable" }); },
+        checkDelivery: () => ({ status: "gated" as const, gate: "gate_unavailable" as const }),
+        deliverable: () => false,
+      };
+      registerReplicationLoaders({
+        ...loaders(),
+        gate: async () => { throw new Error("Browser sign-out must not load the file gate."); },
+      });
+      const node = new TinyCloudNode({
+        host: RESTORE_HOST,
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+        replication: {
+          enabled: true,
+          prefixes: ["notes/"],
+          storage: { kind: "indexeddb", lifecycle: unavailable, async open() { throw new Error("Replica must stay gated."); }, async purge() {} },
+        },
+      });
+
+      await node.restoreSession({ ...proof, replicaStamp: stamp });
+      expect(node.address).toBe(proof.address);
+      expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "gate_unavailable" });
+      await node.signOut();
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      expect(JSON.parse(entries.get("tinycloud-replica:deny-tombstone")!)).toMatchObject({ epoch: stamp.lifecycleEpoch + 1 });
+    });
+  });
+
+  test("fresh browser consent requires a verified finite owner SIWE with exact-space get and sync", async () => {
+    await withBrowserOrigin(async (lifecycle) => {
+      const node = new TinyCloudNode({
+        host: RESTORE_HOST,
+        signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+        wasmBindings: new NodeWasmBindings(),
+        replication: {
+          enabled: true,
+          prefixes: ["notes/"],
+          storage: { kind: "indexeddb", lifecycle, async open() { throw new Error("No partition open expected."); }, async purge() {} },
+        },
+      });
+      const establish = async (proof: Awaited<ReturnType<typeof signedRestorableSession>>) =>
+        (node as any).establishReplicaStamp({ ...proof, sessionKey: "default" });
+      expect(await establish(await signedRestorableSession())).toBeUndefined();
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      expect(await establish(await signedRestorableSession({ expirationless: true }))).toBeUndefined();
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      expect(await establish(await signedRestorableSession({
+        abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      }))).toBeUndefined();
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+
+      const proof = await signedRestorableSession({ abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } } });
+      const stamp = await establish(proof);
+      expect(typeof stamp.incarnation).toBe("string");
+      expect(stamp.lifecycleEpoch).toBe(0);
+      expect(await lifecycle.restoreSessionStamp(pkhDid(proof.address, proof.chainId), stamp)).toEqual(stamp);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+    });
   });
 });
 
