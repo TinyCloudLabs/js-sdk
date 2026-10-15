@@ -331,6 +331,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private activeSessionKeyId = "default";
   /** Incremented by resetSession; a sign-in started earlier publishes nothing. */
   private sessionGeneration = 0;
+  /**
+   * Sign-in saves and cancellation cleanups run one at a time, in order, so a
+   * cancelled sign-in can neither overwrite nor delete a newer sign-in's record.
+   */
+  private persistenceQueue: Promise<void> = Promise.resolve();
+  /** The sign-in generation whose record was written last. */
+  private lastPersistedGeneration?: number;
   private extensions: Extension[] = [];
   private _session?: ClientSession;
   private _tinyCloudSession?: TinyCloudSession;
@@ -513,6 +520,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (generation !== this.sessionGeneration) {
       throw new Error("Sign-in was cancelled by sign-out.");
     }
+  }
+
+  /** Runs `task` after every earlier queued persistence task has settled. */
+  private enqueuePersistence(task: () => Promise<void>): Promise<void> {
+    const run = this.persistenceQueue.then(task);
+    this.persistenceQueue = run.catch(() => undefined);
+    return run;
   }
 
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
@@ -1509,10 +1523,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
     };
-    await this.sessionStorage.save(address, persistedData);
+    await this.enqueuePersistence(async () => {
+      this.lastPersistedGeneration = generation;
+      await this.sessionStorage.save(address, persistedData);
+    });
     if (generation !== this.sessionGeneration) {
-      // Signed out while saving: never publish, and remove what was saved.
-      await this.sessionStorage.clear(address);
+      // Signed out while saving: never publish, and remove this sign-in's
+      // record unless a newer sign-in has written its own since.
+      await this.enqueuePersistence(async () => {
+        if (this.lastPersistedGeneration === generation) {
+          await this.sessionStorage.clear(address);
+        }
+      });
       this.assertSignInCurrent(generation);
     }
 

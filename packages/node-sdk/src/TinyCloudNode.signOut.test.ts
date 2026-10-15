@@ -239,11 +239,11 @@ describe("TinyCloudNode.signOut and delegated authority", () => {
     });
     await node.restoreSession(proof);
 
-    let releaseActivation!: () => void;
+    const release = Promise.withResolvers<void>();
     const activationStarted = Promise.withResolvers<void>();
     globalThis.fetch = mock(async () => {
       activationStarted.resolve();
-      await new Promise<void>((resolve) => { releaseActivation = resolve; });
+      await release.promise;
       return new Response(JSON.stringify({ activated: [], skipped: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -264,7 +264,7 @@ describe("TinyCloudNode.signOut and delegated authority", () => {
     });
     await activationStarted.promise;
     const signedOut = node.signOut();
-    releaseActivation();
+    release.resolve();
 
     await expect(pending).rejects.toThrow("retired");
     await signedOut;
@@ -420,9 +420,9 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     const requested = Promise.withResolvers<AbortSignal | undefined>();
     globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
       requested.resolve(init?.signal ?? undefined);
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
-      });
+      const response = Promise.withResolvers<Response>();
+      init?.signal?.addEventListener("abort", () => response.reject(new DOMException("aborted", "AbortError")), { once: true });
+      return response.promise;
     }) as unknown as typeof fetch;
 
     const pending = access.kv.get("notes/a");
@@ -493,5 +493,72 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     const before = requests.length;
     await node.kv.get("notes/a");
     expect(requests.length).toBeGreaterThan(before);
+  });
+
+  test("a cancelled sign-in's save cleanup keeps a newer sign-in's persisted session", async () => {
+    requests = [];
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      requests.push(url);
+      const body = url.endsWith("/info")
+        ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
+        : { activated: [], skipped: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const firstWrite = Promise.withResolvers<void>();
+    const ack = Promise.withResolvers<void>();
+    let delayAck = true;
+    // The first save lands immediately but its acknowledgment is held.
+    class SlowAckStorage extends MemorySessionStorage {
+      override async save(...args: Parameters<MemorySessionStorage["save"]>): Promise<void> {
+        await super.save(...args);
+        if (delayAck) {
+          delayAck = false;
+          firstWrite.resolve();
+          await ack.promise;
+        }
+      }
+    }
+    const sessionStorage = new SlowAckStorage();
+    const inner = new PrivateKeySigner(OWNER_KEY);
+    let signatures = 0;
+    const secondSignature = Promise.withResolvers<void>();
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: {
+        getAddress: () => inner.getAddress(),
+        getChainId: () => inner.getChainId(),
+        signMessage: async (message: string | Uint8Array) => {
+          const signature = await inner.signMessage(message);
+          if (++signatures === 2) secondSignature.resolve();
+          return signature;
+        },
+      },
+      wasmBindings: new NodeWasmBindings(),
+      sessionStorage,
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      enablePublicSpace: false,
+      autoCreateSpace: false,
+    });
+    const address = await inner.getAddress();
+
+    const first = node.signIn();
+    first.catch(() => undefined);
+    await firstWrite.promise;
+    await node.signOut();
+    const second = node.signIn();
+    // Let the second sign-in reach its own save before the first resumes.
+    await secondSignature.promise;
+    const tick = Promise.withResolvers<void>();
+    setTimeout(tick.resolve, 0);
+    await tick.promise;
+    ack.resolve();
+
+    await expect(first).rejects.toThrow("Sign-in was cancelled by sign-out.");
+    await second;
+    expect(node.session).toBeDefined();
+    expect(sessionStorage.exists(address)).toBe(true);
+    expect((await sessionStorage.load(address))?.siwe).toBe(node.session?.siwe);
   });
 });

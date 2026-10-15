@@ -2578,7 +2578,13 @@ export class TinyCloudNode {
       if (!session) {
         throw new Error(`Missing bootstrap session for ${step.space}`);
       }
-      const activated = await activateSessionWithHost(host, session.delegationHeader);
+      const activated = await activateSessionWithHost(host, session.delegationHeader, graph.signal)
+        .catch((error: unknown) => {
+          graph.assertActive();
+          throw error;
+        });
+      // Signed out during activation: install nothing for the retired session.
+      graph.assertActive();
       if (!activated.success || activated.skipped?.includes(step.spaceId)) {
         throw Object.assign(
           new Error(
