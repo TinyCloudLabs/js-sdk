@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ServiceContext, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
+import { ServiceContext, ok, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
 import { createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
 import type { ServiceSession } from "@tinycloud/sdk-core";
 import { ReplicationRuntime } from "./runtime";
@@ -213,6 +213,94 @@ describe("node ReplicationRuntime binding", () => {
     await Promise.all([binding, purging]);
     expect(timers).toBe(0);
     expect(purges).toBe(1);
+    await runtime.control.close();
+  });
+  test("a committed browser expiry reaches only the bound opened controller", async () => {
+    const stamp = { incarnation: "current", lifecycleEpoch: 2 };
+    const events: Array<{ type: string; action?: string; replicaId?: string }> = [];
+    const subscribers = new Set<(stamp: typeof stamp) => void>();
+    let stale = false;
+    let redundantDenials = 0;
+    let localReads = 0;
+    let attached: KVReadThrough | null = null;
+    const storage: KVReplicaStorage = {
+      kind: "indexeddb",
+      lifecycle: {
+        kind: "indexeddb",
+        consentDeadline: () => clock.now() + 60_000,
+        checkDelivery: () => stale ? { status: "gated", gate: "stamp_stale" } : { status: "allow" },
+        subscribeConsentExpired(listener: (stamp: typeof stamp) => void) {
+          subscribers.add(listener);
+          return () => { subscribers.delete(listener); };
+        },
+        async deny() { redundantDenials++; return { status: "denied", lifecycleEpoch: 3, intents: 1 }; },
+      } as unknown as NonNullable<KVReplicaStorage["lifecycle"]>,
+      async open(spec) {
+        return {
+          spec,
+          deviceDid: "did:key:replica",
+          replicaId: "opaque-run",
+          async get(key) {
+            localReads++;
+            return {
+              status: "present", key, value: new TextEncoder().encode('"local"'),
+              etag: '"local"', metadata: { "content-type": "application/json" },
+              meta: { asOf: new Date(clock.now()).toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 },
+            };
+          },
+          async grant() {
+            return { cid: "installed", parentCid: null, expiresAt: clock.now() + 60_000, state: "active", unconstrained: true,
+              installedAt: clock.now(), effectiveExpiresAt: clock.now() + 60_000, consentDeadline: clock.now() + 60_000 };
+          },
+          async installGrant() { return this.grant(); },
+          async status() {
+            return { coverage: "complete", lastSyncAt: new Date(clock.now()).toISOString(), syncedThroughEpoch: 0,
+              authority: { state: "valid", expiresAt: clock.now() + 60_000 }, grant: await this.grant(),
+              counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null };
+          },
+          async close() {},
+        } as KVReplicaHandle;
+      },
+      async purge() {},
+      pendingWrites(identity) { return Object.assign(createMemoryPendingStore(identity), { durable: true }); },
+    };
+    const runtime = new ReplicationRuntime({
+      enabled: true, prefixes: ["notes/"], storage, mode: "foreground",
+      onEvent(event) { events.push(event); },
+    }, clock);
+    const binding = {
+      context: context("https://expiry.example"), session, address, chainId: 1, stamp,
+      authority: {
+        ...authority,
+        consentAnchor: () => ({ source: "siwe" as const, at: clock.now() }),
+        sessionGrant: () => ({ ucan: "token", device: { did: "did:key:replica", jwk: {} } }),
+      },
+      primaryKV: [{ space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) { attached = value; } } }],
+    };
+    const network = async () => ok({ data: "network", headers: { get: () => null } });
+    const read = () => attached!.get({ space: primarySpace, key: "notes/a", path: "notes/a",
+      options: undefined, signal: new AbortController().signal, network });
+
+    await runtime.bind(binding);
+    expect(subscribers.size).toBe(1);
+    const beforeExpiry = await read();
+    expect(beforeExpiry.ok && beforeExpiry.data.data).toBe("local");
+    expect(localReads).toBe(1);
+    stale = true;
+    for (const notify of subscribers) notify(stamp);
+    const afterExpiry = await read();
+    expect(afterExpiry.ok && afterExpiry.data.data).toBe("network");
+    expect(localReads).toBe(1);
+    expect(events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached"))
+      .toEqual([expect.objectContaining({ replicaId: "opaque-run" })]);
+    expect(events.filter((event) => event.type === "replication.lifecycle" && event.action === "denied"))
+      .toHaveLength(1);
+    expect(redundantDenials).toBe(0);
+
+    await runtime.bind(binding);
+    expect(subscribers.size).toBe(1);
+    await runtime.unbind();
+    expect(subscribers.size).toBe(0);
     await runtime.control.close();
   });
 });

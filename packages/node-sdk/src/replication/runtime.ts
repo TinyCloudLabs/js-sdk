@@ -12,6 +12,7 @@ import type {
   ReplicationOptions,
   ReplicationScheduler,
 } from "@tinycloud/sdk-services";
+import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 type ReplicationServices = typeof import("@tinycloud/sdk-services/kv/replication");
 
 export interface ReplicationRuntimeOptions extends ReplicationOptions {
@@ -25,6 +26,7 @@ export interface ReplicationRuntimeBinding {
   address?: string;
   chainId?: number;
   principal?: string;
+  stamp?: ReplicaSessionStamp;
   authority: ReplicationAuthority;
   nodeFeatures?: readonly string[];
   primaryKV: Array<{ space: string; kv: { setReadThrough(readThrough: KVReadThrough | null): void } }>;
@@ -60,6 +62,7 @@ export class ReplicationRuntime {
   private readonly attached = new Map<ReadThroughKV, string>();
   private current?: KVReplicationController;
   private lastController?: KVReplicationController;
+  private unsubscribeConsentExpired?: () => void;
   private previous: Promise<void> = Promise.resolve();
   private binding: Promise<void> = Promise.resolve();
   private services?: Promise<ReplicationServices>;
@@ -140,6 +143,8 @@ export class ReplicationRuntime {
     this.bindingActive = true;
     const generation = ++this.generation;
     this.purgedGeneration = undefined;
+    this.unsubscribeConsentExpired?.();
+    this.unsubscribeConsentExpired = undefined;
     const { context, session } = input;
     const emit = (event: ReplicationEvent): void => {
       try { this.options.onEvent?.(event); } catch { /* Observability must not affect KV behavior. */ }
@@ -181,6 +186,7 @@ export class ReplicationRuntime {
         storage: this.options.storage,
         identity,
         session: { id: session.delegationCid, did: session.verificationMethod, space: session.spaceId },
+        stamp: input.stamp,
         authority: input.authority,
         pending,
         scheduler: this.clock,
@@ -190,6 +196,9 @@ export class ReplicationRuntime {
         previous: previousClose,
       });
       this.current = controller;
+      this.unsubscribeConsentExpired = this.options.storage.lifecycle?.subscribeConsentExpired?.(
+        (stamp) => controller.observeConsentExpired(stamp),
+      );
       this.lastController = controller;
       this.lastIdentity = identity;
       for (const [kv, space] of this.attached) {
@@ -221,6 +230,8 @@ export class ReplicationRuntime {
     this.generation++;
     this.bindingActive = false;
     this.pendingPurgeSet = false;
+    this.unsubscribeConsentExpired?.();
+    this.unsubscribeConsentExpired = undefined;
     const controller = this.current;
     this.current = undefined;
     this.primarySpace = undefined;
