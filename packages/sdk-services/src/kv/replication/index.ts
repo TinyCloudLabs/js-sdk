@@ -21,6 +21,7 @@ export type {
   ReplicaCoverage,
   ReplicaDevice,
   ReplicaGrantInfo,
+  ReplicaPeerCommit,
   ReplicaState,
   ReplicaStatusEntry,
   ReplicationAuthority,
@@ -33,6 +34,37 @@ export type {
   ReplicationScheduler,
   ResolvedReplicationOptions,
 } from "./types";
+export type {
+  ReplicaAccountGate,
+  ReplicaDenyInput,
+  ReplicaDenyOutcome,
+  ReplicaEraseReport,
+  ReplicaGateAccess,
+  ReplicaGatedError,
+  ReplicaGateReason,
+  ReplicaGateTx,
+  ReplicaLifecycleGate,
+  ReplicaPartitionEraser,
+  ReplicaPartitionIndexEntry,
+  ReplicaPurgeIntent,
+  ReplicaSessionStamp,
+} from "./lifecycle";
+export type {
+  ReplicaAdmitHook,
+  ReplicaPageAdmission,
+  ReplicaQuotaLedger,
+  ReplicaQuotaSpec,
+} from "./quota";
+export type {
+  ConsentDeadlineMs,
+  EffectiveGrantExpiry,
+  EffectiveGrantExpiryInput,
+  MintRemainingMs,
+  NeedsSilentRenewal,
+  ReplicaConsentAnchor,
+  ReplicaConsentSource,
+  ReplicaGrantPolicy,
+} from "./grantPolicyTypes";
 export { CLEAR_PENDING_WARNING } from "./constants";
 export {
   canonicalReplicationIdentity,

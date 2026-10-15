@@ -1,5 +1,8 @@
 import type { Result, FetchFunction } from "../../types";
 import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
+import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaSessionStamp } from "./lifecycle";
+import type { ReplicaQuotaSpec } from "./quota";
+import type { ReplicaConsentAnchor, ReplicaGrantPolicy } from "./grantPolicyTypes";
 
 export interface ReplicationIdentity {
   /** Canonical HTTP(S) URL: origin + path without trailing slash; no credentials/query/fragment. */
@@ -69,11 +72,24 @@ export type LocalSyncResult =
 export interface ReplicaGrantInfo {
   cid: string;
   parentCid: string | null;
+  /** The signed `exp`, ms since epoch; null when the grant has none. */
   expiresAt: number | null;
   /** Grant lifecycle: pending until confirmed/activated by a successful replica sync. */
   state: "active" | "pending";
   /** Both get and sync in the grant carry no caveats. */
   unconstrained: boolean;
+  /** ms since epoch the grant was installed. Present when the adapter enforces a grant policy. */
+  installedAt?: number;
+  /**
+   * min(expiresAt, installedAt + grantTtlMs, consentDeadline), stored with the grant and
+   * recomputed at open from the handle's `spec.grantPolicy`. Reads refuse with GRANT_EXPIRED
+   * (authority `expired`) at or after it. Absent when no policy is configured (Phase 1).
+   */
+  effectiveExpiresAt?: number;
+  /** ms since epoch; consent anchor + CONSENT_WINDOW_MS. */
+  consentDeadline?: number;
+  /** The resolved consent anchor, including a storage-persisted `first_install` anchor. */
+  consentAnchor?: ReplicaConsentAnchor;
 }
 
 export interface LocalReplicaStatus {
@@ -86,6 +102,13 @@ export interface LocalReplicaStatus {
   counts: { keys: number; contentMissing: number; tombstones: number };
   bytes: number;
   lastError: { at: string; code: string; message: string } | null;
+  /**
+   * Browser: result of `navigator.storage.persist()`; null when the API is missing or not yet
+   * asked. Node/CLI omit it (disk storage is persistent).
+   */
+  persisted?: boolean | null;
+  /** A purge intent covers this partition (or its identity); it is unreadable until erased. */
+  purgePending?: boolean;
 }
 
 export interface ReplicaDevice {
@@ -106,6 +129,30 @@ export interface KVReplicaSpec {
   device?: ReplicaDevice;
   /** Graph-scoped fetch for main-thread adapters; worker adapters ignore it. */
   fetch?: FetchFunction;
+  /**
+   * The session stamp this handle is bound to; immutable for the handle's life. Adapters with a
+   * `lifecycle` gate refuse a spec without it (REPLICA_GATED `not_established`) and assert it,
+   * with `identity.principal`, inside every guarded transaction. Adapters without a gate ignore it.
+   */
+  stamp?: ReplicaSessionStamp;
+  /** Grant lifetime policy; absent means Phase 1 behaviour (signed `exp` only). */
+  grantPolicy?: ReplicaGrantPolicy;
+  /** Quota settings; absent means unbounded. */
+  quota?: ReplicaQuotaSpec;
+  /**
+   * Called when another tab/process commits a sync for this partition (browser: the worker's
+   * `committed` BroadcastChannel message). The controller emits `replication.sync` with
+   * `trigger: "peer"`, `origin: "peer"`. Must not throw; must not be called for own commits.
+   */
+  onPeerCommit?(info: ReplicaPeerCommit): void;
+}
+
+export interface ReplicaPeerCommit {
+  /** ms since epoch of the peer's commit. */
+  at: number;
+  syncedThroughEpoch: number;
+  changes?: number;
+  coverage?: ReplicaCoverage;
 }
 
 export interface KVReplicaHandle {
@@ -119,12 +166,21 @@ export interface KVReplicaHandle {
     limit?: number;
   }): Promise<LocalListResult>;
   grant(): Promise<ReplicaGrantInfo | null>;
+  /**
+   * Installs a grant after validating audience (the handle's device), `kv/get` + `kv/sync` coverage
+   * of the prefix, and no caveats (caveated grants reject GRANT_NOT_COVERING). With
+   * `spec.grantPolicy`, stores `installedAt` and `effectiveExpiresAt`. Gated: REPLICA_GATED.
+   */
   installGrant(ucan: string): Promise<ReplicaGrantInfo>;
   /**
    * The controller supplies syncStartEpoch, captured from this identity's committedEpoch before
    * starting the sync. Every adapter, including the browser worker, MUST persist that exact epoch
-   * atomically with the successful replica sync; failed and busy syncs MUST leave the prior fence
-   * unchanged. A successful result returns that persisted value as syncedThroughEpoch.
+   * in the same transaction as the sync's completion marker, only after the whole sync finishes
+   * (feed pages, repairs and GC). Failed, aborted and busy syncs, including a failure after the
+   * last feed page, MUST leave the prior fence unchanged. A successful result returns that
+   * persisted value as syncedThroughEpoch. Aborting `signal` stops at the last complete page;
+   * nothing past it commits. Gated: REPLICA_GATED; quota refusal: STORAGE_BUDGET / STORAGE_FULL,
+   * keeping committed content.
    */
   sync(o: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult>;
   /** Status reports the durable syncedThroughEpoch, including after reopening this handle. */
@@ -170,6 +226,11 @@ export interface KVReplicaStorage {
    * silently fall back to memory.
    */
   pendingWrites?(identity: ReplicationIdentity): PendingWriteStore;
+  /**
+   * The platform lifecycle gate (browser: origin DB control stores + logout marker; node/CLI:
+   * gate file). Absent means Phase 1 behaviour: no stamps, no gate checks.
+   */
+  readonly lifecycle?: ReplicaLifecycleGate;
 }
 
 export interface PendingWriteRecord {
@@ -230,7 +291,19 @@ export interface ReplicationAuthority {
     deviceDid: string,
     prefix: string,
     signal: AbortSignal,
+    /**
+     * `expiryMs` is a DURATION from now (forwarded as `delegateTo(…, { expiry: expiryMs })`), from
+     * `mintRemainingMs`. Absent means Phase 1 behaviour (session-tier default).
+     */
+    options?: { expiryMs?: number },
   ): Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
+  /**
+   * Consent anchor of the session that granted replication: SIWE `issuedAt`, else the compact
+   * delegation's `iat`, else `nbf`; null when none (storage falls back to first install).
+   */
+  consentAnchor?(): ReplicaConsentAnchor | null;
+  /** False for sessions that can't derive (compact delegated / sessionOnly): no silent renewal. */
+  readonly canRenew?: boolean;
 }
 
 export interface ReplicationScheduler {
@@ -256,6 +329,8 @@ export interface KVReplicationDeps {
   pending: PendingWriteStore;
   /** Node `/info` features discovered on sign-in for protocol gating. */
   nodeFeatures?: readonly string[];
+  /** This session's stamp; forwarded into every `KVReplicaSpec.stamp`. */
+  stamp?: ReplicaSessionStamp;
   scheduler: ReplicationScheduler;
   emit(event: ReplicationEvent): void;
   fetch?: FetchFunction;
@@ -349,6 +424,18 @@ export interface ReplicationOptions {
   staleSyncTimeoutMs?: number;
   verify?: boolean;
   onEvent?: (event: ReplicationEvent) => void;
+  /**
+   * Device-grant lifetime from install; default DEFAULT_GRANT_TTL_MS (24 h). Values ≤ 0 or above
+   * MAX_GRANT_TTL_MS (7 d) are a TypeError at construction.
+   */
+  grantTtlMs?: number;
+  /**
+   * Replica byte budget; absent means unbounded. Browser: origin-wide across every partition.
+   * Node/CLI: per profile (per storage dir). Forwarded to storage via `KVReplicaSpec.quota`.
+   */
+  maxBytes?: number;
+  /** Browser free-space floor; default DEFAULT_MIN_FREE_BYTES (64 MiB). Ignored on node/CLI. */
+  minFreeBytes?: number;
 }
 export interface ResolvedReplicationOptions extends ReplicationOptions {
   syncIntervalMs: number;
@@ -373,6 +460,8 @@ export interface ReplicaStatusEntry extends Partial<LocalReplicaStatus> {
   prefix: string;
   state: ReplicaState;
   reason?: ReplicationReason;
+  /** Set while state is `gated`. */
+  gate?: ReplicaGateReason;
   errorCode?: string;
   pending: { inFlight: number; committed: number; ambiguous: number };
   pinned: PinnedKey[];
@@ -385,6 +474,8 @@ export type ReplicaState =
   | "runtime_unsupported"
   | "unavailable"
   | "revoked"
+  /** The lifecycle gate refuses this session (REPLICA_GATED); reads use the network. */
+  | "gated"
   | "closed";
 
 export type ReplicationReason =
@@ -409,7 +500,9 @@ export type ReplicationReason =
   | "aborted"
   | "REPLICA_BEHIND_OWN_WRITES"
   | "REPLICA_UNPROVEN_SINCE_START"
-  | "NETWORK_REQUESTED";
+  | "NETWORK_REQUESTED"
+  /** The lifecycle gate refused (REPLICA_GATED); the read went to the network. */
+  | "replica_gated";
 
 export type ReplicationEvent =
   | {
@@ -448,9 +541,12 @@ export type ReplicationEvent =
       at: string;
       space: string;
       replica: string;
-      trigger: "start" | "interval" | "stale_read" | "manual";
+      /** `peer`: another tab/process committed (via `KVReplicaSpec.onPeerCommit`); no local work ran. */
+      trigger: "start" | "interval" | "stale_read" | "manual" | "peer";
+      /** Present and `peer` only for peer-commit notifications. */
+      origin?: "peer";
       outcome: "ok" | "busy" | "error" | "aborted";
-      class?: "offline" | "authority" | "storage" | "node";
+      class?: "offline" | "authority" | "storage" | "node" | "lifecycle";
       code?: string;
       durationMs: number;
       lagMs: number | null;
@@ -485,6 +581,55 @@ export type ReplicationEvent =
       strategy?: "session" | "minted" | "installed";
       count?: number;
       keys?: string[];
+    }
+  | {
+      /** Grant lifetime and renewal (CONTRACT.md §3). */
+      type: "replication.grant";
+      at: string;
+      space: string;
+      replica: string;
+      action:
+        | "minted"
+        | "renewed"
+        /** The node or authority refused renewal; current grant serves until effective expiry. */
+        | "renewal_refused"
+        /** Offline or the authority can't derive; retried on the next trigger. */
+        | "renewal_deferred"
+        /** An overlong session/restored grant was capped locally or replaced by a derived grant. */
+        | "capped"
+        | "expired"
+        | "consent_deadline_reached";
+      code?: string;
+      /** ISO instants. */
+      effectiveExpiresAt?: string;
+      consentDeadline?: string;
+      /** Duration passed to `mint` (`expiryMs`). */
+      expiryMs?: number;
+    }
+  | {
+      /** Sign-out / account-switch lifecycle (CONTRACT.md §2). Never carries a principal. */
+      type: "replication.lifecycle";
+      at: string;
+      action:
+        | "denied"
+        | "deny_failed"
+        | "database_deleted"
+        | "marker_set"
+        | "marker_cleared"
+        | "unguarded"
+        | "drained"
+        | "erased"
+        | "erase_failed"
+        | "activation_blocked"
+        | "activated"
+        | "recovered";
+      reason?: "sign_out" | "account_switch" | "startup";
+      gate?: ReplicaGateReason;
+      /** Partitions/intents affected by this step. */
+      partitions?: number;
+      /** Intents still outstanding after this step. */
+      remaining?: number;
+      code?: string;
     }
   | {
       type: "replication.divergence";
