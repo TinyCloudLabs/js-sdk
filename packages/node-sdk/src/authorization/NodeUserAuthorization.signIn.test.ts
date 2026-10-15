@@ -190,6 +190,54 @@ test("NodeUserAuthorization.signIn keeps constructor siweConfig.nonce when no pe
   expect(signedMessages[0]).toContain("Nonce: constructor-nonce");
 });
 
+test("account-only manifest signs into the account space it authorizes", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spacePrefix: "account",
+    manifest: {
+      app_id: "xyz.tinycloud.account",
+      name: "Account",
+      defaults: false,
+      includePublicSpace: false,
+      permissions: [
+        { service: "tinycloud.delegation", space: "account", path: "", actions: ["list"], skipPrefix: true },
+      ],
+    },
+  });
+
+  try {
+    await auth.signIn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  expect(captured[0]?.spaceId).toMatch(/:account$/);
+  expect(captured[0]?.abilities).toMatchObject({ delegation: { "": ["tinycloud.delegation/list"] } });
+});
+
 test("NodeUserAuthorization.signIn preserves caller defaultActions when merging account parity", async () => {
   const captured: Array<Record<string, unknown>> = [];
   const signedMessages: string[] = [];

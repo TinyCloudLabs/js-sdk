@@ -149,6 +149,13 @@ function addRawAbility(
   }
 }
 
+/** Prefer an app space; an account-only manifest must sign into its authorized account space. */
+function primaryManifestSpace(resources: readonly ResourceCapability[]): string {
+  return resources.find((entry) => entry.space !== "account")?.space ??
+    resources[0]?.space ??
+    DEFAULT_MANIFEST_SPACE;
+}
+
 function cloneAbilitiesMap(actions: AbilitiesMap): AbilitiesMap {
   return Object.fromEntries(
     Object.entries(actions).map(([service, paths]) => [
@@ -757,9 +764,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceResources = request.resources.filter(
       (entry) => entry.service !== ENCRYPTION_PERMISSION_SERVICE,
     );
-    const primarySpaceName =
-      spaceResources.find((entry) => entry.space !== "account")?.space ??
-      DEFAULT_MANIFEST_SPACE;
+    const primarySpaceName = primaryManifestSpace(spaceResources);
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
       address,
@@ -907,9 +912,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return false;
     });
 
-    const primarySpaceName =
-      spaceResources.find((entry) => entry.space !== "account")?.space ??
-      DEFAULT_MANIFEST_SPACE;
+    const primarySpaceName = primaryManifestSpace(spaceResources);
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
       address,
