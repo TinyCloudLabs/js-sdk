@@ -4,7 +4,8 @@
  * `TinyCloudWeb` through its own sign-in, grant and session flow. Each scenario
  * runs in a fresh browser context so IndexedDB never leaks between scenarios.
  *
- * Scenario numbers follow plan §10. Deny-failure variants are sub-cases (8a-8c).
+ * Scenario numbers follow plan §10. Deny-failure variants are 8a-8c; 8d
+ * probes the stale tab's pending store across deny, erase and fresh sign-in.
  *
  * Gating: without `TC858_ACCEPTANCE_STRICT=1` every scenario is `test.todo`, so
  * non-strict CI stays green while S1-S5 are unlanded. Strict mode runs the real
@@ -434,6 +435,39 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await sibling.waitForFunction(() => window.__tcw !== undefined);
       const reloaded = (await sibling.evaluate(() => window.__tcw.replicationStatus())) as { state: string };
       expect(reloaded.state).toBe("gated");
+    } finally {
+      await context.close();
+    }
+  });
+
+  scenario("8d a stale tab cannot refill pending writes after deny/erase or same-principal re-sign-in", async () => {
+    const context = await newContext();
+    try {
+      const current = await bootPage(context);
+      await current.evaluate(() => window.__tcw.signIn());
+      await current.evaluate(() => window.__tcw.replicationSync());
+      const stale = await bootPage(context);
+      await stale.evaluate(() => window.__tcw.signIn());
+      expect(await originStoresContain(current, "alpha note")).toBe(true);
+      expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-before-deny"))).toEqual({ status: "updated" });
+      expect(await originStoresContain(stale, "notes/stale-before-deny")).toBe(true);
+
+      await current.evaluate(() => window.__tcw.signOut());
+      await current.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
+      expect(await originStoresContain(current, "alpha note")).toBe(false);
+      expect(await originStoresContain(current, "notes/stale-before-deny")).toBe(false);
+      expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-erase"))).toMatchObject({
+        status: "error", code: "REPLICA_GATED", gate: "stamp_stale",
+      });
+      expect(await originStoresContain(current, "notes/stale-after-erase")).toBe(false);
+
+      await current.evaluate(() => window.__tcw.signIn());
+      await current.evaluate(() => window.__tcw.replicationSync());
+      expect(await originStoresContain(current, "alpha note")).toBe(true);
+      expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-resignin"))).toMatchObject({
+        status: "error", code: "REPLICA_GATED", gate: "stamp_stale",
+      });
+      expect(await originStoresContain(current, "notes/stale-after-resignin")).toBe(false);
     } finally {
       await context.close();
     }
