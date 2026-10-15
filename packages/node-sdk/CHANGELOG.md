@@ -1,5 +1,11 @@
 # @tinycloudlabs/node-sdk
 
+## 3.2.6-beta.0
+
+### Patch Changes
+
+- 2aa917e: Sign account-only manifests into the account space they authorize, and expose the active authorization CID after restoring a persisted browser session.
+
 ## 3.2.5
 
 ### Patch Changes
