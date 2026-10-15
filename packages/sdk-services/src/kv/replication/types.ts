@@ -396,9 +396,11 @@ export interface ReplicationAuthority {
     signal: AbortSignal,
     /**
      * `expiryMs` is a DURATION from now (forwarded as `delegateTo(…, { expiry: expiryMs })`), from
-     * `mintRemainingMs`. Absent means Phase 1 behaviour (session-tier default).
+     * `mintRemainingMs`. Absent means Phase 1 behaviour (session-tier default). `renewalOnly`
+     * requires the authority to recheck a session-key parent at mint time; an initial runtime
+     * parent mint leaves it unset.
      */
-    options?: { expiryMs?: number },
+    options?: { expiryMs?: number; renewalOnly?: boolean },
   ): Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   /**
    * Finite consent anchor from an independently validated signed owner SIWE `issuedAt`

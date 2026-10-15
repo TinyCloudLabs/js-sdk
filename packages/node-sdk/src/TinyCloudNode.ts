@@ -6956,7 +6956,7 @@ export class TinyCloudNode {
     return auth.replicationSignInEntries();
   }
   private async replicationAuthority(): Promise<ReplicationAuthority> {
-    const { createReplicationAuthority } = await getNodeReplicationLoaders().authority();
+    const { createReplicationAuthority, assertRenewalParent } = await getNodeReplicationLoaders().authority();
     return createReplicationAuthority({
       replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
       verifiedConsentAnchor: (session) => {
@@ -6980,7 +6980,9 @@ export class TinyCloudNode {
             signature: session.signature,
           });
           if (!verified || !Number.isFinite(Date.parse(verified.expiresAt ?? ""))) return null;
-          const issuedAt = Date.parse(new SiweMessage(session.siwe).issuedAt);
+          const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
+          if (typeof signedIssuedAt !== "string") return null;
+          const issuedAt = Date.parse(signedIssuedAt);
           if (!Number.isFinite(issuedAt)) return null;
           const granted = exactVerifiedRecap(verified)
             .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
@@ -6999,7 +7001,14 @@ export class TinyCloudNode {
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
       mintDelegation: async (deviceDid, entries, options) => {
-        const result = await this.delegateTo(principalDid(deviceDid), entries, options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs });
+        const renewalSession = options?.renewalOnly ? this.currentTinyCloudSession() : undefined;
+        if (options?.renewalOnly && !renewalSession) throw new Error("replication renewal lost its owner session");
+        const result = await this.delegateTo(principalDid(deviceDid), entries, options?.renewalOnly ? {
+          expiry: options.expiryMs,
+          onPrepared: async (prepared) => {
+            assertRenewalParent(prepared.delegationHeader.Authorization, renewalSession!);
+          },
+        } : options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs });
         return {
           ucan: result.delegation.delegationHeader.Authorization,
           expiresAt: result.delegation.expiry.getTime(),

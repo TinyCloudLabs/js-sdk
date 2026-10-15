@@ -151,7 +151,7 @@ export interface ReplicationAuthorityHost {
   mintDelegation(
     deviceDid: string,
     entries: PermissionEntry[],
-    options?: { expiryMs?: number },
+    options?: { expiryMs?: number; renewalOnly?: boolean },
   ): Promise<{ ucan: string; expiresAt: number }>;
 }
 
@@ -185,6 +185,18 @@ export function replicationScopeFromSignedSession(input: {
   }
   return undefined;
 }
+/** Runs before host activation; a replan cannot silently switch a renewal to a runtime parent. */
+export function assertRenewalParent(authorization: string, session: ReplicationAuthoritySession): void {
+  const grant = parseUcanGrant(authorization);
+  if (
+    grant.issuer !== session.verificationMethod.split("#", 1)[0] ||
+    grant.prf.length !== 1 ||
+    grant.prf[0] !== session.delegationCid
+  ) {
+    throw Object.assign(new Error("replication renewal requires the bound owner session parent"), { refused: "NOT_COVERED" as const });
+  }
+}
+
 export function createReplicationAuthority(host: ReplicationAuthorityHost): ReplicationAuthority {
   const boundSession = host.replicationSession();
   let verifiedAnchor: ReplicaConsentAnchor | null = null;
@@ -276,7 +288,7 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
       deviceDid: string,
       prefix: string,
       signal: AbortSignal,
-      options?: { expiryMs?: number },
+      options?: { expiryMs?: number; renewalOnly?: boolean },
     ): Promise<{ ucan: string; parentCid: string; expiresAt: number }> {
       const session = activeSession();
       if (session === undefined) throw new Error("replication mint without the bound session");
@@ -289,6 +301,9 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
           new Error(`replication authority refused the mint: ${plan.refused}`),
           { refused: plan.refused },
         );
+      }
+      if (options?.renewalOnly && plan.path !== "session") {
+        throw Object.assign(new Error("replication renewal requires a session parent"), { refused: "NOT_COVERED" as const });
       }
       signal.throwIfAborted();
       const minted = await new Promise<{ ucan: string; expiresAt: number }>((resolve, reject) => {
