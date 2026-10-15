@@ -496,6 +496,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
   }
 
+  /**
+   * @internal End the session: adopt a fresh session manager whose active key
+   * is `sessionKeyId`, and return to the constructed state.
+   */
+  resetSession(sessionManager: ISessionManager, sessionKeyId: string, hosts?: string[]): void {
+    this.installRestoredSession(sessionManager, undefined, hosts);
+    this.activeSessionKeyId = sessionKeyId;
+  }
+
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
   installRestoredSession(
     sessionManager: ISessionManager,

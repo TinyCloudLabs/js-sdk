@@ -787,18 +787,23 @@ export class TinyCloudWeb {
   };
 
   /**
-   * Sign out: clear the persisted session and end the session on this
-   * instance. Afterwards session accessors return `undefined` and service
+   * Sign out: end the session on this instance and clear the persisted
+   * session. Afterwards session accessors return `undefined` and service
    * calls fail with "Not signed in" until the next sign-in or restore.
    */
   signOut = async (): Promise<void> => {
-    // Resolves the address from the live session, so it runs first.
-    await this.clearPersistedSession();
-    await this._node?.signOut();
-    this.resetSessionScopedCaches();
-    this._credentialsService = undefined;
-    this._shareReceiverService = undefined;
-    this.notificationHandler.cleanup?.();
+    // The persisted entry is keyed by the live session's address.
+    const address = await this.resolveRestoreAddress();
+    try {
+      await this._node?.signOut();
+    } finally {
+      this.resetSessionScopedCaches();
+      this._credentialsService = undefined;
+      this._shareReceiverService = undefined;
+      this._sessionRestoreStatus = "idle";
+      this.notificationHandler.cleanup?.();
+      if (address) await this.clearPersistedSession(address);
+    }
   };
 
   session = (): ClientSession | undefined => {

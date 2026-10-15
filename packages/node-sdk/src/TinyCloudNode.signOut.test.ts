@@ -92,18 +92,16 @@ describe.each([
       ...(withSigner ? { signer: new PrivateKeySigner(OWNER_KEY) } : {}),
     });
     await node.restoreSession(proof);
-    if (withSigner) {
-      await sessionStorage.save(proof.address, {
-        address: proof.address,
-        chainId: proof.chainId,
-        sessionKey: JSON.stringify(proof.jwk),
-        siwe: proof.siwe,
-        signature: proof.signature,
-        expiresAt: proof.expiresAt,
-        createdAt: new Date().toISOString(),
-        version: "1.0",
-      });
-    }
+    await sessionStorage.save(proof.address, {
+      address: proof.address,
+      chainId: proof.chainId,
+      sessionKey: JSON.stringify(proof.jwk),
+      siwe: proof.siwe,
+      signature: proof.signature,
+      expiresAt: proof.expiresAt,
+      createdAt: new Date().toISOString(),
+      version: "1.0",
+    });
 
     const kv = node.kv;
     const sessionDid = node.sessionDid;
@@ -121,7 +119,11 @@ describe.each([
     expect(node.sessionDid).not.toBe(sessionDid);
     await expectNoAuthorizedCall(() => kv.get("notes/a"));
     await expectNoAuthorizedCall(() => kv.put("notes/b", "after sign-out"));
-    if (withSigner) expect(sessionStorage.exists(proof.address)).toBe(false);
+    expect(sessionStorage.exists(proof.address)).toBe(false);
+
+    // Signing out twice is harmless.
+    await node.signOut();
+    expect(node.restorableSession).toBeUndefined();
   });
 
   test("can restore a session again after signing out", async () => {
@@ -141,5 +143,131 @@ describe.each([
     const before = requests.length;
     await node.kv.get("notes/a");
     expect(requests.length).toBeGreaterThan(before);
+  });
+});
+
+describe("TinyCloudNode.signIn after signOut", () => {
+  function stubNode(): void {
+    requests = [];
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      requests.push(url);
+      const body = url.endsWith("/info")
+        ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
+        : { activated: [], skipped: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+  }
+
+  function walletNode(): TinyCloudNode {
+    return new TinyCloudNode({
+      host: HOST,
+      signer: new PrivateKeySigner(OWNER_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      enablePublicSpace: false,
+      autoCreateSpace: false,
+    });
+  }
+
+  async function expectUsableSession(node: TinyCloudNode): Promise<void> {
+    expect(node.restorableSession).toBeDefined();
+    const before = requests.length;
+    await node.kv.get("notes/a");
+    expect(requests.length).toBeGreaterThan(before);
+  }
+
+  test("a signed-in instance can sign in again after signing out", async () => {
+    stubNode();
+    const node = walletNode();
+    await node.signIn();
+    const firstCid = node.restorableSession?.delegationCid;
+    await node.signOut();
+    await node.signIn();
+    await expectUsableSession(node);
+    expect(node.restorableSession?.delegationCid).not.toBe(firstCid);
+  });
+
+  test("a restored instance can sign in after signing out", async () => {
+    stubNode();
+    const node = walletNode();
+    await node.restoreSession(await signedSession());
+    await node.signOut();
+    await node.signOut();
+    await node.signIn();
+    await expectUsableSession(node);
+  });
+});
+
+describe("TinyCloudNode.signOut and delegated authority", () => {
+  test("a useDelegation() result stops signing after sign-out", async () => {
+    recordRequests();
+    const proof = await signedSession();
+    const node = new TinyCloudNode({
+      host: HOST,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+    });
+    const access = await node.useDelegation({
+      cid: proof.delegationCid,
+      delegationHeader: proof.delegationHeader,
+      spaceId: proof.spaceId,
+      path: "notes/",
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date(Date.now() + 60 * 60_000),
+      delegateDID: node.did,
+      ownerAddress: proof.address,
+      chainId: proof.chainId,
+      host: HOST,
+    });
+    await access.kv.get("notes/a");
+    expect(requests.length).toBeGreaterThan(0);
+
+    await node.signOut();
+
+    await expectNoAuthorizedCall(() => access.kv.get("notes/a"));
+  });
+
+  test("a runtime grant activated across sign-out is not installed", async () => {
+    const proof = await signedSession();
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: new PrivateKeySigner(OWNER_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+    });
+    await node.restoreSession(proof);
+
+    let releaseActivation!: () => void;
+    const activationStarted = Promise.withResolvers<void>();
+    globalThis.fetch = mock(async () => {
+      activationStarted.resolve();
+      await new Promise<void>((resolve) => { releaseActivation = resolve; });
+      return new Response(JSON.stringify({ activated: [], skipped: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const pending = node.useRuntimeDelegation({
+      cid: "bafy-runtime-grant",
+      delegationHeader: { Authorization: "Bearer runtime-grant" },
+      spaceId: proof.spaceId,
+      path: "photos/",
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date(Date.now() + 60 * 60_000),
+      delegateDID: proof.verificationMethod,
+      ownerAddress: proof.address,
+      chainId: proof.chainId,
+      host: HOST,
+    });
+    await activationStarted.promise;
+    const signedOut = node.signOut();
+    releaseActivation();
+
+    await expect(pending).rejects.toThrow("retired");
+    await signedOut;
+    expect(node.getRuntimePermissionDelegations()).toEqual([]);
   });
 });
