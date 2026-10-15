@@ -33,7 +33,11 @@ beforeEach(async () => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { locks: { request: (_name: string, section: () => Promise<unknown>) => section() } },
+    value: { locks: { request: (
+      _name: string,
+      optionsOrSection: LockOptions | (() => Promise<unknown>),
+      section?: () => Promise<unknown>,
+    ) => (typeof optionsOrSection === "function" ? optionsOrSection : section!)() } },
   });
   await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
 });
@@ -579,6 +583,41 @@ describe("origin deny tombstone", () => {
     expect(JSON.parse(entries.get(tombstoneKey)!)).toEqual(recorded);
     await expect(lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: issuedAt } }))
       .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+  });
+
+  test("aborting queued recovery leaves the expired gate and keys untouched", async () => {
+    const clock = { ms: Date.now() };
+    const lifecycle = createIndexedDbLifecycle({ now: () => clock.ms });
+    const stamp = await lifecycle.establishSessionStamp(principal, { consentAnchor: { source: "siwe", at: clock.ms } });
+    clock.ms += CONSENT_WINDOW_MS;
+    const queued = Promise.withResolvers<void>();
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { locks: { request: (_name: string, optionsOrSection: LockOptions | (() => Promise<unknown>)) => {
+        queued.resolve();
+        if (typeof optionsOrSection === "function") return Promise.reject(new Error("Queued recovery had no abort signal."));
+        const signal = optionsOrSection.signal;
+        return new Promise<unknown>((_resolve, reject) => {
+          if (signal?.aborted) reject(signal.reason);
+          else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      } } },
+    });
+    const controller = new AbortController();
+    const recovery = lifecycle.recover({ signal: controller.signal });
+    await queued.promise;
+    controller.abort(Object.assign(new Error("Recovery was cancelled."), { code: "RECOVERY_ABORTED" }));
+    const report = await recovery;
+    expect(report).toMatchObject({ erased: [], failed: [{ id: "recover", code: "RECOVERY_ABORTED" }], remaining: 1 });
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+    expect(entries.has(tombstoneKey)).toBe(false);
+    const db = (await openKvDatabase({ create: false }))!;
+    const gate = await requestAsPromise<{ lifecycleEpoch: number; principalHash: string | null }>(
+      db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get("account"),
+    );
+    db.close();
+    expect(gate.lifecycleEpoch).toBe(stamp.lifecycleEpoch);
+    expect(gate.principalHash).not.toBeNull();
   });
 
   test("a tombstone write failure does not delete the existing gate", async () => {
