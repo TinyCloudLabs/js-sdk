@@ -19,6 +19,7 @@ import type {
   ReplicaStore,
   VerifiedPage,
 } from "../types.js";
+import type { ReplicaAdmitHook } from "@tinycloud/sdk-services/kv/replication";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
 
 const SCHEMA_VERSION = 1;
@@ -216,6 +217,10 @@ export type SqliteReplicaStoreOptions = {
   /** Clock for leases and status (ms since epoch). */
   now?: () => number;
   guard?: MutationGuard;
+  /** Quota admission, run inside applyPage's guarded mutation before any write (TC-858 S5). */
+  admit?: ReplicaAdmitHook;
+  /** Partition the store belongs to; reported to `admit`. */
+  partitionId?: string;
 };
 
 /** Crash-test seam key. Only tests import it (from this module, not the package entry). */
@@ -236,6 +241,8 @@ export class SqliteReplicaStore implements ReplicaStore {
   readonly #guard: MutationGuard;
   /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
   readonly #ino: number;
+  readonly #admit: ReplicaAdmitHook | undefined;
+  readonly #partitionId: string;
 
   private constructor(dir: string, db: SqliteDatabase, ino: number, options: SqliteReplicaStoreOptions) {
     this.dir = dir;
@@ -243,6 +250,8 @@ export class SqliteReplicaStore implements ReplicaStore {
     this.#ino = ino;
     this.#now = options.now ?? Date.now;
     this.#faults = (options as InternalOptions)[FAULTS] ?? {};
+    this.#admit = options.admit;
+    this.#partitionId = options.partitionId ?? "";
     this.#guard = options.guard ?? ((section) => section());
   }
 
@@ -294,6 +303,35 @@ export class SqliteReplicaStore implements ReplicaStore {
         throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica is busy during status inspection.", undefined, { cause: error });
       }
       throw storageError(error, "Inspecting the replica");
+    } finally {
+      db?.close();
+    }
+  }
+
+  /**
+   * Distinct content bytes stored in the replica at `dir` (0 when absent). Read-only and outside
+   * the mutation guard, so quota admission can sum a profile's replicas under its own hold. Blobs
+   * are content-addressed per replica: a hash counts once within a replica.
+   */
+  static async contentBytes(dir: string): Promise<number> {
+    const dbPath = join(dir, "replica.db");
+    try {
+      await stat(dbPath);
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT") return 0;
+      throw storageError(error, "Measuring replica content");
+    }
+    const opener = await loadSqlite();
+    let db: SqliteDatabase | undefined;
+    try {
+      db = opener(dbPath, { readonly: true });
+      db.exec("PRAGMA busy_timeout = 0");
+      const row = db.get<{ bytes: number | null }>(
+        "SELECT SUM(size) AS bytes FROM (SELECT DISTINCT hash, size FROM entry WHERE deleted = 0 AND content = 1)",
+      );
+      return row?.bytes ?? 0;
+    } catch (error) {
+      throw storageError(error, "Measuring replica content");
     } finally {
       db?.close();
     }
@@ -685,6 +723,20 @@ export class SqliteReplicaStore implements ReplicaStore {
           throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, `No stored content backs ${JSON.stringify(change.key)}.`);
         }
         reused.set(change.hash, size);
+      }
+      // Quota admission (TC-858 S5): projected bytes are this page's blobs not
+      // already stored in this replica. Runs under the same guard as the write,
+      // before any blob or row changes; a refusal leaves the replica untouched.
+      if (this.#admit) {
+        let blobBytes = 0;
+        for (const [hash, bytes] of p.blobs) {
+          const stored = this.#db.get<{ hit: number }>(
+            "SELECT 1 AS hit FROM entry WHERE hash = ? AND content = 1 AND deleted = 0 LIMIT 1",
+            hash,
+          );
+          if (stored === undefined) blobBytes += bytes.byteLength;
+        }
+        await this.#admit({ partitionId: this.#partitionId, blobBytes, entries: p.changes.length, freeBytes: null });
       }
       try {
         await this.#writeBlobs(p.blobs);

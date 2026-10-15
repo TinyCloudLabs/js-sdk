@@ -30,6 +30,7 @@ export type ReplicaErrorCode =
   | "REPLICA_INVALID_ARGUMENT"
   | "STORAGE_ERROR"
   | "STORAGE_FULL"
+  | "STORAGE_BUDGET"
   | "NOT_COVERED"
   | "SECRETS_OPT_IN_REQUIRED"
   | "GRANT_MISSING"
@@ -410,6 +411,18 @@ export type SqliteReplicaStoreOptions = {
   /** Clock for leases and status (ms since epoch). */
   now?: () => number;
   guard?: MutationGuard;
+  /** Quota admission (TC-858 S5): partition id for the page facts handed to `admit`. */
+  partitionId?: string;
+  /**
+   * Runs inside the guarded page commit, before any write. Throwing aborts the
+   * page with nothing committed. Mirrors replica's `ReplicaAdmitHook`.
+   */
+  admit?: (page: {
+    partitionId: string;
+    blobBytes: number;
+    entries: number;
+    freeBytes: number | null;
+  }) => void | Promise<void>;
 };
 
 /**
@@ -442,6 +455,7 @@ export interface ReplicaRuntime {
     SECRETS_OPT_IN_REQUIRED: ReplicaErrorCode;
     GRANT_NOT_COVERING: ReplicaErrorCode;
     RESET_REQUIRED: ReplicaErrorCode;
+    STORAGE_BUDGET: ReplicaErrorCode;
   };
   isReplicaError(error: unknown, code?: ReplicaErrorCode): error is ReplicaError;
   parseUcanGrant(input: Uint8Array | string): ParsedUcanGrant;
@@ -457,5 +471,7 @@ export interface SqliteRuntime {
   SqliteReplicaStore: {
     open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore>;
     inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{ state: ReplicaState; status: ReplicaStatus } | null>;
+    /** Distinct content blob bytes stored in one replica directory (read-only; 0 when absent). */
+    contentBytes(dir: string): Promise<number>;
   };
 }

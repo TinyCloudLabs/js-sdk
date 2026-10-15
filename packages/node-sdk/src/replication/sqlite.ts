@@ -15,7 +15,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, open as openFile, readFile, realpath, rename, rm, stat, type FileHandle } from "node:fs/promises";
+import { chmod, mkdir, open as openFile, readdir, readFile, realpath, rename, rm, stat, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 
@@ -529,6 +529,11 @@ export interface SqliteReplicaStorageOptions {
    */
   guard?: MutationGuard;
   /**
+   * Profile byte budget (CONTRACT §4, §5). Applies when the open spec carries no
+   * `quota.maxBytes`. Absent means unbounded, and the store opens with no admit hook.
+   */
+  maxBytes?: number;
+  /**
    * Test seam: supply sync transports without WASM/KVService. Production
    * builds invoke through `kvSyncTransport` like the CLI's `grantTransports`.
    * @internal
@@ -894,11 +899,50 @@ class SqliteReplicaHandle implements KVReplicaHandle {
   }
 }
 
+/** In-process mutual exclusion: sections run one at a time, in call order. */
+function createSerialGuard(): MutationGuard {
+  let tail: Promise<unknown> = Promise.resolve();
+  return (section) => {
+    const run = tail.then(section);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}
+
+/** Directory entries, or none when the path is absent or not a directory. */
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Content bytes across every replica in the profile at `root` (`<root>/<partition>/replicas/<replica>`).
+ * Blobs are stored per replica directory, so a hash held by two replicas counts twice, matching disk use.
+ */
+async function profileContentBytes(root: string, contentBytes: (dir: string) => Promise<number>): Promise<number> {
+  let total = 0;
+  for (const partition of await listDir(root)) {
+    const replicasDir = join(root, partition, "replicas");
+    for (const replicaName of await listDir(replicasDir)) {
+      total += await contentBytes(join(replicasDir, replicaName));
+    }
+  }
+  return total;
+}
+
 export function createSqliteReplicaStorage(
   options: SqliteReplicaStorageOptions,
 ): KVReplicaStorage {
   const root = options.dir;
   const guard: MutationGuard = options.guard ?? ((section) => section());
+  // In-process default for quota-enabled handles; a supplied guard always wins.
+  const serialGuard = createSerialGuard();
   const createDevice = options.createDevice ?? createDeviceKey;
 
   async function openHandle(spec: KVReplicaSpec): Promise<KVReplicaHandle> {
@@ -932,10 +976,30 @@ export function createSqliteReplicaStorage(
     const device = { ...createdDevice, did: principalOf(createdDevice.did) };
     const replicaHash = replicaHashOf(spec.prefix, device.did);
     const replicaDir = join(idDir, "replicas", replicaHash);
-    const store = await sqlite.SqliteReplicaStore.open(replicaDir, {
-      create: true,
-      guard,
-    });
+    // Quota admission (TC-858 S5). Without maxBytes the store opens exactly as
+    // before: no admit hook and no serial default guard.
+    const quota = spec.quota?.maxBytes ?? options.maxBytes;
+    const store = await sqlite.SqliteReplicaStore.open(
+      replicaDir,
+      quota === undefined
+        ? { create: true, guard }
+        : {
+            create: true,
+            // Admission runs inside the store's guarded write, so both share one hold.
+            // The serial default is per storage instance; the CLI passes its profile lock.
+            guard: options.guard ?? serialGuard,
+            partitionId: basename(idDir),
+            admit: async (page) => {
+              const used = await profileContentBytes(root, sqlite.SqliteReplicaStore.contentBytes);
+              if (used + page.blobBytes > quota) {
+                throw new replica.ReplicaError(
+                  replica.ReplicaErrorCode.STORAGE_BUDGET,
+                  `Profile storage holds ${used} bytes; this page adds ${page.blobBytes} against a ${quota}-byte quota. Nothing was committed.`,
+                );
+              }
+            },
+          },
+    );
     let generation: number;
     try {
       // First-open race (review): the existence check must run INSIDE the

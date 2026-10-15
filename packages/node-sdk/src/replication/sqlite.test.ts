@@ -14,9 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ed25519 } from "@noble/curves/ed25519";
-import type { ReplicaTransport } from "@tinycloud/replica";
+import { contentHash, type ReplicaTransport } from "@tinycloud/replica";
 import type {
+  KVReplicaHandle,
   KVReplicaSpec,
+  KVReplicaStorage,
   PendingWriteState,
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
@@ -887,5 +889,124 @@ describe("grant reuse across restored invocations (§4.4 inputs)", () => {
       });
       await restored.close();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quota admission (TC-858 S5, plan §7): `maxBytes` ledger checked in applyPage
+// ---------------------------------------------------------------------------
+
+const SIX_KB = 6_000;
+const signal = (): AbortSignal => new AbortController().signal;
+
+/** One page carrying `entries` (key, bytes) changes, content served by hash. */
+function contentTransport(entries: Array<[string, Uint8Array]>): ReplicaTransport {
+  const served = new Map<string, { bytes: Uint8Array; etag: string }>();
+  const changes = entries.map(([key, bytes]) => {
+    const etag = `"blake3-${contentHash(bytes)}"`;
+    served.set(key, { bytes, etag });
+    return { key, deleted: false as const, etag, metadata: {} };
+  });
+  return {
+    async syncPage({ prefix }) {
+      return {
+        changes,
+        more: false,
+        cursor: "1",
+        source: { nodeDid: "did:key:zTestNode", space: SPACE_A, prefix },
+        authority: { notBefore: null, expiresAt: null, retainUntil: null },
+      };
+    },
+    async fetchContent(keys) {
+      return new Map(keys.map((key) => [key, served.get(key) ?? { missing: true as const }]));
+    },
+  };
+}
+
+/** Two replicas in one profile (`notes/`, `docs/`), each one 6 KB change. */
+async function pairStorage(guard: SqliteReplicaStorageOptions["guard"]): Promise<KVReplicaStorage> {
+  const dir = await makeDir();
+  return createSqliteReplicaStorage(
+    storageOptions({
+      dir,
+      guard,
+      maxBytes: 10_000,
+      transportFor: (_grant, replicaSpec) =>
+        replicaSpec.prefix === "notes/"
+          ? contentTransport([["notes/a", new Uint8Array(SIX_KB).fill(1)]])
+          : contentTransport([["docs/a", new Uint8Array(SIX_KB).fill(2)]]),
+    }),
+  );
+}
+
+async function openPair(
+  storage: KVReplicaStorage,
+): Promise<{ notes: KVReplicaHandle; docs: KVReplicaHandle }> {
+  const notes = await storage.open(spec({ prefix: "notes/" }));
+  const docs = await storage.open(spec({ prefix: "docs/" }));
+  await notes.installGrant(await mintUcan({ audience: DEVICE_DID, prefixes: ["notes", "notes/"] }));
+  await docs.installGrant(await mintUcan({ audience: DEVICE_DID, prefixes: ["docs", "docs/"] }));
+  return { notes, docs };
+}
+
+/** Both replicas sync at once: exactly one 6 KB page fits in a 10 KB budget. */
+async function expectOneAdmitted(storage: KVReplicaStorage): Promise<void> {
+  const { notes, docs } = await openPair(storage);
+  const outcomes = await Promise.allSettled([
+    notes.sync({ signal: signal(), syncStartEpoch: 1 }),
+    docs.sync({ signal: signal(), syncStartEpoch: 1 }),
+  ]);
+  const refused = outcomes.filter((o): o is PromiseRejectedResult => o.status === "rejected");
+  expect(refused).toHaveLength(1);
+  expect(refused[0]!.reason).toMatchObject({ code: "STORAGE_BUDGET" });
+  expect((await notes.status()).bytes + (await docs.status()).bytes).toBe(SIX_KB);
+  await notes.close();
+  await docs.close();
+}
+
+describe("quota admission (TC-858 S5)", () => {
+  test("CLI shape: two replicas in one profile share one budget under the profile guard", async () => {
+    await expectOneAdmitted(await pairStorage(serialGuard()));
+  });
+
+  test("default guard: two writers in one process on one storage serialise", async () => {
+    await expectOneAdmitted(await pairStorage(undefined));
+  });
+
+  test("a refused page commits nothing: no bytes stored, fence not advanced", async () => {
+    const storage = await pairStorage(serialGuard());
+    const { notes, docs } = await openPair(storage);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    await expect(docs.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toMatchObject({
+      code: "STORAGE_BUDGET",
+    });
+    expect((await docs.status()).bytes).toBe(0);
+    expect((await docs.status()).syncedThroughEpoch).toBe(0);
+    await notes.close();
+    await docs.close();
+  });
+
+  test("identical content under two keys is counted once against the budget", async () => {
+    const same = new Uint8Array(SIX_KB).fill(3);
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(
+      storageOptions({
+        dir,
+        guard: serialGuard(),
+        maxBytes: 10_000,
+        transportFor: (_grant, replicaSpec) =>
+          replicaSpec.prefix === "notes/"
+            ? contentTransport([["notes/a", same], ["notes/b", same]])
+            : contentTransport([["docs/a", new Uint8Array(3_000).fill(4)]]),
+      }),
+    );
+    const { notes, docs } = await openPair(storage);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    // 6 KB is stored once, so a 3 KB page still fits (6 + 3 <= 10). Counting both
+    // keys (12 KB) would refuse it.
+    await expect(docs.sync({ signal: signal(), syncStartEpoch: 1 })).resolves.toBeDefined();
+    expect((await docs.status()).bytes).toBe(3_000);
+    await notes.close();
+    await docs.close();
   });
 });
