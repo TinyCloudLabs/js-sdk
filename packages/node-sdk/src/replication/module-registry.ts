@@ -1,3 +1,5 @@
+import type { ReplicaDenyInput } from "@tinycloud/sdk-services/kv/replication";
+
 /**
  * The `@tinycloud/replica/profile-gate` members the node adapter uses, typed structurally: node-sdk
  * compiles under `moduleResolution: node` and cannot read replica's `exports` map (see replica-contract.ts).
@@ -15,7 +17,7 @@ export type ProfileGateModule = {
   ): Promise<{ incarnation: string; lifecycleEpoch: number }>;
   denyGate(
     profileDir: string,
-    input: { reason: "sign_out"; principal: string },
+    input: ReplicaDenyInput,
     collectIntents: (principalHash: string) => Promise<readonly unknown[]>,
   ): Promise<{ status: string; code?: string }>;
 };
