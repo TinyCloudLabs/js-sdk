@@ -249,6 +249,7 @@ export type {
 } from "./kv/replication";
 export type {
   ConsentDeadlineMs,
+  ClampConsentAnchor,
   EffectiveGrantExpiry,
   EffectiveGrantExpiryInput,
   MintRemainingMs,

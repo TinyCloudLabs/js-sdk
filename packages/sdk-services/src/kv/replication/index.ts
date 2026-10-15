@@ -57,6 +57,7 @@ export type {
 } from "./quota";
 export type {
   ConsentDeadlineMs,
+  ClampConsentAnchor,
   EffectiveGrantExpiry,
   EffectiveGrantExpiryInput,
   MintRemainingMs,

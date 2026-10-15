@@ -35,6 +35,8 @@ export interface ReplicaGateAccess {
   principal: string;
   /** When set, the operation is also refused while a purge intent covers this partition. */
   partitionId?: string;
+  /** Pending-store calls set this: refused while a `pending` purge intent covers the identity. */
+  identityKeyHash?: string;
 }
 
 /** Why the gate refused (`REPLICA_GATED` errors carry this as `gate`). */
@@ -110,7 +112,8 @@ export interface ReplicaEraseReport {
 export interface ReplicaGateTx<Tx> {
   /**
    * First call in every guarded transaction (open, get, list, status, grant install, page commit,
-   * sync completion). Rejects with {@link ReplicaGatedError}; the caller aborts the transaction.
+   * sync completion, and every pending-store read/readExisting/update). Rejects with
+   * {@link ReplicaGatedError}; the caller aborts the transaction.
    */
   assert(tx: Tx, access: ReplicaGateAccess): Promise<void>;
   /** Registers a partition in the index, in the transaction that creates it. Idempotent. */
@@ -129,7 +132,7 @@ export interface ReplicaPartitionEraser<Tx> {
    * contentless tombstone. Returns the bytes released (for `ReplicaQuotaLedger.accountErase`).
    */
   erasePartition(tx: Tx, partitionId: string): Promise<{ bytes: number }>;
-  /** Removes the identity's pending-write state. */
+  /** Removes the identity's pending-write state. (The `first_install` anchor is cleared by `deny`.) */
   eraseIdentityPending(tx: Tx, identityKeyHash: string): Promise<void>;
 }
 
@@ -161,7 +164,11 @@ export interface ReplicaLifecycleGate {
    * synchronously by `deny`). Node/CLI: this process's gate view.
    */
   deliverable(stamp: ReplicaSessionStamp): boolean;
-  /** Step 1: one commit moves the gate (epoch + 1) and records intents for every indexed partition and pending record of the old principal. */
+  /**
+   * Step 1: one commit moves the gate (epoch + 1), records intents for every indexed partition and
+   * pending record of the old principal, and clears the old principal's `first_install` consent
+   * anchors (node: the gate file's `firstInstall` map; browser: the `device` store entries).
+   */
   deny(input: ReplicaDenyInput): Promise<ReplicaDenyOutcome>;
   /** Step 3: erase each outstanding intent in its own transaction (erase + clearIntent + accountErase). */
   erasePending(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;

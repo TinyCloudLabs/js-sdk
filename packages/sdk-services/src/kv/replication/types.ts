@@ -78,17 +78,28 @@ export interface ReplicaGrantInfo {
   state: "active" | "pending";
   /** Both get and sync in the grant carry no caveats. */
   unconstrained: boolean;
-  /** ms since epoch the grant was installed. Present when the adapter enforces a grant policy. */
+  /**
+   * ms since epoch, from the storage clock at the FIRST install of this grant CID. Re-installing
+   * the same CID never refreshes it; recompute-at-open uses the stored value.
+   */
   installedAt?: number;
   /**
    * min(expiresAt, installedAt + grantTtlMs, consentDeadline), stored with the grant and
-   * recomputed at open from the handle's `spec.grantPolicy`. Reads refuse with GRANT_EXPIRED
-   * (authority `expired`) at or after it. Absent when no policy is configured (Phase 1).
+   * recomputed at open from the stored `installedAt` and the handle's `spec.grantPolicy`. Serving
+   * requires `now < effectiveExpiresAt` and a finite stored value; anything else (including NaN,
+   * ±Infinity or a missing bound with replication enabled) refuses with GRANT_EXPIRED (authority
+   * `expired`). Present on every Phase 2 grant; absent only on Phase 1 data before recompute.
    */
   effectiveExpiresAt?: number;
-  /** ms since epoch; consent anchor + CONSENT_WINDOW_MS. */
+  /**
+   * ms since epoch; consent anchor + CONSENT_WINDOW_MS. Serving and minting require
+   * `now < consentDeadline` and a finite value.
+   */
   consentDeadline?: number;
-  /** The resolved consent anchor, including a storage-persisted `first_install` anchor. */
+  /**
+   * The resolved consent anchor (finite ms, clamped to ≤ now). A `first_install` anchor is keyed by
+   * identity, survives partition reset, purge and reinstall, and is cleared only by `deny`.
+   */
   consentAnchor?: ReplicaConsentAnchor;
 }
 
@@ -135,7 +146,11 @@ export interface KVReplicaSpec {
    * with `identity.principal`, inside every guarded transaction. Adapters without a gate ignore it.
    */
   stamp?: ReplicaSessionStamp;
-  /** Grant lifetime policy; absent means Phase 1 behaviour (signed `exp` only). */
+  /**
+   * Grant lifetime policy. The controller MUST set it whenever replication is enabled. An adapter
+   * given a spec without it applies the default policy (DEFAULT_GRANT_TTL_MS, anchor null), never
+   * unbounded serving; "absent = Phase 1" holds only when replication is off.
+   */
   grantPolicy?: ReplicaGrantPolicy;
   /** Quota settings; absent means unbounded. */
   quota?: ReplicaQuotaSpec;
@@ -224,8 +239,20 @@ export interface KVReplicaStorage {
    * Optional only for volatile runtimes. Omission means an in-memory store with `durable: false`.
    * B-node's Node/CLI adapter MUST provide a durable store and surface open failures, never
    * silently fall back to memory.
+   *
+   * With a `lifecycle` gate configured, the store is bound to `options.stamp` for its whole life
+   * (callers cache stores per identity AND stamp). Every `read`, `readExisting` and `update`
+   * (append, settle, remove, clear, flush) runs `ReplicaGateTx.assert(tx, { stamp, principal:
+   * identity.principal })` first, inside its own transaction / guarded mutation, before touching
+   * or initializing storage; a refusal rejects REPLICA_GATED and writes nothing. A store obtained
+   * without a stamp rejects every call with REPLICA_GATED `not_established`. So after `deny`, a
+   * stale tab, worker or process can neither read nor refill the signed-out identity's pending
+   * state. Without a gate, `options` is ignored (Phase 1).
    */
-  pendingWrites?(identity: ReplicationIdentity): PendingWriteStore;
+  pendingWrites?(
+    identity: ReplicationIdentity,
+    options?: { stamp?: ReplicaSessionStamp },
+  ): PendingWriteStore;
   /**
    * The platform lifecycle gate (browser: origin DB control stores + logout marker; node/CLI:
    * gate file). Absent means Phase 1 behaviour: no stamps, no gate checks.
@@ -262,11 +289,20 @@ export interface PendingWriteStore {
    */
   readonly durable: boolean;
   readonly identity: ReplicationIdentity;
-  /** Consistent lock-free snapshot, e.g. a read of an atomic file replacement. */
+  /**
+   * Consistent lock-free snapshot, e.g. a read of an atomic file replacement. Gated (see
+   * `KVReplicaStorage.pendingWrites`).
+   */
   read(): Promise<PendingWriteState>;
-  /** Read an existing durable snapshot without initializing storage; undefined means no file exists. */
+  /**
+   * Read an existing durable snapshot without initializing storage; undefined means no file exists.
+   * Gated.
+   */
   readExisting?(): Promise<PendingWriteState | undefined>;
-  /** Serialized read-modify-write; durable stores persist before resolve. Errors on mismatch/failure. */
+  /**
+   * Serialized read-modify-write; durable stores persist before resolve. Errors on mismatch/failure.
+   * Gated: the assert runs inside the same transaction/guard as the write.
+   */
   update<T>(mutate: (s: PendingWriteState) => T): Promise<T>;
 }
 

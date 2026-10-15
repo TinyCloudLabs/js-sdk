@@ -12,7 +12,10 @@ This document is normative for every `KVReplicaStorage` adapter: the browser Ind
 
 `contractConstants` and `grantPolicyTypes` are subpath exports (`@tinycloud/sdk-services/kv/replication/contractConstants`, `…/grantPolicyTypes`). The constants are not re-exported from the package root.
 
-**Feature off is byte-identical.** Every addition is optional. With no `lifecycle` on the storage, no `stamp`, `grantPolicy` or `quota` on the spec, and none of the new options set, adapters and the controller behave exactly as in Phase 1.
+**Feature off is byte-identical.** Every addition is optional in the types. With replication off, nothing in this contract runs. With replication on:
+- no `lifecycle` on the storage means no stamps and no gate checks, as in Phase 1;
+- no `quota` means unbounded;
+- the grant policy is **always** applied (§3). A missing `grantPolicy` means the default policy, never Phase 1's unbounded serving.
 
 Conventions: instants are milliseconds since the Unix epoch, durations are milliseconds and sizes are bytes, unless a field says ISO string. Errors are `Error & { code: string }`, and gate refusals also carry `gate`.
 
@@ -47,9 +50,9 @@ Conventions: instants are milliseconds since the Unix epoch, durations are milli
 - `persisted: boolean | null`. Browser: the result of `navigator.storage.persist()`, or `null` when unavailable or not yet asked. Node/CLI omit it.
 - `purgePending: boolean`. True while a purge intent covers the partition or its identity.
 
-**Pending writes.** `pendingWrites(identity)` returns a durable store (`durable: true`), scoped by identity rather than by prefix. If it can't be opened, it surfaces `STORAGE_ERROR`. It never substitutes memory.
-- Browser: the `pending` store keyed by identity key hash. Read-modify-write is serialised across tabs with a Web Lock named `REPLICA_PENDING_LOCK_PREFIX + identityKeyHash`.
-- Node/CLI: `pending.json` under the identity directory, serialised by the storage `guard` (the profile lock in the CLI).
+**Pending writes.** `pendingWrites(identity, { stamp })` returns a durable store (`durable: true`), scoped by identity rather than by prefix. If it can't be opened, it surfaces `STORAGE_ERROR`. It never substitutes memory. With a gate configured, the store is bound to the stamp it was obtained with, and every call is a guarded operation (§2). Callers cache stores per identity **and** stamp.
+- Browser: the `pending` store keyed by identity key hash. Read-modify-write is serialised across tabs with a Web Lock named `REPLICA_PENDING_LOCK_PREFIX + identityKeyHash`, and each transaction includes the `gate` and `purgeIntents` stores.
+- Node/CLI: `pending.json` under the identity directory, serialised by the storage `guard` (the profile lock in the CLI). `update` re-reads the gate file inside the guard. The lock-free `read`/`readExisting` read the gate file before the pending file.
 
 **Peer commits.** If the spec has `onPeerCommit`, the adapter calls it when **another** tab or process commits a sync for the same partition. The browser does this from the worker's `committed` message on `REPLICA_KV_CHANNEL`. It is never called for the handle's own commits, and it must not throw. The controller emits `replication.sync` with `trigger: "peer"`, `origin: "peer"` and `outcome: "ok"`, and doesn't sync.
 
@@ -67,7 +70,7 @@ Conventions: instants are milliseconds since the Unix epoch, durations are milli
 
 | | Browser | Node/CLI |
 | -- | -- | -- |
-| Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv` | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, principal, lifecycleEpoch, intents }`, written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk storage takes a `gateFile` option that defaults next to `dir`, outside the replication data. The partition index may be derived from the on-disk layout |
+| Gate, index, intents, first-install anchors | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv`. `first_install` anchors live in the `device` store under key `"firstInstall:" + identityKeyHash` | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, principal, lifecycleEpoch, intents, firstInstall }`, where `firstInstall: { [identityKeyHash]: ms }`. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk storage takes a `gateFile` option that defaults next to `dir`, outside the replication data. The partition index may be derived from the on-disk layout |
 | Cross-tab/process signal | `localStorage` marker `REPLICA_LOGOUT_MARKER`; BroadcastChannel `REPLICA_KV_CHANNEL` and the `storage` event | the gate file is re-read inside every guarded mutation |
 | Session stamp persisted in | sdk-core `PersistedSessionData.replicaStamp` (S3 adds it to the zod schema: `incarnation: string`, `lifecycleEpoch: non-negative int`), next to the SIWE | the profile's persisted session record |
 
@@ -76,7 +79,7 @@ Conventions: instants are milliseconds since the Unix epoch, durations are milli
 - A session without a stamp is "not established" and is refused (`not_established`).
 - The controller gets it as `KVReplicationDeps.stamp` and passes it into every `KVReplicaSpec.stamp`. A handle never adopts a newer stamp.
 
-**Guarded operations.** These are `open`, `get`, `list`, `status`, `installGrant`, every sync page commit and the sync completion. Each one calls `ReplicaGateTx.assert(tx, { stamp, principal, partitionId })` **first, inside its own transaction**. The call refuses with `REPLICA_GATED` and a `gate` reason when:
+**Guarded operations.** These are `open`, `get`, `list`, `status`, `installGrant`, every sync page commit, the sync completion, and **every pending-store call**: `read`, `readExisting` and `update` (which covers append, settle, remove, clear and flush). Each one calls `ReplicaGateTx.assert(tx, { stamp, principal, partitionId?, identityKeyHash? })` **first, inside its own transaction** (node: inside the guarded mutation for writes), before it touches or initialises storage. The call refuses with `REPLICA_GATED` and a `gate` reason when:
 - the stamp's `incarnation` or `lifecycleEpoch` differs from the gate (`stamp_stale`);
 - the gate's principal is `null` or a different account (`principal_mismatch`);
 - an intent covers the partition (`purge_pending`);
@@ -92,6 +95,7 @@ On refusal the transaction aborts: a read returns nothing and a page commits not
 | `handle.get` / `list` / `status` | rejects `REPLICA_GATED` (not a `LocalGetResult` status) |
 | `handle.installGrant` | rejects `REPLICA_GATED`; nothing written |
 | `handle.sync` | rejects `REPLICA_GATED`; the current page aborts and the epoch is unchanged |
+| `pendingWrites(…).read` / `readExisting` / `update` | rejects `REPLICA_GATED`; nothing is read, created or written. So a stale tab, worker or process can't refill the pending state after `deny` → `eraseIdentityPending`, or before the purge on an account switch. A store obtained without a stamp rejects every call with `not_established`. **Controller:** `REPLICA_GATED` from the pending store moves the whole controller to `gated`, and it never serves locally again under that stamp. Reads go to the network with `replica_gated`. Covered writes are dispatched to the network **without** a pending record. That's safe because pending records only protect local serving, and none will happen. This differs from Phase 1's `STORAGE_ERROR` path, which refuses to dispatch. A session with no established stamp (for example B before activation) binds no controller, so its KV calls go straight to the network |
 | `storage.purge`, `inspectStatus` | not gated |
 
 `RESET_REQUIRED` is reserved for handles whose partition was **erased** (by purge or revocation) after they opened.
@@ -110,7 +114,7 @@ A gated prefix is not retried on the open-backoff schedule. It stays gated until
 The browser worker attaches to each reply the stamp the read ran under. The SDK drops a reply whose stamp no longer matches the handle's view.
 
 **Sign-out and account switch** (`ReplicaLifecycleGate`), in this order:
-1. **Deny and record intent.** `deny({ reason, next? })` does this in one commit: gate `principal` → `null` (sign-out) or `next` (switch); `lifecycleEpoch + 1`; intents for every indexed partition and pending record of the old principal. It never rejects, and returns a `ReplicaDenyOutcome`:
+1. **Deny and record intent.** `deny({ reason, next? })` does all of this in one commit: gate `principal` → `null` (sign-out) or `next` (switch); `lifecycleEpoch + 1`; intents for every indexed partition and pending record of the old principal; and removal of the old principal's `first_install` consent anchors (§3). It never rejects, and returns a `ReplicaDenyOutcome`:
    - `denied`: the normal path.
    - `deleted` (browser): the deny commit failed, and `indexedDB.deleteDatabase(REPLICA_KV_DATABASE)` succeeded. Every connection has an `onversionchange` handler that closes it. A recreated database gets a new incarnation.
    - `marker` (browser): the delete failed or stayed blocked, and `REPLICA_LOGOUT_MARKER` was written. The marker blocks activation for every account and delivery from every open handle. Every load retries the delete, and the marker is cleared only once the delete succeeds.
@@ -141,13 +145,20 @@ It never rejects. Remaining intents show as `purgePending` and in `pendingPurge(
 - defaults to `DEFAULT_GRANT_TTL_MS` (24 h);
 - `≤ 0` or above `MAX_GRANT_TTL_MS` (7 d) is a `TypeError` at construction.
 
-The controller passes `KVReplicaSpec.grantPolicy = { grantTtlMs, consentAnchor }`.
+The controller passes `KVReplicaSpec.grantPolicy = { grantTtlMs, consentAnchor }`. **With replication enabled, the policy is required.** The controller always sets it. An adapter given a spec without it applies the default policy (`DEFAULT_GRANT_TTL_MS`, anchor `null`), never unbounded serving. "Absent policy = Phase 1" applies only when replication is off. The field stays optional in the type only so Phase 1 callers still compile.
 
 **Consent anchor** (`ReplicationAuthority.consentAnchor()`), in fallback order:
 1. the SIWE `issuedAt` of the sign-in that granted replication (`siwe`);
 2. for compact delegated sessions, the delegation's `iat` (`delegation_iat`);
 3. then its `nbf` (`delegation_nbf`);
 4. otherwise `null`. Storage then uses its persisted first-install time (`first_install`), persisting it on the first install, and reports it in `ReplicaGrantInfo.consentAnchor`.
+
+**Anchor invariants:**
+- `at` is finite milliseconds.
+- Second-based sources (UCAN `iat`/`nbf`) are converted ×1000 **exactly once**, at the authority.
+- Every anchor goes through `clampConsentAnchor(anchor, now)`, which clamps `at` to ≤ now and returns `null` for a non-finite `at`. On `null`, the next source in the order is used.
+- Renewals never re-anchor. Only a fresh sign-in gives a new anchor.
+- A `first_install` anchor is keyed by identity (`identityKeyHash`). It **survives** partition reset, purge, revocation and reinstall, and is cleared **only by `deny`**, because signing in again is fresh consent. It is stored in the node gate file's `firstInstall` map, or in the browser `device` store (§2).
 
 **Consent deadline** = `consentDeadlineMs(anchor)` = `anchor.at + CONSENT_WINDOW_MS` (7 d).
 
@@ -158,7 +169,17 @@ effectiveGrantExpiry({ signedExpiresAt, installedAt, grantTtlMs, consentDeadline
   = min(signedExpiresAt ?? ∞, installedAt + grantTtlMs, consentDeadline)
 ```
 
-The adapter stores it with the installed grant and **recomputes it at open** from the current `spec.grantPolicy`, which caps a grant restored from an older policy. It is checked inside the read transaction, alongside node-attested authority, and whichever ends first wins. At or after it, `LocalReadMeta.authority` is `expired`, and reads go to the network with `grant_expired`. Expiry blocks reads; it does not erase.
+**`installedAt`** is taken from the storage clock at the **first** install of that grant CID. Re-installing the same CID doesn't refresh it, and recompute-at-open uses the stored value.
+
+The adapter stores the effective expiry with the installed grant and **recomputes it at open** from the stored `installedAt` and the current `spec.grantPolicy`, which caps a grant restored from an older policy. It is checked inside the read transaction, alongside node-attested authority, and whichever ends first wins.
+
+**Serve checks fail closed:**
+- Serving requires `now < effectiveExpiresAt` and `now < consentDeadline`. Every check is written as a refusal on `!(now < bound)`, so `NaN` refuses.
+- A stored bound that is missing (with replication enabled) or not finite (`NaN`, `±Infinity`) also refuses.
+- When a check refuses, `LocalReadMeta.authority` is `expired`, and reads go to the network with `grant_expired`. The code is `GRANT_EXPIRED`, or `CONSENT_EXPIRED` when the deadline is what refused.
+- Expiry blocks reads; it does not erase.
+
+**Clock rollback is an accepted risk for Phase 2.** Local bounds use `Date.now()`, so a device clock set backwards extends local serving of bytes already copied. The signed `exp` still bounds every **network** use (sync, renewal), because the node enforces it.
 
 **Every grant path:**
 
@@ -170,7 +191,7 @@ The adapter stores it with the installed grant and **recomputes it at open** fro
 | Installed grant reused at open | only if the stored `effectiveExpiresAt` is ahead and `now < consentDeadline` |
 | Grant restored from an older policy | effective expiry recomputed at open; capped locally |
 
-**Silent renewal.** `needsSilentRenewal({ now, installedAt, effectiveExpiresAt, consentDeadline })` is true when `effectiveExpiresAt − now < RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt)` and `now < consentDeadline`.
+**Silent renewal.** `needsSilentRenewal({ now, installedAt, effectiveExpiresAt, consentDeadline })` is true when `effectiveExpiresAt − now < RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt)`, **strictly** below (exactly 25% remaining does not renew), and `now < consentDeadline`. It returns false for non-finite inputs.
 - **When it's checked:** on a timer, before each sync, and at open.
 - **How it renews:** only through the session-key derivation path of `delegateTo`, never the wallet path. Renewal must not prompt.
 - **On refusal or offline:** the current grant keeps serving until its effective expiry.
@@ -179,7 +200,7 @@ The adapter stores it with the installed grant and **recomputes it at open** fro
 
 **After the deadline:** no mint and no renewal, and local reads stop. Network reads continue. Re-consent is a fresh sign-in, which gives a new anchor.
 
-S4 implements `effectiveGrantExpiry`, `consentDeadlineMs`, `mintRemainingMs` and `needsSilentRenewal` in `grantPolicy.ts`, with the signature types in `grantPolicyTypes.ts` and the constants in `contractConstants.ts`.
+S4 implements `effectiveGrantExpiry`, `consentDeadlineMs`, `mintRemainingMs`, `needsSilentRenewal` and `clampConsentAnchor` in `grantPolicy.ts`, with the signature types in `grantPolicyTypes.ts` and the constants in `contractConstants.ts`.
 
 ## 4. Quota
 
@@ -240,7 +261,7 @@ One IndexedDB database per origin, `REPLICA_KV_DATABASE` = `tinycloud-replica-kv
 | `entries` | adapter | `[partitionId, key]` |
 | `blobs` | adapter | `[partitionId, blake3Hex]` |
 | `pending` | adapter | `identityKeyHash` |
-| `device` | adapter | `"device"` |
+| `device` | adapter (first-install entries cleared by `deny`) | `"device"`; `"firstInstall:" + identityKeyHash` |
 | `gate` | lifecycle (S3) | `"account"` |
 | `partitions` | lifecycle | `partitionId` |
 | `purgeIntents` | lifecycle | `ReplicaPurgeIntent.id` |

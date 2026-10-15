@@ -7,7 +7,7 @@ import type {
   ReplicaGrantInfo,
   ReplicationReason,
 } from "../../index";
-import type { KVReplicaSpec, ReplicationAuthority, ReplicaStatusEntry } from "./types";
+import type { KVReplicaSpec, KVReplicaStorage, ReplicationAuthority, ReplicaStatusEntry } from "./types";
 import type { ReplicaGateTx, ReplicaSessionStamp } from "./lifecycle";
 import type { ReplicaQuotaLedger } from "./quota";
 
@@ -56,3 +56,9 @@ type _GatedIsAState = Assert<"gated" extends ReplicaStatusEntry["state"] ? true 
 type _GatedIsAReason = Assert<"replica_gated" extends ReplicationReason ? true : false>;
 type _GateAssertTakesTx = Assert<Equal<Parameters<ReplicaGateTx<"tx">["assert"]>[0], "tx">>;
 type _LedgerAdmitTakesTx = Assert<Equal<Parameters<ReplicaQuotaLedger<"tx">["admitPage"]>[0], "tx">>;
+type _PendingStoreTakesStamp = Assert<
+  Equal<
+    NonNullable<Parameters<NonNullable<KVReplicaStorage["pendingWrites"]>>[1]>["stamp"],
+    ReplicaSessionStamp | undefined
+  >
+>;

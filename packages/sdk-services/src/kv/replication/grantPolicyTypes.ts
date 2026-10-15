@@ -15,10 +15,21 @@ export type ReplicaConsentSource =
   /** Neither: the persisted time this identity's first grant was installed (storage-owned). */
   | "first_install";
 
+/**
+ * Invariants: `at` is finite milliseconds and clamped to ≤ now by `clampConsentAnchor`. Second-based
+ * sources (UCAN `iat`/`nbf`) are converted ×1000 exactly once, at the authority; SIWE `issuedAt`
+ * is parsed as an ISO date. Renewals never re-anchor: only a fresh sign-in yields a new anchor.
+ */
 export interface ReplicaConsentAnchor {
   at: number;
   source: ReplicaConsentSource;
 }
+
+/**
+ * Returns the anchor with `at` clamped to ≤ now, or null when `at` is not finite (callers then
+ * fall back down the source order). S4 implements it as `clampConsentAnchor` in `grantPolicy.ts`.
+ */
+export type ClampConsentAnchor = (anchor: ReplicaConsentAnchor, now: number) => ReplicaConsentAnchor | null;
 
 /**
  * Policy the controller passes to storage in `KVReplicaSpec.grantPolicy`. Storage stores the
@@ -28,9 +39,10 @@ export interface ReplicaGrantPolicy {
   /** Validated: 0 < grantTtlMs ≤ MAX_GRANT_TTL_MS. */
   grantTtlMs: number;
   /**
-   * From `ReplicationAuthority.consentAnchor()`. Null means the session has neither SIWE nor
-   * delegation `iat`/`nbf`; storage then uses its persisted first-install time (source
-   * `first_install`), persisting it on the first install.
+   * From `ReplicationAuthority.consentAnchor()`, clamped. Null means the session has neither SIWE
+   * nor delegation `iat`/`nbf`; storage then uses its persisted first-install time (source
+   * `first_install`), keyed by identity, persisted on the first install, surviving partition
+   * reset, purge and reinstall, and cleared only by `deny`.
    */
   consentAnchor: ReplicaConsentAnchor | null;
 }
@@ -57,8 +69,9 @@ export type ConsentDeadlineMs = (anchor: ReplicaConsentAnchor) => number;
 export type MintRemainingMs = (input: { now: number; grantTtlMs: number; consentDeadline: number }) => number;
 
 /**
- * True when online-renewal should run: remaining = effectiveExpiresAt − now is below
- * RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt), and now < consentDeadline.
+ * True when online-renewal should run: remaining = effectiveExpiresAt − now is STRICTLY below
+ * RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt) (exactly 25% remaining does not
+ * renew), and now < consentDeadline. All inputs finite; otherwise false.
  * Checked on a timer, before each sync, and at open.
  */
 export type NeedsSilentRenewal = (input: {
