@@ -124,6 +124,7 @@ export function createIndexedDbGateTx(
           if (gate.keyId !== access.keyId || gate.accountKeyId !== access.accountKeyId) throw refusal("stamp_stale");
           if (gate.principalHash !== access.principalHash) throw refusal("principal_mismatch");
           if (typeof gate.consentDeadline !== "number" || !Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
+
           const device = tx.objectStore(KV_STORE.device);
           const hash = await requestAsPromise<GateHmacRecord | undefined>(device.get(GATE_HMAC_KEY));
           const account = await requestAsPromise<AccountKeyRecord | undefined>(device.get(ACCOUNT_KEY));
