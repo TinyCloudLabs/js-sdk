@@ -386,6 +386,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.replicationSync());
       const sibling = await bootPage(context);
       await sibling.evaluate(() => window.__tcw.signIn());
+      await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "delete_database", once: true }));
       await revokeGrantOf(page);
       await page.evaluate(() => window.__tcw.replicationSync());
