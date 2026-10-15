@@ -6,13 +6,15 @@
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake-indexeddb";
+import { replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
 
 import { FakeNode, SPACE, config, deviceGrant, device } from "../../test/fixtures.js";
 import { Replica } from "../engine.js";
 import { isReplicaError, ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
 import { IndexedDbReplicaStore, type ReplicaStoreHooks } from "../browser/store.js";
-import { ERASE_STORES, KV_DATABASE, KV_STORE, kvLayout, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
+import { saltedHash } from "../profile-gate/saltedHash.js";
+import { ERASE_STORES, KV_DATABASE, KV_STORE, identityKeyHashOf, kvLayout, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
 
 beforeAll(() => {
   (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
@@ -60,27 +62,34 @@ async function rowsOf(storeName: string, id: string): Promise<number> {
 }
 
 describe("partition ids", () => {
-  test("canonical spellings of one identity, prefix and device share a partition", () => {
-    const a = partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did });
-    const b = partitionIdOf({
-      identity: { ...identity, host: "https://NODE.example/", principal: identity.principal.replace("aa", "AA") },
-      prefix: "notes/",
-      deviceDid: `${device.did}#${device.did.slice("did:key:".length)}`,
-    });
+  const salt = "c2FsdC1vbmUtc2FsdC1vbmUtc2FsdC1vbmUtc2FsdC0x";
+
+  test("are the salted HMAC of identity key, prefix and device principal; canonical spellings agree", async () => {
+    const a = await partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, salt);
+    const b = await partitionIdOf(
+      {
+        identity: { ...identity, host: "https://NODE.example/", principal: identity.principal.replace("aa", "AA") },
+        prefix: "notes/",
+        deviceDid: `${device.did}#${device.did.slice("did:key:".length)}`,
+      },
+      salt,
+    );
     expect(a).toBe(b);
-    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).toBe(await saltedHash(salt, `${replicationIdentityKey(identity)}\nnotes/\n${device.did}`));
+    expect(await identityKeyHashOf(identity, salt)).toBe(await saltedHash(salt, replicationIdentityKey(identity)));
   });
 
-  test("prefix, device, principal, space and host each name a different partition", () => {
-    const base = partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did });
-    const others = [
-      partitionIdOf({ identity, prefix: "notes/deep/", deviceDid: device.did }),
-      partitionIdOf({ identity, prefix: "notes/", deviceDid: "did:key:z6MkotherDeviceKey" }),
-      partitionIdOf({ identity: { ...identity, principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb" }, prefix: "notes/", deviceDid: device.did }),
-      partitionIdOf({ identity: { ...identity, space: SPACE.replace(":default", ":other") }, prefix: "notes/", deviceDid: device.did }),
-      partitionIdOf({ identity: { ...identity, host: "https://other.example" }, prefix: "notes/", deviceDid: device.did }),
-    ];
-    expect(new Set([base, ...others]).size).toBe(6);
+  test("prefix, device, principal, space, host and salt each name a different partition", async () => {
+    const base = await partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, salt);
+    const others = await Promise.all([
+      partitionIdOf({ identity, prefix: "notes/deep/", deviceDid: device.did }, salt),
+      partitionIdOf({ identity, prefix: "notes/", deviceDid: "did:key:z6MkotherDeviceKey" }, salt),
+      partitionIdOf({ identity: { ...identity, principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb" }, prefix: "notes/", deviceDid: device.did }, salt),
+      partitionIdOf({ identity: { ...identity, space: SPACE.replace(":default", ":other") }, prefix: "notes/", deviceDid: device.did }, salt),
+      partitionIdOf({ identity: { ...identity, host: "https://other.example" }, prefix: "notes/", deviceDid: device.did }, salt),
+      partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, "b3RoZXItc2FsdC1vdGhlci1zYWx0LW90aGVyLXNhbHQ"),
+    ]);
+    expect(new Set([base, ...others]).size).toBe(7);
   });
 });
 

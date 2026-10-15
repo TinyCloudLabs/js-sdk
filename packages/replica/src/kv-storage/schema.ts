@@ -17,14 +17,13 @@
  * The RC1 `openReplica` databases (`tinycloud-replica/<id>`) are separate
  * and untouched.
  */
-import { sha256 } from "@noble/hashes/sha2";
-import { bytesToHex } from "@noble/hashes/utils";
 import { replicationIdentityKey, type ReplicaPartitionEraser, type ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 import { REPLICA_KV_DATABASE, REPLICA_KV_STORES } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 import { principalOf } from "../did.js";
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { eraseReplicaRows, type ReplicaStoreLayout } from "../browser/store.js";
+import { saltedHash } from "../profile-gate/saltedHash.js";
 
 export const KV_DATABASE = REPLICA_KV_DATABASE;
 export const KV_DATABASE_VERSION = 1;
@@ -56,9 +55,13 @@ function createStores(db: IDBDatabase): void {
   }
 }
 
-/** The `pending` store key and Web Lock suffix of one identity: lowercase hex SHA-256 of its identity key. */
-export function identityKeyHash(identityKey: string): string {
-  return bytesToHex(sha256(new TextEncoder().encode(identityKey)));
+/**
+ * The salted identity-key hash (`pending` key, `firstInstall:` suffix,
+ * pending Web Lock suffix): `saltedHash(salt, replicationIdentityKey(identity))`.
+ * Derive it from a gate `snapshot()` before opening any transaction.
+ */
+export function identityKeyHashOf(identity: ReplicationIdentity, salt: string): Promise<string> {
+  return saltedHash(salt, replicationIdentityKey(identity));
 }
 
 /**
@@ -108,14 +111,15 @@ export function openKvDatabase(options: { create: boolean }): Promise<IDBDatabas
 }
 
 /**
- * The partition id: lowercase hex SHA-256 of `replicationIdentityKey(identity)`
- * (host, space and lower-cased principal), the prefix and the device DID,
- * newline-separated. The device DID is taken as its principal (any
- * `#fragment` dropped), so both spellings of one device key name one partition.
+ * The partition id (CONTRACT.md §1): `saltedHash(salt,
+ * replicationIdentityKey(identity) + "\n" + prefix + "\n" + device)`, where
+ * the device is taken as its principal (any `#fragment` dropped) so both
+ * spellings of one device key name one partition. It is also the opaque
+ * `replicaId` events carry. Derive it from a gate `snapshot()` before
+ * opening any transaction; an unsalted id is never stored.
  */
-export function partitionIdOf(input: { identity: ReplicationIdentity; prefix: string; deviceDid: string }): string {
-  const material = `${replicationIdentityKey(input.identity)}\n${input.prefix}\n${principalOf(input.deviceDid)}`;
-  return bytesToHex(sha256(new TextEncoder().encode(material)));
+export function partitionIdOf(input: { identity: ReplicationIdentity; prefix: string; deviceDid: string }, salt: string): Promise<string> {
+  return saltedHash(salt, `${replicationIdentityKey(input.identity)}\n${input.prefix}\n${principalOf(input.deviceDid)}`);
 }
 
 /** The partition-scoped key layout `IndexedDbReplicaStore` runs over. */

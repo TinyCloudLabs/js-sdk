@@ -95,3 +95,12 @@ export function isReplicaError(error: unknown, code?: ReplicaErrorCode): error i
     (code === undefined || (error as ReplicaError).code === code)
   );
 }
+
+/**
+ * A lifecycle-gate refusal in the shared contract's shape:
+ * `Error & { code: "REPLICA_GATED"; gate }`, with `gate` also in `detail`
+ * so it survives the worker boundary.
+ */
+export function gatedError(gate: string, message: string): ReplicaError & { gate: string } {
+  return Object.assign(new ReplicaError(ReplicaErrorCode.GATED, message, { gate }), { gate });
+}

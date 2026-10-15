@@ -407,6 +407,39 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 2 } });
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
   }, 60_000);
+
+  test("without a stamp, or with the published worker (no gate wired), open fails closed", async () => {
+    feed("closed");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    expect(await page.evaluate((spec) => window.__kv.open("s", "h", { ...spec, stamp: null } as never), specOf("closed"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
+    await page.evaluate(() => window.__kv.createStorage("published", "published"));
+    expect(await page.evaluate((spec) => window.__kv.open("published", "p", spec as never), specOf("closed"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "gate_unavailable" });
+  }, 60_000);
+
+  test("after the gate moves, the worker refuses reads, syncs and installs; a revoked view drops replies on the main thread", async () => {
+    const node = feed("gated");
+    node.put("notes/a", "one");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    const deviceDid = await openGranted(page, "s", "h", "gated");
+    expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
+
+    // The main-thread delivery check: this tab's view refuses the stamp; nothing is delivered.
+    const stamp = await page.evaluate((principal) => window.__kv.establish(principal), PRINCIPAL);
+    await page.evaluate((s) => window.__kv.revoke(s), stamp);
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "stamp_stale" });
+
+    // Another tab signs out at the gate: a fresh tab's old handle is refused inside the worker's transactions.
+    const other = await kvPage();
+    await other.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await other.evaluate((spec) => window.__kv.open("s", "h", spec as never), specOf("gated"));
+    expect(await other.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present" } });
+    await other.evaluate(() => window.__kv.deny());
+    expect(await other.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(await other.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: false, code: "REPLICA_GATED" });
+    expect(await other.evaluate(([jwt]) => window.__kv.installGrant("h", jwt), [grantFor(deviceDid)] as const)).toMatchObject({ ok: false, code: "REPLICA_GATED" });
+  }, 60_000);
 });
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
@@ -482,7 +515,7 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
     });
   }
 
-  test("the published worker mints its device, installs a delegated grant, signs a real sync and serves reads", async () => {
+  test("with the WASM signing path, the worker mints its device, installs a delegated grant, signs a real sync and serves reads", async () => {
     await corsToNode();
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "real"));
@@ -503,7 +536,10 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
     expect(await page.evaluate(() => window.__kv.grant("h"))).toMatchObject({ ok: true, value: { state: "active" } });
   }, 120_000);
 
-  test("TinyCloudNode with replication on indexedDbReplicaStorage serves reads from the replica", async () => {
+  // Parked until the runtime sets session stamps (CONTRACT rev 2: the gate is mandatory and the
+  // node-sdk runtime does not pass `deps.stamp` yet); the acceptance suite runs this scenario
+  // against the real lifecycle gate.
+  test.skip("TinyCloudNode with replication on indexedDbReplicaStorage serves reads from the replica", async () => {
     await corsToNode();
     const page = await context.newPage();
     await page.goto(`${origin}/node.html`);

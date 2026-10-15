@@ -12,6 +12,7 @@ import { createKvWorkerHost } from "../../../src/kv-storage/host.js";
 import type { KvRequest } from "../../../src/kv-storage/protocol.js";
 import { ReplicaError } from "../../../src/errors.js";
 import type { FetchedContent, ReplicaTransport, SyncPage } from "../../../src/types.js";
+import { createTestGate } from "../../test-gate.js";
 
 const scope = self as unknown as {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -63,6 +64,7 @@ const host = createKvWorkerHost({
       },
     };
   },
+  gateTx: createTestGate(),
   ...(navigator.locks === undefined ? {} : { locks: navigator.locks }),
 });
 

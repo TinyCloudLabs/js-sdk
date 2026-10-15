@@ -5,5 +5,6 @@
  */
 export { indexedDbReplicaStorage } from "./client.js";
 export type { IndexedDbReplicaStorageOptions } from "./client.js";
-export { FIRST_INSTALL_KEY_PREFIX, KV_DATABASE, KV_STORE, identityKeyHash, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
+export { FIRST_INSTALL_KEY_PREFIX, KV_DATABASE, KV_STORE, identityKeyHashOf, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
+export { saltedHash } from "../profile-gate/saltedHash.js";
 export { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";

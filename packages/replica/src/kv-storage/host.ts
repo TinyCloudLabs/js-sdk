@@ -17,27 +17,30 @@ import type {
   LocalReadMeta,
   LocalSyncResult,
   ReplicaDevice,
+  ReplicaGateAccess,
   ReplicaGateScope,
   ReplicaGateTx,
   ReplicaGrantInfo,
+  ReplicaPartitionIndexEntry,
   ReplicaPeerCommit,
   ReplicaQuotaLedger,
   ReplicaQuotaSpec,
 } from "@tinycloud/sdk-services/kv/replication";
 import { REPLICA_KV_CHANNEL } from "@tinycloud/sdk-services/kv/replication/contractConstants";
-import { canonicalReplicationIdentity, replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
+import { canonicalReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 
 import { principalOf } from "../did.js";
 import { Replica, type ReadMeta } from "../engine.js";
-import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
+import { ReplicaError, ReplicaErrorCode, gatedError, isReplicaError } from "../errors.js";
 import { assertGrantInstallable, grantUnconstrained, parseUcanGrant } from "../grant.js";
 import { assertFolderPrefix, requiresSecretsOptIn } from "../scope.js";
 import type { GrantRecord, ReplicaTransport } from "../types.js";
-import { idbError, requestAsPromise, transactionDone } from "../browser/idb.js";
+import { requestAsPromise } from "../browser/idb.js";
 import { IndexedDbReplicaStore, type ReplicaStoreHooks } from "../browser/store.js";
+import { saltedHash } from "../profile-gate/saltedHash.js";
 import { grantInfoOf } from "./grantInfo.js";
 import type { KvChannelMessage, KvEvent, KvGetResult, KvOpenSpec, KvReply, KvRequest, KvResults, KvWireError } from "./protocol.js";
-import { KV_STORE, identityKeyHash, kvLayout, openKvDatabase, partitionIdOf } from "./schema.js";
+import { KV_STORE, identityKeyHashOf, kvLayout, openKvDatabase, partitionIdOf } from "./schema.js";
 
 /** Writer Web Lock of one partition: one tab syncs it at a time. */
 export function partitionLockName(partitionId: string): string {
@@ -61,7 +64,12 @@ export type KvWorkerDeps = {
   createDevice(): Promise<ReplicaDevice> | ReplicaDevice;
   /** A transport that invokes with exactly `grant` and `device` against the spec's host. */
   transportFor(grant: GrantRecord, spec: KvOpenSpec, device: ReplicaDevice): ReplicaTransport;
-  /** The lifecycle gate's transaction seam; absent = no gate (Phase 1 behaviour). */
+  /**
+   * The lifecycle gate's transaction seam (`createIndexedDbGateTx`). Required:
+   * every id is salted from its `snapshot()` and every data transaction runs
+   * through its `run`, so without it `open` refuses REPLICA_GATED
+   * `gate_unavailable` — there is no ungated mode.
+   */
   gateTx?: ReplicaGateTx<IDBTransaction>;
   /** The quota ledger for a handle's `spec.quota`; absent or undefined = unbounded. */
   ledgerFor?(quota: ReplicaQuotaSpec | undefined): ReplicaQuotaLedger<IDBTransaction> | undefined;
@@ -80,10 +88,6 @@ type Handle = {
   store: IndexedDbReplicaStore;
   syncs: Map<number, { abort: AbortController; settled: Promise<unknown> }>;
 };
-
-function gatedError(gate: string, message: string): ReplicaError {
-  return new ReplicaError(ReplicaErrorCode.GATED, message, { gate });
-}
 
 function wireError(error: unknown): KvWireError {
   if (isReplicaError(error)) {
@@ -133,21 +137,21 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
     return database;
   }
 
-  /** The origin's owner device: read, or minted once and stored under a first-writer-wins transaction. */
-  async function storedDevice(connection: IDBDatabase): Promise<ReplicaDevice> {
-    try {
-      const stored = await requestAsPromise<ReplicaDevice | undefined>(connection.transaction(KV_STORE.device).objectStore(KV_STORE.device).get("device"));
-      if (stored !== undefined) return stored;
-      const candidate = await deps.createDevice();
-      const tx = connection.transaction(KV_STORE.device, "readwrite", { durability: "strict" });
-      const done = transactionDone(tx);
-      const existing = await requestAsPromise<ReplicaDevice | undefined>(tx.objectStore(KV_STORE.device).get("device"));
+  /**
+   * The origin's owner device, read and (once, first writer wins) stored
+   * through the gate: `device` is a guarded store. The key is minted outside
+   * any transaction — WASM work never runs inside one.
+   */
+  async function storedDevice(gate: ReplicaGateTx<IDBTransaction>, access: ReplicaGateAccess): Promise<ReplicaDevice> {
+    const read = (tx: IDBTransaction) => requestAsPromise<ReplicaDevice | undefined>(tx.objectStore(KV_STORE.device).get("device"));
+    const stored = await gate.run({ stores: [KV_STORE.device], mode: "readonly" }, access, read);
+    if (stored !== undefined) return stored;
+    const candidate = await deps.createDevice();
+    return gate.run({ stores: [KV_STORE.device], mode: "readwrite" }, access, async (tx) => {
+      const existing = await read(tx);
       if (existing === undefined) tx.objectStore(KV_STORE.device).put({ did: candidate.did, jwk: candidate.jwk }, "device");
-      await done;
       return existing ?? candidate;
-    } catch (error) {
-      throw idbError(error, "Storing the replica device key");
-    }
+    });
   }
 
   function need(id: number): Handle {
@@ -166,12 +170,23 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
       );
     }
     const gate = deps.gateTx;
+    if (gate === undefined) throw gatedError("gate_unavailable", "No lifecycle gate is wired into the replica worker.");
     const stamp = spec.stamp;
-    if (gate !== undefined && stamp === undefined) throw gatedError("not_established", "The session has no replica stamp.");
-    const connection = await db();
+    if (stamp === undefined) throw gatedError("not_established", "The session has no replica stamp.");
+    // Ordering rule: snapshot, then derive every salted id, then open transactions.
+    const snapshot = await gate.snapshot();
+    if (snapshot === null) throw gatedError("not_established", "No replica gate exists on this origin yet.");
+    const base = { stamp, principal: identity.principal, incarnation: snapshot.incarnation };
     // Delegate posture: an injected device is used as given and nothing is loaded or minted.
-    const device = spec.device ?? (await storedDevice(connection));
-    const partitionId = partitionIdOf({ identity, prefix: spec.prefix, deviceDid: device.did });
+    const device = spec.device ?? (await storedDevice(gate, base));
+    const partitionId = await partitionIdOf({ identity, prefix: spec.prefix, deviceDid: device.did }, snapshot.salt);
+    const index: ReplicaPartitionIndexEntry = {
+      partitionId,
+      principalHash: await saltedHash(snapshot.salt, identity.principal),
+      identityKeyHash: await identityKeyHashOf(identity, snapshot.salt),
+      createdAt: now(),
+    };
+    const access: ReplicaGateAccess = { ...base, partitionId };
     const ledger = deps.ledgerFor?.(spec.quota);
     const hooks: ReplicaStoreHooks = {
       ...(ledger === undefined
@@ -182,14 +197,10 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
             accountCommit: (tx, commit) => ledger.accountCommit(tx, commit),
             accountErase: (tx, erase) => ledger.accountErase(tx, erase),
           }),
-      ...(gate === undefined || stamp === undefined
-        ? {}
-        : {
-            run: (stores, mode, fn) =>
-              gate.run({ stores: stores as ReplicaGateScope["stores"], mode: mode === "readwrite" ? "readwrite" : "readonly" }, { stamp, principal: identity.principal, partitionId }, fn),
-          }),
+      run: (stores, mode, fn) => gate.run({ stores: stores as ReplicaGateScope["stores"], mode: mode === "readwrite" ? "readwrite" : "readonly" }, access, fn),
+      indexPartition: (tx) => gate.indexPartition(tx, index),
     };
-    const store = await IndexedDbReplicaStore.openIn(connection, { holder, layout: kvLayout(partitionId), hooks, now });
+    const store = await IndexedDbReplicaStore.openIn(await db(), { holder, layout: kvLayout(partitionId), hooks, now });
     try {
       const config = {
         name: spec.prefix.replace(/\/+$/, "") || "replica",
@@ -202,15 +213,18 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
         localReadPolicy: "whileGrantValid" as const,
         retentionGrantCid: null,
       };
-      if ((await store.open()) === null) {
+      const existing = await store.open();
+      if (existing === null) {
         await store.init(config);
-      } else {
-        const stored = (await store.open())!.config;
+      } else if (
         // The partition id hashes identity, prefix and device; a stored config naming
         // anything else is corruption, never a replica to share.
-        if (stored.host !== config.host || stored.space !== config.space || stored.prefix !== config.prefix || principalOf(stored.deviceDid) !== config.deviceDid) {
-          throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, "The stored replica does not match its partition; purge it to start over.");
-        }
+        existing.config.host !== config.host ||
+        existing.config.space !== config.space ||
+        existing.config.prefix !== config.prefix ||
+        principalOf(existing.config.deviceDid) !== config.deviceDid
+      ) {
+        throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, "The stored replica does not match its partition; purge it to start over.");
       }
     } catch (error) {
       await store.close();
@@ -397,11 +411,16 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
   }
 
   return {
-    /** One request from the main-thread client (`{ id, op, … }`). */
+    /**
+     * One request from the main-thread client (`{ id, op, … }`). Replies to
+     * handle operations carry the stamp they ran under (`ReplicaStampedReply`);
+     * the client delivers only on an exact match plus `deliverable`.
+     */
     receive(request: { id: number } & KvRequest): void {
       const id = request.id;
+      const stamp = request.op === "open" ? request.spec.stamp : "handle" in request ? handles.get(request.handle)?.spec.stamp : undefined;
       dispatch(id, request).then(
-        ({ result, transfer }) => deps.post({ id, ok: true, result }, transfer ?? []),
+        ({ result, transfer }) => deps.post({ id, ok: true, result, ...(stamp === undefined ? {} : { stamp }) }, transfer ?? []),
         (error: unknown) => deps.post({ id, ok: false, err: wireError(error) }),
       );
     },

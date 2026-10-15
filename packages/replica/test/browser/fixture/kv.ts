@@ -1,15 +1,23 @@
 /**
  * The kv-storage fixture page. Its whole API is `window.__kv`: tests drive
  * `indexedDbReplicaStorage()` through `page.evaluate`, exactly as the
- * read-through controller would. `fake` storages run the production worker
- * host over the fake feed (`kv-test-worker.ts`); `real` storages run the
- * published `kv-storage.worker.js` against a real node.
+ * read-through controller would, with the adapter's test gate standing in
+ * for the lifecycle slice's gate. `fake` storages run the worker host over
+ * the fake feed (`kv-test-worker.ts`); `real` storages run it with the
+ * production WASM signing path (`kv-real-worker.ts`) against a node;
+ * `published` storages run the published `kv-storage.worker.js`, which has
+ * no gate wired and must fail closed.
  */
-import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PurgeTarget, ReplicaPeerCommit, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
+import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PurgeTarget, ReplicaPeerCommit, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 import { indexedDbReplicaStorage } from "@tinycloud/replica/kv-storage";
 import { killReplicaWorker } from "@tinycloud/replica/kv-storage/testing";
 // @ts-expect-error `?url` is a Vite module query.
-import realWorkerUrl from "@tinycloud/replica/kv-storage/worker?url";
+import publishedWorkerUrl from "@tinycloud/replica/kv-storage/worker?url";
+
+import { createTestGate, createTestLifecycle } from "../../test-gate.js";
+
+const gate = createTestGate();
+const lifecycle = createTestLifecycle(gate);
 
 type Outcome<T> = { ok: true; value: T } | { ok: false; code: string; message: string; gate?: string };
 
@@ -40,18 +48,28 @@ function need<T>(map: Map<string, T>, name: string): T {
 }
 
 const api = {
-  createStorage(name: string, kind: "fake" | "real"): void {
-    storages.set(
-      name,
-      indexedDbReplicaStorage({
-        worker: kind === "fake" ? () => new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" }) : new URL(realWorkerUrl, import.meta.url),
-      }),
-    );
+  createStorage(name: string, kind: "fake" | "real" | "published"): void {
+    const worker =
+      kind === "fake"
+        ? () => new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" })
+        : kind === "real"
+          ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
+          : new URL(publishedWorkerUrl, import.meta.url);
+    storages.set(name, indexedDbReplicaStorage({ worker, lifecycle, gateTx: gate }));
   },
-  open: (storage: string, name: string, spec: WireSpec) =>
+  /** The session stamp a fresh sign-in of `principal` gets from the test gate. */
+  establish: (principal: string) => gate.establish(principal),
+  /** Sign-out at the test gate: every earlier stamp goes stale. */
+  deny: () => gate.deny(),
+  /** Make this tab's view refuse delivery under `stamp` (the main-thread check). */
+  revoke: (stamp: ReplicaSessionStamp) => lifecycle.revoke(stamp),
+  /** Open with `spec.stamp`, or a fresh stamp for the spec's principal; `stamp: null` opens without one. */
+  open: (storage: string, name: string, spec: Omit<WireSpec, "stamp"> & { stamp?: ReplicaSessionStamp | null }) =>
     outcome(async () => {
       peerCommits.set(name, []);
-      const handle = await need(storages, storage).open({ ...spec, onPeerCommit: (info) => peerCommits.get(name)!.push(info) });
+      const { stamp, ...rest } = spec;
+      const resolved = stamp === null ? undefined : (stamp ?? (await gate.establish(spec.identity.principal)));
+      const handle = await need(storages, storage).open({ ...rest, ...(resolved === undefined ? {} : { stamp: resolved }), onPeerCommit: (info) => peerCommits.get(name)!.push(info) });
       handles.set(name, handle);
       return { deviceDid: handle.deviceDid };
     }),
@@ -86,7 +104,7 @@ const api = {
   /** `count` concurrent read-modify-writes, each appending one record tagged `tag`. */
   pendingWrites: (storage: string, identity: ReplicationIdentity, tag: string, count: number) =>
     outcome(async () => {
-      const store = need(storages, storage).pendingWrites!(identity);
+      const store = need(storages, storage).pendingWrites!(identity, { stamp: await gate.establish(identity.principal) });
       return Promise.all(
         Array.from({ length: count }, (_, index) =>
           store.update((state) => {
@@ -97,7 +115,8 @@ const api = {
         ),
       );
     }),
-  pendingRead: (storage: string, identity: ReplicationIdentity) => outcome(() => need(storages, storage).pendingWrites!(identity).read()),
+  pendingRead: (storage: string, identity: ReplicationIdentity) =>
+    outcome(async () => need(storages, storage).pendingWrites!(identity, { stamp: await gate.establish(identity.principal) }).read()),
   killWorker: (storage: string) => killReplicaWorker(need(storages, storage)),
   /** Row counts per object store of the origin database, by partition where keys carry one. */
   async dump(): Promise<Record<string, Record<string, number>>> {

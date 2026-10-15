@@ -64,7 +64,8 @@ export type KvResults = {
 
 export type KvWireError = { code: string; message: string; detail?: Record<string, unknown> };
 
-export type KvReply = { id: number; ok: true; result: unknown } | { id: number; ok: false; err: KvWireError };
+/** Replies to open and handle operations carry the stamp they ran under (`ReplicaStampedReply`). */
+export type KvReply = { id: number; ok: true; result: unknown; stamp?: ReplicaSessionStamp } | { id: number; ok: false; err: KvWireError };
 
 export type KvEvent =
   | { event: "ready" }
