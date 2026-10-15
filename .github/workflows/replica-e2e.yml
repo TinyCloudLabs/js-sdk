@@ -269,6 +269,8 @@ jobs:
           bun run --cwd packages/sdk-core build
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/replica build
+          # The read-through fixture page (node.html) uses web-sdk's browser WASM bindings.
+          bun run --cwd packages/web-sdk build
 
       - name: Install Chromium
         run: bunx playwright install chromium
