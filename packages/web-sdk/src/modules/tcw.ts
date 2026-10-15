@@ -420,6 +420,10 @@ export class TinyCloudWeb {
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
   /** Incremented by signOut; a sign-in that started before it does not complete. */
   private signOutCount = 0;
+  private signOutInFlight = 0;
+  private persistedRestoreBlocked = false;
+  private signOutCleanupFailed = false;
+  private readonly pendingRestoreAddresses = new Map<string, number>();
   private _secrets = new Map<string, ISecretsService>();
   private _credentialsService?: CredentialsService;
   private _shareReceiverService?: ShareReceiverService;
@@ -780,27 +784,58 @@ export class TinyCloudWeb {
       : { status: "missing", data: null };
   }
 
+  private trackRestoreAddress(address: string): void {
+    this.pendingRestoreAddresses.set(address, (this.pendingRestoreAddresses.get(address) ?? 0) + 1);
+  }
+
+  private untrackRestoreAddress(address: string): void {
+    const count = this.pendingRestoreAddresses.get(address)!;
+    if (count === 1) this.pendingRestoreAddresses.delete(address);
+    else this.pendingRestoreAddresses.set(address, count - 1);
+  }
+
   async restoreSession(address?: string): Promise<SessionRestoreResult> {
+    const signOuts = this.signOutCount;
+    const assertNotSignedOut = (): void => {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
+        throw new Error("Session restore was cancelled by sign-out.");
+      }
+    };
     if (!this.sessionStorage) {
       this._sessionRestoreStatus = "disabled";
       return { status: "disabled" };
     }
+    if (this.signOutInFlight > 0 || this.persistedRestoreBlocked) {
+      return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+    }
+    // An explicit address is known before resolveRestoreAddress's first await.
+    // Sign-out must see it even when storage has no activeAddress() hook.
+    if (address) this.trackRestoreAddress(address);
 
     const restoreAddress = await this.resolveRestoreAddress(address);
+    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
+      if (address) this.untrackRestoreAddress(address);
+      return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+    }
     if (!restoreAddress) {
+      if (address) this.untrackRestoreAddress(address);
       this._sessionRestoreStatus = "missing";
       return { status: "missing" };
     }
+    if (!address) this.trackRestoreAddress(restoreAddress);
 
     this._sessionRestoreStatus = "restoring";
     try {
       const loaded = await this.loadPersistedSession(restoreAddress);
+      assertNotSignedOut();
       if (loaded.status !== "loaded") {
         this._sessionRestoreStatus = loaded.status;
         return { status: loaded.status };
       }
       const node = await this.ensureNode();
+      assertNotSignedOut();
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      assertNotSignedOut();
       this.resetSessionScopedCaches();
       this._sessionRestoreStatus = "restored";
       return {
@@ -808,6 +843,9 @@ export class TinyCloudWeb {
         session: clientSessionFromPersisted(loaded.data),
       };
     } catch (err) {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
+        return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+      }
       // Restore rejection is intentionally transactional. Persisted storage
       // is user state, and attempting best-effort cleanup here can both mask
       // the authority error and strand this wrapper in "restoring" when a
@@ -818,6 +856,8 @@ export class TinyCloudWeb {
         status: "restore-failed",
         error: err instanceof Error ? err : new Error(String(err)),
       };
+    } finally {
+      this.untrackRestoreAddress(restoreAddress);
     }
   }
 
@@ -864,10 +904,11 @@ export class TinyCloudWeb {
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
-      if (this.signOutCount !== signOuts) {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
         throw new Error("Sign-in was cancelled by sign-out.");
       }
     };
+    assertNotSignedOut();
     const restored = await this.restoreSession();
     assertNotSignedOut();
     if (restored.status === "restored" && restored.session) {
@@ -877,6 +918,7 @@ export class TinyCloudWeb {
         return restored.session;
       }
       await this.clearPersistedSession(restored.session.address);
+      assertNotSignedOut();
       this._sessionRestoreStatus = "stale";
     }
 
@@ -907,17 +949,37 @@ export class TinyCloudWeb {
     // The persisted entry is keyed by the live session's address; read it
     // before the node ends the session, without awaiting first.
     const liveAddress = this._node?.address;
+    const pendingAddresses = this.pendingRestoreAddresses.size
+      ? [...this.pendingRestoreAddresses.keys()]
+      : undefined;
     this.signOutCount++;
+    this.signOutInFlight++;
+    this.persistedRestoreBlocked = true;
+    let cleaned = false;
     try {
       await this._node?.signOut();
     } finally {
-      this.resetSessionScopedCaches();
-      this._credentialsService = undefined;
-      this._shareReceiverService = undefined;
-      this._sessionRestoreStatus = "idle";
-      this.notificationHandler.cleanup?.();
-      const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
-      if (address) await this.clearPersistedSession(address);
+      try {
+        this.resetSessionScopedCaches();
+        this._credentialsService = undefined;
+        this._shareReceiverService = undefined;
+        this._sessionRestoreStatus = "idle";
+        this.notificationHandler.cleanup?.();
+        const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
+        if (address) await this.clearPersistedSession(address);
+        for (const pendingAddress of pendingAddresses ?? []) {
+          if (pendingAddress !== address) await this.clearPersistedSession(pendingAddress);
+        }
+        cleaned = true;
+      } finally {
+        this.signOutInFlight--;
+        if (!cleaned) this.signOutCleanupFailed = true;
+        // A successful overlapping sign-out must not release a failed one's
+        // persisted authority. Explicit fresh sign-in remains available.
+        if (this.signOutInFlight === 0 && !this.signOutCleanupFailed) {
+          this.persistedRestoreBlocked = false;
+        }
+      }
     }
   };
 
@@ -1218,12 +1280,16 @@ export class TinyCloudWeb {
   }
 
   async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
+    const signOuts = this.signOutCount;
     const node = await this.ensureNode();
+    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw new Error("Delegation use was cancelled by sign-out.");
     await node.useRuntimeDelegation(delegation);
   }
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {
+    const signOuts = this.signOutCount;
     const node = await this.ensureNode();
+    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw new Error("Delegation use was cancelled by sign-out.");
     return node.useDelegation(delegation);
   }
 
