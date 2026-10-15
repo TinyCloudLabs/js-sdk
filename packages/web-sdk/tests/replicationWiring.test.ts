@@ -205,7 +205,7 @@ test("signIn keeps a covered restored session that carries a replica stamp", asy
   });
   const { node } = stubRestore(
     tcw,
-    persistedRecord({ replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 1 } }),
+    persistedRecord({ replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 1 }, siwe: siweIssuedAt(ONE_DAY_AGO) }),
   );
 
   const session = await tcw.signIn();
