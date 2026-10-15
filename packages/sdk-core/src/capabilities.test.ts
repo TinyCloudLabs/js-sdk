@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { buildScopedDecryptResource } from "@tinycloud/sdk-services";
 
 import {
   ACCOUNT_MANIFEST_PERMISSIONS,
@@ -58,6 +59,39 @@ describe("isCapabilitySubset — exact match", () => {
   it("accepts the exact same entry", () => {
     const { subset } = isCapabilitySubset(granted, granted);
     expect(subset).toBe(true);
+  });
+});
+
+describe("isCapabilitySubset — exact encryption resources", () => {
+  const address = "0xd559CCd9EB87c530A9a349262669386dE93cf412";
+  const root = `urn:tinycloud:encryption:did:pkh:eip155:1:${address}:default`;
+  const legacyRoot = root.replace(address, address.toLowerCase());
+  const spaceId = `tinycloud:pkh:eip155:1:${address}:default`;
+  const secretA = buildScopedDecryptResource(root, { spaceId, path: "vault/secrets/SECRET_A" });
+  const secretB = buildScopedDecryptResource(root, { spaceId, path: "vault/secrets/SECRET_B" });
+  const alternateSpace = buildScopedDecryptResource(root, {
+    spaceId: `tinycloud:pkh:eip155:1:${address}:secrets`,
+    path: "vault/secrets/SECRET_A",
+  });
+  const grant = (path: string): PermissionEntry => ({
+    service: "tinycloud.encryption",
+    space: "encryption",
+    path,
+    actions: ["tinycloud.encryption/decrypt"],
+  });
+
+  it("attenuates canonical and legacy network roots to one secret without widening a scope", () => {
+    expect(isCapabilitySubset([grant(secretA)], [grant(root)]).subset).toBe(true);
+    expect(isCapabilitySubset([grant(secretA)], [grant(legacyRoot)]).subset).toBe(true);
+    expect(isCapabilitySubset([grant(secretA)], [grant(secretA)]).subset).toBe(true);
+    for (const denied of [root, secretB, alternateSpace]) {
+      expect(isCapabilitySubset([grant(denied)], [grant(secretA)]).subset).toBe(false);
+    }
+  });
+
+  it("does not accept a malformed encryption resource as prefix authority", () => {
+    expect(isCapabilitySubset([grant(secretA)], [grant(`${root}/kv/`)]).subset).toBe(false);
+    expect(isCapabilitySubset([grant(secretA)], [grant(`${root}/`)]).subset).toBe(false);
   });
 });
 

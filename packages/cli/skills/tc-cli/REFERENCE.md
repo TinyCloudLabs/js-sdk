@@ -138,14 +138,16 @@ Per-command override: `tinycloud kv get mykey --profile staging`
 
 ## Secrets
 
-Secrets are stored as network-encrypted inline envelopes and read through
-`tinycloud.encryption/decrypt`. Secret names are env-style uppercase
-identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accepts
-either a short network name or a full
-`urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
-network grant` takes the short name, resolves the network, and issues
-`tinycloud.encryption/decrypt` on that network. Share the decrypt grant
-separately from any KV or SQL reads the app also needs.
+Secrets are stored as network-encrypted inline envelopes. A named-secret read
+requires exact `kv/get` on its stored key and `tinycloud.encryption/decrypt` on
+`<networkId>/kv/<base64url(canonical spaceId)>/<base64url(vault/secrets/NAME)>`.
+Secret names are uppercase env identifiers such as `FIREFLIES_API_KEY`.
+The node releases a scoped key only for its current stored envelope with a
+valid location-bound `scopeTag`; the owner must rewrite older untagged secrets.
+`tinycloud secrets network show` accepts a short network name or the full
+`urn:tinycloud:encryption:<ownerDid>:<network>` ID. `secrets network grant`
+still grants **network-wide** decrypt, not one secret. A legacy broad grant
+remains broad until expiry or revocation and scoped failures never fall back to it.
 
 ```bash
 "$TC" secrets network init
@@ -221,7 +223,7 @@ printf '%s\n' "$CODE" | "$TC" --profile agent auth login --method openkey --past
 "$TC" --profile agent secrets get OPENAI_API_KEY --raw
 ```
 
-`secrets: { NAME: true }` requests, in the owner's `secrets` space, `kv/get` on `vault/secrets/NAME` and `capabilities/read` on `""`, plus the raw network entry `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`. The owner DID comes from the profile's recorded owner, else `--owner`, and its address is EIP-55 checksummed in the URN; with neither the login fails with `OWNER_DID_UNKNOWN`. The JSON result lists approved `permissions` and `declined` entries. A decrypt signed inside the owner's space by an older OpenKey deployment is not a raw grant: scoped login reports it in `declined` and omits it from saved permissions. Browser `auth request --grant` or secret-read escalation refuses that old nested proof before activating or storing a grant (`OPENKEY_GRANT_BROADENED`); a renewed approval must sign the raw network grant.
+`secrets: { NAME: true }` requests `kv/get` on `vault/secrets/NAME` and `capabilities/read` in the owner's `secrets` space, plus raw `tinycloud.encryption/decrypt` on `<networkId>/kv/<base64url(canonical secrets spaceId)>/<base64url(vault/secrets/NAME)>`. The owner DID comes from the recorded profile or `--owner`; without one, login fails with `OWNER_DID_UNKNOWN`. The JSON result separates `permissions` from `declined` entries. An older OpenKey deployment that signs decrypt nested inside a space, or rejects exact `/kv/` raw resources, cannot approve this grant; the CLI rejects broadened/nested proofs instead of using a bare network grant. Named reads require a location-bound tag on the current stored envelope. Existing untagged secrets require an owner rewrite, while existing bare-network grants remain explicitly network-wide until expiry or revocation.
 
 When neither stdin nor stderr is a terminal, `secrets get|list|put|delete` on an OpenKey profile that lacks the grant fails with `PERMISSION_DENIED` (exit 5) and a scoped paste-login hint. Missing or expired sessions instead fail with `AUTH_REQUIRED` (exit 3) before a canonical read invokes the node or starts an unscoped browser refresh. On any profile kind, a stored session that has expired (a signed session, or one `tinycloud auth import` created from a compact UCAN) or no longer verifies fails with `AUTH_REQUIRED` (exit 3) and a sign-in hint before any node request, never as a retryable `NODE_ERROR`; operations and MCP report a non-retryable `AUTH_REQUIRED`. Any service result coded `AUTH_REQUIRED` or `PERMISSION_DENIED` without an HTTP status now exits 3 or 5 instead of 1 in commands using `cliErrorFromService` (account, delegation, DuckDB, encryption, KV, secrets, SQL, and vars); this preserves operation auth codes as typed errors.
 

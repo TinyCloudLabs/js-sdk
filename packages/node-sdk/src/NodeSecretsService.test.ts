@@ -72,14 +72,16 @@ describe("NodeSecretsService", () => {
 
   it("requests read and decrypt permissions before getting a secret", async () => {
     const base = makeBaseSecrets();
+    const spaceId = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other";
+    const networkId = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
     const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
       getService: () => base,
+      space: spaceId,
       getManifest: readOnlyManifest,
       grantPermissions,
       canEscalate: () => true,
-      getEncryptionNetworkId: () =>
-        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+      getEncryptionNetworkId: () => networkId,
     });
 
     const result = await secrets.get("ANTHROPIC_API_KEY");
@@ -88,14 +90,14 @@ describe("NodeSecretsService", () => {
     expect(grantPermissions).toHaveBeenCalledWith([
       {
         service: "tinycloud.kv",
-        space: "secrets",
+        space: spaceId,
         path: "vault/secrets/ANTHROPIC_API_KEY",
         actions: ["get"],
         skipPrefix: true,
       },
       {
         service: "tinycloud.encryption",
-        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        path: `${networkId}/kv/${Buffer.from(spaceId).toString("base64url")}/${Buffer.from("vault/secrets/ANTHROPIC_API_KEY").toString("base64url")}`,
         actions: ["decrypt"],
         skipPrefix: true,
       },

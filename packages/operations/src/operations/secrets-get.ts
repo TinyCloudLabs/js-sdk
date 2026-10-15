@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { SecretReadResult } from "@tinycloud/node-sdk";
+import { buildScopedDecryptResource, type SecretReadResult } from "@tinycloud/node-sdk";
 
 import { CLI_NAME } from "../cli-name.js";
 import {
@@ -90,30 +90,24 @@ async function planSecretGet(
     context.runtime.node,
     context.summary.space,
   );
-  let networkSpace = reference.space;
-  if (input.space === undefined) {
-    try {
-      networkSpace = operationSpaceResolver(
-        context.runtime.node,
-        context.summary.space,
-      )("secrets");
-    } catch {
-      // Definition-focused callers may omit authenticated identity metadata;
-      // the runtime path supplies the owner space before production planning.
-    }
-  }
+  const networkSpace = input.space === undefined
+    ? operationSpaceResolver(context.runtime.node, context.summary.space)("secrets")
+    : reference.space;
   const networkId = resolveEncryptionNetworkId(context.runtime.node, networkSpace);
 
   return [
     {
       service: "tinycloud.kv",
-      space: reference.space,
+      space: networkSpace,
       path: reference.permissionPath,
       actions: ["tinycloud.kv/get"],
     },
     {
       service: "tinycloud.encryption",
-      path: networkId,
+      path: buildScopedDecryptResource(networkId, {
+        spaceId: networkSpace,
+        path: reference.permissionPath,
+      }),
       actions: ["tinycloud.encryption/decrypt"],
     },
   ];
@@ -198,6 +192,14 @@ function classifySecretRead(
         error: operationError(
           "SECRET_READ_FAILED",
           "The secret ciphertext could not be read.",
+        ),
+      };
+    case "scope_migration_required":
+      return {
+        status: "error",
+        error: operationError(
+          "SECRET_SCOPE_MIGRATION_REQUIRED",
+          "The owner must rewrite this legacy untagged secret before an exact named-secret grant can decrypt it.",
         ),
       };
     case "decrypt_failed":

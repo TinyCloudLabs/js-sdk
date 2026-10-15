@@ -7,6 +7,8 @@ import * as realSdkServices from "@tinycloud/sdk-services";
 
 const OWNER_DID = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const OWNER_ADDRESS = "0xd559ccd9eb87c530a9a349262669386de93cf412";
+const SECRETS_SPACE = `tinycloud:pkh:eip155:1:${OWNER_DID.slice("did:pkh:eip155:1:".length)}:secrets`;
+const NAMED_RESOURCE = `urn:tinycloud:encryption:${OWNER_DID}:default/kv/${Buffer.from(SECRETS_SPACE).toString("base64url")}/${Buffer.from("vault/secrets/OPENAI_API_KEY").toString("base64url")}`;
 let activeProfile: Record<string, unknown>;
 
 mock.module("../config/profiles.js", () => ({
@@ -394,14 +396,14 @@ describe("loadManifestPermissions", () => {
       expect.arrayContaining([
         {
           service: "tinycloud.kv",
-          space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:secrets`,
+          space: SECRETS_SPACE,
           path: "vault/secrets/scoped/listen/ASSEMBLYAI_API_KEY",
           actions: ["tinycloud.kv/get"],
         },
         {
           service: "tinycloud.encryption",
           space: "encryption",
-          path: `urn:tinycloud:encryption:${OWNER_DID}:default`,
+          path: `urn:tinycloud:encryption:${OWNER_DID}:default/kv/${Buffer.from(SECRETS_SPACE).toString("base64url")}/${Buffer.from("vault/secrets/scoped/listen/ASSEMBLYAI_API_KEY").toString("base64url")}`,
           actions: ["tinycloud.encryption/decrypt"],
         },
       ]),
@@ -443,7 +445,7 @@ describe("loadManifestPermissions", () => {
     activeProfile.ownerDid = `did:pkh:eip155:1:${OWNER_ADDRESS}`;
     const recorded = await loadManifestPermissions(source, "default", { allowLogicalSpaces: true });
     expect(recorded.find((permission) => permission.service === "tinycloud.encryption")?.path)
-      .toBe(`urn:tinycloud:encryption:${OWNER_DID}:default`);
+      .toBe(NAMED_RESOURCE);
 
     delete activeProfile.ownerDid;
     const explicit = await loadManifestPermissions(source, "default", {
@@ -451,7 +453,7 @@ describe("loadManifestPermissions", () => {
       ownerDid: `did:pkh:eip155:1:${OWNER_ADDRESS}`,
     });
     expect(explicit.find((permission) => permission.service === "tinycloud.encryption")?.path)
-      .toBe(`urn:tinycloud:encryption:${OWNER_DID}:default`);
+      .toBe(NAMED_RESOURCE);
   });
 
   test("device manifest with secrets is rejected before resolving an unknown owner", async () => {
@@ -539,7 +541,7 @@ describe("loadManifestPermissions", () => {
     expect(permissions.find((permission) => permission.service === "tinycloud.encryption")).toEqual({
       service: "tinycloud.encryption",
       space: "encryption",
-      path: `urn:tinycloud:encryption:${OWNER_DID}:default`,
+      path: NAMED_RESOURCE,
       actions: ["tinycloud.encryption/decrypt"],
     });
   });

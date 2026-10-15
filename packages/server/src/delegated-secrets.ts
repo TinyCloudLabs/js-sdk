@@ -1,5 +1,6 @@
 import {
   TinyCloudNode,
+  canonicalScopedDecryptLocator,
   deserializeDelegation,
   type InlineEncryptedEnvelope,
   type PortableDelegation,
@@ -30,6 +31,7 @@ type EncryptionLike = {
   decryptEnvelope(
     envelope: InlineEncryptedEnvelope,
     capabilityProof: { proofs: string[] },
+    locator: { spaceId: string; path: string },
   ): Promise<DecryptResult>;
 };
 
@@ -118,7 +120,11 @@ export async function readDelegatedSecret(
     throw new Error(`delegated secret ${name} has no decrypt proof`);
   }
 
-  const decrypted = await node.encryption.decryptEnvelope(envelope, { proofs: [proofCid] });
+  const locator = canonicalScopedDecryptLocator(envelope.networkId, {
+    spaceId: delegation.spaceId,
+    path: secretKey,
+  });
+  const decrypted = await node.encryption.decryptEnvelope(envelope, { proofs: [proofCid] }, locator);
   if (!decrypted.ok) {
     throw new Error(`delegated secret ${name} decrypt failed: ${decrypted.error.message}`);
   }

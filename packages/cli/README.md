@@ -142,11 +142,14 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc completion` | Generate shell completions |
 | `tc courier` | Agent-to-agent threads over TinyCloud (beta; see [Courier](#courier)) |
 
-Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
-`tc secrets network show` accepts either a short network name or a full
-`urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tc secrets
-network grant` takes the short name, resolves the network, and grants
-`tinycloud.encryption/decrypt`.
+Secret names are uppercase env identifiers such as `FIREFLIES_API_KEY`.
+Named-secret reads request `tinycloud.encryption/decrypt` on the exact
+`<networkId>/kv/<base64url(spaceId)>/<base64url(vault/secrets/NAME)>` resource,
+alongside exact `kv/get`; scoped names include `scoped/<scope>/` in that key.
+`tc secrets network grant` remains a **network-wide** decrypt grant. Existing
+broad grants remain broad until expiry or revocation; scoped reads never retry
+with one. Older untagged secrets need an owner rewrite to add the location-bound
+`scopeTag` before a scoped grant can read them.
 
 ## Global Options
 

@@ -172,9 +172,6 @@ describe("tc secrets e2e", () => {
       name: SCOPED_SECRET_NAME,
       value: SCOPED_SECRET_VALUE,
     });
-    const scopedAliasGet = await tc("secrets", "get", SCOPED_SECRET_NAME, "--space", SECRET_SCOPE);
-    expect(scopedAliasGet.exitCode).toBe(0);
-    expect(scopedAliasGet.json.value).toBe(SCOPED_SECRET_VALUE);
 
     const list = await tc("secrets", "list");
     expect(list.exitCode).toBe(0);

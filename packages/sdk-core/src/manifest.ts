@@ -17,7 +17,12 @@
 
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
-import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
+import {
+  parseNetworkId,
+  parseScopedDecryptResource,
+  resolveSecretPath,
+  SECRET_NAME_RE,
+} from "@tinycloud/sdk-services";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -505,6 +510,17 @@ function expandEncryptionPermissionEntry(
         `(got ${JSON.stringify(entry.path)})`,
     );
   }
+  let scoped = false;
+  try {
+    if (entry.path.includes("/kv/")) {
+      parseScopedDecryptResource(entry.path);
+      scoped = true;
+    } else {
+      parseNetworkId(entry.path);
+    }
+  } catch {
+    throw new ManifestValidationError("tinycloud.encryption path is not a canonical network or exact named-secret resource");
+  }
   const normalizedActions: string[] = [];
   for (const action of entry.actions) {
     if (action === "decrypt" || action === "tinycloud.encryption/decrypt") {
@@ -533,6 +549,9 @@ function expandEncryptionPermissionEntry(
     throw new ManifestValidationError(
       `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`,
     );
+  }
+  if (scoped && normalizedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("Only decrypt is allowed on exact named-secret resources");
   }
   // Dedupe while preserving order
   const dedupedActions: string[] = [];

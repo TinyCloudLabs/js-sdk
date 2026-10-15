@@ -19,6 +19,11 @@
 import { canonicalize, canonicalHashHex, hexEncode, utf8Encode } from "./canonical";
 import { parseNetworkId } from "./networkId";
 import {
+  buildScopedDecryptResource,
+  canonicalScopedDecryptLocator,
+  type ScopedDecryptLocator,
+} from "./scope";
+import {
   DECRYPT_ACTION,
   DECRYPT_FACT_TYPE,
   ENCRYPTION_SERVICE,
@@ -123,10 +128,12 @@ export function buildDecryptFacts(
  */
 export function buildDecryptAttenuation(
   networkId: string,
+  scope?: ScopedDecryptLocator,
 ): Record<string, Record<string, Record<string, never>>> {
   parseNetworkId(networkId);
+  const resource = scope === undefined ? networkId : buildScopedDecryptResource(networkId, scope);
   return {
-    [networkId]: {
+    [resource]: {
       [DECRYPT_ACTION]: {},
     },
   };
@@ -241,6 +248,30 @@ export function checkDecryptInvocationInput(
           "facts.receiverPublicKeyHash must equal body.receiverPublicKeyHash",
       }),
     };
+  }
+  if ((input.body.spaceId === undefined) !== (input.body.path === undefined)) {
+    return {
+      ok: false,
+      error: encryptionError({ code: "INVALID_INPUT", message: "Scoped decrypt body requires both spaceId and path" }),
+    };
+  }
+  if (input.body.spaceId !== undefined && input.body.path !== undefined) {
+    try {
+      const scope = canonicalScopedDecryptLocator(input.networkId, {
+        spaceId: input.body.spaceId, path: input.body.path,
+      });
+      if (scope.networkId !== input.networkId || scope.spaceId !== input.body.spaceId) {
+        throw new Error("Scoped decrypt locator is not canonical");
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: encryptionError({
+          code: "INVALID_INPUT",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      };
+    }
   }
   try {
     parseNetworkId(input.networkId);

@@ -25,8 +25,8 @@ import { KVService } from "../kv/KVService";
 import { DataVaultService, type VaultCrypto } from "./DataVaultService";
 import { SecretsService } from "../secrets/SecretsService";
 
-const SPACE_ID = "tinycloud:pkh:eip155:1:0xabc:secrets";
-const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
+const SPACE_ID = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:secrets";
+const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
 const TARGET_NODE = "did:key:z6MkNode";
 const NETWORK_PUBLIC_KEY = new Uint8Array(32).fill(7);
 
@@ -100,7 +100,7 @@ function createVaultCrypto(): VaultCrypto {
 function descriptor(): NetworkDescriptor {
   return {
     networkId: NETWORK_ID,
-    ownerDid: "did:key:z6MkPrincipal",
+    ownerDid: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
     name: "default",
     members: [{ nodeId: TARGET_NODE, role: "primary" }],
     threshold: { n: 1, t: 1 },
@@ -208,7 +208,7 @@ function createClassifiedVault(options?: {
       publicKV: kv,
       readPublicSpace: async () => ({ ok: true as const, data: undefined }),
       makePublicSpaceId: () => SPACE_ID,
-      did: "did:key:z6MkPrincipal",
+      did: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
       address: "0xabc",
       chainId: 1,
       hosts: ["https://tinycloud.test"],
@@ -233,7 +233,7 @@ function createClassifiedVault(options?: {
       const result = await encryption.encryptToNetwork(
         NETWORK_ID,
         utf8Encode(JSON.stringify(value)),
-        { metadata: { "x-vault-content-type": "application/json" } },
+        { metadata: { "x-vault-content-type": "application/json" }, scope: { spaceId: SPACE_ID, path: "vault/secrets/API_KEY" } },
       );
       if (!result.ok) throw new Error("test envelope encryption failed");
       return JSON.stringify(result.data);
@@ -343,21 +343,18 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     });
     fixture.setLocalDecryptFails(false);
 
-    fixture.setDecrypt(async () => {
-      throw transportHttpError(403, {
-        service: "tinycloud.encryption",
-        path: NETWORK_ID,
-        actions: ["tinycloud.encryption/decrypt"],
+    for (const status of [401, 403]) {
+      fixture.setDecrypt(async () => {
+        throw transportHttpError(status, {
+          service: "tinycloud.encryption",
+          path: NETWORK_ID,
+          actions: ["tinycloud.encryption/decrypt"],
+        });
       });
-    });
-    expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
-      status: "permission_required",
-      hint: {
-        service: "tinycloud.encryption",
-        path: NETWORK_ID,
-        actions: ["tinycloud.encryption/decrypt"],
-      },
-    });
+      expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+        status: "decrypt_failed",
+      });
+    }
 
     fixture.setDecrypt(async () => {
       throw new Error("node transport failure canary");
@@ -366,6 +363,19 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     expect(transport).toEqual({ status: "node_unreachable" });
     expect(JSON.stringify(transport)).not.toContain("canary");
     expect(JSON.stringify(transport)).not.toContain("sensitive value");
+  });
+
+  test("untagged legacy named records require an owner rewrite, without another decrypt grant", async () => {
+    const fixture = createClassifiedVault();
+    const envelope = JSON.parse(await fixture.encrypt({ value: "legacy" })) as Record<string, unknown>;
+    delete envelope.scopeTag;
+    fixture.setKvResponse(() => Promise.resolve(new Response(JSON.stringify(envelope), { status: 200 })));
+    fixture.setDecrypt(async () => {
+      throw new Error("untagged ciphertext must not reach decrypt transport");
+    });
+    expect(await fixture.vault.readNetworkEncrypted("secrets/API_KEY")).toEqual({
+      status: "scope_migration_required",
+    });
   });
 
   test("redacts classified-read canaries from debug logs and telemetry", async () => {

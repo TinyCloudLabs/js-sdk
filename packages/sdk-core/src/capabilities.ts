@@ -14,6 +14,7 @@
  * @packageDocumentation
  */
 
+import { decryptResourceContains } from "@tinycloud/sdk-services";
 import {
   DEFAULT_MANIFEST_SPACE,
   type PermissionEntry,
@@ -196,7 +197,9 @@ function canonicalizeEntryScopeMatches(
   ) {
     return false;
   }
-  if (!pathContains(granted.path, requested.path)) {
+  if (requested.service === "tinycloud.encryption"
+    ? !decryptResourceContains(granted.path, requested.path)
+    : !pathContains(granted.path, requested.path)) {
     return false;
   }
   // There is no safe general partial ordering for arbitrary ReCap caveat

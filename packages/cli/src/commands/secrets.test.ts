@@ -22,7 +22,7 @@ function operationSetupFor(name: string) {
 }
 
 const DEFAULT_NETWORK_ID =
-  "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
+  `urn:tinycloud:encryption:${SECRETS_OWNER}:default`;
 const DEFAULT_NODE_DID = "did:key:z6MkPrincipal";
 const SECRET_VALUE_CANARY = "tc-191-secret-value-canary";
 
@@ -74,6 +74,7 @@ type FakeNode = {
     decryptEnvelope(
       envelope: unknown,
       options: { proofs: string[] },
+      locator?: { spaceId: string; path: string },
     ): Promise<SecretResult<Uint8Array>>;
   };
   useDelegation(delegation: unknown): Promise<{
@@ -136,7 +137,7 @@ const recorded = {
   }>,
   sessionRefreshes: [] as Array<{ profile: string; host: string }>,
   delegatedKvGets: [] as Array<{ path: string; options: { raw: boolean; prefix: string } }>,
-  decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] } }>,
+  decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] }; locator?: { spaceId: string; path: string } }>,
   networkReadCalls: [] as string[],
   networkReadSources: [] as Array<"network" | undefined>,
 };
@@ -211,7 +212,7 @@ function makeDescriptor(
 ): NetworkDescriptorLike {
   return {
     networkId,
-    ownerDid: DEFAULT_NODE_DID,
+    ownerDid: SECRETS_OWNER,
     name: "default",
     members: [{ nodeId: DEFAULT_NODE_DID, role: "primary" }],
     threshold: { n: 1, t: 1 },
@@ -240,14 +241,12 @@ function makeFakeNode(overrides: {
   const descriptor = overrides.networkInitResult ?? makeDescriptor();
   return {
     did: DEFAULT_NODE_DID,
+    spaceId: SECRETS_OWNER_SPACE,
     getDefaultEncryptionNetworkId(name = "default") {
-      return `urn:tinycloud:encryption:${DEFAULT_NODE_DID}:${name}`;
+      return `urn:tinycloud:encryption:${SECRETS_OWNER}:${name}`;
     },
-    getEncryptionNetworkIdForSpace(spaceId: string, name = "default") {
-      if (spaceId.startsWith("tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:")) {
-        return `urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:${name}`;
-      }
-      return `urn:tinycloud:encryption:${DEFAULT_NODE_DID}:${name}`;
+    getEncryptionNetworkIdForSpace(_spaceId: string, name = "default") {
+      return `urn:tinycloud:encryption:${SECRETS_OWNER}:${name}`;
     },
     secretsForSpace(spaceId: string) {
       recorded.secretsForSpaceCalls.push(spaceId);
@@ -292,8 +291,8 @@ function makeFakeNode(overrides: {
       return { status: "read_failed" as const };
     },
     encryption: {
-      async decryptEnvelope(envelope: unknown, options: { proofs: string[] }) {
-        recorded.decryptEnvelopeCalls.push({ envelope, options });
+      async decryptEnvelope(envelope: unknown, options: { proofs: string[] }, locator?: { spaceId: string; path: string }) {
+        recorded.decryptEnvelopeCalls.push({ envelope, options, ...(locator === undefined ? {} : { locator }) });
         return overrides.decryptResult ?? {
           ok: true as const,
           data: new TextEncoder().encode(JSON.stringify({ value: "delegated-value" })),
@@ -363,7 +362,7 @@ mock.module("@tinycloud/node-sdk", () => ({
   canonicalizeAddress: (address: string) =>
     address.toLowerCase() === SECRETS_OWNER.slice(-42).toLowerCase() ? SECRETS_OWNER.slice(-42) : address.toLowerCase(),
   makePkhSpaceId: (address: string, chainId: number, name: string) =>
-    `tinycloud:pkh:eip155:${chainId}:${address.toLowerCase()}:${name}`,
+    `tinycloud:pkh:eip155:${chainId}:${address.toLowerCase() === SECRETS_OWNER.slice(-42).toLowerCase() ? SECRETS_OWNER.slice(-42) : address.toLowerCase()}:${name}`,
   parsePkhDid: (did: string) => {
     const match = /^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/.exec(did);
     return match === null
@@ -488,6 +487,11 @@ mock.module("@tinycloud/operations", () => ({
     }
     if (read.status === "permission_required") {
       const networkId = currentNode.getEncryptionNetworkIdForSpace(targetSpace);
+      const path = `vault/secrets${input.scope ? `/scoped/${input.scope.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-")}` : ""}/${input.name}`;
+      const spaceId = targetSpace.startsWith("tinycloud:")
+        ? targetSpace
+        : `tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:${targetSpace}`;
+      const decryptResource = `${networkId}/kv/${Buffer.from(spaceId).toString("base64url")}/${Buffer.from(path).toString("base64url")}`;
       return {
         status: "authority_required" as const,
         operation: { operationId, operationVersion },
@@ -496,12 +500,12 @@ mock.module("@tinycloud/operations", () => ({
           {
             service: "tinycloud.kv",
             space: targetSpace,
-            path: `vault/secrets${input.scope ? `/scoped/${input.scope.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-")}` : ""}/${input.name}`,
+            path,
             actions: ["tinycloud.kv/get"],
           },
           {
             service: "tinycloud.encryption",
-            path: networkId,
+            path: decryptResource,
             actions: ["tinycloud.encryption/decrypt"],
           },
         ],
@@ -866,18 +870,18 @@ describe("CLI secrets commands", () => {
     await writeFile(source, JSON.stringify({
       delegation: {
         cid: "bafy-decrypt-failure",
-        spaceId: "secrets",
+        spaceId: `tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:secrets`,
         path: "vault/secrets/ANTHROPIC_API_KEY",
         actions: ["tinycloud.kv/get"],
         delegateDID: "did:key:z6MkDelegate",
-        ownerAddress: "0xOwner",
+        ownerAddress: SECRETS_OWNER.split(":").at(-1),
         chainId: 1,
         expiry: "2099-01-01T00:00:00.000Z",
         delegationHeader: { Authorization: "Bearer delegated" },
       },
       permissions: [
         { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] },
-        { service: "tinycloud.encryption", path: DEFAULT_NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] },
+        { service: "tinycloud.encryption", path: `${DEFAULT_NETWORK_ID}/kv/${Buffer.from(`tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:secrets`).toString("base64url")}/${Buffer.from("vault/secrets/ANTHROPIC_API_KEY").toString("base64url")}`, actions: ["tinycloud.encryption/decrypt"] },
       ],
     }), "utf8");
     currentNode = makeFakeNode({
@@ -900,29 +904,29 @@ describe("CLI secrets commands", () => {
     ].join("\n")).not.toContain(SECRET_VALUE_CANARY);
   });
 
-  test("maps delegated decrypt PERMISSION_DENIED without requesting owner authority", async () => {
+  test("surfaces untagged scoped decrypt denial without broad grant escalation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tc-secrets-decrypt-permission-"));
     const source = join(dir, "delegation.json");
     await writeFile(source, JSON.stringify({
       delegation: {
         cid: "bafy-decrypt-permission",
-        spaceId: "secrets",
+        spaceId: SECRETS_OWNER_SPACE,
         path: "vault/secrets/ANTHROPIC_API_KEY",
         actions: ["tinycloud.kv/get"],
         delegateDID: "did:key:z6MkDelegate",
-        ownerAddress: "0xOwner",
+        ownerAddress: SECRETS_OWNER.split(":").at(-1),
         chainId: 1,
         expiry: "2099-01-01T00:00:00.000Z",
         delegationHeader: { Authorization: "Bearer delegated" },
       },
       permissions: [
-        { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] },
-        { service: "tinycloud.encryption", path: DEFAULT_NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] },
+        { service: "tinycloud.kv", space: SECRETS_OWNER_SPACE, path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] },
+        { service: "tinycloud.encryption", path: `${DEFAULT_NETWORK_ID}/kv/${Buffer.from(`tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:secrets`).toString("base64url")}/${Buffer.from("vault/secrets/ANTHROPIC_API_KEY").toString("base64url")}`, actions: ["tinycloud.encryption/decrypt"] },
       ],
     }), "utf8");
     currentNode = makeFakeNode({
       delegatedKvResult: { ok: true, data: { data: JSON.stringify({ networkId: DEFAULT_NETWORK_ID, ciphertext: SECRET_VALUE_CANARY }) } },
-      decryptResult: { ok: false, error: { code: "PERMISSION_DENIED", message: "decrypt capability denied" } },
+      decryptResult: { ok: false, error: { code: "DECRYPT_DENIED", message: "Named secret has no scopeTag; its owner must rewrite it before scoped decrypt" } },
     });
     try {
       await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--delegation", source]);
@@ -930,7 +934,7 @@ describe("CLI secrets commands", () => {
       await rm(dir, { recursive: true, force: true });
     }
 
-    expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(recorded.errors[0]).toMatchObject({ code: "DECRYPT_DENIED", exitCode: 5 });
     expect(recorded.permissionRequests).toEqual([]);
     expect([
       JSON.stringify(recorded.outputs),
@@ -1071,8 +1075,9 @@ describe("CLI secrets commands", () => {
   });
 
   test("routes --space operations and permission requests to the requested TinyCloud space", async () => {
-    const targetSpace = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other";
-    const targetNetwork = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+    const targetSpace = `tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:other`;
+    const targetNetwork = DEFAULT_NETWORK_ID;
+    currentSession = { ...currentSession, address: SECRETS_OWNER.split(":").at(-1) };
     currentNode = makeFakeNode({
       getResult: [
         {
@@ -1106,7 +1111,7 @@ describe("CLI secrets commands", () => {
           },
           {
             service: "tinycloud.encryption",
-            path: targetNetwork,
+            path: `${targetNetwork}/kv/${Buffer.from(targetSpace).toString("base64url")}/${Buffer.from("vault/secrets/ANTHROPIC_API_KEY").toString("base64url")}`,
             actions: ["tinycloud.encryption/decrypt"],
           },
         ],
@@ -1118,7 +1123,8 @@ describe("CLI secrets commands", () => {
   });
 
   test("delegated get honors --space when selecting delegation resources", async () => {
-    const targetSpace = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:other";
+    const targetSpace = `tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:other`;
+    currentSession = { ...currentSession, address: SECRETS_OWNER.split(":").at(-1) };
     const dir = await mkdtemp(join(tmpdir(), "tc-secrets-"));
     const source = join(dir, "delegation.json");
 
@@ -1129,7 +1135,7 @@ describe("CLI secrets commands", () => {
         path: "vault/secrets/ANTHROPIC_API_KEY",
         actions: ["tinycloud.kv/get"],
         delegateDID: "did:key:z6MkDelegate",
-        ownerAddress: "0x0000000000000000000000000000000000000001",
+        ownerAddress: SECRETS_OWNER.split(":").at(-1),
         chainId: 1,
         expiry: "2099-01-01T00:00:00.000Z",
         delegationHeader: { Authorization: "Bearer delegated" },
@@ -1143,7 +1149,7 @@ describe("CLI secrets commands", () => {
         },
         {
           service: "tinycloud.encryption",
-          path: DEFAULT_NETWORK_ID,
+          path: `${DEFAULT_NETWORK_ID}/kv/${Buffer.from(targetSpace).toString("base64url")}/${Buffer.from("vault/secrets/ANTHROPIC_API_KEY").toString("base64url")}`,
           actions: ["tinycloud.encryption/decrypt"],
         },
       ],
@@ -1173,11 +1179,37 @@ describe("CLI secrets commands", () => {
       {
         envelope: { networkId: DEFAULT_NETWORK_ID },
         options: { proofs: ["bafy-delegated-other"] },
+        locator: { networkId: DEFAULT_NETWORK_ID, spaceId: targetSpace, path: "vault/secrets/ANTHROPIC_API_KEY" },
       },
     ]);
     expect(recorded.outputs).toEqual([
       { name: "ANTHROPIC_API_KEY", value: "delegated-value" },
     ]);
+  });
+
+  test("does not use a broad legacy decrypt grant for a named delegated secret", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tc-secrets-broad-"));
+    const source = join(dir, "delegation.json");
+    await writeFile(source, JSON.stringify({
+      delegation: {
+        cid: "bafy-broad", spaceId: SECRETS_OWNER_SPACE,
+        path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"],
+        delegateDID: "did:key:z6MkDelegate", ownerAddress: SECRETS_OWNER.split(":").at(-1),
+        chainId: 1, expiry: "2099-01-01T00:00:00.000Z",
+        delegationHeader: { Authorization: "Bearer delegated" },
+      },
+      permissions: [
+        { service: "tinycloud.kv", space: SECRETS_OWNER_SPACE, path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] },
+        { service: "tinycloud.encryption", path: `urn:tinycloud:encryption:${SECRETS_OWNER}:default`, actions: ["tinycloud.encryption/decrypt"] },
+      ],
+    }));
+    try {
+      await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--delegation", source]);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "PERMISSION_DENIED" })]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("refreshes an unverified owner OpenKey session (no signed proof) before listing secrets (TC-1059)", async () => {
@@ -1464,7 +1496,7 @@ describe("CLI secrets commands", () => {
           },
           {
             service: "tinycloud.encryption",
-            path: DEFAULT_NETWORK_ID,
+            path: `${DEFAULT_NETWORK_ID}/kv/${Buffer.from(`tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:secrets`).toString("base64url")}/${Buffer.from("vault/secrets/ANTHROPIC_API_KEY").toString("base64url")}`,
             actions: ["tinycloud.encryption/decrypt"],
           },
         ],
@@ -1959,7 +1991,7 @@ describe("CLI secrets commands", () => {
             },
             {
               service: "tinycloud.encryption",
-              path: DEFAULT_NETWORK_ID,
+              path: `${DEFAULT_NETWORK_ID}/kv/${Buffer.from(`tinycloud:pkh:eip155:1:${SECRETS_OWNER.split(":").at(-1)}:secrets`).toString("base64url")}/${Buffer.from("vault/secrets/ASSEMBLYAI_API_KEY").toString("base64url")}`,
               actions: ["tinycloud.encryption/decrypt"],
             },
           ],

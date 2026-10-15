@@ -150,6 +150,10 @@ import {
   type LocalNodeIdentityStore,
   principalDidEquals,
   parseNetworkId,
+  buildScopedDecryptResource,
+  canonicalScopedSpaceId,
+  parseScopedDecryptResource,
+  decryptResourceContains,
   resolveSecretPath,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
@@ -249,6 +253,7 @@ export type SecretReadResult =
   | { status: "node_unreachable" }
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
+  | { status: "scope_migration_required" }
   | { status: "decrypt_failed" }
   | { status: "invalid_payload" };
 
@@ -690,6 +695,18 @@ function describeHostFailure(result: SpaceHostResult): string {
   return text ? `${result.status} - ${text}` : `${result.status}`;
 }
 
+function encryptionPermissionNetworkId(path: string, actions: readonly string[]): string {
+  try {
+    return parseNetworkId(path).networkId;
+  } catch {
+    const scoped = parseScopedDecryptResource(path);
+    if (actions.some((action) => action !== DECRYPT_ACTION)) {
+      throw new Error("Only decrypt may be granted on an exact named-secret resource");
+    }
+    return scoped.networkId;
+  }
+}
+
 function ownerDelegationPermissions(
   params: CreateOwnerDelegationParams,
 ): OwnerDelegationPermission[] {
@@ -770,7 +787,7 @@ function ownerDelegationPermissions(
     }
     if (permission.service === ENCRYPTION_PERMISSION_SERVICE) {
       try {
-        parseNetworkId(permission.path);
+        encryptionPermissionNetworkId(permission.path, permission.actions);
       } catch {
         throw new Error("Owner delegation encryption permission requires a canonical network URN");
       }
@@ -3184,7 +3201,7 @@ export class TinyCloudNode {
         resource.path.startsWith("urn:tinycloud:encryption:") &&
         resource.actions.includes(DECRYPT_ACTION)
       ) {
-        networkIds.add(resource.path);
+        networkIds.add(encryptionPermissionNetworkId(resource.path, resource.actions));
       }
     }
     return [...networkIds];
@@ -4606,6 +4623,7 @@ export class TinyCloudNode {
   }
 
   private createSpaceScopedKVService(spaceId: string): KVService {
+    spaceId = this.canonicalPkhSpaceId(spaceId);
     const kvService = new KVService({});
     if (this._serviceContext) {
       const spaceScopedContext = this._serviceGraph.track(new ServiceContext({
@@ -4634,7 +4652,16 @@ export class TinyCloudNode {
     name = DEFAULT_ENCRYPTION_NETWORK_NAME,
   ): string {
     const ownerDid = this.ownerDidFromSpaceId(spaceId) ?? this.did;
-    return `urn:tinycloud:encryption:${ownerDid}:${name}`;
+    const networkId = `urn:tinycloud:encryption:${ownerDid}:${name}`;
+    return spaceId.startsWith("tinycloud:pkh:eip155:")
+      ? canonicalScopedSpaceId(networkId, spaceId).networkId
+      : networkId;
+  }
+
+  private canonicalPkhSpaceId(spaceId: string): string {
+    return spaceId.startsWith("tinycloud:pkh:eip155:")
+      ? canonicalScopedSpaceId(this.getEncryptionNetworkIdForSpace(spaceId), spaceId).spaceId
+      : spaceId;
   }
 
   private ownerDidFromSpaceId(spaceId: string): string | undefined {
@@ -4742,6 +4769,7 @@ export class TinyCloudNode {
   private async signRawNetworkAuthorization(input: {
     targetNode: string;
     networkId: string;
+    resource?: string;
     action: string;
     facts: NetworkInvocationFact;
   }, binding?: {
@@ -4760,9 +4788,9 @@ export class TinyCloudNode {
       session,
       [
         {
-          resource: input.networkId,
+          resource: input.resource ?? input.networkId,
           service: "encryption",
-          path: input.networkId,
+          path: input.resource ?? input.networkId,
           action: input.action,
         },
       ],
@@ -4827,7 +4855,7 @@ export class TinyCloudNode {
     // this cache. Misses and failures remain retryable.
     const descriptorCache = new Map<string, Promise<NetworkDescriptor | null>>();
     const transport: DecryptTransport = {
-      postDecrypt: async ({ networkId, authorization, canonicalBody, signal }) => {
+      postDecrypt: async ({ networkId, resource, authorization, canonicalBody, signal }) => {
         graph.assertActive();
         const response = await graph.fetch(
           `${host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
@@ -4843,12 +4871,13 @@ export class TinyCloudNode {
         );
         graph.assertActive();
         if (!response.ok) {
-          // A decrypt denial identifies the attempted authority, not a permission
-          // named by the response body, which may describe another operation.
-          const permissionHint = response.status === 401 || response.status === 403
+          // A scoped 401 can be a missing/forged scopeTag, not missing authority.
+          // Do not turn an authenticated envelope mismatch into another grant prompt.
+          const permissionHint = resource === undefined &&
+            (response.status === 401 || response.status === 403)
             ? parsePermissionHint({
               service: "tinycloud.encryption",
-              path: networkId,
+              path: resource ?? networkId,
               actions: ["tinycloud.encryption/decrypt"],
             })
             : undefined;
@@ -4867,6 +4896,11 @@ export class TinyCloudNode {
           const signed = await this.signRawNetworkAuthorization({
             targetNode: input.targetNode,
             networkId: input.networkId,
+            ...(input.body.spaceId === undefined || input.body.path === undefined ? {} : {
+              resource: buildScopedDecryptResource(input.networkId, {
+                spaceId: input.body.spaceId, path: input.body.path,
+              }),
+            }),
             action: DECRYPT_ACTION,
             facts: input.facts,
           }, { graph, session });
@@ -5285,7 +5319,7 @@ export class TinyCloudNode {
     for (const permission of permissions) {
       if (
         permission.service === ENCRYPTION_PERMISSION_SERVICE
-        && !principalDidEquals(parseNetworkId(permission.path).ownerDid, ownerDid)
+        && !principalDidEquals(parseNetworkId(encryptionPermissionNetworkId(permission.path, permission.actions)).ownerDid, ownerDid)
       ) {
         throw new Error("Owner delegation cannot grant a foreign encryption network");
       }
@@ -5739,9 +5773,9 @@ export class TinyCloudNode {
     if (!this._spaceService) {
       throw new Error("Not signed in. Call signIn() first.");
     }
-    const resolvedSpace = spaceId.startsWith("tinycloud:")
+    const resolvedSpace = this.canonicalPkhSpaceId(spaceId.startsWith("tinycloud:")
       ? spaceId
-      : this.ownedSpaceId(spaceId);
+      : this.ownedSpaceId(spaceId));
     let secrets = this._secrets.get(resolvedSpace);
     if (!secrets) {
       secrets = new NodeSecretsService({
@@ -5767,9 +5801,9 @@ export class TinyCloudNode {
    */
   async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope });
-    const targetSpace = input.space.startsWith("tinycloud:")
+    const targetSpace = this.canonicalPkhSpaceId(input.space.startsWith("tinycloud:")
       ? input.space
-      : this.ownedSpaceId(input.space);
+      : this.ownedSpaceId(input.space));
     const result = await this.getBaseVault(targetSpace).readNetworkEncrypted<unknown>(
       resolved.vaultKey,
     );
@@ -5800,9 +5834,9 @@ export class TinyCloudNode {
     if (!this._spaceService) {
       throw new Error("Not signed in. Call signIn() first.");
     }
-    const resolvedSpace = spaceId.startsWith("tinycloud:")
+    const resolvedSpace = this.canonicalPkhSpaceId(spaceId.startsWith("tinycloud:")
       ? spaceId
-      : this.ownedSpaceId(spaceId);
+      : this.ownedSpaceId(spaceId));
     let secrets = this._baseSecrets.get(resolvedSpace);
     if (!secrets) {
       secrets = new SecretsService(() => this.getBaseVault(resolvedSpace));
@@ -5815,9 +5849,9 @@ export class TinyCloudNode {
     if (!this._spaceService) {
       throw new Error("Not signed in. Call signIn() first.");
     }
-    const resolvedSpace = spaceId.startsWith("tinycloud:")
+    const resolvedSpace = this.canonicalPkhSpaceId(spaceId.startsWith("tinycloud:")
       ? spaceId
-      : this.ownedSpaceId(spaceId);
+      : this.ownedSpaceId(spaceId));
     let vault = this._baseVaults.get(resolvedSpace);
     if (!vault) {
       vault = this.createVaultService(
@@ -7409,8 +7443,15 @@ export class TinyCloudNode {
   }
 
   private isEncryptionPermissionEntry(entry: PermissionEntry): boolean {
-    return entry.service === ENCRYPTION_PERMISSION_SERVICE &&
-      this.isEncryptionNetworkOperation("encryption", entry.path, entry.space);
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
+      (entry.space !== undefined && entry.space !== "encryption") ||
+      entry.actions.length === 0) return false;
+    try {
+      encryptionPermissionNetworkId(entry.path, entry.actions);
+      return true;
+    } catch {
+      return false;
+    }
   }
   private isRawRevocationPermissionEntry(entry: PermissionEntry): boolean {
     return entry.service === "tinycloud.delegation" &&
@@ -7428,9 +7469,8 @@ export class TinyCloudNode {
         rawAbilities[entry.space!] = [...new Set(entry.actions)];
         continue;
       }
-      if (!this.isEncryptionPermissionEntry(entry)) {
-        continue;
-      }
+      if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) continue;
+      if (!this.isEncryptionPermissionEntry(entry)) throw new Error("Invalid raw encryption permission");
       const existing = rawAbilities[entry.path] ?? [];
       const seen = new Set(existing);
       for (const action of entry.actions) {
@@ -7859,10 +7899,10 @@ export class TinyCloudNode {
     }
 
     if (granted.resource !== undefined || requested.resource !== undefined) {
-      return granted.resource !== undefined &&
-        requested.resource !== undefined &&
-        granted.resource === requested.resource &&
-        this.pathContains(granted.path, requested.path);
+      if (granted.resource === undefined || requested.resource === undefined) return false;
+      return granted.service === "encryption"
+        ? decryptResourceContains(granted.resource, requested.resource)
+        : granted.resource === requested.resource && this.pathContains(granted.path, requested.path);
     }
 
     return granted.spaceId !== undefined &&
@@ -7914,9 +7954,13 @@ export class TinyCloudNode {
   }
 
   private isEncryptionNetworkOperation(service: string, path: string, space?: string): boolean {
-    return service === "encryption" &&
-      (space === undefined || space === "encryption") &&
-      path.startsWith("urn:tinycloud:encryption:");
+    if (service !== "encryption" || (space !== undefined && space !== "encryption")) return false;
+    try {
+      encryptionPermissionNetworkId(path, [DECRYPT_ACTION]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private operationFromInvokeAnyEntry(entry: {
@@ -7929,6 +7973,14 @@ export class TinyCloudNode {
   }): RuntimePermissionOperation | undefined {
     const service = this.invocationServiceName(entry.service);
     if (typeof entry.resource === "string") {
+      if (service === "encryption") {
+        if (entry.path !== entry.resource) return undefined;
+        try {
+          encryptionPermissionNetworkId(entry.resource, [entry.action]);
+        } catch {
+          return undefined;
+        }
+      }
       return {
         resource: entry.resource,
         service,
@@ -7938,6 +7990,11 @@ export class TinyCloudNode {
       };
     }
     if (entry.spaceId === undefined && this.isEncryptionNetworkOperation(service, entry.path)) {
+      try {
+        encryptionPermissionNetworkId(entry.path, [entry.action]);
+      } catch {
+        return undefined;
+      }
       return {
         resource: entry.path,
         service,
@@ -8491,7 +8548,12 @@ export class TinyCloudNode {
     const resourceIsContained = (parent: typeof parentResources[number], child: typeof requestedResources[number]): boolean => {
       const parentEncryption = parent.service === "encryption" || parent.service === "tinycloud.encryption";
       const childEncryption = child.service === "encryption" || child.service === "tinycloud.encryption";
-      if (parentEncryption || childEncryption) return parentEncryption && childEncryption && parent.path === child.path && child.actions.every((action) => parent.actions.includes(action));
+      if (parentEncryption || childEncryption) {
+        if (!parentEncryption || !childEncryption ||
+          !child.actions.every((action) => parent.actions.includes(action))) return false;
+        return decryptResourceContains(parent.path, child.path) &&
+          (!child.path.includes("/kv/") || child.actions.every((action) => action === DECRYPT_ACTION));
+      }
       const pathContained = parent.path === child.path || parent.path.endsWith("/") && child.path.startsWith(parent.path) || child.path.startsWith(`${parent.path}/`);
       return pathContained && child.actions.every((action) => parent.actions.includes(action));
     };

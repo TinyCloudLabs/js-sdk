@@ -1,4 +1,4 @@
-import type { NodeWasmBindings, PermissionEntry, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { parseNetworkId, parseScopedDecryptResource, type NodeWasmBindings, type PermissionEntry, type PrivateKeySigner } from "@tinycloud/node-sdk";
 
 export type OpenKeyCallback = {
   delegationHeader: { Authorization: string };
@@ -12,8 +12,6 @@ export type OpenKeyDelegate = (
   options?: { permissions?: PermissionEntry[] },
 ) => Promise<OpenKeyCallback>;
 
-const RAW_NETWORK = /^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]*)$/;
-const NETWORK_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 
 function isRawRequest(permission: PermissionEntry): boolean {
@@ -60,13 +58,17 @@ export function openKeyDelegate(params: {
       if (p.actions.length === 0 || p.actions.some((action) => action !== "tinycloud.encryption/decrypt")) {
         refuse(`permissions[${index}].actions must be ["tinycloud.encryption/decrypt"] for a raw encryption network`);
       }
-      const network = RAW_NETWORK.exec(p.path);
-      if (!network) return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
-      if (network[1] !== "1" || network[2]!.toLowerCase() !== address.toLowerCase()) {
-        return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
+      let networkId: string;
+      try {
+        networkId = p.path.includes("/kv/")
+          ? parseScopedDecryptResource(p.path).networkId
+          : parseNetworkId(p.path).networkId;
+      } catch {
+        return refuse(`permissions[${index}].path must be a canonical encryption network or exact named-secret resource`);
       }
-      if (!NETWORK_NAME.test(network[3]!)) {
-        refuse(`permissions[${index}].path names an invalid network`);
+      const network = parseNetworkId(networkId);
+      if (network.ownerDid !== `did:pkh:eip155:1:${params.wasm.ensureEip55(address)}`) {
+        return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
       }
     });
     const hasSpacePermission = permissions.some((permission) => !isRawRequest(permission));

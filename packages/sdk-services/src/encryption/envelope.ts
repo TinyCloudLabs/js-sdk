@@ -28,6 +28,11 @@ import {
   type InlineEncryptedEnvelope,
 } from "./types";
 import { parseNetworkId } from "./networkId";
+import {
+  computeScopeTag,
+  scopeTagMatches,
+  type ScopedDecryptLocator,
+} from "./scope";
 
 export interface EncryptToNetworkInput {
   /** Target network id URN. */
@@ -44,6 +49,8 @@ export interface EncryptToNetworkInput {
   keyVersion?: number;
   /** Caller-supplied envelope metadata. */
   metadata?: Record<string, string>;
+  /** Bind a named network-vault secret to its canonical stored locator. */
+  scope?: ScopedDecryptLocator;
 }
 
 export interface EncryptToNetworkResult {
@@ -67,6 +74,7 @@ export function encryptToNetwork(
 
   const symmetricKey = crypto.randomBytes(32);
   const ciphertext = crypto.authEncrypt(symmetricKey, input.plaintext, input.aad);
+  const ciphertextBase64 = base64Encode(ciphertext);
   const wrapped = crypto.sealToNetworkKey(input.networkPublicKey, symmetricKey);
   const encryptedSymmetricKey = base64Encode(wrapped);
   const encryptedSymmetricKeyHash = canonicalHashHex(
@@ -81,9 +89,17 @@ export function encryptToNetwork(
     keyVersion,
     encryptedSymmetricKey,
     encryptedSymmetricKeyHash,
-    ciphertext: base64Encode(ciphertext),
+    ciphertext: ciphertextBase64,
     ...(input.aad !== undefined ? { aad: base64Encode(input.aad) } : {}),
     ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+    ...(input.scope === undefined ? {} : {
+      scopeTag: computeScopeTag(crypto, symmetricKey, {
+        networkId: input.networkId,
+        alg,
+        keyVersion,
+        ciphertext: ciphertextBase64,
+      }, input.scope),
+    }),
   };
 
   return { envelope, symmetricKey };
@@ -154,6 +170,15 @@ export function validateEnvelope(
       }),
     };
   }
+  if (e.scopeTag !== undefined && !/^[0-9a-f]{64}$/.test(e.scopeTag)) {
+    return {
+      ok: false,
+      error: encryptionError({
+        code: "INVALID_ENVELOPE",
+        message: "envelope.scopeTag must be lowercase hex SHA-256",
+      }),
+    };
+  }
   const expectedHash = canonicalHashHex(crypto.sha256, e.encryptedSymmetricKey);
   if (expectedHash !== e.encryptedSymmetricKeyHash) {
     return {
@@ -179,7 +204,14 @@ export function decryptEnvelopeWithKey(
   crypto: EncryptionCrypto,
   envelope: InlineEncryptedEnvelope,
   symmetricKey: Uint8Array,
+  scope?: ScopedDecryptLocator,
 ): Uint8Array {
+  if (scope !== undefined && !scopeTagMatches(
+    envelope.scopeTag,
+    computeScopeTag(crypto, symmetricKey, envelope, scope),
+  )) {
+    throw new Error("Envelope scopeTag does not match the named secret locator");
+  }
   const ciphertext = base64Decode(envelope.ciphertext);
   const aad = envelope.aad !== undefined ? base64Decode(envelope.aad) : undefined;
   return crypto.authDecrypt(symmetricKey, ciphertext, aad);

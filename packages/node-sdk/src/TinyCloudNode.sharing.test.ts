@@ -4,6 +4,7 @@ import {
   CapabilityKeyRegistry,
   CaveatedDelegationUnsupportedError,
   canonicalizeEncryptionJson,
+  buildScopedDecryptResource,
   authorizationVerdictOf,
   type EncodedShareData,
   type ISessionManager,
@@ -110,7 +111,7 @@ describe("TinyCloudNode sharing", () => {
     (node as any)._chainId = 1;
     const resources = [
       { service: "kv", space: SPACE, path: "docs", actions: ["tinycloud.kv/get"] },
-      { service: "encryption", space: "encryption", path: "urn:tinycloud:encryption:network-1", actions: ["tinycloud.encryption/decrypt"] },
+      { service: "encryption", space: "encryption", path: `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER}:default`, actions: ["tinycloud.encryption/decrypt"] },
     ];
     const delegation = await node.createSubDelegation(
       {
@@ -129,9 +130,56 @@ describe("TinyCloudNode sharing", () => {
     );
     const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
     expect(prepared.abilities).toEqual({ kv: { docs: ["tinycloud.kv/get"] } });
-    expect(prepared.rawAbilities).toEqual({ "urn:tinycloud:encryption:network-1": ["tinycloud.encryption/decrypt"] });
+    expect(prepared.rawAbilities).toEqual({ [`urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER}:default`]: ["tinycloud.encryption/decrypt"] });
     expect(delegation.resources).toEqual(resources);
     expect((globalThis.fetch as any).mock.calls[0][0]).toBe("https://node.example/delegate");
+  });
+
+  test("root decrypt can attenuate to A, while A cannot redelegate root or sibling B", async () => {
+    const wasmBindings = makeWasmBindings();
+    globalThis.fetch = mock(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    const node = new TinyCloudNode({
+      host: "https://node.example",
+      signer: { signMessage: mock(async () => "signature") } as never,
+      wasmBindings,
+    });
+    (node as any)._address = OWNER;
+    (node as any)._chainId = 1;
+    const networkId = "urn:tinycloud:encryption:did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:default";
+    const a = buildScopedDecryptResource(networkId, { spaceId: SPACE, path: "vault/secrets/API_KEY" });
+    const b = buildScopedDecryptResource(networkId, { spaceId: SPACE, path: "vault/secrets/OTHER_KEY" });
+    const actions = ["tinycloud.encryption/decrypt"];
+    const resource = (path: string) => ({ service: "encryption", space: "encryption", path, actions });
+    const parent = (path: string) => ({
+      cid: "parent-cid",
+      delegationHeader: { Authorization: "parent.header.signature" },
+      spaceId: SPACE,
+      path,
+      actions,
+      resources: [resource(path)],
+      expiry: new Date(Date.now() + 60 * 60_000),
+      delegateDID: "did:key:z6MkReceiver",
+      ownerAddress: OWNER,
+      chainId: 1,
+    });
+    const child = (path: string) => ({
+      path, actions, delegateDID: "did:key:z6MkChild", resources: [resource(path)],
+    });
+    const narrowed = await node.createSubDelegation(parent(networkId), child(a));
+    expect(narrowed).toMatchObject({ resources: [resource(a)] });
+    const legacyRoot = await node.createSubDelegation(parent(networkId.toLowerCase()), child(a));
+    expect(legacyRoot).toMatchObject({ resources: [resource(a)] });
+    await expect(node.createSubDelegation(parent(a), child(networkId))).rejects.toThrow(
+      "Sub-delegation resources exceed",
+    );
+    await expect(node.createSubDelegation(parent(a), child(b))).rejects.toThrow(
+      "Sub-delegation resources exceed",
+    );
   });
 
   test("TC-531: a sub-delegation defaults to its parent's expiry, the longest it may last", async () => {
