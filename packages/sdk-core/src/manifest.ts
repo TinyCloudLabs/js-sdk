@@ -296,6 +296,7 @@ interface VaultActionExpansion {
 export const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> =
   Object.freeze({
     kv: "tinycloud.kv",
+    space: "tinycloud.space",
     sql: "tinycloud.sql",
     duckdb: "tinycloud.duckdb",
     capabilities: "tinycloud.capabilities",
