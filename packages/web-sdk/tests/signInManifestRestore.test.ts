@@ -96,6 +96,7 @@ const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
 const { dispatchSDKEvent } = require("../src/notifications");
+const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinycloud/node-sdk");
 
 test("passes persisted additional spaces and expiry through browser restore data", () => {
   const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
@@ -456,4 +457,74 @@ test("plain restored sessions require all canonical account permissions", async 
   ]));
   expect(node.signIn).not.toHaveBeenCalled();
   expect(session.siwe).toBe("canonical-siwe");
+});
+
+test("signOut() ends the session on the TinyCloudWeb instance", async () => {
+  const host = "https://signout.test";
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
+  const manager = wasm.createSessionManager();
+  const jwk = JSON.parse(manager.jwk("default")!);
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const spaceId = wasm.makeSpaceId(address, chainId, "default");
+  const now = Date.now();
+  const expirationTime = new Date(now + 60 * 60_000).toISOString();
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put"] } },
+    address,
+    chainId,
+    domain: "signout.test",
+    issuedAt: new Date(now).toISOString(),
+    expirationTime,
+    spaceId,
+    jwk,
+  });
+  const signature = await signer.signMessage(prepared.siwe);
+  const completed = wasm.completeSessionSetup({ ...prepared, signature });
+  // A real node-sdk session; the browser wallet flow is not under test.
+  const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
+  await node.restoreSession({
+    delegationHeader: completed.delegationHeader,
+    delegationCid: completed.delegationCid,
+    spaceId,
+    jwk,
+    verificationMethod: manager.getDID("default"),
+    address,
+    chainId,
+    siwe: prepared.siwe,
+    signature,
+    expiresAt: expirationTime,
+    tinycloudHosts: [host],
+  });
+  const tcw = new TinyCloudWeb({});
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = node;
+
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  try {
+    const kv = tcw.kv;
+    expect(tcw.session()).toBeDefined();
+    expect(tcw.accountAuthorizationCid()).toBe(completed.delegationCid);
+    await kv.get("notes/a");
+    const signedInRequests = requests.length;
+    expect(signedInRequests).toBeGreaterThan(0);
+
+    await tcw.signOut();
+
+    expect(tcw.session()).toBeUndefined();
+    expect(tcw.address()).toBeUndefined();
+    expect(() => tcw.accountAuthorizationCid()).toThrow("Not signed in");
+    expect(() => tcw.kv).toThrow("Not signed in");
+    const stale = await kv.put("notes/b", "after sign-out").catch(() => ({ ok: false }));
+    expect(stale.ok).toBe(false);
+    expect(requests.length).toBe(signedInRequests);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
