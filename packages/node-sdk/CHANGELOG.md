@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 3.2.6-beta.2
+
+### Patch Changes
+
+- 370a8e4: `TinyCloudWeb.signOut()` now ends the session on the instance, through the new `TinyCloudNode.signOut()`: session accessors return `undefined`, the session key is replaced, pending requests are aborted, and service calls fail instead of acting for the signed-out user. A sign-in or restore still in progress when sign-out is called does not establish its session; a later `signIn()` or `restoreSession()` starts a fresh one.
+
+  `useDelegation()` results now belong to the session that created them: they stop working when that session signs out or is replaced by another `signIn()` or `restoreSession()`.
+
+- Updated dependencies [370a8e4]
+  - @tinycloud/sdk-services@3.2.6-beta.2
+  - @tinycloud/replica@0.2.4-beta.0
+  - @tinycloud/sdk-core@3.2.6-beta.2
+
 ## 3.2.6-beta.1
 
 ### Patch Changes

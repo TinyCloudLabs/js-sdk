@@ -30,6 +30,7 @@
   },
   "changesets": [
     "account-manifest-primary",
-    "account-space-list-manifest"
+    "account-space-list-manifest",
+    "sign-out-ends-session"
   ]
 }
