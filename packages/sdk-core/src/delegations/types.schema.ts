@@ -558,6 +558,12 @@ export const DelegationManagerConfigSchema = z.object({
     (val): val is InvokeAnyFunction => val === undefined || typeof val === "function",
     { message: "Expected an invokeAny function or undefined" }
   ).optional(),
+  /** Optional owner-signed authorization for direct CID revocation */
+  signOwnerRevocation: z.unknown().refine(
+    (val): val is (cid: string) => Promise<string> =>
+      typeof val === "function",
+    { message: "Expected an owner revocation signer or undefined" }
+  ).optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",

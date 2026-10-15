@@ -4229,6 +4229,7 @@ export class TinyCloudNode {
       session: input.serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
+      signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
       fetch: graph.fetch,
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
@@ -5266,6 +5267,7 @@ export class TinyCloudNode {
       session: serviceSession,
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
+      signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
       fetch: graph.fetch,
     });
 
@@ -6777,7 +6779,8 @@ export class TinyCloudNode {
   }
 
   /**
-   * Revoke a delegation using the v2 DelegationManager.
+   * Revoke a delegation with the owner wallet when available. Session-only
+   * clients continue to use their delegated revocation authority.
    *
    * @param cid - The CID of the delegation to revoke
    * @returns Result indicating success or failure
