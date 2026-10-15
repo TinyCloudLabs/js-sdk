@@ -609,7 +609,7 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect((await postKeyRevocation(outsider)).status).toBe(403);
     const changed = await signedKeyRevocation(f.registrarDid, f.registrarKey, f.nodeDid, { kind: "global" }, requestNonce, [], 39);
     expect(changed.authorization).not.toBe(signed.authorization);
-    expect((await postKeyRevocation(changed)).status).toBe(409);
+    expect((await postKeyRevocation(changed)).status).toBe(403);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status);
   }, 30_000);
 
@@ -631,6 +631,28 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect(await ownerRead(f)).toBe("recovery-before");
   }, 30_000);
 
+  test("expired scoped recovery proof denies a fresh revoke but preserves its committed receipt", async () => {
+    const f = await fixture();
+    const recoveryKey = key(), recoveryDid = did(recoveryKey), now = seconds();
+    const spaceId = f.resource.split("/kv/", 1)[0]!;
+    const scope = { kind: "space", spaceId } as const;
+    const recovery = await signCompactUcanRootAuthorization({ issuerDid: f.ownerDid, audienceDid: recoveryDid,
+      attenuation: { [`urn:tinycloud:key:${f.recipientDid}`]: {
+        "tinycloud.key/revoke": [{ version: 1, targetDid: f.recipientDid, scope }] } },
+      facts: [{}], notBefore: now - 2, expiresAt: now + 10, nonce: nonce(), sign: signer(f.ownerKey) });
+    await importDelegation(recovery);
+    const signed = await signedKeyRevocation(f.recipientDid, recoveryKey, f.nodeDid, scope, nonce(), [recovery.cid]);
+    const first = await postKeyRevocation(signed);
+    expect(first.status).toBe(200);
+    const receipt = await first.json();
+    await Bun.sleep(Math.max(0, (now + 11) * 1000 - Date.now()));
+    const exact = await postKeyRevocation(signed);
+    expect(exact.status).toBe(200);
+    expect(await exact.json()).toEqual(receipt);
+    const fresh = await signedKeyRevocation(f.recipientDid, recoveryKey, f.nodeDid, scope, nonce(), [recovery.cid]);
+    expect((await postKeyRevocation(fresh)).status).toBe(403);
+  }, 30_000);
+
   test("a space owner revokes one recipient key only in its space; another owner's live grant still works", async () => {
     const first = await fixture();
     const second = await fixture(300, "ucan", first.recipientKey);
@@ -640,8 +662,12 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect((await invoke(second.session, second.recipientKey, second.recipientDid, second.nodeDid, second.resource, "tinycloud.kv/put", "second-before")).status).toBe(200);
     const spaceId = first.resource.split("/kv/", 1)[0]!;
     const scope = { kind: "space", spaceId } as const;
-    const request = await signedKeyRevocation(first.recipientDid, first.ownerKey, first.nodeDid, scope);
+    const requestNonce = nonce();
+    const request = await signedKeyRevocation(first.recipientDid, first.ownerKey, first.nodeDid, scope, requestNonce);
     expect((await postKeyRevocation(request)).status).toBe(200);
+    const changed = await signedKeyRevocation(first.recipientDid, first.ownerKey, first.nodeDid, scope, requestNonce, [], 39);
+    expect(changed.authorization).not.toBe(request.authorization);
+    expect((await postKeyRevocation(changed)).status).toBe(409);
     statusDenied((await invoke(first.session, first.recipientKey, first.recipientDid, first.nodeDid, first.resource, "tinycloud.kv/get")).status);
     statusDenied((await invoke(first.session, first.recipientKey, first.recipientDid, first.nodeDid, first.resource, "tinycloud.kv/put", "first-denied")).status);
     statusDenied((await descendantInvoke(first, "tinycloud.kv/get")).status);
