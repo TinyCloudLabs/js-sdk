@@ -14,6 +14,7 @@ import type {
   InvokeAnyFunction,
   InvokeFunction,
   ServiceSession,
+  ServiceHeaders,
 } from "@tinycloud/sdk-services";
 import {
   Result,
@@ -96,6 +97,7 @@ export class DelegationManager {
   private session: ServiceSession;
   private invoke: InvokeFunction;
   private invokeAny?: InvokeAnyFunction;
+  private signOwnerRevocation?: (cid: string) => Promise<string>;
   private fetchFn: FetchFunction;
   private accountSpaceId?: string;
 
@@ -109,6 +111,7 @@ export class DelegationManager {
     this.session = config.session;
     this.invoke = config.invoke;
     this.invokeAny = config.invokeAny;
+    this.signOwnerRevocation = config.signOwnerRevocation;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.accountSpaceId = config.accountSpaceId;
   }
@@ -299,30 +302,35 @@ export class DelegationManager {
     }
 
     try {
-      if (!this.invokeAny) {
+      if (!this.signOwnerRevocation && !this.invokeAny) {
         return {
           ok: false,
           error: createError(
             DelegationErrorCodes.NOT_INITIALIZED,
-            "Revocation requires an invokeAny function that can sign the target CID"
+            "Revocation requires an owner signer or invokeAny function that can sign the target CID"
           ),
         };
       }
 
-      const entry = {
-        resource: `urn:cid:${cid}`,
-        ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
-        service: "delegation",
-        path: "",
-        action: DelegationAction.REVOKE,
-      } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
-      if (options?.authorityCid !== undefined) {
-        Object.defineProperty(entry, "revokeAuthorityCid", {
-          value: options.authorityCid,
-          enumerable: false,
-        });
+      let headers: ServiceHeaders;
+      if (this.signOwnerRevocation) {
+        headers = { Authorization: await this.signOwnerRevocation(cid) };
+      } else {
+        const entry = {
+          resource: `urn:cid:${cid}`,
+          ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
+          service: "delegation",
+          path: "",
+          action: DelegationAction.REVOKE,
+        } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
+        if (options?.authorityCid !== undefined) {
+          Object.defineProperty(entry, "revokeAuthorityCid", {
+            value: options.authorityCid,
+            enumerable: false,
+          });
+        }
+        headers = this.invokeAny!(this.session, [entry]);
       }
-      const headers = this.invokeAny(this.session, [entry]);
       const response = await this.fetchFn(`${this.host}/revoke`, {
         method: "POST",
         headers,
