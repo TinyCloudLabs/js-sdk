@@ -35,6 +35,7 @@ import { generateNonce, SiweMessage } from "siwe";
 
 import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
+import type { ReplicaConsentAnchor } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
@@ -6955,48 +6956,47 @@ export class TinyCloudNode {
     }
     return auth.replicationSignInEntries();
   }
+  private verifiedOwnerConsentAnchor(session: TinyCloudSession): ReplicaConsentAnchor | null {
+    if (typeof session.siwe !== "string" || typeof session.signature !== "string" ||
+        typeof session.address !== "string" || typeof session.chainId !== "number") return null;
+    try {
+      const verified = this.wasmBindings.validatePersistedSession?.({
+        delegationHeader: session.delegationHeader,
+        delegationCid: session.delegationCid,
+        spaceId: session.spaceId,
+        jwk: session.jwk,
+        address: session.address,
+        chainId: session.chainId,
+        siwe: session.siwe,
+        signature: session.signature,
+      });
+      if (!verified || !Number.isSafeInteger(Date.parse(verified.expiresAt ?? ""))) return null;
+      const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
+      if (typeof signedIssuedAt !== "string") return null;
+      const issuedAt = Date.parse(signedIssuedAt);
+      if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) return null;
+      const granted = exactVerifiedRecap(verified)
+        .filter((entry) => entry.space === session.spaceId && entry.service === "kv" && entry.path === "")
+        .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
+      const coversGetAndSync = isCapabilitySubset([{
+        service: "tinycloud.kv",
+        space: session.spaceId,
+        path: "",
+        actions: [KV.GET, KV.SYNC],
+      }], granted).subset;
+      return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async replicationAuthority(): Promise<ReplicationAuthority> {
     const { createReplicationAuthority, assertRenewalParent } = await getNodeReplicationLoaders().authority();
     return createReplicationAuthority({
       replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
       verifiedConsentAnchor: (session) => {
         const current = this.currentTinyCloudSession();
-        if (
-          session !== current ||
-          typeof session.siwe !== "string" ||
-          typeof session.signature !== "string" ||
-          typeof session.address !== "string" ||
-          typeof session.chainId !== "number"
-        ) return null;
-        try {
-          const verified = this.wasmBindings.validatePersistedSession?.({
-            delegationHeader: session.delegationHeader,
-            delegationCid: session.delegationCid,
-            spaceId: session.spaceId,
-            jwk: session.jwk,
-            address: session.address,
-            chainId: session.chainId,
-            siwe: session.siwe,
-            signature: session.signature,
-          });
-          if (!verified || !Number.isFinite(Date.parse(verified.expiresAt ?? ""))) return null;
-          const signedIssuedAt = new SiweMessage(session.siwe).issuedAt;
-          if (typeof signedIssuedAt !== "string") return null;
-          const issuedAt = Date.parse(signedIssuedAt);
-          if (!Number.isFinite(issuedAt)) return null;
-          const granted = exactVerifiedRecap(verified)
-            .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
-            .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
-          const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
-            service: "tinycloud.kv",
-            space: session.spaceId,
-            path: entry.path,
-            actions: [KV.GET, KV.SYNC],
-          }], granted).subset);
-          return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
-        } catch {
-          return null;
-        }
+        return session === current && current !== undefined ? this.verifiedOwnerConsentAnchor(current) : null;
       },
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
