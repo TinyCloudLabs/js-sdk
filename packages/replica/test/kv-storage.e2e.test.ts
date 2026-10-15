@@ -15,12 +15,18 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { FakeNode, SPACE, deviceGrant, keyPair, owner, signUcan } from "./fixtures.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../src/errors.js";
 
 const FIXTURE_DIST = resolve(import.meta.dir, "browser/fixture/dist");
+/**
+ * Runs where the fixture is built (the `browser-e2e` CI job and local runs);
+ * TC_KV_STORAGE_E2E=1 makes a missing build an error instead of a skip.
+ */
+const RUN = existsSync(join(FIXTURE_DIST, "kv.html")) || process.env.TC_KV_STORAGE_E2E === "1";
 const PRINCIPAL = "did:pkh:eip155:1:0x00000000000000000000000000000000000000c1";
 
 type Outcome<T = unknown> = { ok: true; value: T } | { ok: false; code: string; message: string; gate?: string };
@@ -73,6 +79,7 @@ async function openGranted(page: Page, storage: string, handle: string, name: st
 }
 
 beforeAll(async () => {
+  if (!RUN) return;
   server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -123,7 +130,7 @@ afterEach(async () => {
   feeds.clear();
 });
 
-describe("kv-storage over a fake feed (Chromium)", () => {
+describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
   test("reads carry LocalReadMeta: coverage, authority and the epoch the last sync persisted", async () => {
     const node = feed("meta");
     node.put("notes/a", "alpha");
