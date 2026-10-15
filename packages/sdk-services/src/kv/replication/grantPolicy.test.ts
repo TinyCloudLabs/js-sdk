@@ -173,6 +173,12 @@ describe("needsSilentRenewal (§6 renewal at <25% remaining, before the deadline
     expect(needsSilentRenewal({ now: installedAt + 3 * HOUR + 1, installedAt, effectiveExpiresAt, consentDeadline })).toBe(true);
   });
 
+  test("exactly 25% remaining does not renew; the threshold is strict", () => {
+    const now = installedAt + 3 * HOUR;
+    expect(needsSilentRenewal({ now, installedAt, effectiveExpiresAt, consentDeadline })).toBe(false);
+    expect(needsSilentRenewal({ now: now + 1, installedAt, effectiveExpiresAt, consentDeadline })).toBe(true);
+  });
+
   test("never renews at or after the consent deadline", () => {
     const deadline = installedAt + 3 * HOUR;
     expect(
