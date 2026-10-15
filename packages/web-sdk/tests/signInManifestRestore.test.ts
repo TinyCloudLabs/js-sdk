@@ -19,6 +19,7 @@ global.TextDecoder = TD;
 (globalThis as any).window = {
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
+  dispatchEvent: () => true,
   location: { hostname: "test.local" },
 };
 (globalThis as any).document = {
@@ -46,6 +47,20 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
     generateHostSIWEMessage: () => "",
     siweToDelegationHeaders: () => ({}),
     protocolVersion: () => 1,
+    prepareSession: (params: { jwk: object; spaceId: string; nonce?: string; issuedAt: string; expirationTime: string }) => ({
+      siwe: [
+        `Nonce: ${params.nonce ?? ""}`,
+        `Issued At: ${params.issuedAt}`,
+        `Expiration Time: ${params.expirationTime}`,
+      ].join("\n"),
+      jwk: params.jwk,
+      spaceId: params.spaceId,
+      verificationMethod: "did:key:default",
+    }),
+    completeSessionSetup: () => ({
+      delegationHeader: { Authorization: "Bearer signed-in" },
+      delegationCid: "bafy-signed-in-account",
+    }),
     validatePersistedSession: () => ({
       verifiedRecap: [],
       expiresAt: "2099-01-01T00:00:00.000Z",
@@ -80,6 +95,7 @@ const { TinyCloudWeb } = require("../src/modules/tcw");
 const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
+const { dispatchSDKEvent } = require("../src/notifications");
 
 test("passes persisted additional spaces and expiry through browser restore data", () => {
   const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
@@ -158,6 +174,51 @@ test("accountAuthorizationCid returns the delegation CID of a restored walletles
   expect(result.error).toBeUndefined();
   expect(result.status).toBe("restored");
   expect(tcw.accountAuthorizationCid()).toBe("bafy-restored-account");
+});
+
+test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", async () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const signedMessages: string[] = [];
+  const provider = {
+    request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+      if (method === "eth_requestAccounts" || method === "eth_accounts") return [address];
+      if (method === "eth_chainId") return "0x1";
+      if (method === "personal_sign") {
+        signedMessages.push(String(params?.[0]));
+        return "0xsigned";
+      }
+      throw new Error(`Unexpected wallet request: ${method}`);
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return Response.json({ activated: ["space"], skipped: [] });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  const tcw = new TinyCloudWeb({
+    provider,
+    persistSession: false,
+    tinycloudHosts: ["https://node.test.local"],
+  });
+
+  try {
+    await tcw.signIn();
+    // Settle the background account-registry sync while fetch is still stubbed.
+    await tcw._node.waitForAccountRegistrySync();
+  } finally {
+    globalThis.fetch = originalFetch;
+    // Drop the debounced "signed in" event so it cannot fire into a later file's window shim.
+    dispatchSDKEvent.cleanup();
+  }
+
+  expect(signedMessages).toHaveLength(1);
+  expect(tcw.accountAuthorizationCid()).toBe("bafy-signed-in-account");
 });
 
 test("keeps a valid persisted session when the loaded binding cannot restore its signer", async () => {

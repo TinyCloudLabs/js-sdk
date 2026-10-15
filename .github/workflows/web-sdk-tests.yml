@@ -20,6 +20,8 @@ on:
       - "bun.lock"
       - "package.json"
       - "turbo.json"
+      - "tsconfig.base.json"
+      - "scripts/setup.sh"
       - ".github/workflows/web-sdk-tests.yml"
   push:
     branches: [master]
@@ -38,6 +40,8 @@ on:
       - "bun.lock"
       - "package.json"
       - "turbo.json"
+      - "tsconfig.base.json"
+      - "scripts/setup.sh"
       - ".github/workflows/web-sdk-tests.yml"
   workflow_dispatch:
 
@@ -98,31 +102,42 @@ jobs:
         working-directory: packages/web-sdk
         env:
           BUN_JSC_useConcurrentJIT: "0"
-          # No paired OpenCredentials checkout in CI; the suite prints its skip reason.
+          # No paired OpenCredentials checkout in CI; the suite skips its tests and prints why.
           OPENCREDENTIALS_FIXTURE_OPTIONAL: "1"
         run: |
+          set -o pipefail
           declare -A skip=(
             [tests/web-sdk.test.ts]="Jest-only suite (jest.mock automock, eth-testing provider, TinyCloud server on localhost:3001); not runnable under bun test"
             [tests/siwe-signature-init.test.js]="exercises an in-file MockUserAuthorization rather than web-sdk source, and 3 of its cases fail against that mock"
           )
+          log="$RUNNER_TEMP/web-sdk-test.log"
           passed=()
+          skipped=()
           failed=()
-          for file in tests/*.test.ts tests/*.test.js; do
-            if [[ -v skip[$file] ]]; then
-              echo "SKIP $file: ${skip[$file]}"
-              echo "::notice title=Skipped $file::${skip[$file]}"
-              continue
+          for file in tests/*.test.ts tests/*.test.js tests/*.bun.ts; do
+            reason="${skip[$file]:-}"
+            if [[ -z "$reason" ]]; then
+              echo "::group::$file"
+              if ! bun test "./$file" 2>&1 | tee "$log"; then
+                failed+=("$file")
+                echo "::error title=web-sdk test failed::$file"
+              elif grep -Eq '\b0 pass\b' "$log" && grep -Eq '\b[1-9][0-9]* skip\b' "$log"; then
+                # Every test was skipped at runtime; report the file's own reason.
+                reason="$(grep -m1 -o 'Skipping .*' "$log" || echo "all tests skipped")"
+              else
+                passed+=("$file")
+              fi
+              echo "::endgroup::"
             fi
-            echo "::group::$file"
-            if bun test "./$file"; then
-              passed+=("$file")
-            else
-              failed+=("$file")
-              echo "::error title=web-sdk test failed::$file"
+            if [[ -n "$reason" ]]; then
+              skipped+=("$file")
+              echo "SKIP $file: $reason"
+              echo "::notice title=Skipped $file::$reason"
             fi
-            echo "::endgroup::"
           done
-          echo "Passed ${#passed[@]}, failed ${#failed[@]}, skipped ${#skip[@]}"
+          echo "Passed ${#passed[@]}, skipped ${#skipped[@]}, failed ${#failed[@]}"
+          printf 'PASS %s\n' "${passed[@]}"
+          printf 'SKIP %s\n' "${skipped[@]}"
           if (( ${#failed[@]} > 0 )); then
             printf 'FAIL %s\n' "${failed[@]}"
             exit 1

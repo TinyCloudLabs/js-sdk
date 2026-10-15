@@ -140,7 +140,7 @@ describe("BrowserSessionStorage", () => {
 
 describe("browser session restore data", () => {
   it("converts a valid persisted session to restore data and client session", async () => {
-    const session = persistedSession();
+    const session = persistedSession({ tinycloudHosts: ["https://node.example.com"] });
 
     expect(clientSessionFromPersisted(session)).toEqual({
       address: session.address,
@@ -154,12 +154,15 @@ describe("browser session restore data", () => {
       delegationHeader: session.tinycloudSession?.delegationHeader,
       delegationCid: session.tinycloudSession?.delegationCid,
       spaceId: session.tinycloudSession?.spaceId,
+      spaces: session.tinycloudSession?.spaces,
       jwk: JSON.parse(session.sessionKey),
       verificationMethod: session.tinycloudSession?.verificationMethod,
       address: session.address,
       chainId: session.chainId,
       siwe: session.siwe,
       signature: session.signature,
+      expiresAt: session.expiresAt,
+      tinycloudHosts: session.tinycloudHosts,
     });
   });
 });
