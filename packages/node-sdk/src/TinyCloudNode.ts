@@ -7040,10 +7040,47 @@ export class TinyCloudNode {
     const { createReplicationAuthority } = await getNodeReplicationLoaders().authority();
     return createReplicationAuthority({
       replicationSession: () => this.currentTinyCloudSession() ?? this.replicationDelegateSession,
+      verifiedConsentAnchor: (session) => {
+        const current = this.currentTinyCloudSession();
+        if (
+          session !== current ||
+          typeof session.siwe !== "string" ||
+          typeof session.signature !== "string" ||
+          typeof session.address !== "string" ||
+          typeof session.chainId !== "number"
+        ) return null;
+        try {
+          const verified = this.wasmBindings.validatePersistedSession?.({
+            delegationHeader: session.delegationHeader,
+            delegationCid: session.delegationCid,
+            spaceId: session.spaceId,
+            jwk: session.jwk,
+            address: session.address,
+            chainId: session.chainId,
+            siwe: session.siwe,
+            signature: session.signature,
+          });
+          if (!verified || !Number.isFinite(Date.parse(verified.expiresAt ?? ""))) return null;
+          const issuedAt = Date.parse(new SiweMessage(session.siwe).issuedAt);
+          if (!Number.isFinite(issuedAt)) return null;
+          const granted = exactVerifiedRecap(verified)
+            .filter((entry) => entry.space === session.spaceId && entry.service === "kv")
+            .map((entry) => ({ ...entry, service: "tinycloud.kv" }));
+          const coversGetAndSync = granted.some((entry) => isCapabilitySubset([{
+            service: "tinycloud.kv",
+            space: session.spaceId,
+            path: entry.path,
+            actions: [KV.GET, KV.SYNC],
+          }], granted).subset);
+          return coversGetAndSync ? { at: issuedAt, source: "siwe" } : null;
+        } catch {
+          return null;
+        }
+      },
       siweExpiration: (siwe) => extractSiweExpiration(siwe),
       planDelegation: (entries, options) => this.planDelegation(entries, options),
-      mintDelegation: async (deviceDid, entries) => {
-        const result = await this.delegateTo(principalDid(deviceDid), entries);
+      mintDelegation: async (deviceDid, entries, options) => {
+        const result = await this.delegateTo(principalDid(deviceDid), entries, options?.expiryMs === undefined ? undefined : { expiry: options.expiryMs });
         return {
           ucan: result.delegation.delegationHeader.Authorization,
           expiresAt: result.delegation.expiry.getTime(),

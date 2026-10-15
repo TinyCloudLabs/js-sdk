@@ -12,6 +12,7 @@ import {
 import { activateValidatedRuntimeDelegation } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
+import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
@@ -44,6 +45,20 @@ function legacySessionManager(): ISessionManager {
 
 function legacyBindings(): IWasmBindings {
   return { createSessionManager: legacySessionManager } as IWasmBindings;
+}
+
+/** Test-only access to the node authority after real WASM restore validation. */
+function replicationAuthorityForTest(node: TinyCloudNode): Promise<{
+  consentAnchor?(): { at: number; source: string } | null;
+  canRenew?: boolean;
+}> {
+  const withAuthority = node as unknown as {
+    replicationAuthority(): Promise<{
+      consentAnchor?(): { at: number; source: string } | null;
+      canRenew?: boolean;
+    }>;
+  };
+  return withAuthority.replicationAuthority();
 }
 
 describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
@@ -124,6 +139,64 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       actions: ["tinycloud.kv/get"],
       caveats: [],
     }]);
+  });
+
+  test("derives replica consent recency only from a WASM-verified signed owner SIWE", async () => {
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      wasmBindings: new NodeWasmBindings(),
+    });
+    await node.restoreSession(proof);
+
+    const authority = await replicationAuthorityForTest(node);
+    const issuedAt = Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)?.[1] ?? "");
+    expect(authority.consentAnchor?.()).toEqual({ at: issuedAt, source: "siwe" });
+    expect(authority.canRenew).toBe(true);
+  });
+
+  test("verified expirationless SIWE without KV get+sync still cannot anchor replica consent", async () => {
+    const proof = await signedRestorableSession({ expirationless: true });
+    const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession(proof);
+    // This valid owner proof carries no ReCap KV authority; it must not activate replication.
+    const authority = await replicationAuthorityForTest(node);
+    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.canRenew).toBe(false);
+  });
+
+  test("a verified owner SIWE with KV get+sync but no signed expiration cannot anchor consent", async () => {
+    const signed = await signedRestorableSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    });
+    const siwe = signed.siwe.replace(/\nExpiration Time: [^\n]+/, "");
+    expect(siwe).not.toBe(signed.siwe);
+    const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+    const signature = await signer.signMessage(siwe);
+    const wasm = new NodeWasmBindings();
+    const rebuilt = wasm.completeSessionSetup({
+      jwk: signed.jwk,
+      spaceId: signed.spaceId,
+      verificationMethod: signed.verificationMethod,
+      siwe,
+      signature,
+    });
+    const proof = {
+      ...signed,
+      siwe,
+      signature,
+      delegationHeader: rebuilt.delegationHeader,
+      delegationCid: rebuilt.delegationCid,
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+    };
+    const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: wasm });
+    await node.restoreSession(proof);
+
+    const authority = await replicationAuthorityForTest(node);
+    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.canRenew).toBe(false);
   });
 
   test("restores a genuinely signed caveated session, converting the verifier's Map and undefined encodings", async () => {
