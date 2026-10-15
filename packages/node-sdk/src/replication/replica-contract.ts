@@ -51,7 +51,10 @@ export type ReplicaErrorCode =
   | "SCOPE_VIOLATION"
   | "CONTENT_MISMATCH"
   | "INTEGRITY_ERROR"
-  | "REPLICA_CLOSED";
+  | "REPLICA_CLOSED"
+  | "REPLICA_GATED"
+  | "STORAGE_BUDGET"
+  | "CONSENT_EXPIRED";
 
 /** The instance shape of replica's `ReplicaError` class. */
 export interface ReplicaError extends Error {
