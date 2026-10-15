@@ -4,59 +4,68 @@
  * that a page commit, its quota accounting and its lifecycle-gate check, or
  * an erase and its purge-intent update, each run as a single transaction.
  *
- * Stores:
- *   meta          — one state row per partition, keyed by partition id
- *   entries       — keyPath [pid, key]; index byHash [pid, hash]
- *   blobs         — keyPath [pid, hash]; index bySize [pid, size]
- *   pendingWrites — one PendingWriteState per identity, keyed by its identity key
- *   device        — the owner-minted device key of this origin ("device")
- *   gate, partitions, purgeIntents — lifecycle control stores (slice C)
- *   quotaLedger   — the origin-wide byte ledger (slice E)
+ * Stores (names and keys frozen in the shared contract; every store keys
+ * out-of-line):
+ *   meta    — one state row per partition, key partitionId
+ *   entries — key [pid, key]; index byHash on [pid, hash]
+ *   blobs   — key [pid, hash]; index bySize on [pid, size]
+ *   pending — one PendingWriteState per identity, key identityKeyHash
+ *   device  — the owner-minted device key of this origin, key "device"
+ *   gate, partitions, purgeIntents — lifecycle control stores (the gate owns their records)
+ *   quota   — the origin-wide byte ledger (the ledger owns its records)
  *
  * The RC1 `openReplica` databases (`tinycloud-replica/<id>`) are separate
  * and untouched.
  */
 import { sha256 } from "@noble/hashes/sha2";
-import { replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
-import type { ReplicationIdentity } from "@tinycloud/sdk-services";
+import { replicationIdentityKey, type ReplicaPartitionEraser, type ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
+import { REPLICA_KV_DATABASE, REPLICA_KV_STORES } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 import { principalOf } from "../did.js";
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { eraseReplicaRows, type ReplicaStoreLayout } from "../browser/store.js";
 
-export const KV_DATABASE = "tinycloud-replica-kv";
+export const KV_DATABASE = REPLICA_KV_DATABASE;
 export const KV_DATABASE_VERSION = 1;
-
-export const KV_STORE = {
-  meta: "meta",
-  entries: "entries",
-  blobs: "blobs",
-  pendingWrites: "pendingWrites",
-  device: "device",
-  gate: "gate",
-  partitions: "partitions",
-  purgeIntents: "purgeIntents",
-  quotaLedger: "quotaLedger",
-} as const;
+export const KV_STORE = REPLICA_KV_STORES;
 
 /** The scope a partition erase (and the identity-scoped pending erase) needs. */
-export const ERASE_STORES: readonly string[] = [KV_STORE.meta, KV_STORE.entries, KV_STORE.blobs, KV_STORE.pendingWrites];
+export const ERASE_STORES: readonly string[] = [KV_STORE.meta, KV_STORE.entries, KV_STORE.blobs, KV_STORE.pending];
 
-const READ_SCOPE: readonly string[] = [KV_STORE.gate];
-const WRITE_SCOPE: readonly string[] = [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quotaLedger];
+const READ_SCOPE: readonly string[] = [KV_STORE.gate, KV_STORE.purgeIntents];
+const WRITE_SCOPE: readonly string[] = [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quota];
 
 function createStores(db: IDBDatabase): void {
   db.createObjectStore(KV_STORE.meta);
-  const entries = db.createObjectStore(KV_STORE.entries, { keyPath: ["pid", "key"] });
+  const entries = db.createObjectStore(KV_STORE.entries);
   entries.createIndex("byHash", ["pid", "hash"], { unique: false });
-  const blobs = db.createObjectStore(KV_STORE.blobs, { keyPath: ["pid", "hash"] });
+  const blobs = db.createObjectStore(KV_STORE.blobs);
   blobs.createIndex("bySize", ["pid", "size"], { unique: false });
-  db.createObjectStore(KV_STORE.pendingWrites);
-  db.createObjectStore(KV_STORE.device);
-  db.createObjectStore(KV_STORE.gate);
-  db.createObjectStore(KV_STORE.partitions, { keyPath: "partitionId" });
-  db.createObjectStore(KV_STORE.purgeIntents, { keyPath: "intentId" });
-  db.createObjectStore(KV_STORE.quotaLedger);
+  for (const name of [KV_STORE.pending, KV_STORE.device, KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quota]) {
+    db.createObjectStore(name);
+  }
+}
+
+/** sha256 → base32, first 26 characters: the partition id and identity-key hash. */
+function hash26(material: string): string {
+  const digest = sha256(new TextEncoder().encode(material));
+  let out = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of digest) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[(buffer >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  return out.slice(0, 26);
+}
+
+/** The `pending` store key and Web Lock suffix of one identity. */
+export function identityKeyHash(identityKey: string): string {
+  return hash26(identityKey);
 }
 
 /**
@@ -108,26 +117,12 @@ export function openKvDatabase(options: { create: boolean }): Promise<IDBDatabas
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
 /**
- * The partition id: base32(sha256) over the canonical identity key
+ * The partition id: the 26-character hash of the canonical identity key
  * (`replicationIdentityKey`: host, space and lower-cased principal), the
- * prefix and the device principal (any `#fragment` dropped), first 26
- * characters — the same hashing the Node adapter uses for its directories.
+ * prefix and the device principal (any `#fragment` dropped).
  */
 export function partitionIdOf(input: { identity: ReplicationIdentity; prefix: string; deviceDid: string }): string {
-  const material = `${replicationIdentityKey(input.identity)}\n${input.prefix}\n${principalOf(input.deviceDid)}`;
-  const digest = sha256(new TextEncoder().encode(material));
-  let out = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of digest) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32[(buffer >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  return out.slice(0, 26);
+  return hash26(`${replicationIdentityKey(input.identity)}\n${input.prefix}\n${principalOf(input.deviceDid)}`);
 }
 
 /** The partition-scoped key layout `IndexedDbReplicaStore` runs over. */
@@ -137,10 +132,11 @@ export function kvLayout(partitionId: string): ReplicaStoreLayout {
     readScope: READ_SCOPE,
     writeScope: WRITE_SCOPE,
     metaKey: partitionId,
+    outOfLineKeys: true,
     entryKey: (key) => [partitionId, key],
     blobKey: (hash) => [partitionId, hash],
     blobHashOf: (key) => (Array.isArray(key) && key[0] === partitionId && typeof key[1] === "string" ? key[1] : undefined),
-    // Arrays sort after every string, so [pid, []] bounds every [pid, <string|number>].
+    // Arrays sort after every string and number, so [pid, []] bounds every [pid, <string|number>].
     range: IDBKeyRange.bound([partitionId], [partitionId, []]),
     tag: { pid: partitionId },
     blobSizeIndex: "bySize",
@@ -148,11 +144,19 @@ export function kvLayout(partitionId: string): ReplicaStoreLayout {
 }
 
 /**
- * Erase one partition inside `tx` (scope {@link ERASE_STORES}): entries and
- * blobs are deleted and the state row — config, grant, authority, cursor —
- * becomes a contentless tombstone that fences every handle opened before
- * it. Returns the blob bytes removed, for the quota ledger.
+ * The erase seam the lifecycle gate drives (`ReplicaPartitionEraser`). Both
+ * run inside the caller's transaction (scope {@link ERASE_STORES} plus the
+ * gate's and ledger's stores), which also clears the intent and releases quota.
+ *
+ * `erasePartition`: entries and blobs are deleted and the state row —
+ * config, grant, authority, cursor — becomes a contentless tombstone that
+ * fences every handle opened before it. Returns the blob bytes released.
  */
-export function erasePartition(tx: IDBTransaction, partitionId: string): Promise<{ blobBytes: number }> {
-  return eraseReplicaRows(tx, kvLayout(partitionId));
-}
+export const kvPartitionEraser: ReplicaPartitionEraser<IDBTransaction> = {
+  async erasePartition(tx, partitionId) {
+    return { bytes: (await eraseReplicaRows(tx, kvLayout(partitionId))).blobBytes };
+  },
+  async eraseIdentityPending(tx, identityKey) {
+    tx.objectStore(KV_STORE.pending).delete(identityKeyHash(identityKey));
+  },
+};

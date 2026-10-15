@@ -58,6 +58,12 @@ export const ReplicaErrorCode = {
   INTEGRITY_ERROR: "INTEGRITY_ERROR",
   /** The replica handle was closed; in-flight calls settle with this code. */
   CLOSED: "REPLICA_CLOSED",
+  /** The lifecycle gate refused the operation (shared contract `REPLICA_GATED`); `detail.gate` says why. */
+  GATED: "REPLICA_GATED",
+  /** Quota admission refused a page (`maxBytes` or the free-space floor); nothing committed. */
+  STORAGE_BUDGET: "STORAGE_BUDGET",
+  /** The consent deadline passed: the grant is not served until the user consents again. */
+  CONSENT_EXPIRED: "CONSENT_EXPIRED",
 } as const;
 
 export type ReplicaErrorCode = (typeof ReplicaErrorCode)[keyof typeof ReplicaErrorCode];

@@ -36,6 +36,7 @@ import type {
 } from "../types.js";
 import { compareKeyBytes, idbError, openDatabase, requestAsPromise, transactionDone } from "./idb.js";
 import { principalOf } from "../did.js";
+import type { ReplicaQuotaLedger } from "@tinycloud/sdk-services/kv/replication";
 
 export const DURABILITY = "indexeddb-strict";
 
@@ -113,59 +114,55 @@ type BlobRecord = { hash: string; bytes: Uint8Array; size: number };
  * control stores so lifecycle and quota checks commit with it.
  */
 export type ReplicaStoreLayout = {
-  /** The partition id, or null for the RC1 database-per-replica layout. */
-  readonly partitionId: string | null;
+  /** The partition id (the RC1 layout uses its replica id). */
+  readonly partitionId: string;
   /** Extra stores every read transaction spans (the lifecycle gate). */
   readonly readScope: readonly string[];
-  /** Extra stores every write transaction spans (gate, partition index, quota ledger). */
+  /** Extra stores every write transaction spans (gate, partition index, purge intents, quota ledger). */
   readonly writeScope: readonly string[];
   readonly metaKey: IDBValidKey;
+  /** True when `entries`/`blobs` take out-of-line keys (`put(record, key)`); RC1 keys inline. */
+  readonly outOfLineKeys: boolean;
   entryKey(key: string): IDBValidKey;
   blobKey(hash: string): IDBValidKey;
   /** The hash a `blobs` primary key names. */
   blobHashOf(key: IDBValidKey): string | undefined;
   /** Every row of this replica in `entries`, `blobs` and their indexes; null = the whole store. */
   readonly range: IDBKeyRange | null;
-  /** Fields stamped on every `entries`/`blobs` record (the partition id). */
+  /** Fields stamped on every `entries`/`blobs` record (the partition id, for the indexes). */
   readonly tag: Readonly<Record<string, string>>;
   /** The `blobs` index keyed by `[…, size]`, when the layout keeps one (byte accounting). */
   readonly blobSizeIndex: string | null;
 };
 
-export const RC1_LAYOUT: ReplicaStoreLayout = {
-  partitionId: null,
-  readScope: [],
-  writeScope: [],
-  metaKey: "state",
-  entryKey: (key) => key,
-  blobKey: (hash) => hash,
-  blobHashOf: (key) => (typeof key === "string" ? key : undefined),
-  range: null,
-  tag: {},
-  blobSizeIndex: null,
-};
+/** The RC1 layout: one database per replica, inline keys, no control stores. */
+export function rc1Layout(replicaId: string): ReplicaStoreLayout {
+  return {
+    partitionId: replicaId,
+    readScope: [],
+    writeScope: [],
+    metaKey: "state",
+    outOfLineKeys: false,
+    entryKey: (key) => key,
+    blobKey: (hash) => hash,
+    blobHashOf: (key) => (typeof key === "string" ? key : undefined),
+    range: null,
+    tag: {},
+    blobSizeIndex: null,
+  };
+}
 
 /**
- * Seams other layers plug into this store's transactions. Every hook runs
- * inside the transaction it is given and may await only IndexedDB requests
- * issued on that transaction — any other await lets it auto-commit.
+ * Seams other layers plug into this store's transactions: the quota ledger
+ * (`ReplicaQuotaLedger`) and the lifecycle gate, bound to one handle. Every
+ * hook runs inside the transaction it is given and may await only
+ * IndexedDB requests issued on it — any other await lets it auto-commit.
  */
-export type ReplicaStoreHooks = {
+export type ReplicaStoreHooks = Partial<ReplicaQuotaLedger<IDBTransaction>> & {
   /** First request of every transaction; rejecting aborts it and returns no data. */
   assert?(tx: IDBTransaction): Promise<void>;
   /** In the transaction that creates the replica's state row. */
-  registerPartition?(tx: IDBTransaction, info: { partitionId: string | null }): Promise<void>;
-  /** Before a page transaction opens: the free bytes the browser reports, if known. */
-  freeBytes?(): Promise<number | null>;
-  /** In the page transaction, after sizes resolve and before any write; throw to refuse the page. */
-  admitPage?(
-    tx: IDBTransaction,
-    page: { partitionId: string | null; blobBytes: number; entries: number; freeBytes: number | null },
-  ): Promise<void>;
-  /** In the page transaction, after its writes: blob bytes the page added. */
-  accountCommit?(tx: IDBTransaction, commit: { partitionId: string | null; deltaBytes: number }): Promise<void>;
-  /** In every transaction that removes blobs: the bytes it removed. */
-  accountErase?(tx: IDBTransaction, erase: { partitionId: string | null; bytes: number }): Promise<void>;
+  indexPartition?(tx: IDBTransaction): Promise<void>;
 };
 
 export function replicaDatabaseName(replicaId: string): string {
@@ -335,7 +332,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     const store = new IndexedDbReplicaStore(db, {
       holder: options.holder,
       now: options.now ?? Date.now,
-      layout: RC1_LAYOUT,
+      layout: rc1Layout(replicaId),
       hooks: {},
       ownsDb: true,
     });
@@ -546,7 +543,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
               );
             }
             const next = existing.generation + 1;
-            await this.#hooks.registerPartition?.(tx, { partitionId: this.#layout.partitionId });
+            await this.#hooks.indexPartition?.(tx);
             this.#putMeta(tx, this.#freshMeta(c, next));
             return next;
           }
@@ -576,7 +573,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
           if (same) return existing.generation;
           throw new ReplicaError(ReplicaErrorCode.CONFIG_MISMATCH, `Replica ${c.name} already exists.`);
         }
-        await this.#hooks.registerPartition?.(tx, { partitionId: this.#layout.partitionId });
+        await this.#hooks.indexPartition?.(tx);
         this.#putMeta(tx, this.#freshMeta(c, 0));
         return 0;
       },
@@ -825,23 +822,25 @@ export class IndexedDbReplicaStore implements ReplicaStore {
       await this.#hooks.admitPage?.(tx, { partitionId: layout.partitionId, blobBytes, entries: p.changes.length, freeBytes });
 
       for (const [hash, bytes] of p.blobs) {
-        blobs.put({ ...layout.tag, hash, bytes, size: bytes.length } satisfies BlobRecord);
+        const record = { ...layout.tag, hash, bytes, size: bytes.length } satisfies BlobRecord;
+        if (layout.outOfLineKeys) blobs.put(record, layout.blobKey(hash));
+        else blobs.put(record);
       }
       for (const change of p.changes) {
-        if (change.deleted) {
-          entries.put({ ...layout.tag, key: change.key, deleted: true } satisfies EntryRecord);
-          continue;
-        }
-        entries.put({
-          ...layout.tag,
-          key: change.key,
-          deleted: false,
-          etag: change.etag,
-          hash: change.hash,
-          metadata: change.metadata,
-          content: change.content,
-          size: change.content ? (sizes.get(change.hash) ?? null) : null,
-        } satisfies EntryRecord);
+        const record: EntryRecord = change.deleted
+          ? { ...layout.tag, key: change.key, deleted: true }
+          : {
+              ...layout.tag,
+              key: change.key,
+              deleted: false,
+              etag: change.etag,
+              hash: change.hash,
+              metadata: change.metadata,
+              content: change.content,
+              size: change.content ? (sizes.get(change.hash) ?? null) : null,
+            };
+        if (layout.outOfLineKeys) entries.put(record, layout.entryKey(change.key));
+        else entries.put(record);
       }
       await this.#hooks.accountCommit?.(tx, { partitionId: layout.partitionId, deltaBytes: blobBytes });
       state.cursor = p.cursor;

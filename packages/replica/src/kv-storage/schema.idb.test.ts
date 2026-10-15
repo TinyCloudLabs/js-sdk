@@ -12,7 +12,7 @@ import { Replica } from "../engine.js";
 import { isReplicaError, ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
 import { IndexedDbReplicaStore, type ReplicaStoreHooks } from "../browser/store.js";
-import { ERASE_STORES, KV_DATABASE, KV_STORE, erasePartition, kvLayout, openKvDatabase, partitionIdOf } from "./schema.js";
+import { ERASE_STORES, KV_DATABASE, KV_STORE, kvLayout, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
 
 beforeAll(() => {
   (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
@@ -139,7 +139,7 @@ describe("the origin database", () => {
     expect(await rowsOf(KV_STORE.blobs, three.id)).toBe(1);
   });
 
-  test("erasePartition leaves a contentless tombstone that fences open handles", async () => {
+  test("kvPartitionEraser.erasePartition leaves a contentless tombstone that fences open handles", async () => {
     const one = await partition();
     const keep = await partition();
     const node = new FakeNode();
@@ -150,9 +150,9 @@ describe("the origin database", () => {
     const db = (await openKvDatabase({ create: false }))!;
     const tx = db.transaction([...ERASE_STORES], "readwrite");
     const done = transactionDone(tx);
-    const { blobBytes } = await erasePartition(tx, one.id);
+    const { bytes } = await kvPartitionEraser.erasePartition(tx, one.id);
     await done;
-    expect(blobBytes).toBe("secret-ish".length);
+    expect(bytes).toBe("secret-ish".length);
     const meta = await requestAsPromise<Record<string, unknown>>(db.transaction(KV_STORE.meta).objectStore(KV_STORE.meta).get(one.id));
     db.close();
     expect(Object.keys(meta).sort()).toEqual(["generation", "purgePending", "purged", "writerEpoch"]);
@@ -172,7 +172,7 @@ describe("transaction seams", () => {
       async assert(tx) {
         calls += 1;
         expect([...tx.objectStoreNames]).toContain(KV_STORE.gate);
-        await requestAsPromise(tx.objectStore(KV_STORE.gate).get("gate"));
+        await requestAsPromise(tx.objectStore(KV_STORE.gate).get("account"));
         if (refuse) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "gate refused");
       },
     };
@@ -189,17 +189,17 @@ describe("transaction seams", () => {
     expect((await new Replica({ store }).get("notes/b")).status).toBe("absent");
   });
 
-  test("registerPartition runs in the transaction that creates the state row", async () => {
-    const seen: Array<string | null> = [];
+  test("indexPartition runs in the transaction that creates the state row", async () => {
+    let indexed = 0;
     await partition({
       hooks: {
-        async registerPartition(tx, info) {
+        async indexPartition(tx) {
           expect([...tx.objectStoreNames]).toContain(KV_STORE.partitions);
-          seen.push(info.partitionId);
+          indexed += 1;
         },
       },
     });
-    expect(seen).toEqual([`p${sequence}`]);
+    expect(indexed).toBe(1);
   });
 
   test("the ledger hooks see exactly the bytes committed and erased", async () => {

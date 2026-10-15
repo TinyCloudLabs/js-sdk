@@ -9,8 +9,8 @@ import { replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
 
 import { SPACE } from "../../test/fixtures.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
-import { KV_DATABASE, KV_STORE, openKvDatabase } from "./schema.js";
-import { IndexedDbPendingWriteStore, eraseIdentityPending } from "./pending.js";
+import { KV_DATABASE, KV_STORE, identityKeyHash, kvPartitionEraser, openKvDatabase } from "./schema.js";
+import { IndexedDbPendingWriteStore } from "./pending.js";
 
 beforeAll(() => {
   (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
@@ -120,8 +120,8 @@ describe("IndexedDB pending-write store", () => {
   test("a record belonging to another identity is STORAGE_ERROR, never shared", async () => {
     const id = identity();
     const db = (await openKvDatabase({ create: true }))!;
-    const tx = db.transaction(KV_STORE.pendingWrites, "readwrite");
-    tx.objectStore(KV_STORE.pendingWrites).put({ v: 2, identity: identity(), committedEpoch: 0, seq: 0, records: [] }, replicationIdentityKey(id));
+    const tx = db.transaction(KV_STORE.pending, "readwrite");
+    tx.objectStore(KV_STORE.pending).put({ v: 2, identity: identity(), committedEpoch: 0, seq: 0, records: [] }, identityKeyHash(replicationIdentityKey(id)));
     await transactionDone(tx);
     db.close();
     await expect(new IndexedDbPendingWriteStore(id, { locks: sharedLocks().locks }).read()).rejects.toMatchObject({ code: "STORAGE_ERROR" });
@@ -136,15 +136,15 @@ describe("IndexedDB pending-write store", () => {
     expect((await store.readExisting())?.seq).toBe(2);
   });
 
-  test("eraseIdentityPending removes one identity's record in the caller's transaction", async () => {
+  test("kvPartitionEraser.eraseIdentityPending removes one identity's record in the caller's transaction", async () => {
     const { locks } = sharedLocks();
     const a = identity();
     const b = identity();
     await new IndexedDbPendingWriteStore(a, { locks }).update((state) => void (state.seq = 1));
     await new IndexedDbPendingWriteStore(b, { locks }).update((state) => void (state.seq = 1));
     const db = (await openKvDatabase({ create: false }))!;
-    const tx = db.transaction(KV_STORE.pendingWrites, "readwrite");
-    eraseIdentityPending(tx, replicationIdentityKey(a));
+    const tx = db.transaction(KV_STORE.pending, "readwrite");
+    await kvPartitionEraser.eraseIdentityPending(tx, replicationIdentityKey(a));
     await transactionDone(tx);
     db.close();
     expect(await new IndexedDbPendingWriteStore(a, { locks }).readExisting()).toBeUndefined();
