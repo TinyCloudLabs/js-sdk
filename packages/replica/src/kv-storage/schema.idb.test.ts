@@ -161,26 +161,39 @@ describe("the origin database", () => {
 });
 
 describe("transaction seams", () => {
-  test("assert runs first in every transaction and a refusal returns no data", async () => {
+  test("with a gate, run opens every transaction, checks first, and a refusal returns and commits nothing", async () => {
     let refuse = false;
     let calls = 0;
+    let db: IDBDatabase | undefined;
     const hooks: ReplicaStoreHooks = {
-      async assert(tx) {
+      async run(stores, mode, fn) {
         calls += 1;
-        expect(Array.from(tx.objectStoreNames)).toContain(KV_STORE.gate);
+        // A gate in the shape of ReplicaGateTx.run: it opens the transaction with its
+        // control stores, checks first, then runs the body and resolves after the commit.
+        const tx = db!.transaction([...stores, KV_STORE.gate], mode);
+        const done = transactionDone(tx);
         await requestAsPromise(tx.objectStore(KV_STORE.gate).get("account"));
-        if (refuse) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "gate refused");
+        if (refuse) {
+          tx.abort();
+          await done.catch(() => undefined);
+          throw Object.assign(new Error("gated"), { code: "REPLICA_GATED", gate: "stamp_stale" });
+        }
+        const result = await fn(tx);
+        await done;
+        return result;
       },
     };
+    db = (await openKvDatabase({ create: true }))!;
     const { store } = await partition({ hooks });
     const node = new FakeNode();
     node.put("notes/a", "one");
     await new Replica({ store, transport: node }).sync();
     expect(calls).toBeGreaterThan(5);
     refuse = true;
-    expect(await codeOf(new Replica({ store }).get("notes/a"))).toBe(ReplicaErrorCode.STORAGE_ERROR);
+    const refusal = new Replica({ store }).get("notes/a").catch((error: unknown) => error);
+    expect(await refusal).toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
     node.put("notes/b", "two");
-    expect(await codeOf(new Replica({ store, transport: node }).sync())).toBe(ReplicaErrorCode.STORAGE_ERROR);
+    expect(await new Replica({ store, transport: node }).sync().catch((error: unknown) => error)).toMatchObject({ code: "REPLICA_GATED" });
     refuse = false;
     expect((await new Replica({ store }).get("notes/b")).status).toBe("absent");
   });

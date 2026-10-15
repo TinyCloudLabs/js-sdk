@@ -8,10 +8,10 @@
  */
 import { ed25519 } from "@noble/curves/ed25519";
 
-import { createKvWorkerHost } from "../../../src/kv-storage/host.ts";
-import type { KvRequest } from "../../../src/kv-storage/protocol.ts";
-import { ReplicaError } from "../../../src/errors.ts";
-import type { FetchedContent, ReplicaTransport, SyncPage } from "../../../src/types.ts";
+import { createKvWorkerHost } from "../../../src/kv-storage/host.js";
+import type { KvRequest } from "../../../src/kv-storage/protocol.js";
+import { ReplicaError } from "../../../src/errors.js";
+import type { FetchedContent, ReplicaTransport, SyncPage } from "../../../src/types.js";
 
 const scope = self as unknown as {
   postMessage(message: unknown, transfer?: Transferable[]): void;

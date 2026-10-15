@@ -17,6 +17,7 @@ import type {
   LocalReadMeta,
   LocalSyncResult,
   ReplicaDevice,
+  ReplicaGateScope,
   ReplicaGateTx,
   ReplicaGrantInfo,
   ReplicaPeerCommit,
@@ -184,16 +185,8 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
       ...(gate === undefined || stamp === undefined
         ? {}
         : {
-            assert: (tx) => gate.assert(tx, { stamp, principal: identity.principal, partitionId }),
-            indexPartition: (tx) =>
-              gate.indexPartition(tx, {
-                partitionId,
-                identityKeyHash: identityKeyHash(replicationIdentityKey(identity)),
-                principal: identity.principal,
-                prefix: spec.prefix,
-                deviceDid: principalOf(device.did),
-                createdAt: now(),
-              }),
+            run: (stores, mode, fn) =>
+              gate.run({ stores: stores as ReplicaGateScope["stores"], mode: mode === "readwrite" ? "readwrite" : "readonly" }, { stamp, principal: identity.principal, partitionId }, fn),
           }),
     };
     const store = await IndexedDbReplicaStore.openIn(connection, { holder, layout: kvLayout(partitionId), hooks, now });

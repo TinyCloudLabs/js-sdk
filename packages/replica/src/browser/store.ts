@@ -154,13 +154,19 @@ export function rc1Layout(replicaId: string): ReplicaStoreLayout {
 
 /**
  * Seams other layers plug into this store's transactions: the quota ledger
- * (`ReplicaQuotaLedger`) and the lifecycle gate, bound to one handle. Every
- * hook runs inside the transaction it is given and may await only
- * IndexedDB requests issued on it — any other await lets it auto-commit.
+ * (`ReplicaQuotaLedger`) and the lifecycle gate (`ReplicaGateTx.run`), bound
+ * to one handle. Every hook runs inside the transaction it is given and may
+ * await only IndexedDB requests issued on it — any other await lets it
+ * auto-commit.
  */
 export type ReplicaStoreHooks = Partial<ReplicaQuotaLedger<IDBTransaction>> & {
-  /** First request of every transaction; rejecting aborts it and returns no data. */
-  assert?(tx: IDBTransaction): Promise<void>;
+  /**
+   * Open every transaction through the gate: it opens `stores` plus its
+   * control stores in `mode`, asserts the handle's access first, then runs
+   * `fn`, aborting the transaction on any rejection. Without it the store
+   * opens its own transactions over the layout's scope.
+   */
+  run?<T>(stores: readonly string[], mode: IDBTransactionMode, fn: (tx: IDBTransaction) => Promise<T>): Promise<T>;
   /** In the transaction that creates the replica's state row. */
   indexPartition?(tx: IDBTransaction): Promise<void>;
 };
@@ -373,14 +379,14 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     try {
       // Record the durable generation first — it is the fence every later
       // transaction runs against — then finish a torn revocation purge.
-      const { state } = await this.#beginRead([], "Opening the replica");
+      const state = await this.#transact("readonly", [], "Opening the replica", async (_tx, row) => row, { skipFence: true });
       this.#generation = state?.generation ?? 0;
       if (options.finishPurge) await this.finishPurgeIfPending();
     } catch (error) {
       // Any failure closes an owned connection — an open error never leaks
-      // a db — and surfaces as STORAGE_ERROR like every other IndexedDB failure.
+      // a db. #transact already mapped it (gate refusals keep their code).
       if (this.#ownsDb) this.#db.close();
-      throw idbError(error, "Opening the replica");
+      throw error;
     }
   }
 
@@ -402,78 +408,79 @@ export class IndexedDbReplicaStore implements ReplicaStore {
   }
 
   /**
-   * Open a read transaction over `stores` plus `meta` and the layout's
-   * read scope, run the `assert` hook as its first request, then read the
-   * state row. The caller fences on the row it gets back.
+   * One transaction over `stores` plus `meta`. With a gate (`hooks.run`) the
+   * gate opens it — adding its control stores and asserting the handle's
+   * access before anything else; otherwise this store opens it over the
+   * layout's scope. Inside, the state row is read and, unless `skipFence`,
+   * fenced against this store's generation before `body` runs. `body` may
+   * only await IDB requests issued on `tx`. Write transactions use `strict`
+   * durability and settle after the commit; any failure aborts them.
+   * `skipFence` is for `init` and the open-time reads, which handle the
+   * tombstone and generation themselves.
    */
-  async #beginRead(stores: readonly string[], action: string): Promise<{ tx: IDBTransaction; state: MetaState | undefined }> {
-    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
-    let tx: IDBTransaction;
-    try {
-      tx = this.#db.transaction([...new Set([STORE_META, ...stores, ...this.#layout.readScope])], "readonly");
-    } catch (error) {
-      throw idbError(error, action);
-    }
-    return { tx, state: await this.#gatedMeta(tx) };
-  }
-
-  /** The `assert` hook (when set), then the state row — both on `tx`. */
-  async #gatedMeta(tx: IDBTransaction): Promise<MetaState | undefined> {
-    await this.#hooks.assert?.(tx);
-    return requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get(this.#layout.metaKey));
-  }
-
-  /**
-   * A read transaction. `meta` is always in scope and its row is checked
-   * against this store's generation inside the transaction before `body`
-   * (which receives the already-read meta row) runs.
-   */
-  async #readTx<T>(stores: readonly string[], body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>): Promise<T> {
-    const { tx, state } = await this.#beginRead(stores, "Reading the replica");
-    this.#assertLive(state);
-    return body(tx, state);
-  }
-
-  /**
-   * A write transaction with `strict` durability — the `assert` hook and
-   * `meta` first, the generation fence inside the transaction, then `body`
-   * (which receives the already-read meta row). `body` may only await IDB
-   * requests issued on `tx`; the returned promise settles after the writes,
-   * and `transactionDone` settles after the commit. `skipFence` is for
-   * `init`: it checks the marker and generation itself because a purge
-   * marker belonging to this store's generation is the
-   * reinitialize-in-place case.
-   */
-  async #writeTx<T>(
+  async #transact<T>(
+    mode: IDBTransactionMode,
     stores: readonly string[],
     action: string,
     body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>,
     options: { skipFence?: boolean } = {},
   ): Promise<T> {
     if (this.#closed) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica store is closed.");
-    const scope = new Set([STORE_META, ...stores, ...this.#layout.writeScope]);
+    // Errors that already carry a contract code (gate refusals, quota) pass through unchanged.
+    const mapped = (error: unknown): unknown =>
+      typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error : idbError(error, action);
+    const data = [...new Set([STORE_META, ...stores])];
+    const execute = async (tx: IDBTransaction): Promise<T> => {
+      const done = mode === "readwrite" ? transactionDone(tx) : undefined;
+      try {
+        const state = await requestAsPromise<MetaState | undefined>(tx.objectStore(STORE_META).get(this.#layout.metaKey));
+        if (options.skipFence !== true) this.#assertLive(state);
+        const result = await body(tx, state);
+        await done;
+        return result;
+      } catch (error) {
+        if (done !== undefined) {
+          try {
+            tx.abort();
+          } catch {
+            // already finished
+          }
+          await done.catch(() => undefined);
+        }
+        throw mapped(error);
+      }
+    };
+    const run = this.#hooks.run;
+    if (run !== undefined) {
+      try {
+        return await run(data, mode, execute);
+      } catch (error) {
+        throw mapped(error);
+      }
+    }
     let tx: IDBTransaction;
     try {
-      tx = this.#db.transaction([...scope], "readwrite", { durability: "strict" });
+      const scope = [...new Set([...data, ...(mode === "readonly" ? this.#layout.readScope : this.#layout.writeScope)])];
+      tx = mode === "readonly" ? this.#db.transaction(scope, mode) : this.#db.transaction(scope, mode, { durability: "strict" });
     } catch (error) {
       throw idbError(error, action);
     }
-    const done = transactionDone(tx);
-    try {
-      const state = await this.#gatedMeta(tx);
-      if (options.skipFence !== true) this.#assertLive(state);
-      const result = await body(tx, state);
-      await done;
-      return result;
-    } catch (error) {
-      try {
-        tx.abort();
-      } catch {
-        // already finished
-      }
-      await done.catch(() => undefined);
-      throw idbError(error, action);
-    }
+    return execute(tx);
+  }
+
+  /** A fenced read transaction; `body` receives the already-read state row. */
+  #readTx<T>(stores: readonly string[], body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>): Promise<T> {
+    return this.#transact("readonly", stores, "Reading the replica", body);
+  }
+
+  /** A fenced write transaction (`skipFence` for `init`); `body` receives the already-read state row. */
+  #writeTx<T>(
+    stores: readonly string[],
+    action: string,
+    body: (tx: IDBTransaction, state: MetaState | undefined) => Promise<T>,
+    options: { skipFence?: boolean } = {},
+  ): Promise<T> {
+    return this.#transact("readwrite", stores, action, body, options);
   }
 
   #requireMeta(state: MetaState | undefined): LiveMetaState {
@@ -498,7 +505,7 @@ export class IndexedDbReplicaStore implements ReplicaStore {
     // reopen that moved the generation on is RESET_REQUIRED — but the
     // tombstone itself is read rather than fenced, because open()'s null is
     // the not-created signal init needs to reinitialize the database.
-    const { state } = await this.#beginRead([], "Reading the replica");
+    const state = await this.#transact("readonly", [], "Reading the replica", async (_tx, row) => row, { skipFence: true });
     if (state !== undefined && state.generation !== this.#generation) {
       throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was purged or reopened; open it again to continue.");
     }
