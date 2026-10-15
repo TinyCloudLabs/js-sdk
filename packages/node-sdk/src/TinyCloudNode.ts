@@ -35,13 +35,13 @@ import { generateNonce, SiweMessage } from "siwe";
 
 import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
-import type { ReplicaGateReason } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
   TinyCloud,
   checkNodeInfo,
-  VersionCheckError,
+  ProtocolMismatchError,
   TinyCloudSession,
   activateSessionWithHost,
   authorizationVerdictOf,
@@ -878,11 +878,17 @@ export interface TinyCloudNodeConfig {
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
   /**
-   * Optional read-through replica configuration; disabled unless explicitly enabled. `profileDir`
-   * holds `replica-gate.json`: required when enabled; restore refuses with `REPLICA_GATED`
-   * (`gate_unavailable`) when absent.
+   * Optional read-through replica configuration; disabled unless explicitly enabled.
+   * Node profile mutations require `profileDir` and a caller-supplied `profileGuard` holding
+   * the same cross-process profile lock as SQLite and pending writes. Browser storage uses
+   * its mandatory origin Web Lock instead. Missing guards gate the replica, not the session.
    */
-  replication?: ReplicationOptions & { storage: KVReplicaStorage; mode?: "background" | "foreground"; profileDir?: string };
+  replication?: ReplicationOptions & {
+    storage: KVReplicaStorage;
+    mode?: "background" | "foreground";
+    profileDir?: string;
+    profileGuard?: <T>(section: () => Promise<T>) => Promise<T>;
+  };
 }
 
 /**
@@ -1222,6 +1228,8 @@ export class TinyCloudNode {
   private replicationDelegateSession?: Pick<TinyCloudSession, "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk">;
   private replicationScopeError?: string;
   private replicaRestoreGate?: ReplicaGateReason;
+  private replicaSessionPrincipal?: string;
+  private replicaSessionStamp?: ReplicaSessionStamp;
   /** Mints the replica session stamp on each fresh sign-in (TC-858 §4.1). Undefined when replication is off. */
   private readonly establishReplicaStamp = async (input: {
     address: string;
@@ -1230,27 +1238,44 @@ export class TinyCloudNode {
   }) => {
     const replication = this.config.replication;
     if (!replication?.enabled) return undefined;
-    const issuedAtMs = Date.parse(input.siweIssuedAt);
-    if (!Number.isSafeInteger(issuedAtMs) || issuedAtMs < 0) {
-      throw Object.assign(new Error("Replica sign-in requires a verified finite SIWE issued-at time."), {
+    const epoch = this.sessionEpoch;
+    const attempt = this.latestSessionAttempt;
+    try {
+      const issuedAtMs = Date.parse(input.siweIssuedAt);
+      if (!Number.isSafeInteger(issuedAtMs) || issuedAtMs < 0) {
+        throw Object.assign(new Error("Replica sign-in requires a verified finite SIWE issued-at time."), {
+          code: "REPLICA_GATED" as const,
+          gate: "not_established" as const,
+        });
+      }
+      const principal = pkhDid(input.address, input.chainId);
+      if (replication.storage.kind === "indexeddb" && replication.storage.lifecycle?.kind === "indexeddb") {
+        const stamp = await replication.storage.lifecycle.establishSessionStamp(principal, {
+          consentAnchor: { source: "siwe", at: issuedAtMs },
+        });
+        if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
+        this.replicaSessionStamp = stamp;
+        return stamp;
+      }
+      if (replication.storage.kind === "sqlite" && replication.profileDir && replication.profileGuard) {
+        const gate = await getNodeReplicationLoaders().gate();
+        const stamp = await replication.profileGuard(() =>
+          gate.establishSessionStamp(replication.profileDir!, principal, { siweIssuedAt: issuedAtMs }));
+        if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt) return undefined;
+        this.replicaSessionStamp = stamp;
+        return stamp;
+      }
+      throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
         code: "REPLICA_GATED" as const,
-        gate: "not_established" as const,
+        gate: "gate_unavailable" as const,
       });
+    } catch (error) {
+      // A refused local replica must not cancel the independently verified network sign-in.
+      if (epoch === this.sessionEpoch && attempt === this.latestSessionAttempt) {
+        this.replicaRestoreGate = replicaRestoreRefusal(error);
+      }
+      return undefined;
     }
-    const principal = pkhDid(input.address, input.chainId);
-    if (replication.storage.kind === "indexeddb" && replication.storage.lifecycle?.kind === "indexeddb") {
-      return replication.storage.lifecycle.establishSessionStamp(principal, {
-        consentAnchor: { source: "siwe", at: issuedAtMs },
-      });
-    }
-    if (replication.storage.kind === "sqlite" && replication.profileDir) {
-      const gate = await getNodeReplicationLoaders().gate();
-      return gate.establishSessionStamp(replication.profileDir, principal, { siweIssuedAt: issuedAtMs });
-    }
-    throw Object.assign(new Error("Replica sign-in requires its platform lifecycle gate."), {
-      code: "REPLICA_GATED" as const,
-      gate: "gate_unavailable" as const,
-    });
   };
   private readonly replicationControl?: ReplicationControl;
   private _sql?: SQLService;
@@ -2120,19 +2145,24 @@ export class TinyCloudNode {
   private async endSession(): Promise<void> {
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
     const leavingChainId = this._chainId;
+    const leavingPrincipal = this.replicaSessionPrincipal
+      ?? (leavingAddress ? pkhDid(leavingAddress, leavingChainId) : undefined);
     this.teardownSession();
+    // Browser denial clears this tab's cached delivery permission synchronously,
+    // before waiting on account-registry work or worker shutdown.
+    const denial = leavingPrincipal
+      ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal })
+      : Promise.resolve(undefined);
     let denied: { status: string; code?: string } | undefined;
     try {
       await this.accountRegistryTail;
-      if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
+      await this.quiesceReplicaRuntime();
     } finally {
-      if (leavingAddress) {
-        denied = await this.denyReplicaGate(leavingAddress, leavingChainId);
-        await this.clearPersistedSessionFor(leavingAddress);
-      }
+      denied = await denial;
+      if (leavingAddress) await this.clearPersistedSessionFor(leavingAddress);
     }
     if (denied?.status === "unguarded") {
-      throw new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the profile may still be restorable.`);
+      throw new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`);
     }
   }
 
@@ -2140,17 +2170,20 @@ export class TinyCloudNode {
    * Step 1 of replica sign-out. Never rejects: failures come back as `unguarded` so the session
    * is still cleared. Returns `undefined` when replication is off.
    */
-  private async denyReplicaGate(
-    address: string,
-    chainId: number,
-  ): Promise<{ status: string; code?: string } | undefined> {
-    const profileDir = this.config.replication?.profileDir;
-    if (!this.config.replication?.enabled || !profileDir) return undefined;
+  private async denyReplicaGate(input: ReplicaDenyInput): Promise<{ status: string; code?: string } | undefined> {
+    const replication = this.config.replication;
+    if (!replication?.enabled) return undefined;
     try {
+      if (replication.storage.kind === "indexeddb") {
+        const lifecycle = replication.storage.lifecycle;
+        if (lifecycle?.kind !== "indexeddb") return { status: "unguarded", code: "gate_unavailable" };
+        return await lifecycle.deny(input);
+      }
+      if (!replication.profileDir || !replication.profileGuard) return { status: "unguarded", code: "gate_unavailable" };
       const gate = await getNodeReplicationLoaders().gate();
-      // Node profile replicas are erased by the CLI before clear. The node keeps no partition index
-      // of its own, so it reports no intents here.
-      return await gate.denyGate(profileDir, { reason: "sign_out", principal: pkhDid(address, chainId) }, async () => []);
+      // The caller's profile lock spans the gate write and its pending-intent snapshot.
+      return await replication.profileGuard(() =>
+        gate.denyGate(replication.profileDir!, input, async () => []));
     } catch (error) {
       const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
         ? error.code
@@ -2207,6 +2240,8 @@ export class TinyCloudNode {
     this._bootstrapStatus = { skipped: false };
     this.replicationDelegateSession = undefined;
     this.replicationScopeError = undefined;
+    this.replicaSessionPrincipal = undefined;
+    this.replicaSessionStamp = undefined;
     this.replicaRestoreGate = undefined;
     this._serviceGraph = this.createServiceGraphLifetime();
     oldGraph.retire();
@@ -2285,6 +2320,13 @@ export class TinyCloudNode {
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
     this.assertSessionEpoch(epoch, "Sign-in");
+    const nextPrincipal = pkhDid(address, chainId);
+    const priorPrincipal = this.replicaSessionPrincipal
+      ?? (this.address ? pkhDid(this.address, this._chainId) : undefined);
+    if (this.config.replication?.enabled && priorPrincipal && priorPrincipal !== nextPrincipal) {
+      const denial = await this.denyReplicaGate({ reason: "account_switch", principal: priorPrincipal, next: nextPrincipal });
+      this.replicaRestoreGate = denial?.status === "unguarded" ? "gate_unavailable" : "stamp_stale";
+    }
     // Storage is one budget per account: another account starts with no known rejection.
     if (address !== this._address || chainId !== this._chainId) this.storageFull.clear();
     this._address = address;
@@ -2306,7 +2348,20 @@ export class TinyCloudNode {
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
 
-    await this.tc.signIn(options);
+    const signInAttempt = this.latestSessionAttempt;
+    const previousReplicaGate = this.replicaRestoreGate;
+    const previousReplicaStamp = this.replicaSessionStamp;
+    this.replicaRestoreGate = undefined;
+    this.replicaSessionStamp = undefined;
+    try {
+      await this.tc.signIn(options);
+    } catch (error) {
+      if (epoch === this.sessionEpoch && signInAttempt === this.latestSessionAttempt) {
+        this.replicaRestoreGate = previousReplicaGate;
+        this.replicaSessionStamp = previousReplicaStamp;
+      }
+      throw error;
+    }
     this.assertSessionEpoch(epoch, "Sign-in");
     this.cancelOwnedSpaceHosts();
     this.syncResolvedHostFromAuth();
@@ -2320,9 +2375,10 @@ export class TinyCloudNode {
     // session. The authorization flow above remains transactional: a rejected
     // sign-in leaves the existing graph untouched.
     this.replicationDelegateSession = undefined;
+    this.replicaSessionPrincipal = pkhDid(address, chainId);
     this.replicationScopeError = undefined;
-    this.replicaRestoreGate = undefined;
-    if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
+    // Keep the replica-only refusal recorded by establishReplicaStamp during sign-in.
+    await this.quiesceReplicaRuntime();
     this.assertSessionEpoch(epoch, "Sign-in");
     const oldGraph = this._serviceGraph;
     this._serviceGraph = this.createServiceGraphLifetime();
@@ -3809,7 +3865,7 @@ export class TinyCloudNode {
       } catch (error) {
         // Offline restores may serve complete local data; an incompatible node cannot.
         // Neither replica-only preflight outcome invalidates the verified network session.
-        replicaProtocolMismatch = error instanceof VersionCheckError;
+        replicaProtocolMismatch = error instanceof ProtocolMismatchError;
       }
     }
     // Never blend a metadata-light restore with the prior wallet identity.
@@ -3850,6 +3906,7 @@ export class TinyCloudNode {
       }
     }
     let replicaRestoreGate: ReplicaGateReason | undefined;
+    let restoredReplicaStamp: ReplicaSessionStamp | undefined;
     const replication = this.config.replication;
     if (replication?.enabled) {
       if (replicaProtocolMismatch) {
@@ -3861,11 +3918,11 @@ export class TinyCloudNode {
           if (replication.storage.kind === "indexeddb") {
             const lifecycle = replication.storage.lifecycle;
             if (lifecycle?.kind !== "indexeddb") throw new Error("Browser replica lifecycle is unavailable.");
-            await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
+            restoredReplicaStamp = await lifecycle.restoreSessionStamp(replicationPrincipal, sessionData.replicaStamp ?? undefined);
           } else {
             if (!replication.profileDir) throw new Error("Replica profile directory is unavailable.");
             const gate = await getNodeReplicationLoaders().gate();
-            await gate.restoreSessionStamp(replication.profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
+            restoredReplicaStamp = await gate.restoreSessionStamp(replication.profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
           }
         } catch (error) {
           replicaRestoreGate = replicaRestoreRefusal(error);
@@ -3977,7 +4034,9 @@ export class TinyCloudNode {
     this.replicationDelegateSession = compactReplicationSession;
     this.replicationScopeError = replicationScopeError;
     this.replicaRestoreGate = replicaRestoreGate;
-    if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
+    this.replicaSessionPrincipal = replicationPrincipal;
+    this.replicaSessionStamp = restoredReplicaStamp;
+    await this.quiesceReplicaRuntime();
     if (epoch !== this.sessionEpoch) {
       oldGraph.retire();
       (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
@@ -3992,9 +4051,7 @@ export class TinyCloudNode {
         detail: replicationScopeError,
       });
     }
-    if (!replicaRestoreGate) {
-      await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
-    }
+    await this.bindReplicaOrGate(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
     if (epoch !== this.sessionEpoch) {
       if (attempt === this.latestSessionAttempt) await this.endSession();
@@ -4731,7 +4788,7 @@ export class TinyCloudNode {
       jwk: session.jwk,
     };
     this._serviceContext.setSession(serviceSession);
-    await this.bindReplicationRuntime(this._serviceContext, serviceSession, this._kv!);
+    await this.bindReplicaOrGate(this._serviceContext, serviceSession, this._kv!);
     (this.tc!.serviceContext as ServiceContext).setSession(serviceSession);
 
     // Create and register Vault service
@@ -7115,6 +7172,30 @@ export class TinyCloudNode {
     });
   }
 
+  private async quiesceReplicaRuntime(): Promise<void> {
+    if (!this.replicationRuntime) return;
+    try {
+      await (await this.replicationRuntime).unbind();
+    } catch {
+      this.replicaRestoreGate = "gate_unavailable";
+    }
+  }
+
+  private async bindReplicaOrGate(
+    context: ServiceContext,
+    session: ServiceSession,
+    kv: KVService,
+    principal?: string,
+  ): Promise<void> {
+    if (this.replicaRestoreGate) return;
+    try {
+      await this.bindReplicationRuntime(context, session, kv, principal);
+    } catch {
+      this.replicaRestoreGate = "gate_unavailable";
+      await this.quiesceReplicaRuntime();
+    }
+  }
+
   private async bindReplicationRuntime(
     context: ServiceContext,
     session: ServiceSession,
@@ -7131,6 +7212,7 @@ export class TinyCloudNode {
       context,
       session,
       principal: identityPrincipal,
+      stamp: this.replicaSessionStamp,
       authority,
       nodeFeatures: this.replicationNodeFeatures,
       primaryKV: [{ space: session.spaceId, kv }],
