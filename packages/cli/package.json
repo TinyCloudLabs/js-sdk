@@ -34,6 +34,7 @@
     "@tinycloud/share-sdk": "1.1.1",
     "@tinycloud/share-envelope": "1.1.0",
     "@tinycloud/node-sdk": "3.2.6-beta.2",
+    "@tinycloud/sdk-services": "3.2.6-beta.2",
     "@tinycloud/node-sdk-wasm": "1.7.7",
     "@tinycloud/sdk-core": "3.2.6-beta.2",
     "@tinycloud/operations": "0.6.1-beta.2",

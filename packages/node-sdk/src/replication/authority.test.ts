@@ -92,6 +92,32 @@ describe("assertValidReplicationConfig (§3.1)", () => {
   });
 });
 
+describe("assertValidReplicationConfig byte budget (plan §7)", () => {
+  const storage = {};
+
+  test("maxBytes must be a positive safe integer", () => {
+    for (const maxBytes of [0, -1, 0.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/"], maxBytes }),
+      ).toThrow(/maxBytes/);
+    }
+    expect(() =>
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/"], maxBytes: 1024 * 1024 }),
+    ).not.toThrow();
+  });
+
+  test("minFreeBytes must be a non-negative safe integer; 0 disables the floor", () => {
+    for (const minFreeBytes of [-1, 0.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/"], minFreeBytes }),
+      ).toThrow(/minFreeBytes/);
+    }
+    expect(() =>
+      assertValidReplicationConfig({ enabled: true, storage, prefixes: ["notes/"], minFreeBytes: 0 }),
+    ).not.toThrow();
+  });
+});
+
 describe("hasUnrestrictedGetCoverage (§4.1 gate)", () => {
   test("a covering uncaveated get passes on the full space id and the short name", () => {
     const entries = [kvEntry({ path: "notes/" })];
