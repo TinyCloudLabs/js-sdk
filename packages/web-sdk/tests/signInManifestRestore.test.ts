@@ -417,6 +417,44 @@ test("signIn refreshes a restored session that does not cover the configured man
   expect(tcw.sessionRestoreStatus).toBe("logging-in");
 });
 
+test("a manifest refresh cannot change restore status after signOut()", async () => {
+  const tcw = new TinyCloudWeb({
+    manifest: {
+      app_id: "xyz.tinycloud.secrets",
+      name: "TinyCloud Secrets",
+      defaults: false,
+      permissions: [{ service: "tinycloud.sql", space: "secrets", path: "default", actions: ["read"] }],
+    },
+  });
+  await (tcw as any)._initPromise;
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const cleared = Promise.withResolvers<void>();
+  const releaseClear = Promise.withResolvers<void>();
+  (tcw as any)._node = {
+    hasRuntimePermissions: () => false,
+    signIn: mock(async () => undefined),
+    signOut: mock(async () => undefined),
+  };
+  (tcw as any).restoreSession = async () => ({
+    status: "restored",
+    session: { address, walletAddress: address, chainId: 1, sessionKey: {}, siwe: "old", signature: "old" },
+  });
+  (tcw as any).clearPersistedSession = async () => {
+    cleared.resolve();
+    await releaseClear.promise;
+  };
+
+  const signingIn = tcw.signIn();
+  const rejected = signingIn.catch((error: Error) => error);
+  await cleared.promise;
+  await tcw.signOut();
+  releaseClear.resolve();
+
+  expect((await rejected).message).toContain("cancelled by sign-out");
+  expect(tcw.sessionRestoreStatus).toBe("idle");
+  expect((tcw as any)._node.signIn).not.toHaveBeenCalled();
+});
+
 test("plain restored sessions require all canonical account permissions", async () => {
   const tcw = new TinyCloudWeb();
   const restoredSession = {
@@ -593,12 +631,84 @@ async function persistedRealSession(host: string) {
   return { node, persisted, address };
 }
 
+test("signOut() clears an explicit pending restore address even without activeAddress()", async () => {
+  const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
+  let stored: typeof persisted | null = persisted;
+  const enteredLoad = Promise.withResolvers<void>();
+  const resumeLoad = Promise.withResolvers<void>();
+  const storage = {
+    save: mock(async () => undefined),
+    load: mock(async () => {
+      enteredLoad.resolve();
+      await resumeLoad.promise;
+      return stored;
+    }),
+    clear: mock(async () => { stored = null; }),
+  };
+  const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = node;
+
+  const restoring = tcw.restoreSession(address);
+  await enteredLoad.promise;
+  await tcw.signOut();
+  resumeLoad.resolve();
+
+  expect((await restoring).status).toBe("restore-failed");
+  expect(storage.clear).toHaveBeenCalledWith(address);
+  expect(stored).toBeNull();
+  expect((await tcw.restoreSession(address)).status).toBe("missing");
+  expect(tcw.session()).toBeUndefined();
+});
+
+test("signIn() starting during signOut() cannot reload the session being cleared", async () => {
+  const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => Array.from(entries.keys())[index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const storage = new BrowserSessionStorage({ storage: backend });
+  await storage.save(address, persisted);
+  await node.restoreSession({
+    ...persisted.tinycloudSession,
+    jwk: JSON.parse(persisted.sessionKey),
+    address,
+    chainId: persisted.chainId,
+    siwe: persisted.siwe,
+    signature: persisted.signature,
+    expiresAt: persisted.expiresAt,
+    tinycloudHosts: persisted.tinycloudHosts,
+  });
+  const tcw = new TinyCloudWeb({ sessionStorage: storage, includeAccountRegistryPermissions: false });
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = node;
+  const registry = Promise.withResolvers<void>();
+  (node as any).accountRegistryTail = registry.promise;
+
+  const signingOut = tcw.signOut();
+  const signingIn = tcw.signIn();
+  const refused = signingIn.catch((error: Error) => error);
+  registry.resolve();
+  await signingOut;
+
+  expect((await refused).message).toContain("cancelled by sign-out");
+  expect(storage.exists(address)).toBe(false);
+  expect(tcw.session()).toBeUndefined();
+  expect(tcw.sessionRestoreStatus).toBe("idle");
+});
+
 test("a persisted restore that resumes after signOut() does not reinstate the session", async () => {
   const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
   const load = Promise.withResolvers<typeof persisted>();
+  const enteredLoad = Promise.withResolvers<void>();
   const storage = {
     save: mock(async () => undefined),
-    load: mock(() => load.promise),
+    load: mock(() => { enteredLoad.resolve(); return load.promise; }),
     clear: mock(async () => undefined),
   };
   const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
@@ -609,7 +719,7 @@ test("a persisted restore that resumes after signOut() does not reinstate the se
   node.restoreSession = nodeRestore;
 
   const restoring = tcw.restoreSession(address);
-  await Promise.resolve();
+  await enteredLoad.promise;
   await tcw.signOut();
   load.resolve(persisted);
   const result = await restoring;
@@ -625,11 +735,13 @@ test("a persisted restore that resumes after signOut() does not reinstate the se
 test("signIn() rejects and leaves no session when signOut() lands during its persisted restore", async () => {
   const { node, persisted } = await persistedRealSession("https://restore-race.test");
   const load = Promise.withResolvers<typeof persisted>();
+  const enteredLoad = Promise.withResolvers<void>();
+  let stored: typeof persisted | null = persisted;
   const storage = {
     save: mock(async () => undefined),
-    load: mock(() => load.promise),
-    clear: mock(async () => undefined),
-    activeAddress: () => persisted.address,
+    load: mock(() => { enteredLoad.resolve(); return load.promise; }),
+    clear: mock(async () => { stored = null; }),
+    activeAddress: () => stored?.address,
   };
   const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
   await (tcw as any)._initPromise;
@@ -639,12 +751,13 @@ test("signIn() rejects and leaves no session when signOut() lands during its per
   node.signIn = nodeSignIn;
 
   const signingIn = tcw.signIn();
-  await Promise.resolve();
+  await enteredLoad.promise;
   await tcw.signOut();
   load.resolve(persisted);
 
   await expect(signingIn).rejects.toThrow("cancelled by sign-out");
   expect(nodeSignIn).not.toHaveBeenCalled();
+  expect(stored).toBeNull();
   expect(tcw.session()).toBeUndefined();
   expect(() => tcw.kv).toThrow("Not signed in");
 });
