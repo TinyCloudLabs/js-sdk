@@ -2,6 +2,10 @@ const { TextEncoder: TE, TextDecoder: TD } = require('util');
 
 global.TextEncoder = TE;
 global.TextDecoder = TD;
+Object.assign(globalThis, {
+  HTMLElement: class {},
+  customElements: { define: () => undefined, get: () => undefined },
+});
 
 const { TinyCloudWeb } = require('../src');
 
@@ -10,7 +14,7 @@ const { TinyCloudWeb } = require('../src');
 // require WASM/sign-in, and assert the spaceId forwards and the node's
 // space-scoped service is returned unchanged.
 function withFakeNode() {
-  const tcw = new TinyCloudWeb();
+  const tcw = Object.create(TinyCloudWeb.prototype);
   const calls = { sql: [], kv: [] };
   const sqlService = { tag: 'sql-for-space' };
   const kvService = { tag: 'kv-for-space' };
@@ -43,7 +47,7 @@ test('kvForSpace forwards the space URI to node.kvForSpace and returns its servi
 });
 
 test('space-scoped accessors throw before initialization (no _node)', () => {
-  const tcw = new TinyCloudWeb();
+  const tcw = Object.create(TinyCloudWeb.prototype);
   expect(() => tcw.sqlForSpace(SPACE)).toThrow(/not yet initialized/);
   expect(() => tcw.kvForSpace(SPACE)).toThrow(/not yet initialized/);
 });
