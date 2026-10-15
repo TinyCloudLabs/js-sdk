@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "18.0.1"
   },
   "changesets": [
-    "account-manifest-primary"
+    "account-manifest-primary",
+    "account-space-list-manifest"
   ]
 }

@@ -1,5 +1,14 @@
 # @tinycloudlabs/web-sdk
 
+## 3.2.6-beta.1
+
+### Patch Changes
+
+- c92953f: Encode account-scoped `tinycloud.space/list` permissions in manifest-backed sessions.
+- Updated dependencies [c92953f]
+  - @tinycloud/sdk-core@3.2.6-beta.1
+  - @tinycloud/node-sdk@3.2.6-beta.1
+
 ## 3.2.6-beta.0
 
 ### Patch Changes

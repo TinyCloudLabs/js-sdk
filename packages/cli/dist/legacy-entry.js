@@ -14190,6 +14190,7 @@ var init_manifest = __esm({
     VAULT_PERMISSION_SERVICE2 = "tinycloud.vault";
     SERVICE_SHORT_TO_LONG = Object.freeze({
       kv: "tinycloud.kv",
+      space: "tinycloud.space",
       sql: "tinycloud.sql",
       duckdb: "tinycloud.duckdb",
       capabilities: "tinycloud.capabilities",
