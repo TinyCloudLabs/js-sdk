@@ -56,6 +56,15 @@ function takeFault(point: DenyFaultPoint): boolean {
   return true;
 }
 
+function billedDeviceBytes(row: unknown): number {
+  if (row === undefined || (typeof row === "number" && Number.isSafeInteger(row) && row >= 0)) return 0;
+  if (row !== null && typeof row === "object" && "size" in row &&
+      typeof row.size === "number" && Number.isSafeInteger(row.size) && row.size >= 0) {
+    return row.size;
+  }
+  throw gatedError("gate_unavailable", "A device quota row has no valid encoded size.");
+}
+
 function openKvStore(create: boolean): Promise<IDBDatabase | null> {
   return openKvDatabase({ create });
 }
@@ -506,7 +515,7 @@ export function createIndexedDbLifecycle(options: {
     try {
       return await transact<ReplicaDenyOutcome>(
         db,
-        [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.device, KV_STORE.pending],
+        [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.device, KV_STORE.pending, KV_STORE.quota],
         "readwrite",
         async (tx) => {
           const current = await requestAsPromise<Gate | undefined>(tx.objectStore(KV_STORE.gate).get(ACCOUNT));
@@ -543,13 +552,19 @@ export function createIndexedDbLifecycle(options: {
           const purge = tx.objectStore(KV_STORE.purgeIntents);
           for (const intent of intents) purge.put(intent, intent.id);
           const device = tx.objectStore(KV_STORE.device);
+          let deviceBytes = billedDeviceBytes(await requestAsPromise<unknown>(device.get(DEVICE_KEY)));
           device.delete(DEVICE_KEY);
           device.delete(ACCOUNT_KEY);
           device.delete(GATE_HMAC_KEY);
           for (const prefix of [FIRST_INSTALL_KEY_PREFIX, GRANT_INSTALL_KEY_PREFIX]) {
             const keys = await requestAsPromise<IDBValidKey[]>(device.getAllKeys(IDBKeyRange.bound(prefix, `${prefix}\uffff`)));
-            for (const key of keys) device.delete(key);
+            for (const key of keys) {
+              deviceBytes += billedDeviceBytes(await requestAsPromise<unknown>(device.get(key)));
+              if (!Number.isSafeInteger(deviceBytes)) throw gatedError("gate_unavailable", "Device quota bytes overflow.");
+              device.delete(key);
+            }
           }
+          await ledger?.accountErase(tx, { partitionId: "device", bytes: deviceBytes });
 
           const next: Gate = {
             ...current,

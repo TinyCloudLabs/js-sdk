@@ -28,6 +28,8 @@ export interface NodeGateState extends ReplicaAccountGate {
   intents: ReplicaPurgeIntent[];
   /** Identity key hash to first-install time (ms). Cleared by every committed deny. */
   firstInstall: Record<string, number>;
+  /** Identity key hash to generation; advanced once with a newly queued pending intent. */
+  pendingGenerations: Record<string, number>;
 }
 
 function gateRefusal(gate: ReplicaGateReason, message: string) {
@@ -63,20 +65,31 @@ function parseState(text: string): NodeGateState {
   if (record.principalHash !== null && typeof record.principalHash !== "string") {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid principal hash.");
   }
-  if (typeof record.lifecycleEpoch !== "number" || !Number.isInteger(record.lifecycleEpoch) || record.lifecycleEpoch < 0) {
+  if (typeof record.lifecycleEpoch !== "number" || !Number.isSafeInteger(record.lifecycleEpoch) || record.lifecycleEpoch < 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid lifecycle epoch.");
   }
-  if (record.deniedAt !== null && (typeof record.deniedAt !== "number" || !Number.isFinite(record.deniedAt))) {
+  if (record.deniedAt !== null && (typeof record.deniedAt !== "number" ||
+      !Number.isSafeInteger(record.deniedAt) || record.deniedAt < 0)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid deniedAt.");
   }
   if (!Array.isArray(record.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
-  const firstInstall = record.firstInstall ?? {};
+  const firstInstall = record.firstInstall === undefined ? {} : record.firstInstall;
   if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall map.");
   }
   for (const value of Object.values(firstInstall)) {
     if (typeof value !== "number" || !Number.isFinite(value)) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
+    }
+  }
+  const pendingGenerations = record.pendingGenerations === undefined ? {} : record.pendingGenerations;
+  if (typeof pendingGenerations !== "object" || pendingGenerations === null || Array.isArray(pendingGenerations)) {
+    throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation map.");
+  }
+  for (const [hash, generation] of Object.entries(pendingGenerations)) {
+    if (!/^[0-9a-f]{64}$/.test(hash) || typeof generation !== "number" ||
+        !Number.isSafeInteger(generation) || generation < 0) {
+      throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation.");
     }
   }
   // Intent entries are validated where they are consumed (erase), not here.
@@ -88,6 +101,7 @@ function parseState(text: string): NodeGateState {
     deniedAt: record.deniedAt,
     intents: record.intents as ReplicaPurgeIntent[],
     firstInstall: firstInstall as Record<string, number>,
+    pendingGenerations: pendingGenerations as Record<string, number>,
   };
 }
 
@@ -116,6 +130,12 @@ async function writeState(profileDir: string, state: NodeGateState): Promise<voi
       await handle.close();
     }
     await rename(temp, target);
+    const directory = await open(profileDir, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
   } catch (error) {
     await rm(temp, { force: true });
     throw error;
@@ -131,6 +151,7 @@ function freshState(): NodeGateState {
     deniedAt: null,
     intents: [],
     firstInstall: {},
+    pendingGenerations: {},
   };
 }
 
@@ -169,9 +190,13 @@ export async function establishSessionStamp(
   principal: string,
   o: { siweIssuedAt: number },
 ): Promise<ReplicaSessionStamp> {
+  if (!Number.isSafeInteger(o?.siweIssuedAt) || o.siweIssuedAt < 0) {
+    throw gateRefusal("not_established", "A finite signed SIWE issued-at time is required.");
+  }
+  const issuedAt = Math.min(o.siweIssuedAt, Date.now());
   const state = await readGateState(profileDir);
   if (state.intents.length > 0) throw gateRefusal("purge_pending", "A purge is pending for this profile.");
-  if (state.deniedAt !== null && o.siweIssuedAt <= state.deniedAt) {
+  if (state.deniedAt !== null && issuedAt <= state.deniedAt) {
     throw gateRefusal("stamp_stale", "The sign-in predates the last sign-out.");
   }
   const hash = await principalHashOf(state.salt, principal);
@@ -217,10 +242,9 @@ export async function restoreSessionStamp(
 
 /**
  * `deny` step 1. If `input.principal` does not match the gate, returns `stale` and writes nothing.
- * Otherwise one atomic rewrite: principal hash moves to `null` or `next`, the epoch goes up by one,
- * `deniedAt` is set, intents from `collectIntents(oldPrincipalHash)` are added (deduplicated by id),
- * and `firstInstall` is cleared. Never rejects on storage failure: a failed write returns `unguarded`.
- * `collectIntents` runs inside the caller's profile lock and must not take it.
+ * Otherwise one atomic rewrite clears the principal, increments epoch and pending generations
+ * for new pending intents, records the deduplicated intents and clears first-install anchors.
+ * A failed write returns `unguarded`. The caller holds the nonreentrant profile lock throughout.
  */
 export async function denyGate(
   profileDir: string,
@@ -236,15 +260,36 @@ export async function denyGate(
     if (state.principalHash !== (await principalHashOf(state.salt, input.principal))) return { status: "stale" };
     const intents = await collectIntents(state.principalHash);
     const known = new Set(state.intents.map((intent) => intent.id));
-    const merged = [...state.intents, ...intents.filter((intent) => !known.has(intent.id))];
-    const nextHash = input.reason === "account_switch" ? await principalHashOf(state.salt, input.next ?? "") : null;
+    const added: ReplicaPurgeIntent[] = [];
+    for (const intent of intents) {
+      if (known.has(intent.id)) continue;
+      known.add(intent.id);
+      added.push(intent);
+    }
+    const pendingGenerations = { ...state.pendingGenerations };
+    for (const intent of added) {
+      if (intent.kind !== "pending") continue;
+      const hash = intent.identityKeyHash;
+      if (!/^[0-9a-f]{64}$/.test(hash) || intent.id !== `pending:${hash}` ||
+          !Number.isSafeInteger((pendingGenerations[hash] ?? 0) + 1)) {
+        throw gateRefusal("gate_unavailable", "A pending purge intent has an invalid identity generation.");
+      }
+      pendingGenerations[hash] = (pendingGenerations[hash] ?? 0) + 1;
+    }
+    const merged = [...state.intents, ...added];
+    const lifecycleEpoch = state.lifecycleEpoch + 1;
+    const deniedAt = Math.max(Date.now(), (state.deniedAt ?? -1) + 1);
+    if (!Number.isSafeInteger(lifecycleEpoch) || !Number.isSafeInteger(deniedAt)) {
+      throw gateRefusal("gate_unavailable", "The replica deny floor cannot advance.");
+    }
     const next: NodeGateState = {
       ...state,
-      principalHash: nextHash,
-      lifecycleEpoch: state.lifecycleEpoch + 1,
-      deniedAt: Date.now(),
+      principalHash: null,
+      lifecycleEpoch,
+      deniedAt,
       intents: merged,
       firstInstall: {},
+      pendingGenerations,
     };
     await writeState(profileDir, next);
     return { status: "denied", lifecycleEpoch: next.lifecycleEpoch, intents: merged.length };
