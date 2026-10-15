@@ -56,6 +56,16 @@
         "default": "./dist/kv/replication/grantPolicyTypes.cjs"
       }
     },
+    "./kv/replication/grantPolicy": {
+      "import": {
+        "types": "./dist/kv/replication/grantPolicy.d.ts",
+        "default": "./dist/kv/replication/grantPolicy.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/grantPolicy.d.cts",
+        "default": "./dist/kv/replication/grantPolicy.cjs"
+      }
+    },
     "./kv/replication": {
       "import": {
         "types": "./dist/kv/replication/index.d.ts",
@@ -95,6 +105,9 @@
       ],
       "kv/replication/grantPolicyTypes": [
         "dist/kv/replication/grantPolicyTypes.d.ts"
+      ],
+      "kv/replication/grantPolicy": [
+        "dist/kv/replication/grantPolicy.d.ts"
       ]
     }
   },
