@@ -8,7 +8,7 @@ import { localGet, type LocalGetResponse } from "./localResponse";
 import { cursorRestart, decodeTcr1, listPathCovered, localList } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
 import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, ReplicaGrantInfo, PendingWriteState, ReplicaDevice, ReplicaPeerCommit, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
-import type { ReplicaDeliveryDecision } from "./lifecycle";
+import type { ReplicaDeliveryDecision, ReplicaSessionStamp } from "./lifecycle";
 import { DEFAULT_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./contractConstants";
 import { clampConsentAnchor, consentDeadlineMs, mintRemainingMs, needsSilentRenewal } from "./grantPolicy";
 import type { ReplicaConsentAnchor } from "./grantPolicyTypes";
@@ -132,9 +132,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       return { status: "gated", gate: "gate_unavailable" };
     }
   }
-  function startConsentDenial(): void {
-    const gate = storage.lifecycle;
-    if (!gate || consentDenyStarted) return;
+  function markConsentExpired(): boolean {
+    if (consentDenyStarted || isClosed || purgeStarted) return false;
     cancelConsentTimer?.();
     cancelConsentTimer = undefined;
     consentDenyStarted = true;
@@ -148,6 +147,15 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
         emit({ type: "replication.grant", replicaId: id, action: "consent_deadline_reached", code: "CONSENT_EXPIRED" });
       }
     }
+    return true;
+  }
+  function observeConsentExpired(stamp: ReplicaSessionStamp): void {
+    if (!deps.stamp || stamp.incarnation !== deps.stamp.incarnation || stamp.lifecycleEpoch !== deps.stamp.lifecycleEpoch) return;
+    if (markConsentExpired()) emit({ type: "replication.lifecycle", action: "denied", reason: "consent_expired" });
+  }
+  function startConsentDenial(): void {
+    const gate = storage.lifecycle;
+    if (!gate || !markConsentExpired()) return;
     void gate.deny({ reason: "consent_expired", principal: identity.principal }).then(
       (outcome) => emit({ type: "replication.lifecycle", action: outcome.status === "denied" ? "denied" : outcome.status === "stale" ? "deny_stale" : outcome.status === "deleted" ? "database_deleted" : outcome.status === "marker" ? "marker_set" : "unguarded", reason: "consent_expired" }),
       () => emit({ type: "replication.lifecycle", action: "deny_failed", reason: "consent_expired" }),
@@ -1245,7 +1253,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   }
 
   scheduleConsentDeadline();
-  return { get, list, write, observeNetworkRequested, status, sync, purge, clearPending, close };
+  return { get, list, write, observeNetworkRequested, observeConsentExpired, status, sync, purge, clearPending, close };
 }
 
 function cancellationCode(signal: AbortSignal): string {

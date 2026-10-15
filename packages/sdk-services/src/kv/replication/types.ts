@@ -499,6 +499,12 @@ export interface KVReadThrough {
   }): void;
 }
 export interface KVReplicationController extends KVReadThrough {
+  /**
+   * Internal browser gate observer: invoked only after the stamped durable consent-expiry
+   * denial/deletion commits. Records opened opaque grant transitions even if the gate's own
+   * timer wins before this controller's timer; does not issue a second deny.
+   */
+  observeConsentExpired(stamp: ReplicaSessionStamp): void;
   status(): Promise<ReplicaStatusEntry[]>;
   sync(o?: { prefix?: string; signal?: AbortSignal }): Promise<void>;
   /** Not async: synchronously stops timers/syncs and blocks new local opens before returning its promise. */
