@@ -273,6 +273,9 @@ export class DelegationManager {
    * Once revoked, the delegation can no longer be used to access resources.
    * This also invalidates any sub-delegations derived from this delegation.
    *
+   * Explicit target-space or authority options keep the delegated session
+   * signing path even when an owner signer is available.
+   *
    * @param cid - The CID of the delegation to revoke
    * @returns Result indicating success or an error
    *
@@ -302,7 +305,11 @@ export class DelegationManager {
     }
 
     try {
-      if (!this.signOwnerRevocation && !this.invokeAny) {
+      const ownerSigner =
+        options?.targetSpaceId === undefined && options?.authorityCid === undefined
+          ? this.signOwnerRevocation
+          : undefined;
+      if (!ownerSigner && !this.invokeAny) {
         return {
           ok: false,
           error: createError(
@@ -313,8 +320,8 @@ export class DelegationManager {
       }
 
       let headers: ServiceHeaders;
-      if (this.signOwnerRevocation) {
-        headers = { Authorization: await this.signOwnerRevocation(cid) };
+      if (ownerSigner) {
+        headers = { Authorization: await ownerSigner(cid) };
       } else {
         const entry = {
           resource: `urn:cid:${cid}`,
