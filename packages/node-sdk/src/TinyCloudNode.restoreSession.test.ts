@@ -222,7 +222,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
 
   test("derives replica consent recency only from a WASM-verified signed owner SIWE", async () => {
     const proof = await signedRestorableSession({
-      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
     });
     const node = new TinyCloudNode({
       host: RESTORE_HOST,
@@ -236,9 +236,11 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     expect(authority.canRenew).toBe(true);
   });
 
-  test("owner proof requires overlapping uncaveated KV get and sync paths", async () => {
+  test("owner proof requires uncaveated root KV get and sync for the exact full space", async () => {
     const cases: Array<[Record<string, Record<string, string[]>>, boolean]> = [
-      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, true],
+      [{ kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, true],
+      [{ kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } }, false],
+      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, false],
       [{ kv: { "notes/": ["tinycloud.kv/get"], "other/": ["tinycloud.kv/sync"] } }, false],
     ];
     for (const [abilities, anchored] of cases) {
