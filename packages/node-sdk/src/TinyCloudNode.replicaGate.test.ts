@@ -84,33 +84,52 @@ describe("replica gate: restore", () => {
     await node.restoreSession({ ...proof, replicaStamp });
 
     expect(node.address).toBe(proof.address);
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect(await node.replication!.status()).toEqual([]);
   });
 
-  test("refuses a stamp that predates a sign-out", async () => {
+  test("restores the network session but gates a stamp that predates sign-out", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
     const principal = pkhDid(proof.address, proof.chainId);
     const replicaStamp = await replicaGate.establishSessionStamp(dir, principal, { siweIssuedAt: Date.now() });
     await replicaGate.denyGate(dir, { reason: "sign_out", principal }, async () => []);
 
-    await expect(replicatedNode(dir).restoreSession({ ...proof, replicaStamp })).rejects.toMatchObject({
-      gate: "stamp_stale",
+    const node = replicatedNode(dir);
+    await node.restoreSession({ ...proof, replicaStamp });
+    expect(node.address).toBe(proof.address);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "stamp_stale" });
+    await expect(node.replication!.sync({ prefix: "notes/" })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+  });
+  test("keeps the network session while rejecting malformed replica metadata", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
     });
+    const malformed = { ...replicaStamp, forged: true };
+    const node = replicatedNode(dir);
+    await node.restoreSession({ ...proof, replicaStamp: malformed });
+
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "stamp_stale" });
   });
 
-  test("refuses a session with no persisted stamp", async () => {
+
+  test("keeps an unstamped network session with replica gated", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
     await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
       siweIssuedAt: Date.now(),
     });
 
-    await expect(replicatedNode(dir).restoreSession(proof)).rejects.toMatchObject({
-      gate: "not_established",
-    });
+    const node = replicatedNode(dir);
+    await node.restoreSession(proof);
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "not_established" });
   });
 
-  test("refuses while a purge is pending for the profile", async () => {
+  test("keeps the network session while profile purge is pending", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
     const principal = pkhDid(proof.address, proof.chainId);
@@ -123,29 +142,32 @@ describe("replica gate: restore", () => {
       recordedAt: 1,
     }]);
 
-    await expect(replicatedNode(dir).restoreSession({ ...proof, replicaStamp })).rejects.toMatchObject({
-      gate: "purge_pending",
-    });
+    const node = replicatedNode(dir);
+    await node.restoreSession({ ...proof, replicaStamp });
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "purge_pending" });
   });
 
-  test("refuses a profile bound to another principal", async () => {
+  test("keeps the network session when the replica profile belongs to another principal", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
     const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(OTHER_ADDRESS, proof.chainId), {
       siweIssuedAt: Date.now(),
     });
 
-    await expect(replicatedNode(dir).restoreSession({ ...proof, replicaStamp })).rejects.toMatchObject({
-      gate: "principal_mismatch",
-    });
+    const node = replicatedNode(dir);
+    await node.restoreSession({ ...proof, replicaStamp });
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "principal_mismatch" });
   });
 
-  test("refuses replicated restore without a profile directory", async () => {
+  test("keeps the network session without a replica profile directory", async () => {
     const proof = await signedRestorableSession();
 
-    await expect(replicatedNode().restoreSession(proof)).rejects.toMatchObject({
-      gate: "gate_unavailable",
-    });
+    const node = replicatedNode();
+    await node.restoreSession(proof);
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "gate_unavailable" });
   });
 
   test("restores without a stamp when replication is disabled", async () => {
