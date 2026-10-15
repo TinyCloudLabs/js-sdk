@@ -7,6 +7,7 @@ import { registerReplicationLoaders } from "./core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
 // @ts-ignore node-sdk moduleResolution "node" cannot read replica exports (see replica-contract.ts)
@@ -101,6 +102,7 @@ describe("replica gate: restore", () => {
     expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "stamp_stale" });
     await expect(node.replication!.sync({ prefix: "notes/" })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
   });
+
   test("keeps the network session while rejecting malformed replica metadata", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
@@ -114,7 +116,6 @@ describe("replica gate: restore", () => {
     expect(node.spaceId).toBe(proof.spaceId);
     expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "stamp_stale" });
   });
-
 
   test("keeps an unstamped network session with replica gated", async () => {
     const dir = profileDir();
@@ -167,6 +168,39 @@ describe("replica gate: restore", () => {
     const node = replicatedNode();
     await node.restoreSession(proof);
     expect(node.spaceId).toBe(proof.spaceId);
+    expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "gate_unavailable" });
+  });
+
+  test("keeps a compact network session when replica-only scope verification throws", async () => {
+    registerReplicationLoaders({
+      ...loaders(),
+      runtime: async () => ({ ReplicationRuntime: StubRuntime }) as never,
+      authority: async () => ({
+        replicationScopeFromSignedSession: () => { throw new Error("replica scope unavailable"); },
+      }) as never,
+    });
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const delegateDid = manager.getDID("default").split("#", 1)[0]!;
+    const imported = await mintCompactDelegation({
+      audience: delegateDid,
+      expSecs: Math.floor(Date.now() / 1000) + 3600,
+      host: RESTORE_HOST,
+    });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      wasmBindings: new NodeWasmBindings(),
+      replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: profileDir() },
+    });
+    await node.restoreSession({
+      delegationHeader: imported.delegation.delegationHeader,
+      delegationCid: imported.delegation.cid,
+      spaceId: imported.spaceId,
+      jwk: JSON.parse(manager.jwk("default")!),
+      verificationMethod: delegateDid,
+    });
+    expect(node.spaceId).toBe(imported.spaceId);
+    expect(node.isSessionOnly).toBe(true);
     expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "gate_unavailable" });
   });
 

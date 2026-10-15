@@ -296,7 +296,6 @@ describe("origin deny tombstone", () => {
     })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
     expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
   }, 5_000);
-
   test("startup recovery shreds keys when the browser was closed at the deadline", async () => {
     const clock = { ms: Date.now() };
     const initial = createIndexedDbLifecycle({ now: () => clock.ms });
