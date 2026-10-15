@@ -1,6 +1,6 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { basename, dirname, join, resolve } from "node:path";
-import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
+import { createHermeticEncryptedNode, type HermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
 import { createEmailDomainCredentialRequirement, createOpenKeyCallbackSigningStrategy, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
 import { BrowserCredentialInteraction, BrowserCredentialRedirectStore, InlineCredentialInteraction } from "../src/credentials/browser";
 import { CredentialsService } from "../src/credentials/service";
@@ -11,6 +11,14 @@ const branch = basename(jsRoot);
 const worktreesRoot = dirname(dirname(dirname(jsRoot)));
 const openCredentialsRoot = join(worktreesRoot, "opencredentials", basename(dirname(jsRoot)), branch.replace("-js-sdk-", "-opencredentials-"));
 const manifest = join(openCredentialsRoot, "rust/opencredentials_witness/Cargo.toml");
+const pairedCheckout = await Bun.file(manifest).exists();
+if (!pairedCheckout) {
+  const missing = `paired OpenCredentials worktree not found at ${openCredentialsRoot}`;
+  if (process.env.OPENCREDENTIALS_FIXTURE_OPTIONAL !== "1") {
+    throw new Error(`${missing}. Set OPENCREDENTIALS_FIXTURE_OPTIONAL=1 to skip this suite explicitly.`);
+  }
+  console.warn(`Skipping OpenCredentials integration tests: ${missing} (OPENCREDENTIALS_FIXTURE_OPTIONAL=1).`);
+}
 const fixture = await Bun.file(new URL("../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json() as { vectors: { descriptor: CredentialFlowDescriptor }[] };
 const email = fixture.vectors[0]!.descriptor;
 const synthetic = fixture.vectors[1]!.descriptor;
@@ -33,8 +41,12 @@ function memoryStorage() {
   };
 }
 
-async function startFixture(): Promise<{ url: string; stop(): void }> {
-  if (!(await Bun.file(manifest).exists())) throw new Error(`paired OpenCredentials worktree not found at ${openCredentialsRoot}`);
+interface AcquisitionFixture {
+  url: string;
+  stop(): void;
+}
+
+async function startFixture(): Promise<AcquisitionFixture> {
   const process = Bun.spawn(["cargo", "run", "--quiet", "--manifest-path", manifest, "--features", "email-claim-fixture", "--bin", "credential-acquisition-fixture"], { stdout: "pipe", stderr: "inherit" });
   const reader = process.stdout.getReader();
   const decoder = new TextDecoder();
@@ -55,12 +67,17 @@ async function startFixture(): Promise<{ url: string; stop(): void }> {
   throw new Error("credential fixture startup timed out");
 }
 
-const acquisition = await startFixture();
-const initialized = await createHermeticEncryptedNode();
-const redirectInitialized = await createHermeticEncryptedNode();
-afterAll(() => { acquisition.stop(); initialized.stop(); redirectInitialized.stop(); });
+let acquisition: AcquisitionFixture;
+let initialized: HermeticEncryptedNode;
+let redirectInitialized: HermeticEncryptedNode;
+if (pairedCheckout) {
+  acquisition = await startFixture();
+  initialized = await createHermeticEncryptedNode();
+  redirectInitialized = await createHermeticEncryptedNode();
+  afterAll(() => { acquisition.stop(); initialized.stop(); redirectInitialized.stop(); });
+}
 
-test("an initialized active session ensures an email credential through an inline host without a popup", async () => {
+test.skipIf(!pairedCheckout)("an initialized active session ensures an email credential through an inline host without a popup", async () => {
   const holderDid = initialized.delegate.credentialHolderDid;
   const holderKid = initialized.delegate.credentialHolderKid;
   const ownerDid = initialized.delegate.did;
@@ -144,7 +161,7 @@ test("an initialized active session ensures an email credential through an inlin
   expect(resultReads).toBe(2);
 }, 120_000);
 
-test("a locator-only redirect returns after hosted proof and a restored SDK session completes acquisition", async () => {
+test.skipIf(!pairedCheckout)("a locator-only redirect returns after hosted proof and a restored SDK session completes acquisition", async () => {
   const holderDid = redirectInitialized.delegate.credentialHolderDid;
   const ownerDid = redirectInitialized.delegate.did;
   const spaceId = `${ownerDid.replace(/^did:/, "tinycloud:")}:credentials`;
@@ -220,7 +237,7 @@ test("a locator-only redirect returns after hosted proof and a restored SDK sess
   expect(await redirectStore.load()).toBeUndefined();
 }, 120_000);
 
-test("an initialized OpenKey session reports normal approval rejection as recoverable", async () => {
+test.skipIf(!pairedCheckout)("an initialized OpenKey session reports normal approval rejection as recoverable", async () => {
   const automaticDecision = mock(async () => new Response(JSON.stringify({
     approved: false,
     needsApproval: true,
@@ -267,7 +284,7 @@ test("an initialized OpenKey session reports normal approval rejection as recove
   }
 }, 120_000);
 
-test("an email-domain credential proves a recipient-chosen mailbox and carries the issuer-derived domain", async () => {
+test.skipIf(!pairedCheckout)("an email-domain credential proves a recipient-chosen mailbox and carries the issuer-derived domain", async () => {
   const ownerDid = initialized.delegate.did;
   const spaceId = `${ownerDid.replace(/^did:/, "tinycloud:")}:credentials`;
   initialized.provisionKvSpace(spaceId);

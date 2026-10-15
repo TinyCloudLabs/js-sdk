@@ -46,6 +46,10 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
     generateHostSIWEMessage: () => "",
     siweToDelegationHeaders: () => ({}),
     protocolVersion: () => 1,
+    validatePersistedSession: () => ({
+      verifiedRecap: [],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    }),
     vault_encrypt: () => new Uint8Array(),
     vault_decrypt: () => new Uint8Array(),
     vault_derive_key: () => new Uint8Array(),
@@ -121,6 +125,39 @@ test("forwards signStrategy to the underlying TinyCloudNode", async () => {
   await (tcw as any)._initPromise;
 
   expect((tcw as any)._node.config.signStrategy).toBe(signStrategy);
+});
+
+test("accountAuthorizationCid returns the delegation CID of a restored walletless session", async () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const storage = {
+    save: mock(async () => undefined),
+    load: mock(async () => ({
+      address,
+      chainId: 1,
+      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+      siwe: "siwe",
+      signature: "signature",
+      tinycloudSession: {
+        delegationHeader: { Authorization: "Bearer persisted" },
+        delegationCid: "bafy-restored-account",
+        spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+        verificationMethod: "did:key:default",
+      },
+      tinycloudHosts: ["https://node.test.local"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: "1.0",
+    })),
+    clear: mock(async () => undefined),
+  };
+  // No provider: the node has no auth layer, so the restored session is held by the node itself.
+  const tcw = new TinyCloudWeb({ sessionStorage: storage });
+
+  const result = await tcw.restoreSession(address);
+
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe("restored");
+  expect(tcw.accountAuthorizationCid()).toBe("bafy-restored-account");
 });
 
 test("keeps a valid persisted session when the loaded binding cannot restore its signer", async () => {
