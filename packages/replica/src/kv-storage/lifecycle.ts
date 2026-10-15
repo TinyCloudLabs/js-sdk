@@ -26,6 +26,7 @@ import { ReplicaError, ReplicaErrorCode, gatedError } from "../errors.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
 import { ACCOUNT_KEY, GATE_HMAC_KEY, gateHash, newAccountKey, newGateHmac, validAccountKey, validGateHmac, type AccountKeyRecord, type BrowserGate, type GateHmacRecord } from "./gateKeys.js";
 import { createIndexedDbGateTx, withDatabase } from "./gateTx.js";
+import { DEVICE_QUOTA_PARTITION_ID, ledgerFor } from "./ledger.js";
 import { ERASE_STORES, FIRST_INSTALL_KEY_PREFIX, KV_DATABASE, KV_STORE, kvPartitionEraser, openKvDatabase } from "./schema.js";
 
 type Gate = BrowserGate;
@@ -286,7 +287,7 @@ export function createIndexedDbLifecycle(options: {
   onConsentExpired?: (stamp: ReplicaSessionStamp) => void;
 } = {}): BrowserReplicaLifecycle {
   const eraser = options.eraser ?? kvPartitionEraser;
-  const ledger = options.ledger;
+  const ledger = options.ledger ?? ledgerFor();
   const now = options.now ?? Date.now;
   function checkedNow(): number {
     const at = now();
@@ -564,7 +565,13 @@ export function createIndexedDbLifecycle(options: {
               device.delete(key);
             }
           }
-          await ledger?.accountErase(tx, { partitionId: "device", bytes: deviceBytes });
+          await ledger.accountErase(tx, { partitionId: DEVICE_QUOTA_PARTITION_ID, bytes: deviceBytes });
+          const deviceUsage = await requestAsPromise<unknown>(
+            tx.objectStore(KV_STORE.quota).get(`partition:${DEVICE_QUOTA_PARTITION_ID}`),
+          );
+          if (deviceUsage !== undefined) {
+            throw gatedError("gate_unavailable", "The device quota bucket retained bytes after all device rows were erased.");
+          }
 
           const next: Gate = {
             ...current,
@@ -667,7 +674,7 @@ export function createIndexedDbLifecycle(options: {
         if (intent.kind === "partition") {
           const { bytes } = await eraser.erasePartition(tx, intent.partitionId);
           await gateTx.unindexPartition(tx, intent.partitionId);
-          await ledger?.accountErase(tx, { partitionId: intent.partitionId, bytes });
+          await ledger.accountErase(tx, { partitionId: intent.partitionId, bytes });
         } else {
           await eraser.eraseIdentityPending(tx, intent.identityKeyHash);
         }
