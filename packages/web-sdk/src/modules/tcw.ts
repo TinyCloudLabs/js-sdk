@@ -681,12 +681,21 @@ export class TinyCloudWeb {
   }
 
   async restoreSession(address?: string): Promise<SessionRestoreResult> {
+    const signOuts = this.signOutCount;
+    const assertNotSignedOut = (): void => {
+      if (this.signOutCount !== signOuts) {
+        throw new Error("Session restore was cancelled by sign-out.");
+      }
+    };
     if (!this.sessionStorage) {
       this._sessionRestoreStatus = "disabled";
       return { status: "disabled" };
     }
 
     const restoreAddress = await this.resolveRestoreAddress(address);
+    if (this.signOutCount !== signOuts) {
+      return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+    }
     if (!restoreAddress) {
       this._sessionRestoreStatus = "missing";
       return { status: "missing" };
@@ -695,12 +704,15 @@ export class TinyCloudWeb {
     this._sessionRestoreStatus = "restoring";
     try {
       const loaded = await this.loadPersistedSession(restoreAddress);
+      assertNotSignedOut();
       if (loaded.status !== "loaded") {
         this._sessionRestoreStatus = loaded.status;
         return { status: loaded.status };
       }
       const node = await this.ensureNode();
+      assertNotSignedOut();
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      assertNotSignedOut();
       this.resetSessionScopedCaches();
       this._sessionRestoreStatus = "restored";
       return {
@@ -708,6 +720,9 @@ export class TinyCloudWeb {
         session: clientSessionFromPersisted(loaded.data),
       };
     } catch (err) {
+      if (this.signOutCount !== signOuts) {
+        return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+      }
       // Restore rejection is intentionally transactional. Persisted storage
       // is user state, and attempting best-effort cleanup here can both mask
       // the authority error and strand this wrapper in "restoring" when a
@@ -1118,12 +1133,16 @@ export class TinyCloudWeb {
   }
 
   async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
+    const signOuts = this.signOutCount;
     const node = await this.ensureNode();
+    if (this.signOutCount !== signOuts) throw new Error("Delegation use was cancelled by sign-out.");
     await node.useRuntimeDelegation(delegation);
   }
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {
+    const signOuts = this.signOutCount;
     const node = await this.ensureNode();
+    if (this.signOutCount !== signOuts) throw new Error("Delegation use was cancelled by sign-out.");
     return node.useDelegation(delegation);
   }
 
