@@ -19,10 +19,15 @@ export default defineConfig({
     // A single chunk keeps the offline cache small and the test simple.
     modulePreload: false,
     rollupOptions: {
-      input: { index: resolve(import.meta.dirname, "index.html"), kv: resolve(import.meta.dirname, "kv.html") },
+      input: {
+        index: resolve(import.meta.dirname, "index.html"),
+        kv: resolve(import.meta.dirname, "kv.html"),
+        node: resolve(import.meta.dirname, "node.html"),
+      },
       output: {
         entryFileNames: "assets/[name].js",
-        chunkFileNames: "assets/[name].js",
+        // Shared chunks are hashed: a chunk named like a `?url` worker asset would overwrite it.
+        chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name][extname]",
       },
     },

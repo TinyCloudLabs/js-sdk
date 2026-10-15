@@ -14,12 +14,27 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 
 import { FakeNode, SPACE, deviceGrant, keyPair, owner, signUcan } from "./fixtures.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../src/errors.js";
+
+async function freePort(): Promise<number> {
+  const { promise, resolve: done, reject: fail } = Promise.withResolvers<number>();
+  const listener = createServer();
+  listener.once("error", fail);
+  listener.listen(0, "127.0.0.1", () => {
+    const { port } = listener.address() as { port: number };
+    listener.close(() => done(port));
+  });
+  return promise;
+}
 
 const FIXTURE_DIST = resolve(import.meta.dir, "browser/fixture/dist");
 /**
@@ -392,4 +407,111 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true, value: { syncedThroughEpoch: 2 } });
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
   }, 60_000);
+});
+
+const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
+
+describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node (Chromium, published worker)", () => {
+  let dataDir = "";
+  let node: ChildProcess | undefined;
+  let host = "";
+  let nodeOwner: TinyCloudNode;
+  let space = "";
+
+  beforeAll(async () => {
+    dataDir = await mkdtemp(join("/var/tmp", "tc-kv-storage-node-"));
+    const port = await freePort();
+    host = `http://127.0.0.1:${port}`;
+    const child = spawn(NODE_BIN!, [], {
+      cwd: dataDir,
+      env: {
+        ...process.env,
+        TINYCLOUD_STORAGE__DATADIR: join(dataDir, "data"),
+        TINYCLOUD_KEYS__SECRET: randomBytes(48).toString("base64url"),
+        TINYCLOUD_ADDRESS: "127.0.0.1",
+        TINYCLOUD_PORT: String(port),
+        ROCKET_PORT: String(port),
+        ROCKET_ADDRESS: "127.0.0.1",
+        TINYCLOUD_KEYS__TYPE: "Static",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    node = child;
+    const launched = Promise.withResolvers<void>();
+    let output = "";
+    const onData = (chunk: Buffer) => {
+      output += chunk.toString();
+      if (output.includes("Rocket has launched")) launched.resolve();
+    };
+    child.stdout!.on("data", onData);
+    child.stderr!.on("data", onData);
+    child.once("exit", (code) => launched.reject(new Error(`node exited (${code}) before launching:\n${output.slice(-2000)}`)));
+    await launched.promise;
+    nodeOwner = new TinyCloudNode({ privateKey: `0x${randomBytes(32).toString("hex")}`, host, autoCreateSpace: true });
+    await nodeOwner.signIn();
+    space = nodeOwner.session!.spaceId;
+    const put = await nodeOwner.kv.put("notes/a", new TextEncoder().encode("from the node"));
+    if (!put.ok) throw new Error(`kv put failed: ${JSON.stringify(put.error)}`);
+  }, 120_000);
+
+  afterAll(async () => {
+    const child = node;
+    if (child !== undefined && child.exitCode === null) {
+      const exited = Promise.withResolvers<void>();
+      child.once("exit", () => exited.resolve());
+      child.kill("SIGTERM");
+      await exited.promise;
+    }
+    if (dataDir !== "") await rm(dataDir, { recursive: true, force: true });
+  });
+
+  /** The node ships no CORS headers; add them at the driver layer, as browser.e2e does. */
+  async function corsToNode(): Promise<void> {
+    await context.route(`${host}/**`, async (route) => {
+      const cors = {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "access-control-allow-headers": "authorization, content-type, tinycloud-trace-id, x-tinycloud-*",
+      };
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: cors });
+        return;
+      }
+      const response = await route.fetch();
+      await route.fulfill({ response, headers: { ...response.headers(), ...cors } });
+    });
+  }
+
+  test("the published worker mints its device, installs a delegated grant, signs a real sync and serves reads", async () => {
+    await corsToNode();
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "real"));
+    const spec = { identity: { host, space, principal: nodeOwner.did }, space, prefix: "notes/", allowSecrets: false };
+    const opened = (await page.evaluate((s) => window.__kv.open("s", "h", s as never), spec)) as Outcome<{ deviceDid: string }>;
+    if (!opened.ok) throw new Error(`open failed: ${opened.code} ${opened.message}`);
+    const requested = [{ service: "tinycloud.kv", space, path: "notes/", actions: ["get", "list", "metadata", "sync"] }];
+    // `tinycloud.kv/sync` is explicit-only (TC-732): the owner grants itself the runtime permission first.
+    await nodeOwner.grantRuntimePermissions(requested as never, { expiry: "1d" });
+    const minted = await nodeOwner.delegateTo(opened.value.deviceDid, requested as never, {});
+    const jwt = minted.delegation.delegationHeader.Authorization;
+    expect(await page.evaluate((ucan) => window.__kv.installGrant("h", ucan), jwt)).toMatchObject({ ok: true, value: { state: "pending", unconstrained: true } });
+    expect(await page.evaluate(() => window.__kv.sync("h", 3))).toMatchObject({ ok: true, value: { status: "synced", coverage: "complete", syncedThroughEpoch: 3 } });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({
+      ok: true,
+      value: { status: "present", value: "from the node", meta: { coverage: "complete", authority: "valid", syncedThroughEpoch: 3 } },
+    });
+    expect(await page.evaluate(() => window.__kv.grant("h"))).toMatchObject({ ok: true, value: { state: "active" } });
+  }, 120_000);
+
+  test("TinyCloudNode with replication on indexedDbReplicaStorage serves reads from the replica", async () => {
+    await corsToNode();
+    const page = await context.newPage();
+    await page.goto(`${origin}/node.html`);
+    await page.waitForFunction(() => window.__node !== undefined);
+    const result = await page.evaluate((input) => window.__node.run(input), { host, privateKey: `0x${randomBytes(32).toString("hex")}` });
+    expect(result.value).toBe("served locally");
+    expect(result.syncs).toContain("ok");
+    // After the sync, a covered get is answered by the replica.
+    expect(result.reads.at(-1)).toEqual({ op: "get", source: "replica", reason: "hit", key: expect.stringContaining("notes/a") });
+  }, 180_000);
 });
