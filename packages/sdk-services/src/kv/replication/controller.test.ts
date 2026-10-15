@@ -13,8 +13,16 @@ import { CONSENT_WINDOW_MS, DEFAULT_GRANT_TTL_MS } from "./contractConstants";
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes/"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
+function lastEvent(events: readonly ReplicationEvent[], matches: (event: ReplicationEvent) => boolean): ReplicationEvent | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (matches(events[index]!)) return events[index];
+  }
+  return undefined;
+}
+
 
 function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localListKeys = ["notes/a"], localGetErrorCode = "INTEGRITY_ERROR", beforeLocalGet, syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, canRenew = false, planPath = "runtime", setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false, delivery, onDeny, consentAnchor, durableDeadline, anchorError = false }: {
+  durable?: boolean;
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
@@ -49,7 +57,11 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
 } = {}) {
   let now = 1_000_000;
   let listReads = 0;
-  let localStatus = { ...status(initialEpoch), ...statusOverrides };
+  let localStatus = {
+    ...status(initialEpoch),
+    ...(delivery ? { grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000 + DEFAULT_GRANT_TTL_MS, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS } } : {}),
+    ...statusOverrides,
+  };
   let localReads = 0;
   let syncs = 0;
   let opens = 0;
@@ -155,6 +167,7 @@ describe("consent deadline delivery", () => {
     let decision: "allow" | "consent_expired" | "gated" = "allow";
     let denials = 0;
     const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
       delivery: () => decision === "allow" ? { status: "allow" } : decision === "consent_expired" ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "gated", gate: "stamp_stale" },
       onDeny: () => { denials++; decision = "gated"; },
     });
@@ -178,6 +191,7 @@ describe("consent deadline delivery", () => {
     let decision: "allow" | "consent_expired" | "gated" = "allow";
     let denials = 0;
     const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
       delivery: () => decision === "allow" ? { status: "allow" } : decision === "consent_expired" ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "gated", gate: "stamp_stale" },
       onDeny: () => { denials++; decision = "gated"; },
       localGetStatus: "throw",
@@ -219,7 +233,9 @@ describe("consent deadline delivery", () => {
     const timers: number[] = [];
     const env = setup({
       durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
-      statusOverrides: { grant: { ...status().grant!, consentDeadline: 1_000_000 + 2 * CONSENT_WINDOW_MS } },
+      sessionOnly: true,
+      sessionRefused: true,
+      statusOverrides: { grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000 + DEFAULT_GRANT_TTL_MS, consentDeadline: 1_000_000 + 2 * CONSENT_WINDOW_MS } },
       delivery: () => ({ status: "allow" }),
       setTimeoutImpl: (_run, ms) => { timers.push(ms); return () => undefined; },
     });
@@ -282,6 +298,7 @@ describe("consent deadline delivery", () => {
     let expired = false;
     let denials = 0;
     const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
       delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
       onDeny: () => { denials++; },
       onSync: () => { expired = true; },
@@ -313,6 +330,7 @@ describe("consent deadline delivery", () => {
   test("a verified get cannot return bytes or a divergence after consent expires during network comparison", async () => {
     let expired = false;
     const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
       verify: true,
       delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
     });
@@ -327,6 +345,7 @@ describe("consent deadline delivery", () => {
   test("a verified list cannot return keys or a divergence after consent expires during network comparison", async () => {
     let expired = false;
     const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
       verify: true,
       delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
     });
@@ -400,6 +419,28 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("local");
     expect(env.counters()).toMatchObject({ installs: 0, networkCalls: 0 });
   });
+  test("a compact restored grant with missing or expired effective authority cannot serve local bytes", async () => {
+    for (const grant of [
+      { ...status().grant!, installedAt: 1_000_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS },
+      { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS },
+    ]) {
+      const env = setup({
+        sessionOnly: true,
+        sessionRefused: true,
+        statusOverrides: { grant },
+        delivery: () => ({ status: "allow" }),
+      });
+      const result = await env.controller.get(readRequest(env.network));
+      expect(result.ok && result.data.data).toBe("network");
+      expect(env.counters()).toMatchObject({ localReads: 0, installs: 0, networkCalls: 1 });
+    }
+  });
+  test("a full expirationless session cannot reuse an installed grant without a verified owner anchor", async () => {
+    const env = setup({ delivery: () => ({ status: "allow" }) });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ localReads: 0, installs: 0, networkCalls: 1 });
+  });
   test("silent renewal requires a verified owner session plan for this prefix", async () => {
     for (const planPath of ["session", "runtime"] as const) {
       let mints = 0;
@@ -439,7 +480,7 @@ describe("consent deadline delivery", () => {
     const env = setup({
       consentAnchor: { at: 1_000_000, source: "siwe" },
       delivery: () => ({ status: "allow" }),
-      statusOverrides: { grant: { ...status().grant!, expiresAt: 2_000_000, installedAt: 1_000_000, effectiveExpiresAt: 1_010_000 } },
+      statusOverrides: { grant: { ...status().grant!, expiresAt: 2_000_000, installedAt: 1_000_000, effectiveExpiresAt: 1_010_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS } },
     });
     await env.controller.get(readRequest(env.network));
     expect(env.events).toContainEqual(expect.objectContaining({
@@ -460,6 +501,7 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("network");
     expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "GRANT_EXPIRED" }));
     expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.grant", replicaId: "opaque-partition", action: "expired", code: "GRANT_EXPIRED" }));
+    expect(await env.controller.status()).toMatchObject([{ prefix: "notes/", state: "unavailable", reason: "grant_expired", errorCode: "GRANT_EXPIRED" }]);
   });
 });
 
@@ -837,7 +879,7 @@ describe("KVReplication list parity and cursor rules", () => {
     expect(result.ok).toBe(true);
     expect(networkCalls).toBe(1);
     expect(env.listReads()).toBe(0);
-    expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 0 });
+    expect(env.counters()).toMatchObject({ localReads: 0, syncs: 0, opens: 0, networkCalls: 0 });
     const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
     expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
   });
@@ -1178,7 +1220,7 @@ describe("KVReplication controller catch-up fence", () => {
     await env.pending.update((state) => { state.committedEpoch = 4; });
     const value = await env.controller.get(readRequest(env.network));
     expect(value.ok && value.data.data).toBe("local");
-    expect(env.counters()).toEqual({ localReads: 1, syncs: 1, opens: 1, networkCalls: 0 });
+    expect(env.counters()).toMatchObject({ localReads: 1, syncs: 1, opens: 1, networkCalls: 0 });
     expect(env.events.some((event) => event.type === "replication.sync" && event.outcome === "ok")).toBe(true);
   });
 
@@ -1204,7 +1246,7 @@ describe("KVReplication controller catch-up fence", () => {
     const env = setup();
     const value = await env.controller.get({ ...readRequest(env.network), options: { source: "network" } });
     expect(value.ok).toBe(true);
-    expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 1 });
+    expect(env.counters()).toMatchObject({ localReads: 0, syncs: 0, opens: 0, networkCalls: 1 });
     const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
     expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
   });
@@ -1281,7 +1323,7 @@ describe("A2 lifecycle review regressions", () => {
           expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
           expect(networkCalls).toBe(0);
         } else {
-          expect(result.ok && (op === "get" ? result.data.data : result.data.keys[0])).toBe(op === "get" ? "network" : "notes/server");
+          expect(result.ok && (op === "get" && "data" in result.data ? result.data.data : "keys" in result.data ? result.data.keys[0] : undefined)).toBe(op === "get" ? "network" : "notes/server");
           expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(1);
           if (op === "get") expect(env.counters().networkCalls).toBe(1);
           else expect(networkCalls).toBe(1);
@@ -1370,10 +1412,10 @@ describe("A2 lifecycle review regressions", () => {
             expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
             expect(networkCalls).toBe(0);
           } else {
-            expect(result.ok && result.data.data).toBe("network");
+            expect(result.ok && "data" in result.data && result.data.data).toBe("network");
             expect(env.counters().networkCalls).toBe(1);
             expect(env.counters().localReads).toBe(0);
-            expect(env.events.findLast((event) => event.type === "replication.read" && event.source === "network")).toMatchObject({ code: failure === "throw" ? "STATUS_FAILURE" : "STATUS_TIMEOUT" });
+            expect(lastEvent(env.events, (event) => event.type === "replication.read" && event.source === "network")).toMatchObject({ code: failure === "throw" ? "STATUS_FAILURE" : "STATUS_TIMEOUT" });
           }
           expect(timers.every((timer) => timer.cancelled)).toBe(true);
         }
@@ -1449,7 +1491,7 @@ describe("A2 lifecycle review regressions", () => {
         await started;
         timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled)!.fn();
         const result = await request;
-        const event = env.events.findLast((item) => item.type === "replication.read");
+        const event = lastEvent(env.events, (item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
         expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(0);
         expect(op === "get" ? env.counters().networkCalls : networkCalls).toBe(1);
@@ -1502,7 +1544,7 @@ describe("A2 lifecycle review regressions", () => {
         else if (!("aborted" in scenario)) finishSync();
         const result = await request;
         const localReads = op === "get" ? env.counters().localReads : env.listReads();
-        const event = env.events.findLast((item) => item.type === "replication.read");
+        const event = lastEvent(env.events, (item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
         expect(localReads).toBe(scenario.local);
         expect(op === "get" ? env.counters().networkCalls : listNetworkCalls).toBe(scenario.network);
@@ -1634,7 +1676,7 @@ describe("A2 lifecycle review regressions", () => {
       expect(result.ok && result.data.keys).toEqual(["notes/server"]);
       expect(env.listReads()).toBe(0);
       expect(networkCalls).toBe(1);
-      expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+      expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
         type: "replication.read", source: "network", reason: "REPLICA_BEHIND_OWN_WRITES",
       });
     }
@@ -1662,7 +1704,7 @@ describe("A2 lifecycle review regressions", () => {
       expect(result.ok && result.data.keys).toEqual(["notes/server"]);
       expect(env.listReads()).toBe(0);
       expect(networkCalls).toBe(1);
-      expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+      expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
         type: "replication.read", source: "network", reason: "REPLICA_BEHIND_OWN_WRITES",
       });
     }
@@ -1760,7 +1802,7 @@ describe("A2 lifecycle review regressions", () => {
         else await env.controller.purge();
         const result = await waiter;
         await owner;
-        const event = env.events.findLast((item) => item.type === "replication.read");
+        const event = lastEvent(env.events, (item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
         expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(0);
         expect(networkCalls).toBe(1);

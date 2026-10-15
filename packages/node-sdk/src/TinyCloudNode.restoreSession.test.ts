@@ -157,6 +157,20 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     expect(authority.canRenew).toBe(true);
   });
 
+  test("owner proof requires overlapping uncaveated KV get and sync paths", async () => {
+    const cases: Array<[Record<string, Record<string, string[]>>, boolean]> = [
+      [{ kv: { "notes/": ["tinycloud.kv/get"], "notes/sub/": ["tinycloud.kv/sync"] } }, true],
+      [{ kv: { "notes/": ["tinycloud.kv/get"], "other/": ["tinycloud.kv/sync"] } }, false],
+    ];
+    for (const [abilities, anchored] of cases) {
+      const proof = await signedRestorableSession({ abilities });
+      const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
+      await node.restoreSession(proof);
+      const authority = await replicationAuthorityForTest(node);
+      expect(authority.consentAnchor?.() !== null).toBe(anchored);
+    }
+  });
+
   test("verified expirationless SIWE without KV get+sync still cannot anchor replica consent", async () => {
     const proof = await signedRestorableSession({ expirationless: true });
     const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
