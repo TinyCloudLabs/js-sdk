@@ -220,11 +220,13 @@ function denyFloor(gate: Gate | undefined, tombstone: Tombstone | null): { epoch
 }
 
 
-function exclusive<T>(name: string, section: () => Promise<T>): Promise<T> {
+function exclusive<T>(name: string, section: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (typeof navigator === "undefined" || typeof navigator.locks?.request !== "function") {
     return Promise.reject(gatedError("gate_unavailable", "The origin Web Lock is unavailable."));
   }
-  return navigator.locks.request(name, section);
+  return signal === undefined
+    ? navigator.locks.request(name, section)
+    : navigator.locks.request(name, { signal }, section);
 }
 
 function deleteKvDatabase(): Promise<DeleteOutcome> {
@@ -749,7 +751,7 @@ export function createIndexedDbLifecycle(options: {
         }
         const pass = await erasePendingLocked({ signal });
         return { erased: pass.erased, failed: [...failed, ...pass.failed], remaining: pass.remaining, consentExpired: expiry.status === "denied" || expiry.status === "deleted" };
-      });
+      }, signal);
     } catch (error) {
       // Outcome unknown: report one outstanding intent so `purgePending` stays set.
       return { erased: [], failed: [{ id: "recover", code: codeOf(error) }], remaining: 1 };
