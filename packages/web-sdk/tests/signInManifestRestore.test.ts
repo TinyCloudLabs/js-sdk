@@ -528,3 +528,23 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("signIn() does not sign in again after a sign-out during its restore", async () => {
+  const tcw = new TinyCloudWeb({});
+  await (tcw as any)._initPromise;
+  const node = {
+    address: undefined,
+    signIn: mock(async () => undefined),
+    signOut: mock(async () => undefined),
+  };
+  (tcw as any)._node = node;
+  (tcw as any)._initPromise = Promise.resolve();
+  (tcw as any).restoreSession = mock(async () => {
+    await tcw.signOut();
+    return { status: "restore-failed", error: new Error("Session restore was cancelled by sign-out.") };
+  });
+
+  await expect(tcw.signIn()).rejects.toThrow("cancelled by sign-out");
+  expect(node.signOut).toHaveBeenCalledTimes(1);
+  expect(node.signIn).not.toHaveBeenCalled();
+});

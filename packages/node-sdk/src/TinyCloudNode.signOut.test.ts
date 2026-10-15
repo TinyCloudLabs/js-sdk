@@ -272,7 +272,7 @@ describe("TinyCloudNode.signOut and delegated authority", () => {
   });
 });
 
-/** A wallet signer whose signatures wait until `release()`. */
+/** A wallet signer whose next signature (once gated) waits until `release()`. */
 function gatedSigner() {
   const inner = new PrivateKeySigner(OWNER_KEY);
   const started = Promise.withResolvers<void>();
@@ -284,6 +284,7 @@ function gatedSigner() {
       getChainId: () => inner.getChainId(),
       signMessage: async (message: string | Uint8Array) => {
         if (gated) {
+          gated = false;
           started.resolve();
           await gate.promise;
         }
@@ -345,15 +346,56 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
       autoCreateSpace: false,
     });
     const signingIn = node.signIn();
+    signingIn.catch(() => undefined);
     await saving.promise;
-    const signedOut = node.signOut();
+    await node.signOut();
+    const requestsAtSignOut = requests.length;
     releaseSave.resolve();
 
     await expect(signingIn).rejects.toThrow("cancelled by sign-out");
-    await signedOut;
+    // The cancelled sign-in never published its session or made another request.
+    expect(requests.length).toBe(requestsAtSignOut);
     expect(node.session).toBeUndefined();
     expect(node.restorableSession).toBeUndefined();
     expect(sessionStorage.exists(await new PrivateKeySigner(OWNER_KEY).getAddress())).toBe(false);
+  });
+
+  test("a cancelled sign-in does not end a session restored after the sign-out", async () => {
+    recordRequests();
+    const inner = new PrivateKeySigner(OWNER_KEY);
+    const lookup = Promise.withResolvers<void>();
+    const releaseLookup = Promise.withResolvers<void>();
+    let holdLookup = true;
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: {
+        getAddress: async () => {
+          if (holdLookup) {
+            holdLookup = false;
+            lookup.resolve();
+            await releaseLookup.promise;
+          }
+          return inner.getAddress();
+        },
+        getChainId: () => inner.getChainId(),
+        signMessage: (message: string | Uint8Array) => inner.signMessage(message),
+      },
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+    });
+    const signingIn = node.signIn();
+    signingIn.catch(() => undefined);
+    await lookup.promise;
+    await node.signOut();
+    const proof = await signedSession();
+    await node.restoreSession(proof);
+    releaseLookup.resolve();
+
+    await expect(signingIn).rejects.toThrow("cancelled by sign-out");
+    expect(node.restorableSession?.delegationCid).toBe(proof.delegationCid);
+    const before = requests.length;
+    await node.kv.get("notes/a");
+    expect(requests.length).toBeGreaterThan(before);
   });
 
   test("a delegated request in flight is aborted by sign-out", async () => {
@@ -415,5 +457,41 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     await expect(granting).rejects.toThrow("retired");
     expect(requests).toEqual([]);
     expect(node.getRuntimePermissionDelegations()).toEqual([]);
+  });
+
+  test("a sign-in waiting on the wallet across sign-out and a new sign-in does not end the new session", async () => {
+    requests = [];
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      requests.push(url);
+      const body = url.endsWith("/info")
+        ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
+        : { activated: [], skipped: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const gated = gatedSigner();
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: gated.signer,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      enablePublicSpace: false,
+      autoCreateSpace: false,
+    });
+    gated.gateNextSignatures();
+    const first = node.signIn();
+    first.catch(() => undefined);
+    await gated.signing;
+    await node.signOut();
+    await node.signIn();
+    const second = node.restorableSession?.delegationCid;
+    gated.release();
+
+    await expect(first).rejects.toThrow("Sign-in was cancelled by sign-out.");
+    expect(node.restorableSession?.delegationCid).toBe(second);
+    const before = requests.length;
+    await node.kv.get("notes/a");
+    expect(requests.length).toBeGreaterThan(before);
   });
 });

@@ -1291,6 +1291,11 @@ export class TinyCloudNode {
    * starts and does not establish its session once it has changed.
    */
   private sessionEpoch = 0;
+  /**
+   * Numbers sign-in and restore attempts. A cancelled attempt cleans up only
+   * while it is still the latest, so it never ends a newer session.
+   */
+  private latestSessionAttempt = 0;
 
   /**
    * True when the last signIn() detected an interactive signer and skipped
@@ -2148,13 +2153,16 @@ export class TinyCloudNode {
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
+    const attempt = ++this.latestSessionAttempt;
     await this.signOutInFlight;
     try {
       await this.establishSignIn(epoch, options);
     } catch (error) {
-      // A sign-out during sign-in wins: end whatever this sign-in established.
-      // (Overlapping sign-ins on one instance are not supported.)
-      if (epoch !== this.sessionEpoch) await this.endSession();
+      // A sign-out during sign-in wins: end whatever this sign-in established,
+      // unless a newer sign-in or restore has started since.
+      if (epoch !== this.sessionEpoch && attempt === this.latestSessionAttempt) {
+        await this.endSession();
+      }
       throw error;
     }
   }
@@ -2506,6 +2514,8 @@ export class TinyCloudNode {
     }
 
     const auth = this.auth as NodeUserAuthorization;
+    // Sign-out retires this graph; no further bootstrap step runs after that.
+    const graph = this._serviceGraph;
     const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
     const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
     const warnings: BootstrapWarning[] = [];
@@ -2517,6 +2527,7 @@ export class TinyCloudNode {
 
     for (const step of steps) {
       if (step.kind !== "session") continue;
+      graph.assertActive();
       if (step.space === "default" && canReusePrimaryBootstrapSession && primarySession) {
         sessions.set(step.space, primarySession);
         continue;
@@ -2548,6 +2559,7 @@ export class TinyCloudNode {
 
     for (const step of steps) {
       if (step.kind !== "host") continue;
+      graph.assertActive();
       const hosted = await auth.hostOwnedSpaceResult(step.spaceId, "bootstrap-host");
       if (!hosted.success) {
         throw Object.assign(
@@ -2561,6 +2573,7 @@ export class TinyCloudNode {
 
     for (const step of steps) {
       if (step.kind !== "activate") continue;
+      graph.assertActive();
       const session = sessions.get(step.space);
       if (!session) {
         throw new Error(`Missing bootstrap session for ${step.space}`);
@@ -2584,6 +2597,7 @@ export class TinyCloudNode {
     }
 
     for (const step of steps) {
+      graph.assertActive();
       if (step.kind === "account-index-schema") {
         const ensured = await this.account.index.ensure();
         if (!ensured.ok) {
@@ -3541,6 +3555,7 @@ export class TinyCloudNode {
     // Read synchronously: a sign-out called after this restore started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
+    const attempt = ++this.latestSessionAttempt;
     await this.signOutInFlight;
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
@@ -3820,7 +3835,7 @@ export class TinyCloudNode {
     if (epoch !== this.sessionEpoch) {
       oldGraph.retire();
       (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
-      await this.endSession();
+      if (attempt === this.latestSessionAttempt) await this.endSession();
       this.assertSessionEpoch(epoch, "Session restore");
     }
     oldGraph.retire();
@@ -3834,7 +3849,7 @@ export class TinyCloudNode {
     await this.bindReplicationRuntime(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
     (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
     if (epoch !== this.sessionEpoch) {
-      await this.endSession();
+      if (attempt === this.latestSessionAttempt) await this.endSession();
       this.assertSessionEpoch(epoch, "Session restore");
     }
   }
