@@ -1,10 +1,11 @@
 /**
  * Quota contract (TC-858 Phase 2, CONTRACT.md §4). Types only.
  *
- * Browser: `maxBytes` is origin-wide across every partition in the origin database; the ledger
- * lives in the `quota` control store, is constructed inside the worker (`ledgerFor`), and is
- * called inside `ReplicaGateTx.run` page-commit transactions and exempt erase transactions.
- * `accountErase` is idempotent once the partition's entry is gone (crash replay is safe).
+ * Browser: `maxBytes` is origin-wide over the deterministic application encoding of
+ * ciphertext entries/blobs/meta and sealed owner-device plus grant/first-install device
+ * records. The ledger lives in the `quota` control store; page and device writes admit
+ * before any put, then account in the same guarded transaction. Deny releases the reserved
+ * device bucket atomically with key deletion; partition erase remains idempotent.
  * Node/CLI: `maxBytes` is per profile (per storage `dir`); there is no ledger — usage is derived
  * from stored content, so erase replay is safe — and the `admit` hook runs inside `applyPage`'s
  * guarded mutation (profile lock held). `minFreeBytes` applies only in the browser.
@@ -30,9 +31,11 @@ export interface ReplicaPageAdmission {
 }
 
 /**
- * Browser admission uses the exact signed net application-encoded byte change of persisted
- * ciphertext entries, blobs and meta. New rows are sealed before opening the transaction;
- * old stored rows are measured inside it before any mutation. Replacements/GC may release space.
+ * Browser page admission uses the exact signed net application-encoded byte change of
+ * persisted ciphertext entries, blobs and meta. S5's browser ledger separately combines
+ * measured device-row deltas for owner/stamp writes in a reserved device bucket. New rows
+ * are sealed before opening the transaction; old stored rows are measured inside it.
+ * Replacements/GC may release space. Node's page admission stays unchanged.
  */
 export interface ReplicaBrowserPageAdmission {
   partitionId: string;
@@ -42,9 +45,11 @@ export interface ReplicaBrowserPageAdmission {
 }
 
 /**
- * Browser ledger seam, called by the adapter in guarded write or exempt erase transactions
- * that include the `quota` store. Every sealed meta mutation (including lease/status) uses
- * the same ledger as page/repair/GC. Implementations MUST only await requests on `tx`.
+ * Browser ledger seam, called by the adapter in guarded write or exempt erase/deny
+ * transactions that include the `quota` store. Every sealed meta mutation (including
+ * lease/status) and measured device write uses the origin ledger. Implementations MUST
+ * only await requests on `tx`; S5's browser implementation adds combined-row methods
+ * without changing this shared public interface.
  */
 export interface ReplicaQuotaLedger<Tx> {
   /** Read outside any transaction, just before it: `navigator.storage.estimate()` quota − usage. */
