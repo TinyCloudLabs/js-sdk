@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { indexedDB } from "fake-indexeddb";
 
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
-import { ledgerFor } from "./ledger.js";
+import { DEVICE_QUOTA_PARTITION_ID, ledgerFor } from "./ledger.js";
 import { measureSealedRow, seal } from "./sealed.js";
 
 let nextDatabase = 0;
@@ -164,6 +164,80 @@ describe("origin ciphertext quota ledger", () => {
       const read = db.transaction(["quota"], "readonly");
       expect(await stored(read, "quota", "total")).toEqual({ bytes: 60 });
       expect(await stored(read, "quota", `partition:${two}`)).toBeUndefined();
+      await transactionDone(read);
+    } finally {
+      db.close();
+    }
+  });
+  test("admits one combined device gain and partition release at the origin floor and cap", async () => {
+    const db = await database();
+    try {
+      const pid = "c".repeat(64);
+      const ledger = ledgerFor({ maxBytes: 120, minFreeBytes: 50 });
+      const first = db.transaction(["quota"], "readwrite");
+      const firstDone = transactionDone(first);
+      await ledger.accountCommit(first, { partitionId: pid, deltaBytes: 100 });
+      await firstDone;
+
+      const overCap = db.transaction(["quota"], "readwrite");
+      const overCapDone = transactionDone(overCap);
+      await expect(ledger.admitRows(overCap, {
+        partitionId: pid, partitionDeltaBytes: -40, deviceDeltaBytes: 61, freeBytes: 71,
+      })).rejects.toMatchObject({ code: "STORAGE_BUDGET" });
+      overCap.abort();
+      await expect(overCapDone).rejects.toThrow();
+
+      const belowFloor = db.transaction(["quota"], "readwrite");
+      const belowFloorDone = transactionDone(belowFloor);
+      await expect(ledger.admitRows(belowFloor, {
+        partitionId: pid, partitionDeltaBytes: -40, deviceDeltaBytes: 60, freeBytes: 69,
+      })).rejects.toMatchObject({ code: "STORAGE_BUDGET" });
+      belowFloor.abort();
+      await expect(belowFloorDone).rejects.toThrow();
+
+      const combined = db.transaction(["quota"], "readwrite");
+      const combinedDone = transactionDone(combined);
+      const rows = { partitionId: pid, partitionDeltaBytes: -40, deviceDeltaBytes: 60 };
+      await ledger.admitRows(combined, { ...rows, freeBytes: 70 });
+      await ledger.accountRows(combined, rows);
+      await combinedDone;
+
+      const read = db.transaction(["quota"], "readonly");
+      expect(await stored(read, "quota", "total")).toEqual({ bytes: 120 });
+      expect(await stored(read, "quota", `partition:${pid}`)).toEqual({ bytes: 60 });
+      expect(await stored(read, "quota", "partition:device")).toEqual({ bytes: 60 });
+      await transactionDone(read);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("erases the separate device bucket idempotently without releasing partition usage", async () => {
+    const db = await database();
+    try {
+      const pid = "d".repeat(64);
+      const ledger = ledgerFor({ maxBytes: 200, minFreeBytes: 0 });
+      const seed = db.transaction(["quota"], "readwrite");
+      const seedDone = transactionDone(seed);
+      await ledger.accountRows(seed, { partitionId: pid, partitionDeltaBytes: 75, deviceDeltaBytes: 0 });
+      await seedDone;
+      const owner = db.transaction(["quota"], "readwrite");
+      const ownerDone = transactionDone(owner);
+      await ledger.admitRows(owner, { partitionId: DEVICE_QUOTA_PARTITION_ID, partitionDeltaBytes: 0, deviceDeltaBytes: 80, freeBytes: 1000 });
+      await ledger.accountRows(owner, { partitionId: DEVICE_QUOTA_PARTITION_ID, partitionDeltaBytes: 0, deviceDeltaBytes: 80 });
+      await ownerDone;
+      const erase = db.transaction(["quota"], "readwrite");
+      const eraseDone = transactionDone(erase);
+      await ledger.accountErase(erase, { partitionId: DEVICE_QUOTA_PARTITION_ID, bytes: 80 });
+      await eraseDone;
+      const replay = db.transaction(["quota"], "readwrite");
+      const replayDone = transactionDone(replay);
+      await ledger.accountErase(replay, { partitionId: DEVICE_QUOTA_PARTITION_ID, bytes: 80 });
+      await replayDone;
+      const read = db.transaction(["quota"], "readonly");
+      expect(await stored(read, "quota", "total")).toEqual({ bytes: 75 });
+      expect(await stored(read, "quota", `partition:${pid}`)).toEqual({ bytes: 75 });
+      expect(await stored(read, "quota", "partition:device")).toBeUndefined();
       await transactionDone(read);
     } finally {
       db.close();
