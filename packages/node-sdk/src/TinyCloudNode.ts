@@ -876,8 +876,12 @@ export interface TinyCloudNodeConfig {
   autoBootstrapAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
-  /** Optional read-through replica configuration; disabled unless explicitly enabled. */
-  replication?: ReplicationOptions & { storage: KVReplicaStorage; mode?: "background" | "foreground" };
+  /**
+   * Optional read-through replica configuration; disabled unless explicitly enabled. `profileDir`
+   * holds `replica-gate.json`: required when enabled; restore refuses with `REPLICA_GATED`
+   * (`gate_unavailable`) when absent.
+   */
+  replication?: ReplicationOptions & { storage: KVReplicaStorage; mode?: "background" | "foreground"; profileDir?: string };
 }
 
 /**
@@ -1201,6 +1205,27 @@ export class TinyCloudNode {
   private replicationRuntimeInstance?: ReplicationRuntime;
   private replicationDelegateSession?: Pick<TinyCloudSession, "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk">;
   private replicationScopeError?: string;
+  /** Mints the replica session stamp on each fresh sign-in (TC-858 §4.1). Undefined when replication is off. */
+  private readonly establishReplicaStamp = async (input: {
+    address: string;
+    chainId: number;
+    siweIssuedAt: string;
+  }) => {
+    if (!this.config.replication?.enabled) return undefined;
+    const profileDir = this.config.replication.profileDir;
+    if (!profileDir) {
+      throw Object.assign(new Error("Replica sign-in requires replication.profileDir."), {
+        code: "REPLICA_GATED" as const,
+        gate: "gate_unavailable" as const,
+      });
+    }
+    const gate = await getNodeReplicationLoaders().gate();
+    const issuedAtMs = Date.parse(input.siweIssuedAt);
+    if (!Number.isFinite(issuedAtMs)) {
+      throw new Error("Replica sign-in requires a valid SIWE issued-at time.");
+    }
+    return gate.establishSessionStamp(profileDir, pkhDid(input.address, input.chainId), { siweIssuedAt: issuedAtMs });
+  };
   private readonly replicationControl?: ReplicationControl;
   private _sql?: SQLService;
   private _duckdb?: DuckDbService;
@@ -1728,6 +1753,7 @@ export class TinyCloudNode {
       signer: this.signer!,
       signStrategy: config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      establishReplicaStamp: this.establishReplicaStamp,
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
@@ -2050,12 +2076,43 @@ export class TinyCloudNode {
 
   private async endSession(): Promise<void> {
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
+    const leavingChainId = this._chainId;
     this.teardownSession();
+    let denied: { status: string; code?: string } | undefined;
     try {
       await this.accountRegistryTail;
       if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
     } finally {
-      if (leavingAddress) await this.clearPersistedSessionFor(leavingAddress);
+      if (leavingAddress) {
+        denied = await this.denyReplicaGate(leavingAddress, leavingChainId);
+        await this.clearPersistedSessionFor(leavingAddress);
+      }
+    }
+    if (denied?.status === "unguarded") {
+      throw new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the profile may still be restorable.`);
+    }
+  }
+
+  /**
+   * Step 1 of replica sign-out. Never rejects: failures come back as `unguarded` so the session
+   * is still cleared. Returns `undefined` when replication is off.
+   */
+  private async denyReplicaGate(
+    address: string,
+    chainId: number,
+  ): Promise<{ status: string; code?: string } | undefined> {
+    const profileDir = this.config.replication?.profileDir;
+    if (!this.config.replication?.enabled || !profileDir) return undefined;
+    try {
+      const gate = await getNodeReplicationLoaders().gate();
+      // Node profile replicas are erased by the CLI before clear. The node keeps no partition index
+      // of its own, so it reports no intents here.
+      return await gate.denyGate(profileDir, { reason: "sign_out", principal: pkhDid(address, chainId) }, async () => []);
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "gate_unavailable";
+      return { status: "unguarded", code };
     }
   }
 
@@ -3557,6 +3614,13 @@ export class TinyCloudNode {
      * lazily via the registry/fallback on the first host-needing call.
      */
     tinycloudHosts?: string[];
+    /**
+     * Replica gate stamp persisted at sign-in (sdk-core `replicaStamp`).
+     * Validated against the node account gate only when replication is
+     * enabled; ignored otherwise. Absent or null is refused when replication
+     * is enabled (`not_established`).
+     */
+    replicaStamp?: { incarnation: string; lifecycleEpoch: number } | null;
   }): Promise<void> {
     // Read synchronously: a sign-out called after this restore started wins,
     // while a sign-out already in progress finishes before it starts.
@@ -3732,6 +3796,21 @@ export class TinyCloudNode {
           };
         }
       }
+    }
+    if (this.config.replication?.enabled) {
+      // Fail closed: the persisted stamp must match this profile's gate for the verified principal.
+      const profileDir = this.config.replication.profileDir;
+      if (profileDir === undefined) {
+        throw Object.assign(new Error("Replica restore requires replication.profileDir."), {
+          code: "REPLICA_GATED" as const,
+          gate: "gate_unavailable" as const,
+        });
+      }
+      if (replicationPrincipal === undefined) {
+        throw new InvalidRestoredSessionError(replicationScopeError ?? "Replica restore requires a verified principal.");
+      }
+      const gate = await getNodeReplicationLoaders().gate();
+      await gate.restoreSessionStamp(profileDir, replicationPrincipal, sessionData.replicaStamp ?? undefined);
     }
     const stagedNodeDid = stagedAddress
       ? pkhDid(stagedAddress, stagedChainId)
@@ -4406,6 +4485,7 @@ export class TinyCloudNode {
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      establishReplicaStamp: this.establishReplicaStamp,
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
@@ -4482,6 +4562,7 @@ export class TinyCloudNode {
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
+      establishReplicaStamp: this.establishReplicaStamp,
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
