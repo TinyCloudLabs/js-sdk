@@ -4,13 +4,13 @@
  * All instants are milliseconds since epoch; all durations are milliseconds.
  */
 
-/** Where the consent anchor came from, in fallback order. */
+/** Verified source selected by session form; `first_install` is expiry-only. */
 export type ReplicaConsentSource =
-  /** `issuedAt` of a validated signed SIWE. */
+  /** Verified owner SIWE `issuedAt` with finite signed expiration and exact-space KV witness. */
   | "siwe"
-  /** `iat` of the independently verified owner-authorizing proof, never a child leaf's new timestamp. */
+  /** `iat` of the oldest independently verified owner-authorizing proof, never a child leaf. */
   | "delegation_iat"
-  /** `nbf` of that same owner proof; a leaf signature alone is insufficient. */
+  /** `nbf` of that same oldest owner proof; a leaf signature alone is insufficient. */
   | "delegation_nbf"
   /** Neither: persisted first grant install time, for expiry only; never session establishment. */
   | "first_install";
@@ -26,8 +26,11 @@ export interface ReplicaConsentAnchor {
 }
 
 /**
- * Returns the anchor with `at` clamped to ≤ now, or null when `at` is not finite (callers then
- * fall back down the source order). S4 implements it as `clampConsentAnchor` in `grantPolicy.ts`.
+ * Returns the eligible anchor with `at` clamped to ≤ now, or null when it is not finite.
+ * A full SIWE session with missing/invalid signed expiration or issuedAt remains unanchored;
+ * never fall through to a compact leaf or first-install timestamp. Compact-only sessions
+ * may try the same independently verified oldest owner proof's `nbf` after invalid `iat`.
+ * S4 implements this as `clampConsentAnchor` in `grantPolicy.ts`.
  */
 export type ClampConsentAnchor = (anchor: ReplicaConsentAnchor, now: number) => ReplicaConsentAnchor | null;
 
@@ -39,11 +42,15 @@ export interface ReplicaGrantPolicy {
   /** Validated: 0 < grantTtlMs ≤ MAX_GRANT_TTL_MS. */
   grantTtlMs: number;
   /**
-   * From `ReplicationAuthority.consentAnchor()`: validated SIWE `issuedAt`, else the independently
-   * verified owner-authorizing proof's signed `iat`, else its `nbf` (never a fresh child leaf
-   * minted under an old owner grant). Null means no verified source; storage uses persisted
-   * first-install time only to bound grant expiry, never as a freshness proof for a session
-   * stamp. That anchor survives partition reset, purge and reinstall and is cleared only by `deny`.
+   * From `ReplicationAuthority.consentAnchor()`: a full SIWE session requires an
+   * independently verified signed owner `issuedAt`, finite signed expiration and
+   * exact-space KV get+sync witness. A compact-only session instead needs the oldest
+   * independently verified owner-authorizing proof's `iat`, then its `nbf` (never a
+   * fresh child leaf minted under an old owner grant). Invalid SIWE does not fall
+   * through to compact/first-install sources.
+   * Null means no verified source; storage uses its persisted first-install time only
+   * to bound grant expiry, never as freshness proof for a session stamp. That anchor
+   * survives partition reset, purge and reinstall, and is cleared only by `deny`.
    */
   consentAnchor: ReplicaConsentAnchor | null;
 }
@@ -53,7 +60,7 @@ export interface EffectiveGrantExpiryInput {
   signedExpiresAt: number | null;
   installedAt: number;
   grantTtlMs: number;
-  /** `consentDeadlineMs(anchor)`. */
+  /** `min(consentDeadlineMs(policyAnchor), durableGateDeadline)` when browser gate is active. */
   consentDeadline: number;
 }
 

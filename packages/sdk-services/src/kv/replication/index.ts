@@ -20,6 +20,7 @@ export type {
   ReplicaAuthorityState,
   ReplicaCoverage,
   ReplicaDevice,
+  ReplicaGatedHandle,
   ReplicaGatedSpec,
   ReplicaGatedStorage,
   ReplicaInspectedStatus,

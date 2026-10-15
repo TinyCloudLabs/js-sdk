@@ -82,6 +82,14 @@ Otherwise they throw `GRANT_EXPIRED`, `GRANT_REVOKED`, `GRANT_NOT_YET_VALID` or 
 
 Results carry `LocalReadMeta` (`asOf`, `coverage`, `authority`, `syncedThroughEpoch`). `authority` is therefore always `valid` on a returned result.
 
+**Opaque handle identifier.** With replication on, `ReplicaGatedStorage.open`
+returns `ReplicaGatedHandle` with an immutable required `replicaId`: browser
+private gate-HMAC `partitionId`, node replica hash. It also preserves the
+immutable `ReplicaGatedSpec.stamp` and required grant policy. Phase 1
+`KVReplicaHandle.replicaId?` remains optional. The controller never fabricates
+an id from space/prefix/principal or emits a `replication.grant` event before
+it has an opened handle's opaque id.
+
 **Grant metadata.** `grant()` (a guarded read) and `installGrant()` return `ReplicaGrantInfo`:
 - `cid`, `parentCid`, `state` (`active` | `pending`) and `unconstrained` are as in Phase 1;
 - `expiresAt` is the **signed** `exp` in ms;
@@ -165,10 +173,12 @@ prefix, value, grant, or owner JWK enters a replica-owned data/control row.
 **`inspectStatus(spec, { signal })`** is bounded, read-only and cancellable,
 never creating storage. It is **ungated** (no stamp), a known metadata
 exposure. Browser derives the opaque `lookupId` from a current private gate
-key snapshot, selects only `ownerDevice` from the nonunique index and MUST
-NOT acquire the account key or decrypt. With no gate key after deny, it
-returns `undefined`, not a fabricated status or newly minted key. Otherwise
-it returns `ReplicaInspectedStatus { redacted: true }` with opaque control
+key snapshot outside the transaction; its inspection read transaction
+rechecks incarnation/keyId **before** using `byLookupId`, then selects only
+`ownerDevice`. It MUST NOT acquire the account key or decrypt. With no gate
+key after deny, or a changed snapshot, it returns `undefined`, not a
+fabricated status or newly minted key. Otherwise it returns
+`ReplicaInspectedStatus { redacted: true }` with opaque control
 counts, bytes, coverage and epoch only, omitting grant/authority/errors;
 node/CLI may return a full `LocalReplicaStatus` with existing grant CIDs/times.
 Neither returns values, plaintext keys, prefixes or account identifiers.
@@ -281,11 +291,12 @@ never selected with replication on.
 ### Session stamp
 
 `ReplicaSessionStamp { incarnation, lifecycleEpoch }` is bound to one session object for its whole life.
-- **Fresh authenticated session only:** `establishSessionStamp(principal, { consentAnchor })`.
-  The required anchor is finite and clamped at capture: a validated signed SIWE `issuedAt`, or
-  the **owner-authorizing proof's** signed `iat` then `nbf` in an independently verified compact
-  delegation chain. A child leaf freshly minted from a pre-deny owner grant is **not** fresh
-  owner consent; its `iat`/`nbf` must not reset the anchor. Leaf signature, CID, audience and
+- **Fresh interactive sign-in only:** `establishSessionStamp(principal, { consentAnchor })`.
+  The required anchor is finite and clamped at capture: an independently verified signed
+  owner SIWE `issuedAt` with a full-session KV get+sync capability witness (§3),
+  or the **oldest owner-authorizing proof's** signed `iat` then `nbf` in an independently
+  verified compact chain. A child leaf freshly minted from a pre-deny owner grant is **not**
+  fresh owner consent; its `iat`/`nbf` must not reset the anchor. Leaf signature, CID, audience and
   space checks alone do not prove owner consent; an arbitrary did:key leaf with empty `prf`
   cannot establish. The current compact fixture's `nbf=0` is not a post-deny freshness proof.
   Never derive establishment from an unverified JWT claim, local receipt time, `Date.now()` or
@@ -311,7 +322,14 @@ never selected with replication on.
   - `purge_pending`.
 
   Restored sessions validate their persisted stamp; they never establish one.
-- **No rebinding.** A controller is never rebound with a new stamp for an existing session object. A new stamp requires a new session.
+
+A refused, stale, missing or malformed stamp gates **only the replica**: the
+controller constructor must not throw on that refusal. Network-valid
+`signIn()` and session restore continue under their existing rules; replica
+get/list fall back to the network with `REPLICA_GATED`. No replica-only
+refusal forces a fresh sign-in or wallet prompt. Restore never establishes
+or repairs a stamp; only a new fresh interactive sign-in can establish one,
+never rebinding an existing controller.
 
 ### The structural guard: `ReplicaGateTx.run`
 
@@ -366,21 +384,26 @@ When the pending store is gated, the whole controller becomes `gated` for that s
 `checkDelivery(stamp): ReplicaDeliveryDecision` is the **synchronous, reason-bearing**
 main-thread preflight before open, installGrant, get/list, sync or replica-derived events:
 - `{ status: "allow" }` only for a current stamp and `now() < gate.consentDeadline`;
-- `{ status: "consent_expired", code: "CONSENT_EXPIRED" }` when an active browser gate's
-  deadline has elapsed, even if the signed UCAN expired earlier. The controller records this
-  transition once per active stamp/replica, emits `replication.grant` action
-  `consent_deadline_reached` code `CONSENT_EXPIRED`, starts a single scoped
-  `deny({ reason: "consent_expired", principal })`, then dispatches network KV. It never
-  delivers replica bytes or exposes an adapter exception to the read caller;
+- `{ status: "consent_expired", code: "CONSENT_EXPIRED" }` when an active browser
+  gate's deadline has elapsed, even if the signed UCAN expired earlier. For
+  **already opened handles with known `replicaId`**, the controller records
+  this transition once per active stamp/replica and emits `replication.grant`
+  `consent_deadline_reached` code `CONSENT_EXPIRED`. It starts one scoped
+  `deny({ reason: "consent_expired", principal })`, then dispatches network KV;
+  no replica bytes or raw adapter exception reaches the read caller. A
+  preflight before the first open has no opaque id and emits **no per-replica
+  grant event**; scoped `replication.lifecycle`/recovery reports the denial;
 - `{ status: "gated", gate }` when already denied/stale/missing (including when the timer
   won the race). Subsequent reads use network fallback `replica_gated` /
   `REPLICA_GATED`, normally `stamp_stale`.
 
-An active controller's expiry timer uses the existing `ReplicationScheduler` and the same
-injected clock to run that transition even with no read; its event de-duplicates against a
-racing worker `CONSENT_EXPIRED`. Startup recovery before any controller exists instead
-reports `consentExpired: true` and commits denial; no fictional grant event is emitted.
-If the timer wins, an ensuing read is gated, not required to see a worker exception.
+An active controller's expiry timer uses `ReplicationScheduler` and the same
+injected clock. It emits once only for **opened handles whose `replicaId` was
+captured before key deletion**, de-duplicating a racing worker
+`CONSENT_EXPIRED`. Startup recovery or preflight with no opened handle
+instead reports `consentExpired: true` / lifecycle denial, never a synthetic
+grant event. If the timer wins, an ensuing read is gated and need not see a
+worker exception.
 
 `deliverable(stamp)` is the synchronous **boolean reply fence** (`checkDelivery(stamp).status
 === "allow"`), with a required stamp. Browser checks localStorage marker/tombstone and the
@@ -441,6 +464,12 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
 
 **`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Erasure continues in the background.
 
+A transient `BUSY`, lock timeout or retryable I/O failure **before erase** does
+not end the user's network session; the deny/tombstone has already gated the
+replica. Erase is resumable and idempotent on the next command/load, and no
+failure after committed denial resurrects replica reads. An explicit user
+logout always ends the network session, even while erase remains pending.
+
 **Startup.** `recover()` runs before anything binds:
 1. browser retries a pending database delete if the marker is set;
 2. before any v1→v2 upgrade, under the origin gate Web Lock it probes the v1
@@ -480,22 +509,46 @@ or a separately validated future signed SIWE if supported.
 
 With replication on, the controller **always** passes `KVReplicaSpec.grantPolicy = { grantTtlMs, consentAnchor }`, and adapters reject `open` without it.
 
-**Consent anchor** (`ReplicationAuthority.consentAnchor()`), in fallback order:
-1. the validated, signed SIWE `issuedAt` (`siwe`);
-2. the **owner-authorizing proof's** signed `iat` (`delegation_iat`) after independent proof-chain
-   validation; never a child leaf's newly minted timestamp;
-3. then that same owner proof's `nbf` (`delegation_nbf`);
-4. otherwise `null`, and storage uses its persisted `first_install` time **only to bound grant
-   expiry**, never to establish a session stamp.
+**Consent anchor** (`ReplicationAuthority.consentAnchor()`), selected by the verified
+session form, not an opportunistic fallback:
+1. A full owner SIWE session requires independently verified signed `issuedAt`,
+   **finite signed `expirationTime`** and an exact-full-space uncaveated KV
+   get+sync witness (`siwe`). A missing/invalid input returns `null`; it does
+   **not** fall through to a compact leaf or local receipt timestamp.
+2. A compact-only session can use the **oldest independently verified
+   owner-authorizing proof's** signed `iat` (`delegation_iat`), else that same
+   proof's `nbf` (`delegation_nbf`); never a child leaf's timestamp. The current
+   compact parser lacks ancestor proof bytes, so this path currently returns `null`.
+3. Otherwise `null`. Storage may use persisted `first_install` only to bound
+   grant expiry, never to establish a session stamp or repair consent.
 
 **Anchor invariants:**
-- `at` is finite ms. SIWE is parsed from the verified signed message; delegation `iat`/`nbf`
-  comes from the independently verified owner-authorizing proof. Leaf signature/CID/audience
-  alone are insufficient, and a delegate cannot refresh consent by minting a new child under
-  an old owner grant.
+- `at` is finite ms. SIWE is parsed from the independently verified owner's signed message;
+  delegation `iat`/`nbf` comes from the oldest independently verified owner-authorizing
+  proof. A leaf signed by an arbitrary did:key with empty `prf` is not owner consent,
+  even with finite `iat`/`nbf`. Leaf signature/CID/audience alone are insufficient:
+  a delegate cannot refresh consent by minting a new child under an old owner grant.
+- Owner SIWE needs a finite, parseable signed `expirationTime` **and** a verified
+  signed `issuedAt`; expirationless/unparseable SIWE may remain valid for network
+  use but yields `consentAnchor() === null` for replication: no new stamp, mint
+  or renewal. Fresh interactive sign-in requests finite expiration by default
+  when replication is enabled. Neither restore nor the controller constructor
+  invents or repairs the missing anchor.
+- A signed owner SIWE is usable only with an independently verified **full session proof**,
+  not `verifySessionGrant` or an unverified SIWE string. The authority requires the
+  verifier's `verifiedRecap` array to contain at least one **uncaveated KV get+sync**
+  capability for a scope in the exact full `session.spaceId`; a short-name match from
+  another wallet does not count. Node uses
+  `wasmBindings.validatePersistedSession({ header, CID, spaceId, jwk, address, chainId,
+  siwe, signature })` and its verified recap; browser applies the same owner-proof and
+  capability-witness rule. This establishes consent provenance, **not** arbitrary prefix
+  authority: `sessionGrant`/`plan` still check each requested prefix independently.
+  No verified witness means `consentAnchor() === null` and network-only `not_established`.
 - Second-based sources are converted ×1000 **exactly once**, at the authority.
-- Every anchor passes `clampConsentAnchor(anchor, now)` **at capture**. It clamps to ≤ now; a
-  non-finite value gives `null`, and the next source is used.
+- Every eligible anchor passes `clampConsentAnchor(anchor, now)` **at capture**. It
+  clamps to ≤ now; a non-finite value gives `null`. Only an independently
+  verified owner proof may try its signed `nbf` after absent/invalid `iat`;
+  a malformed full SIWE never falls through to a compact or storage anchor.
 - Renewals never re-anchor.
 - `first_install` is keyed by identity. It survives partition reset, purge, revocation and
   reinstall, and is cleared **only by `deny`** (§2). An unreadable anchor **fails closed**:
@@ -511,6 +564,32 @@ persisted stamp still restores via `restoreSessionStamp`. Tests must reject both
 under an old owner proof and a chain whose owner timestamp is unavailable.
 
 **Consent deadline** = `anchor.at + CONSENT_WINDOW_MS` (7 d).
+The browser gate persists this deadline once at fresh establishment; restore and
+renewal do not extend it. `ReplicaLifecycleGate.consentDeadline(stamp)` synchronously
+returns the finite cached **durable gate deadline** only for a matching active stamp,
+or `null` when stale/denied/unavailable. S3 caches it after establish/restore without
+I/O at each call. S4's controller schedules from this method immediately when the
+session binds, including a restored compact session with `consentAnchor() === null`;
+it never substitutes a grant-policy anchor or `first_install`. The callback rechecks
+`checkDelivery(stamp)`, emits the deadline event for each already-opened opaque
+`replicaId` once, and starts scoped `deny({ reason: "consent_expired", principal })`.
+`null` omits this proactive timer, not the mandatory startup/open/read/preflight
+checks. Node/CLI may return `null` when no deadline lives in their gate file.
+
+A later **fresh interactive sign-in by the same principal** returns the same
+session stamp and does **not** extend the existing durable gate deadline.
+Its newly verified SIWE anchor may appear in `grantPolicy` without pretending
+to be the older one: in the **browser** the controller calls
+`mintRemainingMs` with `consentDeadline = min(consentDeadlineMs(policyAnchor),
+lifecycle.consentDeadline(stamp))`, retaining the `grantTtlMs` duration cap.
+The browser adapter passes that same **minimum deadline** into
+`effectiveGrantExpiry` at install and recompute-at-open, and the gate separately
+checks its persisted deadline before every read. A null/stale browser getter
+refuses local mint and serving; neither a newer policy anchor nor `first_install`
+extends the gate. Node/CLI with no persisted gate deadline derive the mint cap
+from the once-clamped independently verified owner SIWE policy anchor (never a
+compact leaf), and the adapter enforces the effective expiry using that anchor
+and the node SIWE clock.
 
 **Effective expiry:**
 
@@ -523,9 +602,12 @@ effectiveGrantExpiry({ signedExpiresAt, installedAt, grantTtlMs, consentDeadline
 
 **Serve checks fail closed,** inside the read transaction:
 - Browser gate checks its durable consent deadline **before** signed/effective grant expiry.
-  At `!(now < consentDeadline)` (including non-finite/missing), it refuses `CONSENT_EXPIRED`
-  without returning value bytes or list keys and triggers scoped expiry denial/crypto-shred
-  outside the read transaction. A shorter signed `exp` does not hide the 7-day event.
+  At `!(now < consentDeadline)` (including non-finite/missing), the read
+  transaction aborts without bytes or keys. The worker then awaits its
+  main-thread scoped deny/key-shred RPC **after** the transaction settles and
+  only then returns `CONSENT_EXPIRED`; failed denial fails closed
+  (`REPLICA_GATED` `gate_unavailable`), never reports successful shredding.
+  A shorter signed `exp` does not hide the 7-day event.
 - Otherwise serving requires `now < effectiveExpiresAt`. A missing or non-finite stored
   bound refuses `GRANT_EXPIRED`. The controller falls through to a **network result** with
   `replication.read` reason `grant_expired`, code `CONSENT_EXPIRED` or `GRANT_EXPIRED`;
@@ -548,17 +630,21 @@ node-enforced signed `exp` still bounds network use.
 
 **Silent renewal.** `needsSilentRenewal(…)` is true when the remaining lifetime is **strictly** below `RENEW_BELOW_FRACTION × (effectiveExpiresAt − installedAt)` (exactly 25% remaining does not renew) and `now < consentDeadline`. It is false for non-finite inputs.
 - It is checked on a timer, before each sync, and at open.
-- It renews only through the session-key derivation path of `delegateTo`, never with a wallet prompt.
+- `canRenew` is true **only** for independently verified owner session-key derivation via
+  `delegateTo`, never for arbitrary/compact delegated authority or a wallet prompt.
 - On refusal or offline, the current grant serves until its effective expiry.
 
-**Events** (`replication.grant`, keyed by `replicaId`): `minted`, `renewed`,
-`renewal_refused`, `renewal_deferred`, `capped`, `expired` and
-`consent_deadline_reached` (`CONSENT_EXPIRED`). An active controller emits the deadline
-transition **once per stamp and replica**, whether main-thread preflight, worker refusal or
-controller timer observes it first; later `stamp_stale` does not duplicate it. A startup
-expiry before a controller exists is observable via `recover().consentExpired` and
-`replication.lifecycle` `denied` with `reason: "consent_expired"` when runtime listeners
-are present; no synthetic per-replica grant event is required.
+**Events** (`replication.grant`, keyed by the opened handle's required opaque
+`replicaId`): `minted`, `renewed`, `renewal_refused`, `renewal_deferred`,
+`capped`, `expired` and `consent_deadline_reached` (`CONSENT_EXPIRED`).
+An active controller emits the deadline transition **once per stamp and
+opened replica**, whether main-thread preflight, worker refusal or timer
+observes it first; later `stamp_stale` does not duplicate it. Before open,
+no handle id exists, so no per-replica grant event is emitted and no raw or
+unsalted prefix fallback is permitted. The scoped `replication.lifecycle`
+`denied` event with `reason: "consent_expired"` (when runtime listeners
+exist), plus `recover().consentExpired` on startup, observes expiry without
+inventing a replica id.
 
 **After the deadline:** browser keys are crypto-shredded, then content purged. No mint,
 renewal or local read. Network reads continue. Re-consent requires a fresh verified
@@ -577,9 +663,9 @@ Both are forwarded as `KVReplicaSpec.quota`.
 
 | | Browser | Node/CLI |
 | -- | -- | -- |
-| Budget scope | origin-wide | per profile (per storage `dir`) |
-| Ledger | `quota` control store, in worker-side `run` page transactions and erase transactions; `accountErase` is idempotent once the partition entry is gone | none: usage is derived from stored content, so erase replay is safe |
-| Seam | `ReplicaQuotaLedger<IDBTransaction>` | `ReplicaAdmitHook` (the `admit` option), run inside `applyPage`'s mutation under the profile lock |
+| Budget scope | origin-wide **application-encoded rows** across `entries`, `blobs`, `meta` and replica-owned `device` records (not IDB disk allocation) | per profile (per storage `dir`) |
+| Ledger | `quota` control store, in guarded page/device writes and exempt erase/deny transactions; partition and reserved device buckets are idempotent on replay | none: usage is derived from stored content, so erase replay is safe |
+| Seam | shared `ReplicaQuotaLedger<IDBTransaction>`; S5's browser implementation extends it with combined `admitRows`/`accountRows` for partition+device signed deltas, without changing this public type | `ReplicaAdmitHook` (the `admit` option), run inside `applyPage`'s mutation under the profile lock |
 | Free-space floor | `freeBytes()` (`navigator.storage.estimate()`), read just before the transaction | not applied |
 
 **Browser persisted-row metric:** v2 `entries` rows use out-of-line key
@@ -618,6 +704,16 @@ eight-byte `size` avoids recursive decimal-length accounting. The same
 helper measures final presealed rows, old stored rows and GC/erase removals;
 it does not claim IDB filesystem bytes.
 
+The same deterministic **application encoding** charges the final persisted
+key+value envelope of the sealed owner-device record and the numeric
+`firstInstall`/`grantInstall` device records, including ciphertext IV/tag and
+all persisted key/field framing. These are not free merely because they are
+outside `entries`/`blobs`/`meta`. S5 reserves
+`DEVICE_QUOTA_PARTITION_ID = "device"` as a nonpartition ledger bucket; no
+opaque partition id collides with it. Native serialization of nonextractable
+`CryptoKey` records and IDB engine/page overhead cannot be measured per row
+and remain excluded from this application metric.
+
 Pre-seal new rows **outside** the transaction. In each guarded write
 transaction check keyId/fence, read and measure old stored rows, compute a
 single signed **net** `deltaBytes` from their `size` values and the final
@@ -631,15 +727,31 @@ solely because free space is below the floor. No WebCrypto await may keep the
 IDB transaction open. The node `ReplicaAdmitHook` retains its blob-byte/entry
 input semantics.
 
+Device creation, grant-install and first-install writes measure old/new
+**device** rows and combine their signed delta with any partition delta
+before the first put. S5's browser-only `admitRows` and `accountRows` use the
+**same** combined signed partition+device deltas in one guarded transaction,
+enforcing the origin total plus free-space floor;
+S1 MUST NOT count grant stamps in both partition `extraBytes` and the device
+bucket. A standalone owner-device creation also admits before writing.
+On deny, device rows (including owner and stamp records) are deleted and the
+device bucket released **in that deny transaction** with key deletion; later
+erase/replay cannot release them twice. Partition erase retains the
+`accountErase` rule below. Node admission is unchanged.
+
 Erase measures the same stored row metric for blobs, entries and meta, then
 calls `accountErase(tx, { partitionId, bytes })` in the erase transaction;
 once the partition index is gone replay subtracts nothing.
 
 **Outcomes:**
-- `STORAGE_BUDGET`: admission refused the page.
-- `STORAGE_FULL`: the platform refused it (`QuotaExceededError`, ENOSPC, `SQLITE_FULL`). Nothing from the page commits or is counted.
+- `STORAGE_BUDGET`: admission refuses the page or owner-device/stamp write before
+  any mutation in that transaction. Owner-device setup fails closed to network
+  read-through; no unbudgeted owner-device or grant-stamp row is persisted.
+- `STORAGE_FULL`: the platform refuses it (`QuotaExceededError`, ENOSPC,
+  `SQLITE_FULL`). Nothing from the attempted transaction commits or is counted.
 
-Both stop the sync (`class: "storage"`) with the epoch unchanged. Committed content serves while it's fresh. There is no eviction.
+Both stop an affected sync (`class: "storage"`) with the epoch unchanged.
+Committed content serves while fresh. There is no eviction.
 
 ## 5. Options, status and events
 
@@ -665,16 +777,19 @@ One IndexedDB database per origin, `REPLICA_KV_DATABASE` = `tinycloud-replica-kv
 | `entries` | adapter | `[partitionId, accountHmac(path)]`; AES-sealed path, entry metadata and hash | yes |
 | `blobs` | adapter | `[partitionId, accountHmac(hash)]`; AES-GCM ciphertext and sealed hash | yes |
 | `pending` | adapter | private gate-HMAC `identityKeyHash`; AES-sealed identity, keys and pending state | yes |
-| `device` | adapter/lifecycle | `"device"` (AES-sealed owner JWK); `"gateHmac"` and `"accountKey"` nonextractable key records; `"firstInstall:" + identityKeyHash` numeric ms; `"grantInstall:" + identityKeyHash + ":" + accountHmac(cid)` numeric ms | guarded data; deny exempt |
+| `device` | adapter/lifecycle | `"device"` (AES-sealed owner JWK); `"gateHmac"` and `"accountKey"` nonextractable key records; `"firstInstall:" + identityKeyHash` numeric ms; `"grantInstall:" + identityKeyHash + ":" + accountHmac(cid)` numeric ms. Sealed owner and timestamp rows charge the reserved device quota bucket; native CryptoKey bytes are unmeasurable | guarded data; deny exempt |
 | `gate` | lifecycle (S3) | `"account"`: opaque hashes, finite consent deadline, epoch/incarnation/keyId | control |
 | `partitions` | lifecycle | private `partitionId`, private principal/identity/lookup hashes, `ownerDevice` boolean; nonunique `byLookupId` secondary index | control |
 | `purgeIntents` | lifecycle | private `ReplicaPurgeIntent.id` and stored opaque ids | control |
-| `quota` | ledger (S5) | opaque partition id and numeric byte accounting | control |
+| `quota` | ledger (S5) | opaque partition id, reserved `DEVICE_QUOTA_PARTITION_ID = "device"` and numeric application-encoded byte accounting | control |
 
-The v2 `entries`, `blobs` and `meta` values have the sealed envelopes and persisted
-`size` field specified in §4. `kv-storage/sealed.ts:measureSealedRow` is the
-canonical key-plus-row metric for admission, every meta write, repair/GC and erase;
-it excludes unobservable IDB engine/page allocation.
+The v2 `entries`, `blobs` and `meta` values have the sealed envelopes and
+persisted `size` field specified in §4. `kv-storage/sealed.ts:measureSealedRow`
+is the canonical key-plus-row metric for page/meta admission, repair/GC and
+erase. The sealed owner-device and grant/first-install device rows contribute
+their final key-plus-row application encoding to the reserved device bucket;
+deny releases that bucket before background purge. No metric claims
+unobservable IDB engine/page or native CryptoKey allocation.
 
 **Destructive v1→v2 migration.** `REPLICA_KV_SCHEMA_VERSION = 2`. V1 contains
 plaintext replica-owned rows incompatible with the sealed/HMAC v2 schema.
