@@ -11,12 +11,14 @@ import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
+  profilePath,
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
   refuseWriteToDeletedProfile,
   updateProfileStore,
   withProfileLock,
+  withPinnedProfileDirectory,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 import {
@@ -33,7 +35,6 @@ import {
   type RuntimeDelegationActivator,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { PROFILES_DIR } from "../config/constants.js";
 import { fileExists, PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
@@ -108,10 +109,10 @@ export function permissionRequestsPath(profile: string): string {
 }
 
 export function grantHistoryPath(profile: string): string {
-  return join(PROFILES_DIR, profile, "auth-grants.jsonl");
+  return join(profilePath(profile), "auth-grants.jsonl");
 }
 export function localGrantArtifactsPath(profile: string): string {
-  return join(PROFILES_DIR, profile, "auth-grant-artifacts.json");
+  return join(profilePath(profile), "auth-grant-artifacts.json");
 }
 
 export function createPermissionRequestArtifact(params: {
@@ -152,30 +153,38 @@ export async function loadAdditionalDelegations(
 }
 
 export async function loadLocalGrantArtifacts(profile: string): Promise<LocalGrantArtifact[]> {
-  const path = localGrantArtifactsPath(profile);
-  if (!(await fileExists(path))) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((value): value is LocalGrantArtifact =>
-    value !== null && typeof value === "object" &&
-    typeof (value as any).delegationCid === "string" &&
-    (value as any).delegation !== null && typeof (value as any).delegation === "object" &&
-    (value as any).delegation.cid === (value as any).delegationCid &&
-    typeof (value as any).delegation.delegationHeader?.Authorization === "string"
-  );
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return [];
+    const path = localGrantArtifactsPath(profile);
+    if (!(await fileExists(path))) return [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    const records: unknown[] = parsed;
+    return records.filter((value): value is LocalGrantArtifact => {
+      if (value === null || typeof value !== "object" ||
+        !("delegationCid" in value) || typeof value.delegationCid !== "string" ||
+        !("delegation" in value) || value.delegation === null || typeof value.delegation !== "object") return false;
+      const delegation = value.delegation;
+      if (!("cid" in delegation) || delegation.cid !== value.delegationCid ||
+        !("delegationHeader" in delegation) || delegation.delegationHeader === null ||
+        typeof delegation.delegationHeader !== "object") return false;
+      const header = delegation.delegationHeader;
+      return "Authorization" in header && typeof header.Authorization === "string";
+    });
+  });
 }
 
 export async function appendLocalGrantArtifact(
   profile: string,
   delegation: PortableDelegation,
 ): Promise<void> {
-  await ProfileManager.ensureProfileDir(profile);
   await withProfileLock(profile, async () => {
+    await ProfileManager.ensureProfileDir(profile);
     await refuseWriteToDeletedProfile(profile);
     const records = await loadLocalGrantArtifacts(profile);
     if (records.some((record) => record.delegationCid === delegation.cid)) return;
@@ -378,29 +387,35 @@ export async function appendGrantHistory(
   profile: string,
   entry: Omit<GrantHistoryEntry, "ts" | "profile">,
 ): Promise<void> {
-  await ProfileManager.ensureProfileDir(profile);
-  const line = JSON.stringify({
-    ts: new Date().toISOString(),
-    profile,
-    ...entry,
-  }) + "\n";
-  const path = grantHistoryPath(profile);
-  await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-  // `mode` only applies on creation; tighten history written by older releases.
-  await chmod(path, PRIVATE_FILE_MODE);
+  await withProfileLock(profile, async () => {
+    await ProfileManager.ensureProfileDir(profile);
+    await refuseWriteToDeletedProfile(profile);
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      profile,
+      ...entry,
+    }) + "\n";
+    const path = grantHistoryPath(profile);
+    await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
+    // `mode` only applies on creation; tighten history written by older releases.
+    await chmod(path, PRIVATE_FILE_MODE);
+  });
 }
 
 export async function readGrantHistory(
   profile: string,
 ): Promise<GrantHistoryEntry[]> {
-  const path = grantHistoryPath(profile);
-  if (!(await fileExists(path))) return [];
-  const raw = await readFile(path, "utf8");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as GrantHistoryEntry);
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return [];
+    const path = grantHistoryPath(profile);
+    if (!(await fileExists(path))) return [];
+    const raw = await readFile(path, "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as GrantHistoryEntry);
+  });
 }
 
 export async function parseCapSpec(

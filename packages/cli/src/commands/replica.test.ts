@@ -4,7 +4,7 @@
  * nothing is written into it.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rename, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, stat, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -18,7 +18,7 @@ import {
   type ReplicaConfig,
   type VerifiedPage,
 } from "@tinycloud/replica";
-import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
 
 // The profile store reads TC_HOME when it loads (and replica.js loads it), so import them afterwards.
 const home = await mkdtemp(join("/var/tmp", "tc-replica-guard-"));
@@ -283,6 +283,29 @@ describe("replica reset purge containment", () => {
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
   });
 
+  test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const selectedDb = join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db");
+    const victimDb = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const readToken = () => {
+      const db = sqlite(victimDb, { readonly: true });
+      try { return db.get<{ lease_token: number }>("SELECT lease_token FROM replica WHERE id = 1")?.lease_token; }
+      finally { db.close(); }
+    };
+    const before = readToken();
+    await unlink(selectedDb);
+    await symlink(victimDb, selectedDb);
+
+    expect((await resetFromCli(PROFILE, "notes")).exited).toBe(true);
+    expect(readToken()).toBe(before);
+    expect(await exists(victimDb)).toBe(true);
+  });
+
   test("rejects a whole-profile alias before reading or writing its key and session", async () => {
     await createProfile("victim");
     const key = { kty: "OKP", d: "victim-private-key" };
@@ -302,6 +325,33 @@ describe("replica reset purge containment", () => {
     }
     expect(await ProfileManager.getKey("victim")).toEqual(key);
     expect(await ProfileManager.getSession("victim")).toEqual(session);
+  });
+
+  test("replica status refuses a whole-profile alias without reading the victim store", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+    const program = new Command();
+    program.option("--profile <name>").option("--json");
+    registerReplicaCommand(program);
+    const previousExit = process.exit;
+    const previousWrite = process.stderr.write;
+    let stderr = "";
+    process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await expect(program.parseAsync(["node", "tc", "--profile", "linked", "--json", "replica", "status", "--replica", "notes"], { from: "node" }))
+        .rejects.toThrow("expected CLI exit");
+      expect(JSON.parse(stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+      expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+    } finally {
+      process.exit = previousExit;
+      process.stderr.write = previousWrite;
+    }
   });
 
   test("refuses an entry replaced after lookup, before opening the store", async () => {
@@ -327,6 +377,37 @@ describe("replica reset purge containment", () => {
       expect(swapped).toBe(true);
       expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
       expect(await exists(`${entry}.original/replica.db`)).toBe(true);
+    } finally {
+      SqliteReplicaStore.open = originalOpen;
+    }
+  });
+
+  test("refuses a real replica entry swapped before SQLite can open it", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const entry = join(PROFILES_DIR, PROFILE, "replicas", "notes");
+    const victimEntry = join(PROFILES_DIR, "victim", "replicas", "notes");
+    const originalOpen = SqliteReplicaStore.open;
+    let sqliteCalled = false;
+    SqliteReplicaStore.open = async function (dir, options) {
+      await rename(entry, `${entry}.original`);
+      await rename(victimEntry, entry);
+      return originalOpen.call(this, dir, {
+        ...options,
+        sqlite: () => {
+          sqliteCalled = true;
+          throw new Error("SQLite must not open a replaced replica entry");
+        },
+      });
+    };
+    try {
+      expect((await resetFromCli(PROFILE, "notes")).exited).toBe(true);
+      expect(sqliteCalled).toBe(false);
+      expect(await exists(`${entry}.original/replica.db`)).toBe(true);
+      expect(await exists(join(entry, "replica.db"))).toBe(true);
     } finally {
       SqliteReplicaStore.open = originalOpen;
     }

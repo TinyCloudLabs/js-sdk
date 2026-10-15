@@ -785,13 +785,13 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const profile = await profileName(cmd);
         const name = await existingReplicaName(profile, options.replica);
         if (options.purge) {
-          await withPinnedReplicaForReset(profile, name, async (path, recheck) => {
+          await withPinnedReplicaForReset(profile, name, async (path, recheck, expectedDirectory) => {
             const profileLock = profileGuard(profile);
             const safeGuard: MutationGuard = (section) => profileLock(async () => {
               await recheck();
               return section();
             });
-            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard });
+            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard, expectedDirectory });
             try {
               await recheck();
               // The store fences the database identity and lease; the root fd

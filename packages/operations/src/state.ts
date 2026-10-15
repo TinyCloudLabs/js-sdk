@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFileSync, readlinkSync } from "node:fs";
+import { constants as fsConstants, readFileSync, readlinkSync } from "node:fs";
 import {
   chmod,
   link,
@@ -16,6 +16,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { connect, createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -48,6 +49,7 @@ interface HeldProfileLock {
   /** A deletion of the profile ran while this acquisition waited for the lock. */
   readonly deletedWhileWaiting: boolean;
   active: boolean;
+  deletedProfile?: boolean;
 }
 /**
  * Async context shared by every copy of this module in the process. Each
@@ -69,6 +71,10 @@ function processWideContext<T>(key: string): AsyncLocalStorage<T> {
 const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot.v1");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
 const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v2");
+/** Profile paths inside a lock/read stay on the directory opened at entry. */
+const pinnedProfiles = processWideContext<ReadonlyMap<string, string>>("tinycloud.operations.pinnedProfiles.v1");
+/** Turn locks use the same opened home as their profile, not its mutable name. */
+const pinnedHomes = processWideContext<ReadonlyMap<string, string>>("tinycloud.operations.pinnedHomes.v1");
 /** One ID across separately bundled ESM, CJS, CLI and MCP copies in this process. */
 const processInstanceId: string =
   (globalThis as unknown as Record<symbol, string | undefined>)[Symbol.for("tinycloud.operations.profileLockInstance.v1")] ??=
@@ -440,8 +446,13 @@ export function profilesPath(): string {
   return join(tinycloudHomePath(), "profiles");
 }
 
-export function profilePath(profile: string): string {
+export function namedProfilePath(profile: string): string {
   return join(profilesPath(), validateProfileName(profile));
+}
+
+export function profilePath(profile: string): string {
+  const named = namedProfilePath(profile);
+  return pinnedProfiles.getStore()?.get(named) ?? named;
 }
 
 export function profileConfigPath(profile: string): string {
@@ -470,7 +481,7 @@ export function profileStoreMetadataPath(profile: string, store: ProfileStoreNam
 }
 
 export function profileLockPath(profile: string): string {
-  return join(profilePath(profile), ".lock");
+  return join(namedProfilePath(profile), ".lock");
 }
 
 export function profileLockMetadataPath(profile: string): string {
@@ -483,7 +494,8 @@ export function profileLockMetadataPath(profile: string): string {
  * removes it.
  */
 export function profileTurnLockPath(profile: string): string {
-  return join(tinycloudHomePath(), "profile-locks", validateProfileName(profile));
+  const home = tinycloudHomePath();
+  return join(pinnedHomes.getStore()?.get(home) ?? home, "profile-locks", validateProfileName(profile));
 }
 
 /**
@@ -547,16 +559,18 @@ async function writeFileDurably(path: string, contents: string): Promise<void> {
 export async function readProfile<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
-  await assertRealProfileDirectory(profile);
-  return readJson<T>(profileConfigPath(profile));
+  return withPinnedProfileDirectory(profile, (directory) =>
+    directory ? readJson<T>(join(directory, "profile.json")) : Promise.resolve(null));
 }
 
 export async function readSession<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
-  await assertRealProfileDirectory(profile);
-  await readStoreMetadata(profile, "session");
-  return readJson<T>(sessionPath(profile));
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return null;
+    await readStoreMetadata(profile, "session");
+    return readJson<T>(sessionPath(profile));
+  });
 }
 
 export async function readAdditionalDelegations<T = Record<string, unknown>>(
@@ -575,45 +589,99 @@ export async function readStoreMetadata(
   profile: string,
   store: ProfileStoreName,
 ): Promise<StoreMetadata> {
-  await assertRealProfileDirectory(profile);
-  const metadata = await readJson<StoreMetadata>(profileStoreMetadataPath(profile, store));
-  if (metadata === null) return { formatVersion: 1 };
-  if (
-    typeof metadata !== "object" ||
-    metadata.formatVersion !== 1
-  ) {
-    throw new TypeError(`Unsupported store format for "${store}".`);
-  }
-  return metadata;
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    const metadata = directory ? await readJson<StoreMetadata>(profileStoreMetadataPath(profile, store)) : null;
+    if (metadata === null) return { formatVersion: 1 };
+    if (
+      typeof metadata !== "object" ||
+      metadata.formatVersion !== 1
+    ) {
+      throw new TypeError(`Unsupported store format for "${store}".`);
+    }
+    return metadata;
+  });
 }
 
 export async function readProfileStore<T>(
   profile: string,
   store: Exclude<ProfileStoreName, "session">,
 ): Promise<ProfileStoreContents<T>> {
-  await assertRealProfileDirectory(profile);
-  const [metadata, raw] = await Promise.all([
-    readStoreMetadata(profile, store),
-    readJson<unknown>(profileStorePath(profile, store)),
-  ]);
-  return {
-    formatVersion: metadata.formatVersion,
-    records: Array.isArray(raw) ? raw as T[] : [],
-  };
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return { formatVersion: 1, records: [] };
+    const [metadata, raw] = await Promise.all([
+      readStoreMetadata(profile, store),
+      readJson<unknown>(profileStorePath(profile, store)),
+    ]);
+    return {
+      formatVersion: metadata.formatVersion,
+      records: Array.isArray(raw) ? raw as T[] : [],
+    };
+  });
 }
 
 export class ProfileSymlinkError extends Error {
   readonly code = "PROFILE_SYMLINK";
 
-  constructor(profile: string) {
-    super(`Profile "${profile}" must be a real directory, not a symlink or another file type.`);
+  constructor(profile: string, detail = "must be a real directory, not a symlink or another file type") {
+    super(`Profile "${profile}" ${detail}.`);
     this.name = "ProfileSymlinkError";
+  }
+}
+
+/** Missing profiles remain missing; existing profiles are always opened without following aliases. */
+export async function withPinnedProfileDirectory<T>(
+  profile: string,
+  action: (directory: string | null) => Promise<T>,
+  options: { create?: boolean } = {},
+): Promise<T> {
+  const named = namedProfilePath(profile);
+  const existing = pinnedProfiles.getStore()?.get(named);
+  if (existing) return action(existing);
+  if (process.platform !== "linux") {
+    throw new ProfileSymlinkError(profile, "cannot be pinned safely on this platform");
+  }
+  const handles: FileHandle[] = [];
+  const fdPath = (fd: number) => `/proc/self/fd/${fd}`;
+  const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
+  try {
+    if (options.create) await mkdir(tinycloudHomePath(), { recursive: true, mode: PRIVATE_DIR_MODE });
+    for (const segment of [tinycloudHomePath(), "profiles", validateProfileName(profile)]) {
+      const path = handles.length ? join(fdPath(handles[handles.length - 1]!.fd), segment) : segment;
+      if (options.create && handles.length) {
+        await mkdir(path, { mode: PRIVATE_DIR_MODE }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "EEXIST") throw error;
+        });
+      }
+      const handle = await open(path, flags).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" && !options.create) return null;
+        if (error.code === "ELOOP" || error.code === "ENOTDIR") throw new ProfileSymlinkError(profile);
+        throw error;
+      });
+      if (!handle) return await action(null);
+      handles.push(handle);
+      if (options.create) await handle.chmod(PRIVATE_DIR_MODE);
+    }
+    const opened = handles[2]!;
+    const [actual, namedStats] = await Promise.all([opened.stat(), lstat(named)]);
+    if (!namedStats.isDirectory() || namedStats.dev !== actual.dev || namedStats.ino !== actual.ino) {
+      throw new ProfileSymlinkError(profile, "changed while opening its directory");
+    }
+    const directory = fdPath(opened.fd);
+    const context = new Map(pinnedProfiles.getStore());
+    context.set(named, directory);
+    const homes = new Map(pinnedHomes.getStore());
+    homes.set(tinycloudHomePath(), fdPath(handles[0]!.fd));
+    return await pinnedHomes.run(homes, () => pinnedProfiles.run(context, () => action(directory)));
+  } finally {
+    for (const handle of handles.reverse()) await handle.close();
   }
 }
 
 /** Missing profiles retain their existing read/create behavior; aliases never do. */
 export async function assertRealProfileDirectory(profile: string): Promise<void> {
-  const stats = await lstat(profilePath(profile)).catch((error: NodeJS.ErrnoException) => {
+  const named = namedProfilePath(profile);
+  if (pinnedProfiles.getStore()?.has(named)) return;
+  const stats = await lstat(named).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -645,23 +713,29 @@ export async function withProfileLock<T>(
     await assertRealProfileDirectory(normalizedProfile);
     return action();
   }
-  const acquired = await acquireProfileLock(normalizedProfile, options);
-  const ownership: HeldProfileLock = {
-    lockPath,
-    turnSlot: acquired.turnSlot,
-    deletedWhileWaiting: acquired.deletedWhileWaiting,
-    active: true,
-  };
-  try {
-    await assertRealProfileDirectory(normalizedProfile);
-    return await heldProfileLocks.run([...held, ownership], action);
-  } finally {
-    ownership.active = false;
-    await acquired.release();
-    // Taking the lock recreated the deleted profile's directory; remove it
-    // again unless something was written into it (rmdir needs it empty).
-    if (acquired.deletedWhileWaiting) await rmdir(profilePath(normalizedProfile)).catch(() => undefined);
-  }
+  return withPinnedProfileDirectory(normalizedProfile, async (directory) => {
+    if (!directory) throw new ProfileDeletedError(normalizedProfile);
+    const acquired = await acquireProfileLock(normalizedProfile, options);
+    const ownership: HeldProfileLock = {
+      lockPath,
+      turnSlot: acquired.turnSlot,
+      deletedWhileWaiting: acquired.deletedWhileWaiting,
+      active: true,
+    };
+    try {
+      return await heldProfileLocks.run([...held, ownership], action);
+    } finally {
+      ownership.active = false;
+      await acquired.release();
+      if (ownership.deletedProfile || acquired.deletedWhileWaiting) {
+        const current = await lstat(namedProfilePath(normalizedProfile)).catch(() => null);
+        const original = await stat(directory).catch(() => null);
+        if (current && original && current.dev === original.dev && current.ino === original.ino) {
+          await rmdir(namedProfilePath(normalizedProfile)).catch(() => undefined);
+        }
+      }
+    }
+  }, { create: !options.requireProfile });
 }
 
 /**
@@ -677,6 +751,7 @@ export async function recordProfileDeletion(profile: string): Promise<void> {
   const ownership = (heldProfileLocks.getStore() ?? []).find((candidate) => candidate.active && candidate.lockPath === lockPath);
   if (!ownership) throw new Error(`Recording the deletion of profile "${profile}" requires holding its lock.`);
   await replaceJson(join(profileTurnLockPath(profile), "deleted.json"), { slot: ownership.turnSlot }, true);
+  ownership.deletedProfile = true;
 }
 
 /**
@@ -825,7 +900,7 @@ async function acquireProfileLock(
     retryMs: options.retryMs ?? DEFAULT_LOCK_RETRY_MS,
   };
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_LOCK_MS;
-  const lockPath = profileLockPath(profile);
+  const lockPath = join(profilePath(profile), ".lock");
   const turnDirectory = profileTurnLockPath(profile);
 
   const directory = profilePath(profile);
@@ -836,13 +911,7 @@ async function acquireProfileLock(
   await mkdir(dirname(turnDirectory), { recursive: true, mode: PRIVATE_DIR_MODE });
   // Every store write takes this lock: tighten the tree older releases
   // created 0775 before writing sessions or delegations into it.
-  for (const path of [tinycloudHomePath(), profilesPath(), directory]) {
-    await chmod(path, PRIVATE_DIR_MODE).catch((error: unknown) => {
-      // A profile deletion can remove the profile directory right after the
-      // mkdir above; the lock attempt below recreates it 0700.
-      if (path !== directory || !isErrno(error, "ENOENT")) throw error;
-    });
-  }
+  await chmod(directory, PRIVATE_DIR_MODE);
 
   // Bound before this acquisition's first turn record (or first probe of
   // another's socket), closed once the acquisition is over.
@@ -870,6 +939,7 @@ async function acquireProfileLock(
     // acquisition; it is written durably, so only damage makes it so.
     const deletion = await readJson<{ slot?: unknown }>(join(turnDirectory, "deleted.json")).catch(() => null);
     const deletedWhileWaiting = typeof deletion?.slot === "number" && deletion.slot >= firstWaitedTurn;
+    if (deletedWhileWaiting && !(await exists(profileConfigPath(profile)))) throw new ProfileDeletedError(profile);
     while (true) {
       const token = randomUUID();
       if (await publishProfileLock(profile, lockPath, token, options.requireProfile === true, liveness.held ?? null)) {
@@ -1152,7 +1222,7 @@ async function takeTurn(profile: string, directory: string, latest: TurnState, l
     if (published) await markTurn(path, token, "done");
     return null;
   } catch (error) {
-    if (published) settleOwnTurn(directory, slot, token);
+    if (published) await settleOwnTurn(directory, slot, token);
     throw error;
   }
 }
@@ -1180,18 +1250,26 @@ async function settleAbandonedTurn(directory: string, abandoned: TurnState): Pro
  * otherwise (by this process's next acquisition, or by another process once
  * this one has exited). The timer does not keep the process alive.
  */
-function settleOwnTurn(directory: string, slot: number, token: string, retries = SETTLE_RETRIES): void {
+async function settleOwnTurn(directory: string, slot: number, token: string): Promise<void> {
   relinquishedTurns.add(token);
-  void (async () => {
-    try {
-      const turn = await readTurn(directory, slot);
-      if (turn !== null && turn !== "damaged" && turn.token === token && !turn.done) await settleAbandonedTurn(directory, turn);
-      relinquishedTurns.delete(token);
-    } catch {
-      // Still relinquished: this process's next acquisition settles it too.
-      if (retries > 0) setTimeout(() => settleOwnTurn(directory, slot, token, retries - 1), SETTLE_RETRY_MS).unref();
-    }
-  })();
+  const pinned = await pinDirectory(directory).catch(() => null);
+  const path = pinned?.path(".") ?? directory;
+  let retries = SETTLE_RETRIES;
+  const attempt = () => {
+    void (async () => {
+      try {
+        const turn = await readTurn(path, slot);
+        if (turn !== null && turn !== "damaged" && turn.token === token && !turn.done) await settleAbandonedTurn(path, turn);
+        relinquishedTurns.delete(token);
+        await pinned?.close();
+      } catch {
+        // Still relinquished: this process's next acquisition settles it too.
+        if (retries-- > 0) setTimeout(attempt, SETTLE_RETRY_MS).unref();
+        else await pinned?.close();
+      }
+    })();
+  };
+  attempt();
 }
 
 /**
@@ -1264,7 +1342,7 @@ async function releaseTurn(profile: string, turn: Turn, liveness: AcquisitionLiv
   try {
     await markTurn(join(turn.directory, String(turn.slot)), turn.token, "done");
   } catch {
-    settleOwnTurn(turn.directory, turn.slot, turn.token);
+    await settleOwnTurn(turn.directory, turn.slot, turn.token);
     return;
   }
   await collectTurns(profile, turn, liveness).catch(() => undefined);

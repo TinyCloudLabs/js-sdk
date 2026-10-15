@@ -1,10 +1,11 @@
-import { chmod, mkdtemp, readdir, readlink, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { FAULTS, SqliteReplicaStore } from "./store.js";
+import { loadSqlite } from "./driver.js";
 import { config, deviceGrant } from "../../test/fixtures.js";
 
 const dirs: string[] = [];
@@ -77,6 +78,39 @@ describe("SQLite gated read transaction", () => {
   });
 });
 
+
+test("opening a symlinked replica.db refuses before changing the victim lease", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const before = await SqliteReplicaStore.inspect(victim);
+  await rm(selectedDb);
+  await symlink(victimDb, selectedDb);
+
+  await expect(SqliteReplicaStore.open(selected, { create: false })).rejects.toMatchObject({ code: "REPLICA_NOT_FOUND" });
+  expect((await SqliteReplicaStore.inspect(victim))?.status).toEqual(before?.status);
+});
+
+test("a replica.db replaced during the native opener is rejected before SQL executes", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const opener = await loadSqlite();
+  let executed = false;
+  const { renameSync, symlinkSync } = await import("node:fs");
+  await expect(SqliteReplicaStore.open(selected, {
+    create: false,
+    sqlite: (path) => {
+      renameSync(selectedDb, `${selectedDb}.original`);
+      symlinkSync(victimDb, selectedDb);
+      const database = opener(path);
+      return { ...database, exec: () => { executed = true; throw Error("SQL reached replaced database"); } };
+    },
+  })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+  expect(executed).toBe(false);
+});
 describe("SQLite status inspection lifecycle", () => {
   test("inspection of an existing database may create only SQLite sidecars", async () => {
     const dir = await makeStore();
