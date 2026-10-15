@@ -29,6 +29,8 @@ const setStatus = (text: string) => {
 
 let walletRequests = 0;
 let tcw: TinyCloudWeb | null = null;
+/** Sink for `ReplicationOptions.onEvent`; cleared on each boot. */
+const replicationEventLog: unknown[] = [];
 
 function testWallet(walletKey: string) {
   if (!isHex(walletKey)) throw new Error("test wallet key must be hex");
@@ -96,6 +98,7 @@ const api = {
     };
     // Replication options are S2's `tcw.replication` surface. Until S2 lands,
     // `replicationPresent` is false and the replication scenarios fail.
+    replicationEventLog.length = 0;
     const replicationOptions: Record<string, unknown> = options.replication
       ? {
           replication: {
@@ -105,6 +108,9 @@ const api = {
             allowSecrets: options.allowSecrets === true,
             ...(options.grantTtlMs === undefined ? {} : { grantTtlMs: options.grantTtlMs }),
             ...(options.maxStalenessMs === undefined ? {} : { maxStalenessMs: options.maxStalenessMs }),
+            onEvent: (event: unknown) => {
+              replicationEventLog.push(event);
+            },
           },
         }
       : {};
@@ -123,16 +129,24 @@ const api = {
 
   walletRequests: () => walletRequests,
 
-  /** Network read through the SDK kv service. */
-  async kvGet(key: string): Promise<{ status: "present"; value: string } | { status: "error" }> {
-    const result = await requireTcw().kv.get<string>(key);
-    if (!result.ok) return { status: "error" };
+  /**
+   * Read through `tcw.kv.get`, exactly as an app would. `source: "network"` is the public
+   * bypass (`KVGetOptions.source`). The read source itself is reported by `replication.read`
+   * events in `replicationEvents()`, not by the return value.
+   */
+  async kvGet(
+    key: string,
+    options: { source?: "network" } = {},
+  ): Promise<{ status: "present"; value: string } | { status: "error"; code: string }> {
+    const result = await requireTcw().kv.get<string>(key, options);
+    if (!result.ok) return { status: "error", code: result.error.code };
     return { status: "present", value: result.data.data };
   },
 
   replicationStatus: () => requireReplication("status")(),
-  replicationGet: (key: string, options: Record<string, unknown> = {}) => requireReplication("get")(key, options),
   replicationSync: () => requireReplication("sync")(),
+  /** Every `replication.*` event since the last boot, in emission order. Read source is `replication.read`. */
+  replicationEvents: (): unknown[] => replicationEventLog.slice(),
   /**
    * Fault hooks live in the shared test-only entry `@tinycloud/replica/kv-storage/testing`
    * (S1 owns the entry; S3 adds `injectDenyFailure`). Until it exists they fail loudly.

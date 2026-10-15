@@ -37,6 +37,28 @@ function scenario(name: string, body: () => Promise<void>): void {
   else test.todo(name, () => {});
 }
 
+/** One `replication.read` event, as emitted by the controller's `readEvent`. */
+type ReadEvent = {
+  source: "replica" | "network" | "none";
+  reason: string;
+  outcome: "found" | "not_found" | "error";
+  syncError?: string;
+};
+
+/** Events the fixture recorded through `onEvent` since its last `boot`, filtered by `type`. */
+async function replicationEventsOf(page: Page, type: string): Promise<Array<Record<string, unknown>>> {
+  const events = (await page.evaluate(() => window.__tcw.replicationEvents())) as Array<Record<string, unknown>>;
+  return events.filter((event) => event.type === type);
+}
+
+/** The most recent `replication.read` event. Throws when the read emitted none. */
+async function lastRead(page: Page): Promise<ReadEvent> {
+  const reads = await replicationEventsOf(page, "replication.read");
+  const last = reads.at(-1);
+  if (last === undefined) throw new Error("no replication.read event recorded");
+  return last as ReadEvent;
+}
+
 async function freePort(): Promise<number> {
   const { promise, resolve: done, reject: fail } = Promise.withResolvers<number>();
   const server = createServer();
@@ -233,8 +255,14 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.signIn());
       const walletBefore = await page.evaluate(() => window.__tcw.walletRequests());
       await page.waitForTimeout(3_000);
-      const status = await page.evaluate(() => window.__tcw.replicationStatus());
-      expect((status as { grantExpiresInMs?: unknown }).grantExpiresInMs).toBeLessThanOrEqual(4_000);
+      const status = (await page.evaluate(() => window.__tcw.replicationStatus())) as {
+        grant: { effectiveExpiresAt: string } | null;
+      };
+      expect(status.grant).not.toBeNull();
+      expect(Date.parse(status.grant?.effectiveExpiresAt ?? "") - Date.now()).toBeLessThanOrEqual(4_000);
+      const minted = (await replicationEventsOf(page, "replication.grant")).filter((event) => event.action === "minted");
+      expect(minted.length).toBeGreaterThan(0);
+      for (const event of minted) expect(event.expiryMs).toBeLessThanOrEqual(4_000);
       // Renewal comes from the stored session, never from the wallet.
       expect(await page.evaluate(() => window.__tcw.walletRequests())).toBe(walletBefore);
     } finally {
@@ -248,8 +276,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
-      const read = await page.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(read).toMatchObject({ source: "replica", value: "alpha note" });
+      const read = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(read).toMatchObject({ status: "present", value: "alpha note" });
+      expect(await lastRead(page)).toMatchObject({ source: "replica", outcome: "found" });
     } finally {
       await context.close();
     }
@@ -261,8 +290,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
-      const read = await page.evaluate(() => window.__tcw.replicationGet("notes/a", { source: "network" }));
-      expect(read).toMatchObject({ source: "network", value: "alpha note" });
+      const read = await page.evaluate(() => window.__tcw.kvGet("notes/a", { source: "network" }));
+      expect(read).toMatchObject({ status: "present", value: "alpha note" });
+      expect(await lastRead(page)).toMatchObject({ source: "network" });
     } finally {
       await context.close();
     }
@@ -275,10 +305,11 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
       await context.setOffline(true);
-      const covered = await page.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(covered).toMatchObject({ syncError: "NETWORK_ERROR" });
-      const uncovered = await page.evaluate(() => window.__tcw.replicationGet("notes-secret/x"));
+      await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(page)).toMatchObject({ outcome: "error", syncError: "NETWORK_ERROR" });
+      const uncovered = await page.evaluate(() => window.__tcw.kvGet("notes-secret/x"));
       expect(uncovered).not.toHaveProperty("value");
+      expect((await lastRead(page)).source).not.toBe("replica");
     } finally {
       await context.setOffline(false);
       await context.close();
@@ -295,8 +326,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.reload();
       await page.waitForFunction(() => window.__tcw !== undefined);
       await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: true });
-      const read = await page.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(read).toMatchObject({ source: "replica", value: "alpha note" });
+      const read = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(read).toMatchObject({ status: "present", value: "alpha note" });
+      expect(await lastRead(page)).toMatchObject({ source: "replica" });
     } finally {
       await context.setOffline(false);
       await context.close();
@@ -313,9 +345,11 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const second = await bootPage(context);
       await second.evaluate(() => window.__tcw.signIn());
       await first.evaluate(() => window.__tcw.signOut());
+      const lifecycle = await replicationEventsOf(first, "replication.lifecycle");
+      expect(lifecycle).toContainEqual(expect.objectContaining({ action: "denied", reason: "sign_out" }));
       expect(await originStoresContain(first, "alpha note")).toBe(false);
-      const denied = await second.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(denied).toMatchObject({ error: expect.stringContaining("Not signed in") });
+      await second.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(second)).toMatchObject({ source: "network", reason: "replica_gated" });
       await second.evaluate(() => window.__tcw.replicationSync());
       expect(await originStoresContain(second, "alpha note")).toBe(false);
     } finally {
@@ -351,8 +385,8 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await revokeGrantOf(page);
       await page.evaluate(() => window.__tcw.replicationSync());
       expect(await originStoresContain(page, "alpha note")).toBe(false);
-      const read = await sibling.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(read).not.toHaveProperty("source", "replica");
+      await sibling.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect((await lastRead(sibling)).source).not.toBe("replica");
     } finally {
       await context.close();
     }
@@ -364,14 +398,16 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const page = await bootPage(context);
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
+      const stale = await bootPage(context);
+      await stale.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
       await revokeGrantOf(page);
       await page.evaluate(() => window.__tcw.replicationSync());
       await page.evaluate(() => window.__tcw.signIn());
-      const stale = await page.evaluate(() => window.__tcw.replicationGet("notes/a", { session: "pre-deny" }));
-      expect(stale).toMatchObject({ error: expect.stringContaining("session") });
-      const fresh = await page.evaluate(() => window.__tcw.replicationSync());
-      expect(fresh).toBeDefined();
+      // The tab signed in before the deny still holds the pre-deny stamp. The gate refuses it.
+      await stale.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(stale)).toMatchObject({ reason: "replica_gated" });
+      await page.evaluate(() => window.__tcw.replicationSync());
       expect(await originStoresContain(page, "alpha note")).toBe(true);
     } finally {
       await context.close();
@@ -390,12 +426,14 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "delete_database", once: true }));
       await revokeGrantOf(page);
       await page.evaluate(() => window.__tcw.replicationSync());
-      const refused = await sibling.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(refused).toMatchObject({ error: expect.stringContaining("denied") });
+      const lifecycle = await replicationEventsOf(page, "replication.lifecycle");
+      expect(lifecycle).toContainEqual(expect.objectContaining({ action: "marker_set" }));
+      await sibling.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(sibling)).toMatchObject({ source: "network", reason: "replica_gated" });
       await sibling.reload();
       await sibling.waitForFunction(() => window.__tcw !== undefined);
-      const reloaded = await sibling.evaluate(() => window.__tcw.replicationStatus());
-      expect(reloaded).toMatchObject({ active: false });
+      const reloaded = (await sibling.evaluate(() => window.__tcw.replicationStatus())) as { state: string };
+      expect(reloaded.state).toBe("gated");
     } finally {
       await context.close();
     }
@@ -408,8 +446,8 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
       await revokeGrantOf(page);
-      const read = await page.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(read).toMatchObject({ syncError: "GRANT_REVOKED" });
+      await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(page)).toMatchObject({ reason: "grant_revoked", syncError: "GRANT_REVOKED" });
       expect(await originStoresContain(page, "alpha note")).toBe(false);
       const network = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(network).toMatchObject({ status: "present", value: "alpha note" });
@@ -426,10 +464,12 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await accountA.evaluate(() => window.__tcw.replicationSync());
       const accountB = await bootPage(context);
       await accountB.evaluate(() => window.__tcw.signIn());
-      const read = await accountB.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(read).toMatchObject({ source: "network" });
-      const staleA = await accountA.evaluate(() => window.__tcw.replicationGet("notes/a"));
-      expect(staleA).toMatchObject({ error: expect.stringContaining("Not signed in") });
+      await accountB.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(accountB)).toMatchObject({ source: "network" });
+      const lifecycle = await replicationEventsOf(accountB, "replication.lifecycle");
+      expect(lifecycle).toContainEqual(expect.objectContaining({ reason: "account_switch" }));
+      await accountA.evaluate(() => window.__tcw.kvGet("notes/a"));
+      expect(await lastRead(accountA)).toMatchObject({ source: "network", reason: "replica_gated" });
     } finally {
       await context.close();
     }
@@ -473,8 +513,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.replicationSync());
       await page.evaluate(() => window.__tcw.killReplicaWorker());
       await page.evaluate(() => window.__tcw.replicationSync());
-      const read = await page.evaluate(() => window.__tcw.replicationGet("notes/b"));
-      expect(read).toMatchObject({ source: "replica", value: "beta note" });
+      const read = await page.evaluate(() => window.__tcw.kvGet("notes/b"));
+      expect(read).toMatchObject({ status: "present", value: "beta note" });
+      expect(await lastRead(page)).toMatchObject({ source: "replica" });
     } finally {
       await context.close();
     }
