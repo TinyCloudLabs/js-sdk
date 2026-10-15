@@ -6,6 +6,7 @@
  * read, never a permissive one.
  */
 import { CONSENT_WINDOW_MS, MAX_GRANT_TTL_MS, RENEW_BELOW_FRACTION } from "./contractConstants";
+export { MAX_GRANT_TTL_MS } from "./contractConstants";
 import type {
   ConsentDeadlineMs,
   EffectiveGrantExpiry,

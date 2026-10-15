@@ -10,22 +10,21 @@
  * `unindexPartition` and `clearIntent` on their own transaction.
  */
 import type {
-  ReplicaAccountGate,
-  ReplicaGateAccess,
+  ReplicaBrowserGateAccess,
+  ReplicaBrowserGateSnapshot,
   ReplicaGateReason,
   ReplicaGateScope,
-  ReplicaGateSnapshot,
   ReplicaGateTx,
   ReplicaPartitionIndexEntry,
+  ReplicaDenyOutcome,
 } from "@tinycloud/sdk-services/kv/replication";
-
-import { gatedError } from "../errors.js";
+import { ReplicaError, ReplicaErrorCode, gatedError } from "../errors.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
-import { saltedHash } from "../profile-gate/saltedHash.js";
+import { ACCOUNT_KEY, GATE_HMAC_KEY, validAccountKey, validGateHmac, type AccountKeyRecord, type BrowserGate, type GateHmacRecord } from "./gateKeys.js";
 import { KV_STORE } from "./schema.js";
 
 const ACCOUNT = "account";
-const CONTROL = [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quota];
+const CONTROL = [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quota, KV_STORE.device];
 
 /**
  * Opens the origin database. `create` false yields `null` when it does not
@@ -47,50 +46,100 @@ export async function withDatabase<T>(open: KvDatabaseOpener, create: boolean, u
   }
 }
 
-export function createIndexedDbGateTx(open: KvDatabaseOpener): ReplicaGateTx<IDBTransaction> {
-  // Read-only and outside any data transaction: the salt and epoch needed to
-  // derive salted ids before `run` opens its transaction.
-  async function snapshot(): Promise<ReplicaGateSnapshot | null> {
+/** Browser IDs and key ids are precomputed before opening a data transaction. */
+export type BrowserGateAccess = ReplicaBrowserGateAccess;
+export type BrowserGateSnapshot = ReplicaBrowserGateSnapshot;
+
+export interface BrowserReplicaGateTx extends ReplicaGateTx<IDBTransaction, BrowserGateAccess> {
+  snapshot(): Promise<BrowserGateSnapshot | null>;
+  readAccountKey(access: BrowserGateAccess): Promise<AccountKeyRecord>;
+}
+
+export function createIndexedDbGateTx(
+  open: KvDatabaseOpener,
+  options: { now?: () => number; onConsentExpired: () => Promise<ReplicaDenyOutcome> },
+): BrowserReplicaGateTx {
+  if (typeof options?.onConsentExpired !== "function") throw refusal("gate_unavailable");
+  const now = options.now ?? Date.now;
+  function checkedNow(): number {
+    const at = now();
+    if (!Number.isSafeInteger(at) || at < 0) throw refusal("gate_unavailable");
+    return at;
+  }
+
+  let expiryFlight: Promise<ReplicaDenyOutcome> | undefined;
+
+  async function snapshot(): Promise<BrowserGateSnapshot | null> {
     return withDatabase(open, false, async (db) => {
-      const gate = await requestAsPromise<ReplicaAccountGate | undefined>(db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get(ACCOUNT));
-      return gate === undefined ? null : { incarnation: gate.incarnation, salt: gate.salt, lifecycleEpoch: gate.lifecycleEpoch };
+      const tx = db.transaction([KV_STORE.gate, KV_STORE.device]);
+      const gate = await requestAsPromise<BrowserGate | undefined>(tx.objectStore(KV_STORE.gate).get(ACCOUNT));
+      if (gate === undefined || gate.principalHash === null) return null;
+      if (typeof gate.consentDeadline !== "number" || !Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
+      const hash = await requestAsPromise<GateHmacRecord | undefined>(tx.objectStore(KV_STORE.device).get(GATE_HMAC_KEY));
+      if (!validGateHmac(hash, gate)) throw refusal("gate_unavailable");
+      return { incarnation: gate.incarnation, salt: gate.salt, lifecycleEpoch: gate.lifecycleEpoch, keyId: hash.keyId, accountKeyId: gate.accountKeyId, gateHmac: hash.hmac };
     });
   }
 
-  return {
-    snapshot,
+  async function expire(access: Pick<BrowserGateAccess, "stamp" | "incarnation">): Promise<void> {
+    let flight: Promise<ReplicaDenyOutcome> | undefined;
+    try {
+      flight = expiryFlight ?? options.onConsentExpired();
+      expiryFlight = flight;
+      const outcome = await flight;
+      if (outcome.status !== "denied" && outcome.status !== "deleted" && outcome.status !== "stale") throw refusal("gate_unavailable");
+      // `stale` can also mean the main clock has not reached the deadline. Verify that
+      // the old incarnation/epoch was actually removed before reporting expiry.
+      const gate = await withDatabase(open, false, (db) =>
+        requestAsPromise<BrowserGate | undefined>(db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get(ACCOUNT)),
+      );
+      if (gate !== null && (gate === undefined ||
+          (gate.incarnation === access.incarnation && (gate.lifecycleEpoch <= access.stamp.lifecycleEpoch || gate.principalHash !== null)))) {
+        throw refusal("gate_unavailable");
+      }
+    } catch {
+      throw refusal("gate_unavailable");
+    } finally {
+      if (flight !== undefined && expiryFlight === flight) expiryFlight = undefined;
+    }
+  }
 
-    async run<T>(scope: ReplicaGateScope, access: ReplicaGateAccess, fn: (tx: IDBTransaction) => Promise<T>): Promise<T> {
-      const current = await snapshot();
-      if (current === null) throw refusal("not_established");
-      // The salt belongs to the incarnation. The in-transaction check below
-      // compares the incarnation first, so a salt read from a replaced gate
-      // is refused as `stamp_stale` before any principal comparison.
-      const principalHash = await saltedHash(current.salt, access.principal.toLowerCase());
-
-      const result = await withDatabase(open, true, async (db) => {
+  async function runChecked<T>(scope: ReplicaGateScope, access: BrowserGateAccess, fn: (tx: IDBTransaction, account: AccountKeyRecord) => Promise<T>): Promise<T> {
+    if (access === null || typeof access !== "object" || access.stamp === null || typeof access.stamp !== "object") {
+      throw refusal("not_established");
+    }
+    if (!("principalHash" in access) || typeof access.principalHash !== "string" ||
+        !("keyId" in access) || typeof access.keyId !== "string" ||
+        !("accountKeyId" in access) || typeof access.accountKeyId !== "string") throw refusal("gate_unavailable");
+    try {
+      const result = await withDatabase(open, false, async (db) => {
         const tx = db.transaction([...scope.stores, ...CONTROL], scope.mode, { durability: "strict" });
         const done = transactionDone(tx);
         try {
-          const gate = await requestAsPromise<ReplicaAccountGate | undefined>(tx.objectStore(KV_STORE.gate).get(ACCOUNT));
+          // The first request is always the gate. No WebCrypto work occurs inside this transaction.
+          const gate = await requestAsPromise<BrowserGate | undefined>(tx.objectStore(KV_STORE.gate).get(ACCOUNT));
           if (gate === undefined) throw refusal("not_established");
-          if (gate.incarnation !== access.incarnation || gate.incarnation !== access.stamp.incarnation || gate.lifecycleEpoch !== access.stamp.lifecycleEpoch) {
-            throw refusal("stamp_stale");
-          }
-          if (gate.principalHash !== principalHash) throw refusal("principal_mismatch");
+          if (gate.incarnation !== access.incarnation || gate.incarnation !== access.stamp.incarnation ||
+              gate.lifecycleEpoch !== access.stamp.lifecycleEpoch || gate.principalHash === null) throw refusal("stamp_stale");
+          if (gate.keyId !== access.keyId || gate.accountKeyId !== access.accountKeyId) throw refusal("stamp_stale");
+          if (gate.principalHash !== access.principalHash) throw refusal("principal_mismatch");
+          if (typeof gate.consentDeadline !== "number" || !Number.isSafeInteger(gate.consentDeadline) || gate.consentDeadline < 0) throw refusal("gate_unavailable");
+          if (checkedNow() >= gate.consentDeadline) throw new ReplicaError(ReplicaErrorCode.CONSENT_EXPIRED, "The account consent has expired.");
+          const device = tx.objectStore(KV_STORE.device);
+          const hash = await requestAsPromise<GateHmacRecord | undefined>(device.get(GATE_HMAC_KEY));
+          const account = await requestAsPromise<AccountKeyRecord | undefined>(device.get(ACCOUNT_KEY));
+          if (!validGateHmac(hash, gate) || !validAccountKey(account, gate)) throw refusal("gate_unavailable");
           const intents = tx.objectStore(KV_STORE.purgeIntents);
           if (access.partitionId !== undefined && (await requestAsPromise(intents.count(access.partitionId))) > 0) throw refusal("purge_pending");
-          if (access.identityKeyHash !== undefined && (await requestAsPromise(intents.count(`pending:${access.identityKeyHash}`))) > 0) {
-            throw refusal("purge_pending");
-          }
-          const value = await fn(tx);
+          if (access.identityKeyHash !== undefined && (await requestAsPromise(intents.count(`pending:${access.identityKeyHash}`))) > 0) throw refusal("purge_pending");
+          const value = await fn(tx, account);
           await done;
           return { value };
         } catch (error) {
           try {
             tx.abort();
           } catch {
-            // Already finished.
+            // Already settled.
           }
           await done.catch(() => undefined);
           throw error;
@@ -98,7 +147,18 @@ export function createIndexedDbGateTx(open: KvDatabaseOpener): ReplicaGateTx<IDB
       });
       if (result === null) throw refusal("gate_unavailable");
       return result.value;
-    },
+    } catch (error) {
+      if (error !== null && typeof error === "object" && "code" in error && error.code === ReplicaErrorCode.CONSENT_EXPIRED) {
+        await expire(access);
+      }
+      throw error;
+    }
+  }
+
+  return {
+    snapshot,
+    run: (scope, access, fn) => runChecked(scope, access, (tx) => fn(tx)),
+    readAccountKey: (access) => runChecked({ stores: [KV_STORE.device], mode: "readonly" }, access, async (_tx, account) => account),
 
     async indexPartition(tx: IDBTransaction, entry: ReplicaPartitionIndexEntry): Promise<void> {
       tx.objectStore(KV_STORE.partitions).put(entry, entry.partitionId);

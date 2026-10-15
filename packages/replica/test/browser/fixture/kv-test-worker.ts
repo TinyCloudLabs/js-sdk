@@ -9,6 +9,7 @@
 import { ed25519 } from "@noble/curves/ed25519";
 
 import { createKvWorkerHost } from "../../../src/kv-storage/host.js";
+import { ledgerFor } from "../../../src/kv-storage/ledger.js";
 import type { KvRequest } from "../../../src/kv-storage/protocol.js";
 import { ReplicaError } from "../../../src/errors.js";
 import type { FetchedContent, ReplicaTransport, SyncPage } from "../../../src/types.js";
@@ -65,6 +66,9 @@ const host = createKvWorkerHost({
     };
   },
   gateTx: createTestGate(),
+  // Exercise the real IndexedDB quota failure path, not the earlier optional
+  // estimate-based floor: browsers may report no usable free-space estimate.
+  ledgerFor: (quota) => ({ ...ledgerFor(quota), freeBytes: async () => null }),
   ...(navigator.locks === undefined ? {} : { locks: navigator.locks }),
 });
 

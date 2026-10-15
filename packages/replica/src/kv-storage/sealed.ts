@@ -59,7 +59,7 @@ function utf8Length(value: string): number {
   return bytes;
 }
 
-type MeasuredRow = SealedRecord & {
+type MeasuredRow = Partial<SealedRecord> & {
   pid?: string;
   hashId?: string;
   size?: number;
@@ -76,6 +76,11 @@ type MeasuredRow = SealedRecord & {
 
 /** Canonical application-encoded bytes for the final persisted row, not IDB engine allocation. */
 export function measureSealedRow(key: IDBValidKey, row: MeasuredRow): number {
+  if (row.purged === true
+    ? row.v !== undefined || row.iv !== undefined || row.bytes !== undefined
+    : row.v !== 1 || !(row.iv instanceof Uint8Array) || !(row.bytes instanceof Uint8Array)) {
+    throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica row has an invalid sealed envelope.");
+  }
   const primaryKey = JSON.stringify(key);
   if (typeof primaryKey !== "string") {
     throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica row has an invalid primary key.");

@@ -18,6 +18,7 @@ import workerUrl from "@tinycloud/replica/kv-storage/worker?url";
 registerReplicationLoaders({
   runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
   authority: () => import("@tinycloud/node-sdk/replication/authority"),
+  gate: () => import("@tinycloud/replica/profile-gate"),
 });
 
 /** EIP-191 `personal_sign` over a raw secp256k1 key — a test wallet. */

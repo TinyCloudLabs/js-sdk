@@ -1,15 +1,6 @@
 /**
- * The worker side of `@tinycloud/replica/kv-storage`: one host per worker,
- * serving every handle of one storage instance over the origin database.
- * The RC1 `Replica` engine runs unchanged over a partition-scoped
- * `IndexedDbReplicaStore`; this module adds what the read-through contract
- * needs on top of it — read metadata, grant metadata and caveat refusal,
- * cancellable syncs, epoch finalisation, the per-handle gate and ledger
- * hooks, and the peer-commit bridge.
- *
- * Everything platform-specific (WASM signing, the device key factory, the
- * lifecycle gate and quota ledger) comes in through {@link KvWorkerDeps}, so
- * the production entry (`worker.ts`) and the test fixtures share this code.
+ * Origin-wide replica worker host. One sealed partition store per handle;
+ * RC1 feed verification, fencing and repair remain in the shared Replica engine.
  */
 import type {
   LocalGetResult,
@@ -17,30 +8,31 @@ import type {
   LocalReadMeta,
   LocalSyncResult,
   ReplicaDevice,
-  ReplicaGateAccess,
-  ReplicaGateScope,
-  ReplicaGateTx,
+  ReplicaBrowserGateAccess,
   ReplicaGrantInfo,
   ReplicaPartitionIndexEntry,
   ReplicaPeerCommit,
-  ReplicaQuotaLedger,
   ReplicaQuotaSpec,
 } from "@tinycloud/sdk-services/kv/replication";
-import { REPLICA_KV_CHANNEL } from "@tinycloud/sdk-services/kv/replication/contractConstants";
-import { canonicalReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
+import { MAX_GRANT_TTL_MS, REPLICA_KV_CHANNEL } from "@tinycloud/sdk-services/kv/replication/contractConstants";
+import { canonicalReplicationIdentity, replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
 
 import { principalOf } from "../did.js";
 import { Replica, type ReadMeta } from "../engine.js";
 import { ReplicaError, ReplicaErrorCode, gatedError, isReplicaError } from "../errors.js";
 import { assertGrantInstallable, grantUnconstrained, parseUcanGrant } from "../grant.js";
-import { assertFolderPrefix, requiresSecretsOptIn } from "../scope.js";
+import { assertBrowserReadThroughScope, assertFolderPrefix } from "../scope.js";
 import type { GrantRecord, ReplicaTransport } from "../types.js";
 import { requestAsPromise } from "../browser/idb.js";
-import { IndexedDbReplicaStore, type ReplicaStoreHooks } from "../browser/store.js";
-import { saltedHash } from "../profile-gate/saltedHash.js";
+import { decodeJson, encodeJson } from "./codec.js";
+import { gateHash } from "./gateKeys.js";
+import type { BrowserReplicaGateTx } from "./gateTx.js";
+import { DEVICE_QUOTA_PARTITION_ID, type ReplicaBrowserQuotaLedger } from "./ledger.js";
 import { grantInfoOf } from "./grantInfo.js";
 import type { KvChannelMessage, KvEvent, KvGetResult, KvOpenSpec, KvReply, KvRequest, KvResults, KvWireError } from "./protocol.js";
-import { KV_STORE, identityKeyHashOf, kvLayout, openKvDatabase, partitionIdOf } from "./schema.js";
+import { KV_STORE, partitionIdOf } from "./schema.js";
+import { SealedReplicaStore } from "./secureStore.js";
+import { measureSealedRow, openSealed, seal, type SealedRecord } from "./sealed.js";
 
 /** Writer Web Lock of one partition: one tab syncs it at a time. */
 export function partitionLockName(partitionId: string): string {
@@ -70,9 +62,9 @@ export type KvWorkerDeps = {
    * through its `run`, so without it `open` refuses REPLICA_GATED
    * `gate_unavailable` — there is no ungated mode.
    */
-  gateTx?: ReplicaGateTx<IDBTransaction>;
-  /** The quota ledger for a handle's `spec.quota`; absent or undefined = unbounded. */
-  ledgerFor?(quota: ReplicaQuotaSpec | undefined): ReplicaQuotaLedger<IDBTransaction> | undefined;
+  gateTx?: BrowserReplicaGateTx;
+  /** Quota admission is required for every signed ciphertext-row mutation. */
+  ledgerFor?(quota: ReplicaQuotaSpec | undefined): ReplicaBrowserQuotaLedger | undefined;
   locks?: Locks;
   channel?: BroadcastChannel | null;
   holder?: string;
@@ -85,7 +77,7 @@ type Handle = {
   spec: KvOpenSpec;
   device: ReplicaDevice;
   partitionId: string;
-  store: IndexedDbReplicaStore;
+  store: SealedReplicaStore;
   syncs: Map<number, { abort: AbortController; settled: Promise<unknown> }>;
 };
 
@@ -108,7 +100,6 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
   const handles = new Map<number, Handle>();
   const requests = new Map<number, AbortController>();
   let nextHandle = 1;
-  let database: Promise<IDBDatabase> | undefined;
 
   const channel = deps.channel === undefined ? (typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(REPLICA_KV_CHANNEL)) : deps.channel;
   if (channel !== null) {
@@ -122,36 +113,43 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
     };
   }
 
-  /** The shared connection; reopened after a `versionchange` closed it. */
-  function db(): Promise<IDBDatabase> {
-    database ??= openKvDatabase({ create: true }).then((opened) => {
-      if (opened === null) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica database could not be created.");
-      opened.addEventListener("versionchange", () => {
-        database = undefined;
-      });
-      return opened;
-    });
-    database.catch(() => {
-      database = undefined;
-    });
-    return database;
-  }
 
-  /**
-   * The origin's owner device, read and (once, first writer wins) stored
-   * through the gate: `device` is a guarded store. The key is minted outside
-   * any transaction — WASM work never runs inside one.
-   */
-  async function storedDevice(gate: ReplicaGateTx<IDBTransaction>, access: ReplicaGateAccess): Promise<ReplicaDevice> {
-    const read = (tx: IDBTransaction) => requestAsPromise<ReplicaDevice | undefined>(tx.objectStore(KV_STORE.device).get("device"));
+  /** The owner device is minted only on demand, sealed before its guarded write. */
+  async function storedDevice(gate: BrowserReplicaGateTx, access: ReplicaBrowserGateAccess, ledger: ReplicaBrowserQuotaLedger): Promise<ReplicaDevice> {
+    const key = await gate.readAccountKey(access);
+    const read = (tx: IDBTransaction) =>
+      requestAsPromise<SealedRecord | undefined>(tx.objectStore(KV_STORE.device).get("device"));
     const stored = await gate.run({ stores: [KV_STORE.device], mode: "readonly" }, access, read);
-    if (stored !== undefined) return stored;
+    if (stored !== undefined) {
+      const device = decodeJson<ReplicaDevice>(await openSealed(key.aesGcm, stored, "device\0owner"));
+      if (device === null || typeof device !== "object" || typeof device.did !== "string" ||
+          device.jwk === null || typeof device.jwk !== "object") {
+        throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The encrypted owner device is invalid.");
+      }
+      return device;
+    }
     const candidate = await deps.createDevice();
-    return gate.run({ stores: [KV_STORE.device], mode: "readwrite" }, access, async (tx) => {
+    const sealed = await seal(key.aesGcm, encodeJson(candidate), "device\0owner");
+    const row = { ...sealed, size: 0 };
+    row.size = measureSealedRow("device", row);
+    const freeBytes = await ledger.freeBytes();
+    const written = await gate.run({ stores: [KV_STORE.device], mode: "readwrite" }, access, async (tx) => {
       const existing = await read(tx);
-      if (existing === undefined) tx.objectStore(KV_STORE.device).put({ did: candidate.did, jwk: candidate.jwk }, "device");
-      return existing ?? candidate;
+      if (existing === undefined) {
+        const admission = { partitionId: DEVICE_QUOTA_PARTITION_ID, partitionDeltaBytes: 0, deviceDeltaBytes: row.size, freeBytes };
+        await ledger.admitRows(tx, admission);
+        tx.objectStore(KV_STORE.device).put(row, "device");
+        await ledger.accountRows(tx, admission);
+      }
+      return existing;
     });
+    if (written === undefined) return candidate;
+    const device = decodeJson<ReplicaDevice>(await openSealed(key.aesGcm, written, "device\0owner"));
+    if (device === null || typeof device !== "object" || typeof device.did !== "string" ||
+        device.jwk === null || typeof device.jwk !== "object") {
+      throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The encrypted owner device is invalid.");
+    }
+    return device;
   }
 
   function need(id: number): Handle {
@@ -162,45 +160,42 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
 
   async function open(spec: KvOpenSpec): Promise<KvResults["open"]> {
     assertFolderPrefix(spec.prefix);
-    const identity = canonicalReplicationIdentity(spec.identity);
-    if (requiresSecretsOptIn(spec.space, spec.prefix) && spec.allowSecrets !== true) {
-      throw new ReplicaError(
-        ReplicaErrorCode.SECRETS_OPT_IN_REQUIRED,
-        `Replicating ${spec.space}/kv/${spec.prefix} copies secret material to this browser; pass allowSecrets to opt in.`,
-      );
+    assertBrowserReadThroughScope(spec.space, spec.prefix, spec.allowSecrets);
+    if (spec.grantPolicy === undefined || !Number.isFinite(spec.grantPolicy.grantTtlMs)
+      || spec.grantPolicy.grantTtlMs <= 0 || spec.grantPolicy.grantTtlMs > MAX_GRANT_TTL_MS) {
+      throw new ReplicaError(ReplicaErrorCode.INVALID_ARGUMENT, "A finite, positive grantPolicy.grantTtlMs within the grant TTL limit is required.");
     }
+    if (deps.locks === undefined) throw gatedError("gate_unavailable", "Web Locks are required to open a browser replica.");
+    const identity = canonicalReplicationIdentity(spec.identity);
     const gate = deps.gateTx;
     if (gate === undefined) throw gatedError("gate_unavailable", "No lifecycle gate is wired into the replica worker.");
     const stamp = spec.stamp;
     if (stamp === undefined) throw gatedError("not_established", "The session has no replica stamp.");
-    // Ordering rule: snapshot, then derive every salted id, then open transactions.
+    // Snapshot and derive private HMAC ids before the first guarded transaction.
     const snapshot = await gate.snapshot();
     if (snapshot === null) throw gatedError("not_established", "No replica gate exists on this origin yet.");
-    const base = { stamp, principal: identity.principal, incarnation: snapshot.incarnation };
-    // Delegate posture: an injected device is used as given and nothing is loaded or minted.
-    const device = spec.device ?? (await storedDevice(gate, base));
-    const partitionId = await partitionIdOf({ identity, prefix: spec.prefix, deviceDid: device.did }, snapshot.salt);
-    const index: ReplicaPartitionIndexEntry = {
-      partitionId,
-      principalHash: await saltedHash(snapshot.salt, identity.principal),
-      identityKeyHash: await identityKeyHashOf(identity, snapshot.salt),
-      createdAt: now(),
+    const principalHash = await gateHash(snapshot.gateHmac, "principal", identity.principal.toLowerCase());
+    const identityKey = replicationIdentityKey(identity);
+    const identityKeyHash = await gateHash(snapshot.gateHmac, "identity", identityKey);
+    const base: ReplicaBrowserGateAccess = {
+      stamp, incarnation: snapshot.incarnation, keyId: snapshot.keyId,
+      accountKeyId: snapshot.accountKeyId, principalHash, identityKeyHash,
     };
-    const access: ReplicaGateAccess = { ...base, partitionId };
     const ledger = deps.ledgerFor?.(spec.quota);
-    const hooks: ReplicaStoreHooks = {
-      ...(ledger === undefined
-        ? {}
-        : {
-            freeBytes: () => ledger.freeBytes(),
-            admitPage: (tx, page) => ledger.admitPage(tx, page),
-            accountCommit: (tx, commit) => ledger.accountCommit(tx, commit),
-            accountErase: (tx, erase) => ledger.accountErase(tx, erase),
-          }),
-      run: (stores, mode, fn) => gate.run({ stores: stores as ReplicaGateScope["stores"], mode: mode === "readwrite" ? "readwrite" : "readonly" }, access, fn),
-      indexPartition: (tx) => gate.indexPartition(tx, index),
+    if (ledger === undefined) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The browser replica quota ledger is unavailable.");
+    // An injected session device is never replaced by, or persisted as, the owner device.
+    const device = spec.device ?? (await storedDevice(gate, base, ledger));
+    const partitionId = await partitionIdOf({ identity, prefix: spec.prefix, deviceDid: device.did }, snapshot.gateHmac);
+    const lookupId = await gateHash(snapshot.gateHmac, "lookup", `${identityKey}\n${spec.prefix}`);
+    const index: ReplicaPartitionIndexEntry = {
+      partitionId, principalHash, identityKeyHash, lookupId,
+      ownerDevice: spec.device === undefined, createdAt: now(),
     };
-    const store = await IndexedDbReplicaStore.openIn(await db(), { holder, layout: kvLayout(partitionId), hooks, now });
+    const access: ReplicaBrowserGateAccess = { ...base, partitionId };
+    const store = await SealedReplicaStore.openIn({
+      partitionId, holder, now, gate, access, ledger, identityKeyHash,
+      policy: spec.grantPolicy, index,
+    });
     try {
       const config = {
         name: spec.prefix.replace(/\/+$/, "") || "replica",
@@ -285,9 +280,7 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
 
   async function sync(handle: Handle, abort: AbortController, syncStartEpoch: number): Promise<LocalSyncResult> {
     const locks = deps.locks;
-    if (locks === undefined) {
-      throw new ReplicaError(ReplicaErrorCode.RUNTIME_UNSUPPORTED, "This browser has no Web Locks API; the replica can read local data but cannot sync.");
-    }
+    if (locks === undefined) throw gatedError("gate_unavailable", "Web Locks are required to sync a browser replica.");
     abort.signal.throwIfAborted();
     let pages = 0;
     const engine = new Replica({

@@ -54,7 +54,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "bun run clean && tsup",
     "clean": "rm -rf dist",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

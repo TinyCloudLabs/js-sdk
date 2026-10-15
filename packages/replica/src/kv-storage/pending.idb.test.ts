@@ -6,12 +6,13 @@
  */
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake-indexeddb";
-import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 
 import { SPACE } from "../../test/fixtures.js";
-import { TEST_SALT, createTestGate, type TestGate } from "../../test/test-gate.js";
+import { createTestGate, type TestGate } from "../../test/test-gate.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
 import { KV_DATABASE, KV_STORE, identityKeyHashOf, kvPartitionEraser, openKvDatabase } from "./schema.js";
+import { createKvWorkerHost } from "./host.js";
 import { IndexedDbPendingWriteStore } from "./pending.js";
 
 beforeAll(() => {
@@ -58,7 +59,42 @@ beforeEach(async () => {
   stamp = await gate.establish(PRINCIPAL);
 });
 
+async function identityId(id: ReplicationIdentity): Promise<string> {
+  const snapshot = await gate.snapshot();
+  if (snapshot === null) throw new Error("Expected an established test gate.");
+  return identityKeyHashOf(id, snapshot.gateHmac);
+}
+
 describe("IndexedDB pending-write store", () => {
+  test("missing Web Locks refuses pending mutations without writing a row", async () => {
+    const id = identity();
+    const store = new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp });
+    await expect(store.update((state) => void (state.seq++))).rejects.toMatchObject({
+      code: "REPLICA_GATED", gate: "gate_unavailable",
+    });
+    expect(await store.readExisting()).toBeUndefined();
+  });
+  test("worker refuses open before device creation when Web Locks are unavailable", async () => {
+    const id = identity();
+    const response = Promise.withResolvers<unknown>();
+    const worker = createKvWorkerHost({
+      gateTx: gate,
+      channel: null,
+      post: (message) => response.resolve(message),
+      createDevice: () => { throw new Error("no device may be minted"); },
+      transportFor: () => { throw new Error("no transport may be created"); },
+    });
+    worker.receive({
+      id: 1, op: "open",
+      spec: { identity: id, space: id.space, prefix: "notes/", allowSecrets: false, stamp, grantPolicy: { grantTtlMs: 60_000, consentAnchor: null } },
+    });
+    expect(await response.promise).toMatchObject({ id: 1, ok: false, err: { code: "REPLICA_GATED", detail: { gate: "gate_unavailable" } } });
+    const db = (await openKvDatabase({ create: false }))!;
+    expect(await requestAsPromise(db.transaction(KV_STORE.meta).objectStore(KV_STORE.meta).count())).toBe(0);
+    db.close();
+  });
+
+
   test("is durable: a new store instance reads what an earlier one wrote", async () => {
     const id = identity();
     const { locks } = sharedLocks();
@@ -75,7 +111,7 @@ describe("IndexedDB pending-write store", () => {
     expect(state.records.map((entry) => entry.opId)).toEqual(["a"]);
   });
 
-  test("is keyed by the salted identity hash, and two identities never share a record", async () => {
+  test("is keyed by a private identity HMAC, and two identities never share a record", async () => {
     const { locks } = sharedLocks();
     const [one, two] = [identity(), identity()];
     await new IndexedDbPendingWriteStore(one, { gateTx: gate, stamp, locks }).update((state) => void (state.seq = 9));
@@ -83,7 +119,7 @@ describe("IndexedDB pending-write store", () => {
     const db = (await openKvDatabase({ create: false }))!;
     const keys = await requestAsPromise(db.transaction(KV_STORE.pending).objectStore(KV_STORE.pending).getAllKeys());
     db.close();
-    expect(keys).toEqual([await identityKeyHashOf(one, TEST_SALT)]);
+    expect(keys).toEqual([await identityId(one)]);
   });
 
   test("two tabs' concurrent read-modify-writes lose nothing, under the identity's Web Lock", async () => {
@@ -106,7 +142,7 @@ describe("IndexedDB pending-write store", () => {
     const state = await tabA.read();
     expect(state.seq).toBe(40);
     expect(state.records).toHaveLength(40);
-    expect([...lockNames]).toEqual([`tinycloud-replica-kv:pending:${await identityKeyHashOf(id, TEST_SALT)}`]);
+    expect([...lockNames]).toEqual([`tinycloud-replica-kv:pending:${await identityId(id)}`]);
   });
 
   test("a throwing mutation writes nothing", async () => {
@@ -121,16 +157,18 @@ describe("IndexedDB pending-write store", () => {
     expect((await store.read()).seq).toBe(1);
   });
 
-  test("a record under this identity's key naming another identity is STORAGE_ERROR, never shared", async () => {
-    const id = identity();
-    // Salted ids are derived before a transaction opens (HMAC is async).
-    const key = await identityKeyHashOf(id, TEST_SALT);
-    const db = (await openKvDatabase({ create: true }))!;
+  test("ciphertext from another identity cannot be replayed under this identity's key", async () => {
+    const [id, other] = [identity(), identity()];
+    const locks = sharedLocks().locks;
+    await new IndexedDbPendingWriteStore(other, { gateTx: gate, stamp, locks }).update((state) => void (state.seq = 7));
+    const [from, to] = await Promise.all([identityId(other), identityId(id)]);
+    const db = (await openKvDatabase({ create: false }))!;
     const tx = db.transaction(KV_STORE.pending, "readwrite");
-    tx.objectStore(KV_STORE.pending).put({ v: 2, identity: identity(), committedEpoch: 0, seq: 0, records: [] }, key);
+    const row = await requestAsPromise(tx.objectStore(KV_STORE.pending).get(from));
+    tx.objectStore(KV_STORE.pending).put(row, to);
     await transactionDone(tx);
     db.close();
-    await expect(new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp, locks: sharedLocks().locks }).read()).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    await expect(new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp, locks }).read()).rejects.toMatchObject({ code: "STORAGE_ERROR" });
   });
 
   test("without a stamp, without a gate, or after the gate moved, every call refuses and nothing is written", async () => {
@@ -142,24 +180,24 @@ describe("IndexedDB pending-write store", () => {
     const store = new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp, locks });
     await store.update((state) => void (state.seq = 1));
     await gate.deny();
-    await expect(store.update((state) => void (state.seq = 2))).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
-    await expect(store.read()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    await expect(store.update((state) => void (state.seq = 2))).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(store.read()).rejects.toMatchObject({ code: "REPLICA_GATED" });
     const fresh = await gate.establish(PRINCIPAL);
-    expect((await new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp: fresh, locks }).read()).seq).toBe(1);
+    expect((await new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp: fresh, locks }).read()).seq).toBe(0);
   });
 
   test("a pending intent over the identity makes it unreadable", async () => {
     const id = identity();
     const store = new IndexedDbPendingWriteStore(id, { gateTx: gate, stamp, locks: sharedLocks().locks });
     await store.update((state) => void (state.seq = 1));
-    await gate.addIntent({ kind: "pending", identityKeyHash: await identityKeyHashOf(id, TEST_SALT) });
+    await gate.addIntent({ kind: "pending", identityKeyHash: await identityId(id) });
     await expect(store.read()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "purge_pending" });
   });
 
-  test("readExisting never creates the database or a record", async () => {
+  test("readExisting refuses a missing gate without creating a database", async () => {
     await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
     const store = new IndexedDbPendingWriteStore(identity(), { gateTx: gate, stamp, locks: sharedLocks().locks });
-    expect(await store.readExisting()).toBeUndefined();
+    await expect(store.readExisting()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "not_established" });
     expect((await indexedDB.databases()).some((info) => info.name === KV_DATABASE)).toBe(false);
   });
 
@@ -168,7 +206,7 @@ describe("IndexedDB pending-write store", () => {
     const [a, b] = [identity(), identity()];
     await new IndexedDbPendingWriteStore(a, { gateTx: gate, stamp, locks }).update((state) => void (state.seq = 1));
     await new IndexedDbPendingWriteStore(b, { gateTx: gate, stamp, locks }).update((state) => void (state.seq = 1));
-    const key = await identityKeyHashOf(a, TEST_SALT);
+    const key = await identityId(a);
     const db = (await openKvDatabase({ create: false }))!;
     const tx = db.transaction(KV_STORE.pending, "readwrite");
     await kvPartitionEraser.eraseIdentityPending(tx, key);

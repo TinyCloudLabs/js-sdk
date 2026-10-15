@@ -21,7 +21,7 @@ export default defineConfig([
     format: ["esm", "cjs"],
     target: "es2022",
     dts: true,
-    clean: true,
+    clean: false,
     sourcemap: true,
     noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
     splitting: false,

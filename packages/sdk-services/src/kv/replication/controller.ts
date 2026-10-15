@@ -5,9 +5,9 @@ import { kvPrefixCovers, listRangeCovers, requiresSecretsOptIn } from "./scope";
 import { classifyWriteOutcome } from "./outcome";
 import { afterSync, begin, clearPending as clearPendingRecords, clearPrefix, emptyPendingState, pinnedKeys, settle } from "./pendingWrites";
 import { localGet, type LocalGetResponse } from "./localResponse";
-import { cursorRestart, decodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
+import { cursorRestart, decodeTcr1, listPathCovered, localList } from "./listLocal";
 import { emitEvent, type ReplicationEventInput } from "./events";
-import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteState, ReplicaDevice, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
+import type { KVListPage, KVReplicaHandle, KVReplicationController, LocalGetResult, LocalReadMeta, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteState, ReplicaDevice, ReplicaPeerCommit, ReplicationEvent, ReplicationReason, ReplicaStatusEntry, KVReplicationDeps, LocalSyncResult } from "./types";
 
 const CLOSE_TIMEOUT_MS = 3_000;
 const STATUS_REFRESH_TIMEOUT_MS = CLOSE_TIMEOUT_MS;
@@ -90,7 +90,20 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (plan && "refused" in plan) refusalCode ??= plan.refused;
       let device: ReplicaDevice | undefined;
       if (delegated) { device = delegated.device; state!.strategy = "session"; }
-      const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
+      const spec = {
+        identity, space: session.space, prefix, allowSecrets: options.allowSecrets,
+        ...(device ? { device } : {}),
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        onPeerCommit: (info: ReplicaPeerCommit) => {
+          if (isClosed || purgeStarted || state!.handle === undefined) return;
+          emit({
+            type: "replication.sync", space: session.space, replica: prefix,
+            trigger: "peer", origin: "peer", outcome: "ok", durationMs: 0, lagMs: null,
+            ...(info.changes === undefined ? {} : { changes: info.changes }),
+            ...(info.coverage === undefined ? {} : { coverage: info.coverage }),
+          });
+        },
+      };
       if (prefix === "/" && deps.nodeFeatures !== undefined && !deps.nodeFeatures.includes("kv-sync-root")) {
         throw unsupportedRoot(prefix);
       }
@@ -572,7 +585,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       readEvent("list", r.listPath, prefix, "network", "replica_unavailable", result.ok ? "found" : "error", started, { code: errorCode(error) });
       return result;
     }
-    const pendingRange = state.records.find((record) => listRangeCovers(r.listPath, record.key) && (!decoded || utf8Compare(record.key, decoded.last) > 0));
+    const pendingRange = state.records.find((record) => listRangeCovers(r.listPath, record.key));
     const behind = fresh.status.syncedThroughEpoch < state.committedEpoch;
     if (cursor && decoded && (fresh.failure || pendingRange || behind || fresh.status.coverage !== "complete" || fresh.status.authority.state !== "valid" || (!pending.durable && !inProcessProof.has(prefix)))) return restart();
     if (behind) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
@@ -583,6 +596,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     try {
       const signalHandle = { list: (o: { prefix: string; after?: string; limit?: number }) => raceSignal(handle.list(o), r.signal) };
       const page = await raceSignal(localList(signalHandle, r.space, r.listPath, r.options?.limit, cursor, validateReadMeta), r.signal);
+      const latest = await raceSignal(pending.read(), r.signal);
+      const laterPending = latest.records.find((record) => listRangeCovers(r.listPath, record.key));
+      if (cursor && decoded && (laterPending || fresh.status.syncedThroughEpoch < latest.committedEpoch)) return restart();
+      if (fresh.status.syncedThroughEpoch < latest.committedEpoch) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "REPLICA_BEHIND_OWN_WRITES", result.ok ? "found" : "error", started); return result; }
+      if (laterPending) { const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "pending_write", result.ok ? "found" : "error", started, { pendingState: laterPending.state }); return result; }
       const event = {
         count: page.keys.length,
         syncedBeforeRead: fresh.syncedBeforeRead,

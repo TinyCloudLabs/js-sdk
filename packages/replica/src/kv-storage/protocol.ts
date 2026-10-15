@@ -9,6 +9,7 @@ import type {
   LocalReplicaStatus,
   LocalSyncResult,
   ReplicaDevice,
+  ReplicaDenyOutcome,
   ReplicaGrantInfo,
   ReplicaGrantPolicy,
   ReplicaPeerCommit,
@@ -67,8 +68,14 @@ export type KvWireError = { code: string; message: string; detail?: Record<strin
 /** Replies to open and handle operations carry the stamp they ran under (`ReplicaStampedReply`). */
 export type KvReply = { id: number; ok: true; result: unknown; stamp?: ReplicaSessionStamp } | { id: number; ok: false; err: KvWireError };
 
+/** Worker asks the main-thread lifecycle to durably deny an expired account. */
+export type KvConsentExpiryAck =
+  | { op: "consentExpiryAck"; requestId: number; ok: true; outcome: ReplicaDenyOutcome }
+  | { op: "consentExpiryAck"; requestId: number; ok: false; message: string };
+
 export type KvEvent =
   | { event: "ready" }
+  | { event: "consentExpiry"; requestId: number }
   /** Another tab committed a sync for this handle's partition. */
   | { event: "peerCommit"; handle: number; info: ReplicaPeerCommit };
 

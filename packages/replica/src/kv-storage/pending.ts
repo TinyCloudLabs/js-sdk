@@ -1,25 +1,14 @@
 /**
- * The durable pending-write store of the browser read-through adapter (plan
- * §3 "Pending writes", CONTRACT.md §1): one `PendingWriteState` per identity
- * in the origin database's `pending` store, keyed by the salted identity-key
- * hash, bound to one session stamp for its whole life.
- *
- * Every `read`, `readExisting` and `update` runs through the lifecycle
- * gate's `run`, on the main thread (the `update` closure cannot cross into
- * the worker). Order, per the contract: `snapshot()`; derive the salted
- * identity-key hash outside any transaction; for `update`, take the Web Lock
- * `REPLICA_PENDING_LOCK_PREFIX + identityKeyHash`; then `run` with the
- * snapshot's incarnation — a gate that moved since the snapshot fails closed.
- * The read-modify-write is one `strict` readwrite transaction, durable
- * before `update` resolves. There is no memory fallback and no ungated mode.
+ * Identity-scoped pending writes: private gate-HMAC row names and Web Locks,
+ * account-key sealed content, and gated compare-and-swap transactions.
+ * A missing key or moved gate never falls back to an unlocked/plaintext store.
  */
 import {
   canonicalReplicationIdentity,
   replicationIdentityKey,
   type PendingWriteState,
   type PendingWriteStore,
-  type ReplicaGateAccess,
-  type ReplicaGateTx,
+  type ReplicaBrowserGateAccess,
   type ReplicaSessionStamp,
   type ReplicationIdentity,
 } from "@tinycloud/sdk-services/kv/replication";
@@ -27,7 +16,13 @@ import { REPLICA_PENDING_LOCK_PREFIX } from "@tinycloud/sdk-services/kv/replicat
 
 import { ReplicaError, ReplicaErrorCode, gatedError } from "../errors.js";
 import { requestAsPromise } from "../browser/idb.js";
-import { KV_STORE, identityKeyHashOf } from "./schema.js";
+import { decodeJson, encodeJson } from "./codec.js";
+import { gateHash } from "./gateKeys.js";
+import type { BrowserReplicaGateTx } from "./gateTx.js";
+import { KV_STORE } from "./schema.js";
+import { measureSealedRow, openSealed, seal, type SealedRecord } from "./sealed.js";
+
+type SealedPending = SealedRecord & { size: number };
 
 type Locks = Pick<LockManager, "request">;
 
@@ -39,11 +34,11 @@ export class IndexedDbPendingWriteStore implements PendingWriteStore {
   readonly durable = true;
   readonly identity: ReplicationIdentity;
   readonly #identityKey: string;
-  readonly #gateTx: ReplicaGateTx<IDBTransaction> | undefined;
+  readonly #gateTx: BrowserReplicaGateTx | undefined;
   readonly #stamp: ReplicaSessionStamp | undefined;
   readonly #locks: Locks | undefined;
 
-  constructor(identity: ReplicationIdentity, options: { gateTx?: ReplicaGateTx<IDBTransaction>; stamp?: ReplicaSessionStamp; locks?: Locks } = {}) {
+  constructor(identity: ReplicationIdentity, options: { gateTx?: BrowserReplicaGateTx; stamp?: ReplicaSessionStamp; locks?: Locks } = {}) {
     this.identity = canonicalReplicationIdentity(identity);
     this.#identityKey = replicationIdentityKey(this.identity);
     this.#gateTx = options.gateTx;
@@ -82,29 +77,33 @@ export class IndexedDbPendingWriteStore implements PendingWriteStore {
     return value as PendingWriteState;
   }
 
-  /**
-   * Snapshot and derive the salted key outside any transaction; `undefined`
-   * when no gate exists yet (no pending record can predate the gate).
-   */
-  async #access(): Promise<{ gateTx: ReplicaGateTx<IDBTransaction>; access: ReplicaGateAccess & { identityKeyHash: string } } | undefined> {
+  async #access(): Promise<{ gateTx: BrowserReplicaGateTx; access: ReplicaBrowserGateAccess; id: string }> {
     const gateTx = this.#gateTx;
     if (gateTx === undefined) throw gatedError("gate_unavailable", "No lifecycle gate is wired into the pending-write store.");
     const stamp = this.#stamp;
     if (stamp === undefined) throw gatedError("not_established", "The pending-write store has no session stamp.");
     const snapshot = await gateTx.snapshot();
-    if (snapshot === null) return undefined;
-    const identityKeyHash = await identityKeyHashOf(this.identity, snapshot.salt);
-    return { gateTx, access: { stamp, principal: this.identity.principal, incarnation: snapshot.incarnation, identityKeyHash } };
+    if (snapshot === null) throw gatedError("not_established", "No replica gate exists on this origin yet.");
+    const identityKeyHash = await gateHash(snapshot.gateHmac, "identity", this.#identityKey);
+    const principalHash = await gateHash(snapshot.gateHmac, "principal", this.identity.principal.toLowerCase());
+    return {
+      gateTx,
+      id: identityKeyHash,
+      access: {
+        stamp, incarnation: snapshot.incarnation, keyId: snapshot.keyId,
+        accountKeyId: snapshot.accountKeyId, principalHash, identityKeyHash,
+      },
+    };
   }
 
   async #stored(): Promise<PendingWriteState | undefined> {
     const gated = await this.#access();
-    if (gated === undefined) return undefined;
-    const { gateTx, access } = gated;
-    return gateTx.run({ stores: [KV_STORE.pending], mode: "readonly" }, access, async (tx) => {
-      const value = await requestAsPromise<unknown>(tx.objectStore(KV_STORE.pending).get(access.identityKeyHash));
-      return value === undefined ? undefined : this.#parse(value);
-    });
+    const { gateTx, access, id } = gated;
+    const row = await gateTx.run({ stores: [KV_STORE.pending], mode: "readonly" }, access, (tx) =>
+      requestAsPromise<SealedPending | undefined>(tx.objectStore(KV_STORE.pending).get(id)));
+    if (row === undefined) return undefined;
+    const account = await gateTx.readAccountKey(access);
+    return this.#parse(decodeJson(await openSealed(account.aesGcm, row, `pending\0${id}`)));
   }
 
   async read(): Promise<PendingWriteState> {
@@ -117,19 +116,29 @@ export class IndexedDbPendingWriteStore implements PendingWriteStore {
 
   async update<T>(mutate: (state: PendingWriteState) => T): Promise<T> {
     const gated = await this.#access();
-    if (gated === undefined) throw gatedError("not_established", "No replica gate exists on this origin yet.");
-    const { gateTx, access } = gated;
-    const section = () =>
-      gateTx.run({ stores: [KV_STORE.pending], mode: "readwrite" }, access, async (tx) => {
-        const value = await requestAsPromise<unknown>(tx.objectStore(KV_STORE.pending).get(access.identityKeyHash));
-        const state = value === undefined ? this.#empty() : this.#parse(value);
-        // `mutate` is synchronous by contract: the transaction stays open across it.
-        const result = mutate(state);
-        tx.objectStore(KV_STORE.pending).put(state, access.identityKeyHash);
-        return result;
+    const { gateTx, access, id } = gated;
+    if (this.#locks === undefined) throw gatedError("gate_unavailable", "Web Locks are required for pending-write mutations.");
+    const section = async (): Promise<T> => {
+      const old = await gateTx.run({ stores: [KV_STORE.pending], mode: "readonly" }, access, (tx) =>
+        requestAsPromise<SealedPending | undefined>(tx.objectStore(KV_STORE.pending).get(id)));
+      const account = await gateTx.readAccountKey(access);
+      const state = old === undefined ? this.#empty() : this.#parse(decodeJson(await openSealed(account.aesGcm, old, `pending\0${id}`)));
+      const result = mutate(state);
+      const sealed = await seal(account.aesGcm, encodeJson(state), `pending\0${id}`);
+      const row = { ...sealed, size: 0 };
+      row.size = measureSealedRow(id, row);
+      await gateTx.run({ stores: [KV_STORE.pending], mode: "readwrite" }, access, async (tx) => {
+        const pending = tx.objectStore(KV_STORE.pending);
+        const current = await requestAsPromise<SealedPending | undefined>(pending.get(id));
+        if ((old === undefined) !== (current === undefined) ||
+            (old !== undefined && current !== undefined &&
+             (old.iv.length !== current.iv.length || old.iv.some((byte, index) => byte !== current.iv[index])))) {
+          throw new ReplicaError(ReplicaErrorCode.BUSY, "The pending-write state changed during its sealed mutation.");
+        }
+        pending.put(row, id);
       });
-    // `run` makes the read-modify-write atomic; the Web Lock serialises it across tabs first.
-    if (this.#locks === undefined) return section();
-    return this.#locks.request(`${REPLICA_PENDING_LOCK_PREFIX}${access.identityKeyHash}`, section) as Promise<T>;
+      return result;
+    };
+    return this.#locks.request(`${REPLICA_PENDING_LOCK_PREFIX}${id}`, section) as Promise<T>;
   }
 }

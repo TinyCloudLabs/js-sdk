@@ -8,13 +8,14 @@
  * `published` storages run the published `kv-storage.worker.js`, which has
  * no gate wired and must fail closed.
  */
-import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PurgeTarget, ReplicaPeerCommit, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
+import type { KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, PurgeTarget, ReplicaPeerCommit, ReplicaQuotaSpec, ReplicaSessionStamp, ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 import { indexedDbReplicaStorage } from "@tinycloud/replica/kv-storage";
 import { killReplicaWorker } from "@tinycloud/replica/kv-storage/testing";
 // @ts-expect-error `?url` is a Vite module query.
 import publishedWorkerUrl from "@tinycloud/replica/kv-storage/worker?url";
 
 import { createTestGate, createTestLifecycle } from "../../test-gate.js";
+import { ledgerFor } from "../../../src/kv-storage/ledger.js";
 
 const gate = createTestGate();
 const lifecycle = createTestLifecycle(gate);
@@ -48,14 +49,14 @@ function need<T>(map: Map<string, T>, name: string): T {
 }
 
 const api = {
-  createStorage(name: string, kind: "fake" | "real" | "published"): void {
+  createStorage(name: string, kind: "fake" | "real" | "published", quota?: ReplicaQuotaSpec): void {
     const worker =
       kind === "fake"
         ? () => new Worker(new URL("./kv-test-worker.ts", import.meta.url), { type: "module" })
         : kind === "real"
           ? () => new Worker(new URL("./kv-real-worker.ts", import.meta.url), { type: "module" })
           : new URL(publishedWorkerUrl, import.meta.url);
-    storages.set(name, indexedDbReplicaStorage({ worker, lifecycle, gateTx: gate }));
+    storages.set(name, indexedDbReplicaStorage({ worker, lifecycle, gateTx: gate, ...(quota === undefined ? {} : { ledger: ledgerFor(quota) }) }));
   },
   /** The session stamp a fresh sign-in of `principal` gets from the test gate. */
   establish: (principal: string) => gate.establish(principal),
@@ -74,6 +75,7 @@ const api = {
       return { deviceDid: handle.deviceDid };
     }),
   peerCommits: (name: string) => peerCommits.get(name) ?? [],
+  replicaId: (name: string) => need(handles, name).replicaId,
   installGrant: (name: string, ucan: string) => outcome(() => need(handles, name).installGrant(ucan)),
   grant: (name: string) => outcome(() => need(handles, name).grant()),
   get: (name: string, key: string) =>
@@ -101,6 +103,12 @@ const api = {
   close: (name: string) => outcome(() => need(handles, name).close()),
   purge: (storage: string, target: PurgeTarget) => outcome(() => need(storages, storage).purge(target)),
   inspectStatus: (storage: string, spec: WireSpec) => outcome(() => need(storages, storage).inspectStatus!(spec, { signal: new AbortController().signal })),
+  inspectAborted: (storage: string, spec: WireSpec) => {
+    const abort = new AbortController();
+    const result = need(storages, storage).inspectStatus!(spec, { signal: abort.signal });
+    abort.abort();
+    return outcome(() => result);
+  },
   /** `count` concurrent read-modify-writes, each appending one record tagged `tag`. */
   pendingWrites: (storage: string, identity: ReplicationIdentity, tag: string, count: number) =>
     outcome(async () => {

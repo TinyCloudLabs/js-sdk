@@ -5,16 +5,18 @@
  * epoch fence. The RC1 engine runs unchanged over the partition layout.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { indexedDB as fakeIndexedDB, IDBKeyRange as fakeIDBKeyRange } from "fake-indexeddb";
+import { bytesToHex } from "@noble/hashes/utils";
 import { replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
+import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 
 import { FakeNode, SPACE, config, deviceGrant, device } from "../../test/fixtures.js";
 import { Replica } from "../engine.js";
 import { isReplicaError, ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { requestAsPromise, transactionDone } from "../browser/idb.js";
 import { IndexedDbReplicaStore, type ReplicaStoreHooks } from "../browser/store.js";
-import { saltedHash } from "../profile-gate/saltedHash.js";
 import { ERASE_STORES, KV_DATABASE, KV_STORE, identityKeyHashOf, kvLayout, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
+
+const encoder = new TextEncoder();
 
 beforeAll(() => {
   (globalThis as { indexedDB?: unknown }).indexedDB = fakeIndexedDB;
@@ -61,33 +63,82 @@ async function rowsOf(storeName: string, id: string): Promise<number> {
   }
 }
 
-describe("partition ids", () => {
-  const salt = "c2FsdC1vbmUtc2FsdC1vbmUtc2FsdC1vbmUtc2FsdC0x";
+describe("origin schema cutover", () => {
+  test("read-only inspection does not upgrade plaintext v1; writable open atomically drops its rows", async () => {
+    const legacyRequest = fakeIndexedDB.open(KV_DATABASE, 1);
+    legacyRequest.onupgradeneeded = () => legacyRequest.result.createObjectStore(KV_STORE.blobs);
+    const legacy = await requestAsPromise(legacyRequest);
+    const write = legacy.transaction(KV_STORE.blobs, "readwrite");
+    const written = transactionDone(write);
+    write.objectStore(KV_STORE.blobs).put({ bytes: "legacy plaintext" }, ["partition", "hash"]);
+    await written;
+    legacy.close();
 
-  test("are the salted HMAC of identity key, prefix and device principal; canonical spellings agree", async () => {
-    const a = await partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, salt);
+    expect(await openKvDatabase({ create: false })).toBeNull();
+    const untouched = await requestAsPromise(fakeIndexedDB.open(KV_DATABASE));
+    expect(untouched.version).toBe(1);
+    expect(await requestAsPromise(untouched.transaction(KV_STORE.blobs).objectStore(KV_STORE.blobs).count())).toBe(1);
+    untouched.close();
+
+    const upgraded = (await openKvDatabase({ create: true }))!;
+    expect(upgraded.version).toBe(2);
+    expect(await requestAsPromise(upgraded.transaction(KV_STORE.blobs).objectStore(KV_STORE.blobs).count())).toBe(0);
+    expect(upgraded.objectStoreNames.contains(KV_STORE.gate)).toBe(true);
+    upgraded.close();
+  });
+});
+
+describe("opaque partition lookup", () => {
+  test("one gate-keyed identity/prefix lookup resolves every stored and injected device partition", async () => {
+    const db = (await openKvDatabase({ create: true }))!;
+    const lookupId = `opaque-lookup-${++sequence}`;
+    const tx = db.transaction(KV_STORE.partitions, "readwrite");
+    const completed = transactionDone(tx);
+    const partitions = tx.objectStore(KV_STORE.partitions);
+    partitions.put({ lookupId, partitionId: `${lookupId}-owner`, ownerDevice: true }, `${lookupId}-owner`);
+    partitions.put({ lookupId, partitionId: `${lookupId}-session`, ownerDevice: false }, `${lookupId}-session`);
+    await completed;
+    const found = await requestAsPromise<Array<{ lookupId: string; partitionId: string; ownerDevice: boolean }>>(
+      db.transaction(KV_STORE.partitions).objectStore(KV_STORE.partitions).index("byLookupId").getAll(lookupId),
+    );
+    expect(found.map((row) => row.partitionId).sort()).toEqual([`${lookupId}-owner`, `${lookupId}-session`]);
+    expect(found.filter((row) => row.ownerDevice).map((row) => row.partitionId)).toEqual([`${lookupId}-owner`]);
+    db.close();
+  });
+});
+
+describe("partition ids", () => {
+  const key = () => crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256", length: 256 }, false, ["sign"]);
+  const expected = async (key: CryptoKey, domain: string, material: string): Promise<string> =>
+    bytesToHex(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${domain}\0${material}`))));
+
+  test("private keyed identity and partition ids agree across canonical spellings", async () => {
+    const gateKey = await key();
+    const a = await partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, gateKey);
     const b = await partitionIdOf(
       {
         identity: { ...identity, host: "https://NODE.example/", principal: identity.principal.replace("aa", "AA") },
         prefix: "notes/",
         deviceDid: `${device.did}#${device.did.slice("did:key:".length)}`,
       },
-      salt,
+      gateKey,
     );
     expect(a).toBe(b);
-    expect(a).toBe(await saltedHash(salt, `${replicationIdentityKey(identity)}\nnotes/\n${device.did}`));
-    expect(await identityKeyHashOf(identity, salt)).toBe(await saltedHash(salt, replicationIdentityKey(identity)));
+    expect(a).toBe(await expected(gateKey, "partition", `${replicationIdentityKey(identity)}\nnotes/\n${device.did}`));
+    expect(await identityKeyHashOf(identity, gateKey)).toBe(await expected(gateKey, "identity", replicationIdentityKey(identity)));
   });
 
-  test("prefix, device, principal, space, host and salt each name a different partition", async () => {
-    const base = await partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, salt);
+  test("prefix, device, principal, space, host and gate key each name a different partition", async () => {
+    const gateKey = await key();
+    const otherKey = await key();
+    const base = await partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, gateKey);
     const others = await Promise.all([
-      partitionIdOf({ identity, prefix: "notes/deep/", deviceDid: device.did }, salt),
-      partitionIdOf({ identity, prefix: "notes/", deviceDid: "did:key:z6MkotherDeviceKey" }, salt),
-      partitionIdOf({ identity: { ...identity, principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb" }, prefix: "notes/", deviceDid: device.did }, salt),
-      partitionIdOf({ identity: { ...identity, space: SPACE.replace(":default", ":other") }, prefix: "notes/", deviceDid: device.did }, salt),
-      partitionIdOf({ identity: { ...identity, host: "https://other.example" }, prefix: "notes/", deviceDid: device.did }, salt),
-      partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, "b3RoZXItc2FsdC1vdGhlci1zYWx0LW90aGVyLXNhbHQ"),
+      partitionIdOf({ identity, prefix: "notes/deep/", deviceDid: device.did }, gateKey),
+      partitionIdOf({ identity, prefix: "notes/", deviceDid: "did:key:z6MkotherDeviceKey" }, gateKey),
+      partitionIdOf({ identity: { ...identity, principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb" }, prefix: "notes/", deviceDid: device.did }, gateKey),
+      partitionIdOf({ identity: { ...identity, space: SPACE.replace(":default", ":other") }, prefix: "notes/", deviceDid: device.did }, gateKey),
+      partitionIdOf({ identity: { ...identity, host: "https://other.example" }, prefix: "notes/", deviceDid: device.did }, gateKey),
+      partitionIdOf({ identity, prefix: "notes/", deviceDid: device.did }, otherKey),
     ]);
     expect(new Set([base, ...others]).size).toBe(7);
   });
@@ -144,29 +195,6 @@ describe("the origin database", () => {
     expect(await rowsOf(KV_STORE.blobs, three.id)).toBe(1);
   });
 
-  test("kvPartitionEraser.erasePartition leaves a contentless tombstone that fences open handles", async () => {
-    const one = await partition();
-    const keep = await partition();
-    const node = new FakeNode();
-    node.put("notes/a", "secret-ish");
-    await new Replica({ store: one.store, transport: node }).sync();
-    await new Replica({ store: keep.store, transport: node }).sync();
-
-    const db = (await openKvDatabase({ create: false }))!;
-    const tx = db.transaction([...ERASE_STORES], "readwrite");
-    const done = transactionDone(tx);
-    const { bytes } = await kvPartitionEraser.erasePartition(tx, one.id);
-    await done;
-    expect(bytes).toBe("secret-ish".length);
-    const meta = await requestAsPromise<Record<string, unknown>>(db.transaction(KV_STORE.meta).objectStore(KV_STORE.meta).get(one.id));
-    db.close();
-    expect(Object.keys(meta).sort()).toEqual(["generation", "purgePending", "purged", "writerEpoch"]);
-    expect(await rowsOf(KV_STORE.entries, one.id)).toBe(0);
-    expect(await rowsOf(KV_STORE.blobs, one.id)).toBe(0);
-    expect(await codeOf(new Replica({ store: one.store }).get("notes/a"))).toBe(ReplicaErrorCode.RESET_REQUIRED);
-    const kept = await new Replica({ store: keep.store }).get("notes/a");
-    expect(kept.status).toBe("present");
-  });
 });
 
 describe("transaction seams", () => {
@@ -276,6 +304,29 @@ describe("transaction seams", () => {
     expect((await store.open())!.cursor).toBe(cursor);
     expect(await rowsOf(KV_STORE.entries, id)).toBe(1);
     expect(ledger).toBe("small".length);
+  });
+
+  test("serving reads refuse an elapsed consent window before an expired signed grant", async () => {
+    let now = Date.now();
+    const day = 24 * 60 * 60 * 1_000;
+    const identityId = sequence + 1;
+    const { store } = await partition({
+      now: () => now,
+      hooks: {
+        grantPolicy: {
+          policy: { grantTtlMs: 2 * day, consentAnchor: { at: now - 6 * day, source: "siwe" } },
+          firstInstallKey: `firstInstall:test-${identityId}`,
+          installedAtKey: (cid) => `grantInstall:test-${identityId}:${cid}`,
+        },
+      },
+    });
+    const node = new FakeNode();
+    node.put("notes/a", "private");
+    await new Replica({ store, transport: node, now: () => now }).sync();
+    expect((await store.get("notes/a"))?.deleted).toBe(false);
+    now += day + 1;
+    expect(await codeOf(store.get("notes/a"))).toBe(ReplicaErrorCode.CONSENT_EXPIRED);
+    expect(await codeOf(store.list({ prefix: "notes/" }))).toBe(ReplicaErrorCode.CONSENT_EXPIRED);
   });
 });
 

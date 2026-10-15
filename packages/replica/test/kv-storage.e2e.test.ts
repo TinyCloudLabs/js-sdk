@@ -69,7 +69,7 @@ let context: BrowserContext;
 
 const hostOf = (name: string) => `${origin}/fake/${name}`;
 const identityOf = (name: string) => ({ host: hostOf(name), space: SPACE, principal: PRINCIPAL });
-const specOf = (name: string, extra: Record<string, unknown> = {}) => ({ identity: identityOf(name), space: SPACE, prefix: "notes/", allowSecrets: false, ...extra });
+const specOf = (name: string, extra: Record<string, unknown> = {}) => ({ identity: identityOf(name), space: SPACE, prefix: "notes/", allowSecrets: false, grantPolicy: { grantTtlMs: 60_000, consentAnchor: null }, ...extra });
 
 async function kvPage(): Promise<Page> {
   const page = await context.newPage();
@@ -146,6 +146,135 @@ afterEach(async () => {
 });
 
 describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
+  test("grant policy keeps the first CID install time and expires reads inside the gated store", async () => {
+    const node = feed("policy");
+    node.put("notes/a", "private");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    const anchor = Date.now() - 6 * 24 * 60 * 60 * 1000;
+    const policy = { grantTtlMs: 5_000, consentAnchor: { at: anchor, source: "siwe" } };
+    const spec = specOf("policy", { grantPolicy: policy });
+    const opened = (await page.evaluate((s) => window.__kv.open("s", "h", s as never), spec)) as Outcome<{ deviceDid: string }>;
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const jwt = grantFor(opened.value.deviceDid);
+    const installed = (await page.evaluate((grant) => window.__kv.installGrant("h", grant), jwt)) as Outcome<{
+      installedAt: number; effectiveExpiresAt: number; consentDeadline: number; consentAnchor: { at: number; source: string };
+    }>;
+    expect(installed).toMatchObject({ ok: true, value: { consentDeadline: anchor + 7 * 24 * 60 * 60 * 1000, consentAnchor: { at: anchor, source: "siwe" } } });
+    if (!installed.ok) return;
+    expect(installed.value.effectiveExpiresAt).toBe(installed.value.installedAt + 5_000);
+    expect(await page.evaluate((grant) => window.__kv.installGrant("h", grant), jwt)).toMatchObject({ ok: true, value: { installedAt: installed.value.installedAt } });
+    expect(await page.evaluate(() => window.__kv.sync("h", 3))).toMatchObject({ ok: true });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "private" } });
+    await page.evaluate(() => window.__kv.close("h"));
+    const shorter = specOf("policy", { grantPolicy: { ...policy, grantTtlMs: 1 } });
+    expect(await page.evaluate((s) => window.__kv.open("s", "shorter", s as never), shorter)).toMatchObject({ ok: true });
+    expect(await page.evaluate(() => window.__kv.grant("shorter"))).toMatchObject({
+      ok: true, value: { installedAt: installed.value.installedAt, effectiveExpiresAt: installed.value.installedAt + 1 },
+    });
+    expect(await page.evaluate(() => window.__kv.get("shorter", "notes/a"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
+    expect(await page.evaluate(() => window.__kv.list("shorter", "notes/"))).toMatchObject({ ok: false, code: "GRANT_EXPIRED" });
+  }, 60_000);
+
+  test("first-install consent and a CID install time survive partition purge and reinstall", async () => {
+    feed("reinstall").put("notes/a", "one");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    const spec = specOf("reinstall", { grantPolicy: { grantTtlMs: 60_000, consentAnchor: null } });
+    const opened = (await page.evaluate((s) => window.__kv.open("s", "h", s as never), spec)) as Outcome<{ deviceDid: string }>;
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const jwt = grantFor(opened.value.deviceDid);
+    const initial = (await page.evaluate((ucan) => window.__kv.installGrant("h", ucan), jwt)) as Outcome<{ installedAt: number; consentAnchor: { at: number; source: string } }>;
+    expect(initial).toMatchObject({ ok: true, value: { consentAnchor: { source: "first_install" } } });
+    if (!initial.ok) return;
+    expect(initial.value.consentAnchor.at).toBe(initial.value.installedAt);
+    await page.evaluate(() => window.__kv.close("h"));
+    expect(await page.evaluate((identity) => window.__kv.purge("s", { identity, space: identity.space, prefix: "notes/" }), identityOf("reinstall"))).toMatchObject({ ok: true });
+    const again = (await page.evaluate((s) => window.__kv.open("s", "again", s as never), spec)) as Outcome<{ deviceDid: string }>;
+    expect(again).toMatchObject({ ok: true, value: { deviceDid: opened.value.deviceDid } });
+    expect(await page.evaluate((ucan) => window.__kv.installGrant("again", ucan), jwt)).toMatchObject({
+      ok: true, value: { installedAt: initial.value.installedAt, consentAnchor: initial.value.consentAnchor },
+    });
+  }, 60_000);
+
+  test("open refuses a missing grant policy before any partition is created", async () => {
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    expect(await page.evaluate((spec) => window.__kv.open("s", "h", spec as never), { ...specOf("missing-policy"), grantPolicy: undefined })).toMatchObject({
+      ok: false, code: "REPLICA_INVALID_ARGUMENT",
+    });
+  }, 60_000);
+
+  test("rejects secrets and vault scopes even when allowSecrets is true", async () => {
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    for (const extra of [
+      { allowSecrets: true },
+      { space: "secrets" },
+      { prefix: "vault/" },
+      { prefix: "secrets/" },
+      { prefix: "/" },
+      { allowSecrets: true, space: "secrets", prefix: "vault/" },
+    ]) {
+      expect(await page.evaluate((spec) => window.__kv.open("s", "h", spec as never), specOf("excluded", extra)))
+        .toMatchObject({ ok: false, code: "REPLICA_INVALID_ARGUMENT" });
+    }
+  }, 60_000);
+
+  test("raw origin IndexedDB rows contain no recognizable replica content, key, metadata or pending key", async () => {
+    const marker = "s1-ciphertext-only-unique-marker";
+    const key = `notes/${marker}-key`;
+    const metadata = `${marker}-metadata`;
+    feed("sealed").put(key, marker, { title: metadata });
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await openGranted(page, "s", "h", "sealed");
+    expect(await page.evaluate(() => window.__kv.sync("h", 7))).toMatchObject({ ok: true, value: { status: "synced" } });
+    expect(await page.evaluate((path) => window.__kv.get("h", path), key)).toMatchObject({ ok: true, value: { status: "present", value: marker } });
+    expect(await page.evaluate((identity) => window.__kv.pendingWrites("s", identity, "s1-ciphertext-only-unique-marker", 1), identityOf("sealed"))).toMatchObject({ ok: true });
+    const scan = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("tinycloud-replica-kv");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const out: Record<string, { rows: number; raw: string }> = {};
+      for (const name of ["blobs", "entries", "meta", "pending", "device", "partitions", "gate", "purgeIntents", "quota"]) {
+        const store = db.transaction(name).objectStore(name);
+        const [rows, keys] = await Promise.all(
+          [store.getAll(), store.getAllKeys()].map((request) => new Promise<unknown[]>((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          })),
+        ) as [unknown[], unknown[]];
+        out[name] = { rows: rows.length, raw: JSON.stringify({ rows, keys }, (_key, value: unknown) =>
+          value instanceof Uint8Array ? new TextDecoder().decode(value) : value) };
+      }
+      db.close();
+      const markers = Object.keys(localStorage).filter((name) => name.startsWith("tinycloud-replica"));
+      out.localStorage = { rows: markers.length, raw: JSON.stringify(markers.map((name) => [name, localStorage.getItem(name)])) };
+      return out;
+    });
+    for (const name of ["blobs", "entries", "meta", "pending", "device", "partitions"]) {
+      expect(scan[name]?.rows ?? 0).toBeGreaterThan(0);
+    }
+    for (const name of ["blobs", "entries", "meta", "pending", "device", "partitions", "gate", "purgeIntents", "quota", "localStorage"]) {
+      const raw = scan[name]?.raw;
+      expect(raw).not.toContain(marker);
+      expect(raw).not.toContain("notes/");
+      expect(raw).not.toContain(SPACE);
+      expect(raw).not.toContain(PRINCIPAL);
+    }
+    const markers = JSON.parse(scan.localStorage?.raw ?? "[]") as Array<[string, string | null]>;
+    for (const [name, value] of markers) {
+      expect(name).toBe("tinycloud-replica:logout-pending");
+      expect(value).toMatch(/^\d+$/);
+    }
+    expect(scan.device?.raw).not.toContain('"jwk"');
+  }, 60_000);
+
   test("reads carry LocalReadMeta: coverage, authority and the epoch the last sync persisted", async () => {
     const node = feed("meta");
     node.put("notes/a", "alpha");
@@ -169,6 +298,8 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
 
     const status = (await page.evaluate(() => window.__kv.status("h"))) as Outcome;
     expect(status).toMatchObject({ ok: true, value: { syncedThroughEpoch: 7, coverage: "complete", purgePending: false, counts: { keys: 2 } } });
+    const replicaId = await page.evaluate(() => window.__kv.replicaId("h"));
+    expect(replicaId).toMatch(/^[0-9a-f]{64}$/);
   }, 60_000);
 
   test("a sync aborted mid-page commits nothing past its last complete page and keeps the epoch", async () => {
@@ -236,6 +367,21 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("again", "notes/a"))).toMatchObject({ ok: true, value: { status: "coverage_incomplete", meta: { syncedThroughEpoch: 0 } } });
   }, 60_000);
 
+  test("close() while a sync reopens a killed worker waits and prevents that sync", async () => {
+    feed("close-race").put("notes/a", "one");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await openGranted(page, "s", "h", "close-race");
+    await page.evaluate(() => window.__kv.killWorker("s"));
+    await page.evaluate(() => {
+      window.__kv.startSync("h", "queued", 5);
+      window.__kv.startClose("h");
+    });
+    await page.evaluate(() => window.__kv.awaitClose("h"));
+    expect(await page.evaluate(() => window.__kv.settled())).toEqual(["sync:queued", "close:h"]);
+    expect((await page.evaluate(() => window.__kv.awaitSync("queued")) as Outcome).ok).toBe(false);
+  }, 60_000);
+
   test("a failure after the last feed page leaves the previous epoch", async () => {
     const node = feed("late");
     node.put("notes/a", "one");
@@ -281,7 +427,7 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
 
     const good = deviceGrant({ aud: device });
     const installed = (await page.evaluate(([jwt]) => window.__kv.installGrant("h", jwt), [good.jwt] as const)) as Outcome;
-    expect(installed).toEqual({
+    expect(installed).toMatchObject({
       ok: true,
       value: { cid: good.cid, parentCid: "bafyparent", expiresAt: good.expiresAt! * 1000, state: "pending", unconstrained: true },
     });
@@ -314,9 +460,23 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("injected", "notes/a"))).toMatchObject({ ok: false, code: "RESET_REQUIRED" });
   }, 60_000);
 
+  test("purge refuses an identity outside the active gate principal", async () => {
+    const node = feed("foreign-purge");
+    node.put("notes/a", "one");
+    const page = await kvPage();
+    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    await openGranted(page, "s", "h", "foreign-purge");
+    expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
+    const foreign = { ...identityOf("foreign-purge"), principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000c2" };
+    expect(await page.evaluate((identity) => window.__kv.purge("s", { identity, space: identity.space, prefix: "notes/" }), foreign))
+      .toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "principal_mismatch" });
+    expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "one" } });
+  }, 60_000);
+
   test("purge without a gate refuses and never creates the database; inspectStatus never creates a replica", async () => {
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
+    expect(await page.evaluate((spec) => window.__kv.inspectAborted("s", spec as never), specOf("none"))).toMatchObject({ ok: false });
     expect(await page.evaluate((identity) => window.__kv.purge("s", { identity, space: identity.space, prefix: "notes/" }), identityOf("none"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
     expect(await page.evaluate((spec) => window.__kv.inspectStatus("s", spec as never), specOf("none"))).toEqual({ ok: true, value: undefined });
     expect(await page.evaluate(() => window.__kv.databases())).not.toContain("tinycloud-replica-kv");
@@ -327,10 +487,16 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.sync("h", 2))).toMatchObject({ ok: true });
     const other = await kvPage();
     await other.evaluate(() => window.__kv.createStorage("s", "fake"));
-    expect(await other.evaluate((spec) => window.__kv.inspectStatus("s", spec as never), specOf("inspect"))).toMatchObject({
+    const inspected = await other.evaluate((spec) => window.__kv.inspectStatus("s", spec as never), specOf("inspect"));
+    expect(inspected).toMatchObject({
       ok: true,
-      value: { syncedThroughEpoch: 2, coverage: "complete", counts: { keys: 1 }, grant: { state: "active" } },
+      value: { redacted: true, syncedThroughEpoch: 2, coverage: "complete", counts: { keys: 1 } },
     });
+    if (inspected.ok) {
+      expect(inspected.value).not.toHaveProperty("grant");
+      expect(inspected.value).not.toHaveProperty("authority");
+      expect(inspected.value).not.toHaveProperty("lastError");
+    }
     // A partition that was never opened stays absent.
     expect(await other.evaluate((spec) => window.__kv.inspectStatus("s", spec as never), { ...specOf("inspect"), prefix: "other/" })).toEqual({ ok: true, value: undefined });
     expect(Object.keys((await page.evaluate(() => window.__kv.dump())).meta!)).toHaveLength(1);
@@ -344,7 +510,8 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
       one.evaluate((id) => window.__kv.pendingWrites("s", id, "one", 25), identity),
       two.evaluate((id) => window.__kv.pendingWrites("s", id, "two", 25), identity),
     ]);
-    expect(a.ok && b.ok).toBe(true);
+    expect(a).toMatchObject({ ok: true });
+    expect(b).toMatchObject({ ok: true });
     const state = (await one.evaluate((id) => window.__kv.pendingRead("s", id), identity)) as Outcome<{ seq: number; records: Array<{ opId: string }> }>;
     if (!state.ok) throw new Error(state.message);
     expect(state.value.seq).toBe(50);
@@ -363,8 +530,8 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     // Before the worker's first connection: Chromium reads the quota when a connection opens.
     const cdp = await context.newCDPSession(page);
     await cdp.send("Storage.overrideQuotaForOrigin", { origin, quotaSize: 4 * 1024 * 1024 });
-    await page.evaluate(() => window.__kv.createStorage("s", "fake"));
-    await openGranted(page, "s", "h", "quota");
+    await page.evaluate(() => window.__kv.createStorage("s", "fake", { minFreeBytes: 0 }));
+    await openGranted(page, "s", "h", "quota", { quota: { minFreeBytes: 0 } });
     expect(await page.evaluate(() => window.__kv.sync("h", 1))).toMatchObject({ ok: true });
 
     node.put("notes/fits", "x".repeat(1024));
@@ -393,6 +560,13 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await writer.evaluate(() => window.__kv.peerCommits("w"))).toEqual([]);
     // The reader serves the writer's commit from the shared partition.
     expect(await reader.evaluate(() => window.__kv.get("r", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "one" } });
+    const readerStamp = await reader.evaluate((principal) => window.__kv.establish(principal), PRINCIPAL);
+    await reader.evaluate((stamp) => window.__kv.revoke(stamp), readerStamp);
+    node.put("notes/b", "two");
+    expect(await writer.evaluate(() => window.__kv.sync("w", 12))).toMatchObject({ ok: true });
+    // An already-open receiver must not deliver a peer event after its session is revoked.
+    await reader.waitForTimeout(100);
+    expect(await reader.evaluate(() => window.__kv.peerCommits("r"))).toHaveLength(1);
   }, 60_000);
 
   test("a killed worker restarts cleanly: the next call reopens and serves current data", async () => {
@@ -408,13 +582,11 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("h", "notes/a"))).toMatchObject({ ok: true, value: { status: "present", value: "two" } });
   }, 60_000);
 
-  test("without a stamp, or with the published worker (no gate wired), open fails closed", async () => {
+  test("without a stamp, open fails closed", async () => {
     feed("closed");
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
     expect(await page.evaluate((spec) => window.__kv.open("s", "h", { ...spec, stamp: null } as never), specOf("closed"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
-    await page.evaluate(() => window.__kv.createStorage("published", "published"));
-    expect(await page.evaluate((spec) => window.__kv.open("published", "p", spec as never), specOf("closed"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "gate_unavailable" });
   }, 60_000);
 
   test("after the gate moves, the worker refuses reads, syncs and installs; a revoked view drops replies on the main thread", async () => {
@@ -519,7 +691,7 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
     await corsToNode();
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "real"));
-    const spec = { identity: { host, space, principal: nodeOwner.did }, space, prefix: "notes/", allowSecrets: false };
+    const spec = { identity: { host, space, principal: nodeOwner.did }, space, prefix: "notes/", allowSecrets: false, grantPolicy: { grantTtlMs: 60_000, consentAnchor: null } };
     const opened = (await page.evaluate((s) => window.__kv.open("s", "h", s as never), spec)) as Outcome<{ deviceDid: string }>;
     if (!opened.ok) throw new Error(`open failed: ${opened.code} ${opened.message}`);
     const requested = [{ service: "tinycloud.kv", space, path: "notes/", actions: ["get", "list", "metadata", "sync"] }];

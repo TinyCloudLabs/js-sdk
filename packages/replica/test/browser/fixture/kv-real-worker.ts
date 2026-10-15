@@ -7,6 +7,7 @@
 import { initialized } from "@tinycloud/web-sdk-wasm";
 
 import { createKvWorkerHost } from "../../../src/kv-storage/host.js";
+import { ledgerFor } from "../../../src/kv-storage/ledger.js";
 import type { KvRequest } from "../../../src/kv-storage/protocol.js";
 import { wasmWorkerDeps } from "../../../src/kv-storage/wasmDeps.js";
 import { createTestGate } from "../../test-gate.js";
@@ -20,6 +21,7 @@ await initialized;
 const host = createKvWorkerHost({
   ...wasmWorkerDeps,
   gateTx: createTestGate(),
+  ledgerFor,
   post: (message, transfer) => scope.postMessage(message, transfer ?? []),
   ...(navigator.locks === undefined ? {} : { locks: navigator.locks }),
 });

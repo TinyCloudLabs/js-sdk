@@ -21,28 +21,29 @@ import type {
   LocalSyncResult,
   PendingWriteStore,
   PurgeTarget,
-  ReplicaDevice,
-  ReplicaGateSnapshot,
-  ReplicaGateTx,
+  ReplicaDenyOutcome,
+  ReplicaBrowserGateSnapshot,
   ReplicaGrantInfo,
   ReplicaLifecycleGate,
   ReplicaQuotaLedger,
+  ReplicaInspectedStatus,
+  ReplicaPartitionIndexEntry,
   ReplicaSessionStamp,
   ReplicationIdentity,
 } from "@tinycloud/sdk-services/kv/replication";
-import { canonicalReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
+import { canonicalReplicationIdentity, replicationIdentityKey } from "@tinycloud/sdk-services/kv/replication";
 
-import { principalOf } from "../did.js";
 import { ReplicaError, ReplicaErrorCode, gatedError as gated } from "../errors.js";
 import { assertFolderPrefix } from "../scope.js";
 import { idbError, requestAsPromise, transactionDone } from "../browser/idb.js";
-import { IndexedDbReplicaStore } from "../browser/store.js";
-import { createIndexedDbGateTx } from "./gateTx.js";
-import { grantInfoOf } from "./grantInfo.js";
+import { gateHash, GATE_HMAC_KEY, type BrowserGate, type GateHmacRecord, validGateHmac } from "./gateKeys.js";
+import { ledgerFor } from "./ledger.js";
+import { createIndexedDbGateTx, type BrowserReplicaGateTx } from "./gateTx.js";
 import { createIndexedDbLifecycle } from "./lifecycle.js";
 import { IndexedDbPendingWriteStore } from "./pending.js";
-import type { KvEvent, KvOpenSpec, KvReply, KvRequest, KvResults, KvWireError } from "./protocol.js";
-import { ERASE_STORES, KV_STORE, identityKeyHashOf, kvLayout, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
+import type { KvConsentExpiryAck, KvEvent, KvOpenSpec, KvReply, KvRequest, KvResults, KvWireError } from "./protocol.js";
+import type { SealedMeta } from "./secureStore.js";
+import { ERASE_STORES, KV_STORE, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
 
 export type IndexedDbReplicaStorageOptions = {
   /**
@@ -57,7 +58,7 @@ export type IndexedDbReplicaStorageOptions = {
    * store runs every read and update through it, and `purge`/`inspectStatus`
    * derive salted ids from its `snapshot()`.
    */
-  gateTx?: ReplicaGateTx<IDBTransaction>;
+  gateTx?: BrowserReplicaGateTx;
   /** Releases quota for partitions `purge()` erases, in the erase transaction. */
   ledger?: Pick<ReplicaQuotaLedger<IDBTransaction>, "accountErase">;
 };
@@ -136,8 +137,8 @@ class WorkerConnection {
     return promise as Promise<Reply<KvResults[Op]>>;
   }
 
-  /** Fire-and-forget (cancel): no reply is awaited. */
-  notify(request: KvRequest): void {
+  /** Fire-and-forget control message: cancel or the durable expiry result. */
+  notify(request: KvRequest | KvConsentExpiryAck): void {
     if (this.dead) return;
     this.#worker.postMessage({ id: this.#nextId++, ...request });
   }
@@ -155,7 +156,7 @@ class WorkerConnection {
 class IndexedDbReplicaHandle implements KVReplicaHandle {
   readonly spec: KVReplicaSpec;
   readonly deviceDid: string;
-  readonly partitionId: string;
+  readonly replicaId: string;
   readonly #storage: IndexedDbReplicaStorage;
   readonly #lifecycle: ReplicaLifecycleGate;
   readonly #stamp: ReplicaSessionStamp;
@@ -181,11 +182,11 @@ class IndexedDbReplicaHandle implements KVReplicaHandle {
     this.#connection = connection;
     this.#remote = opened.handle;
     this.deviceDid = opened.deviceDid;
-    this.partitionId = opened.partitionId;
+    this.replicaId = opened.partitionId;
   }
 
-  get remote(): { connection: WorkerConnection; handle: number } {
-    return { connection: this.#connection, handle: this.#remote };
+  acceptsPeerCommit(connection: WorkerConnection | undefined, handle: number): boolean {
+    return !this.#closed && this.#connection === connection && this.#remote === handle && this.#lifecycle.deliverable(this.#stamp);
   }
 
   /** Before every request that reaches the worker (and every delivery): the gate must still honour the stamp. */
@@ -199,7 +200,12 @@ class IndexedDbReplicaHandle implements KVReplicaHandle {
     this.#assertDeliverable();
     if (this.#connection.dead) {
       const connection = this.#storage.connection();
-      const opened = this.#deliver(await connection.call({ op: "open", spec: this.#wire }));
+      const reply = await connection.call({ op: "open", spec: this.#wire });
+      if (this.#closed) {
+        await connection.call({ op: "close", handle: reply.result.handle }).catch(() => undefined);
+        throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica handle is closed.");
+      }
+      const opened = this.#deliver(reply);
       this.#connection = connection;
       this.#remote = opened.handle;
     }
@@ -208,6 +214,7 @@ class IndexedDbReplicaHandle implements KVReplicaHandle {
 
   /** Delivery check (CONTRACT §2): drop a reply that ran under another (or no) stamp, or that the gate no longer honours. */
   #deliver<T>(reply: Reply<T>): T {
+    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica handle is closed.");
     if (!sameStamp(reply.stamp, this.#stamp)) throw gated("stamp_stale", "The replica reply ran under another session; it was not delivered.");
     this.#assertDeliverable();
     return reply.result;
@@ -234,27 +241,31 @@ class IndexedDbReplicaHandle implements KVReplicaHandle {
     return this.#deliver(await connection.call({ op: "installGrant", handle, ucan }));
   }
 
-  async sync(options: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult> {
+  sync(options: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult> {
+    // Track the entire operation, including a worker restart before the RPC is sent.
+    const running = this.#sync(options);
+    const settled = running.then(() => undefined, () => undefined);
+    this.#syncs.add(settled);
+    void settled.then(() => this.#syncs.delete(settled));
+    return running;
+  }
+
+  async #sync(options: { signal: AbortSignal; syncStartEpoch: number }): Promise<LocalSyncResult> {
     options.signal.throwIfAborted();
     const { connection, handle } = await this.#live();
+    if (this.#closed) throw new ReplicaError(ReplicaErrorCode.CLOSED, "The replica handle is closed.");
     let requestId: number | undefined;
     const cancel = (): void => {
       if (requestId !== undefined) connection.notify({ op: "cancel", target: requestId });
     };
     options.signal.addEventListener("abort", cancel, { once: true });
-    const running = connection.call({ op: "sync", handle, syncStartEpoch: options.syncStartEpoch }, (id) => {
-      requestId = id;
-      if (options.signal.aborted) cancel();
-    });
-    const settled = running.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#syncs.add(settled);
     try {
+      const running = connection.call({ op: "sync", handle, syncStartEpoch: options.syncStartEpoch }, (id) => {
+        requestId = id;
+        if (options.signal.aborted) cancel();
+      });
       return this.#deliver(await running);
     } finally {
-      this.#syncs.delete(settled);
       options.signal.removeEventListener("abort", cancel);
     }
   }
@@ -262,7 +273,7 @@ class IndexedDbReplicaHandle implements KVReplicaHandle {
   async status(): Promise<LocalReplicaStatus> {
     const { connection, handle } = await this.#live();
     const status = this.#deliver(await connection.call({ op: "status", handle }));
-    return { ...status, persisted: await this.#storage.persisted(), purgePending: await purgePendingFor(this.#lifecycle, this.partitionId, null) };
+    return { ...status, persisted: await this.#storage.persisted(), purgePending: await purgePendingFor(this.#lifecycle, this.replicaId, null) };
   }
 
   async close(): Promise<void> {
@@ -282,10 +293,6 @@ async function purgePendingFor(lifecycle: ReplicaLifecycleGate, partitionId: str
   );
 }
 
-/** The origin's stored owner device; purge and inspection are exempt from gating and only read it. */
-async function storedDevice(db: IDBDatabase): Promise<ReplicaDevice | undefined> {
-  return requestAsPromise<ReplicaDevice | undefined>(db.transaction(KV_STORE.device).objectStore(KV_STORE.device).get("device"));
-}
 
 class IndexedDbReplicaStorage implements KVReplicaStorage {
   readonly kind = "indexeddb" as const;
@@ -294,25 +301,37 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
   readonly #handles = new Set<IndexedDbReplicaHandle>();
   #connection: WorkerConnection | undefined;
   #persisted: Promise<boolean | null> | undefined;
+  #recovery: Promise<void> | undefined;
 
   constructor(options: IndexedDbReplicaStorageOptions) {
-    this.#options = options;
+    this.#options = { ...options, ledger: options.ledger ?? ledgerFor() };
     this.lifecycle = options.lifecycle;
   }
 
   /** The live worker, spawned on first use and again after it died. */
   connection(): WorkerConnection {
     if (this.#connection === undefined || this.#connection.dead) {
-      this.#connection = new WorkerConnection(spawn(this.#options.worker), (event) => this.#event(event));
+      const connection = new WorkerConnection(spawn(this.#options.worker), (event) => this.#event(event, connection));
+      this.#connection = connection;
     }
     return this.#connection;
   }
 
-  #event(event: KvEvent): void {
+  #event(event: KvEvent, connection: WorkerConnection): void {
+    if (event.event === "consentExpiry") {
+      const lifecycle = this.lifecycle as (ReplicaLifecycleGate & { expireConsent?: () => Promise<ReplicaDenyOutcome> }) | undefined;
+      void Promise.resolve().then(() => {
+        if (typeof lifecycle?.expireConsent !== "function") throw gated("gate_unavailable", "The lifecycle cannot expire account consent.");
+        return lifecycle.expireConsent();
+      }).then(
+        (outcome) => connection.notify({ op: "consentExpiryAck", requestId: event.requestId, ok: true, outcome }),
+        () => connection.notify({ op: "consentExpiryAck", requestId: event.requestId, ok: false, message: "Consent expiry failed." }),
+      );
+      return;
+    }
     if (event.event !== "peerCommit") return;
     for (const handle of this.#handles) {
-      const remote = handle.remote;
-      if (remote.connection !== this.#connection || remote.handle !== event.handle) continue;
+      if (!handle.acceptsPeerCommit(connection, event.handle)) continue;
       try {
         handle.spec.onPeerCommit?.(event.info);
       } catch {
@@ -334,10 +353,32 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
     return this.#persisted;
   }
 
-  #gateTx(): ReplicaGateTx<IDBTransaction> {
+  #gateTx(): BrowserReplicaGateTx {
     const gateTx = this.#options.gateTx;
     if (gateTx === undefined) throw gated("gate_unavailable", "No lifecycle gate is wired into the replica storage.");
     return gateTx;
+  }
+
+  async #recoverBeforeOpen(lifecycle: ReplicaLifecycleGate): Promise<void> {
+    this.#recovery ??= (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3_000);
+      const timedOut = new Promise<never>((_resolve, reject) =>
+        controller.signal.addEventListener("abort", () =>
+          reject(gated("gate_unavailable", "Replica startup recovery timed out; local reads remain unavailable.")), { once: true }));
+      try {
+        const report = await Promise.race([lifecycle.recover({ signal: controller.signal }), timedOut]);
+        if (report.failed.length > 0 || report.remaining > 0) {
+          throw gated("purge_pending", "Replica startup recovery did not finish; local reads remain unavailable.");
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    })().catch((error: unknown) => {
+      this.#recovery = undefined;
+      throw error;
+    });
+    return this.#recovery;
   }
 
   async open(spec: KVReplicaSpec): Promise<KVReplicaHandle> {
@@ -347,6 +388,7 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
     if (lifecycle === undefined) throw gated("gate_unavailable", "No lifecycle gate is wired into the replica storage.");
     const stamp = spec.stamp;
     if (stamp === undefined) throw gated("not_established", "The session has no replica stamp.");
+    await this.#recoverBeforeOpen(lifecycle);
     if (!lifecycle.deliverable(stamp)) throw gated("stamp_stale", "The replica session ended.");
     void this.persisted();
     const wire: KvOpenSpec = {
@@ -370,60 +412,111 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
     return handle;
   }
 
-  /**
-   * The salted partition ids of `identity`/`prefix` for every known device
-   * (the stored one, plus `extra`), from the current gate snapshot. Empty
-   * when no gate exists yet: no partition can predate the gate.
-   */
+  /** The private lookup index names the stored owner partition without decrypting its device. */
   async #partitions(
     db: IDBDatabase,
-    snapshot: ReplicaGateSnapshot,
+    snapshot: ReplicaBrowserGateSnapshot,
     identity: ReplicationIdentity,
     prefix: string,
-    extra: readonly string[],
+    sessionDeviceDid: string | undefined,
   ): Promise<string[]> {
-    const stored = await storedDevice(db);
-    const dids = [stored?.did, ...extra].filter((did): did is string => did !== undefined);
-    const devices = [...new Map(dids.map((did) => [principalOf(did), did])).values()];
-    return Promise.all(devices.map((deviceDid) => partitionIdOf({ identity, prefix, deviceDid }, snapshot.salt)));
+    const lookupId = await gateHash(snapshot.gateHmac, "lookup", `${replicationIdentityKey(identity)}\n${prefix}`);
+    const indexed = await requestAsPromise<ReplicaPartitionIndexEntry[]>(
+      db.transaction(KV_STORE.partitions).objectStore(KV_STORE.partitions).index("byLookupId").getAll(lookupId));
+    const owners = indexed.filter((item) => item.lookupId === lookupId && item.ownerDevice === true);
+    if (owners.length > 1) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica has multiple owner partitions.");
+    const sessionId = sessionDeviceDid === undefined ? undefined :
+      await partitionIdOf({ identity, prefix, deviceDid: sessionDeviceDid }, snapshot.gateHmac);
+    return [...new Set([owners[0]?.partitionId, sessionId].filter((id): id is string => id !== undefined))];
   }
 
-  async inspectStatus(spec: KVReplicaSpec, { signal }: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined> {
+  async inspectStatus(spec: KVReplicaSpec, { signal }: { signal: AbortSignal }): Promise<ReplicaInspectedStatus | undefined> {
+    signal.throwIfAborted();
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(new DOMException("Replica status inspection timed out.", "TimeoutError")), 3_000);
+    const aborted = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+    });
+    try {
+      if (signal.aborted) onAbort();
+      return await Promise.race([this.#inspectRedacted(spec, controller.signal), aborted]);
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  async #inspectRedacted(spec: KVReplicaSpec, signal: AbortSignal): Promise<ReplicaInspectedStatus | undefined> {
     signal.throwIfAborted();
     const identity = canonicalReplicationIdentity(spec.identity);
     const snapshot = await this.#gateTx().snapshot();
     if (snapshot === null) return undefined;
+    const identityKey = replicationIdentityKey(identity);
+    const lookupId = await gateHash(snapshot.gateHmac, "lookup", `${identityKey}\n${spec.prefix}`);
+    const principalHash = await gateHash(snapshot.gateHmac, "principal", identity.principal.toLowerCase());
+    const identityKeyHash = await gateHash(snapshot.gateHmac, "identity", identityKey);
+    const injectedId = spec.device === undefined ? undefined :
+      await partitionIdOf({ identity, prefix: spec.prefix, deviceDid: spec.device.did }, snapshot.gateHmac);
+    signal.throwIfAborted();
     const db = await openKvDatabase({ create: false });
     if (db === null) return undefined;
     try {
+      const tx = db.transaction([KV_STORE.gate, KV_STORE.device, KV_STORE.partitions, KV_STORE.meta, KV_STORE.purgeIntents], "readonly");
+      const gate = await requestAsPromise<BrowserGate | undefined>(tx.objectStore(KV_STORE.gate).get("account"));
+      if (gate === undefined || gate.incarnation !== snapshot.incarnation || gate.lifecycleEpoch !== snapshot.lifecycleEpoch ||
+          gate.keyId !== snapshot.keyId || gate.accountKeyId !== snapshot.accountKeyId || gate.principalHash !== principalHash) return undefined;
+      const hmac = await requestAsPromise<GateHmacRecord | undefined>(tx.objectStore(KV_STORE.device).get(GATE_HMAC_KEY));
+      if (!validGateHmac(hmac, gate)) return undefined;
       signal.throwIfAborted();
-      // Ungated by contract (no stamp): an injected device names its partition; otherwise the stored one.
-      const device = spec.device ?? (await storedDevice(db));
-      if (device === undefined) return undefined;
-      const partitionId = await partitionIdOf({ identity, prefix: spec.prefix, deviceDid: device.did }, snapshot.salt);
-      const store = await IndexedDbReplicaStore.openIn(db, { holder: "inspect", layout: kvLayout(partitionId), inspect: true });
+      let partitionId = injectedId;
+      if (partitionId === undefined) {
+        const matches = await requestAsPromise<ReplicaPartitionIndexEntry[]>(
+          tx.objectStore(KV_STORE.partitions).index("byLookupId").getAll(lookupId, 64));
+        const owners = matches.filter((item) => item.ownerDevice === true && item.lookupId === lookupId);
+        if (owners.length > 1) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The replica has multiple owner partitions.");
+        if (matches.length === 64) {
+          throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The bounded replica owner lookup is inconclusive.");
+        }
+        partitionId = owners[0]?.partitionId;
+      }
+      if (partitionId === undefined) return undefined;
+      const row = await requestAsPromise<SealedMeta | undefined>(tx.objectStore(KV_STORE.meta).get(partitionId));
+      if (row === undefined || row.purged) return undefined;
+      if (row.pid !== partitionId || ![0, 1, 2].includes(row.coverageCode) ||
+          ![row.syncedThroughEpoch, row.keys, row.contentMissing, row.tombstones, row.contentBytes]
+            .every((value) => Number.isSafeInteger(value) && value >= 0)) {
+        throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "The redacted replica status controls are invalid.");
+      }
+      const intents = tx.objectStore(KV_STORE.purgeIntents);
+      const [partitionIntent, identityIntent] = await Promise.all([
+        requestAsPromise<number>(intents.count(partitionId)),
+        requestAsPromise<number>(intents.count(`pending:${identityKeyHash}`)),
+      ]);
       signal.throwIfAborted();
-      const state = await store.open();
-      if (state === null) return undefined;
-      signal.throwIfAborted();
-      const status = await store.status();
-      const fence = await store.syncFence();
+      const persisted = typeof navigator.storage?.persisted === "function"
+        ? await navigator.storage.persisted().catch(() => null)
+        : null;
       signal.throwIfAborted();
       return {
-        coverage: status.coverage,
-        lastSyncAt: status.lastSyncAt,
-        syncedThroughEpoch: fence.syncedThroughEpoch,
-        authority: { state: status.authority.state, expiresAt: status.authority.expiresAt },
-        grant: grantInfoOf(state, { space: spec.space, prefix: spec.prefix }),
-        counts: status.counts,
-        bytes: status.bytes,
-        lastError: status.lastError,
-        persisted: await this.persisted(),
-        purgePending: this.lifecycle === undefined ? false : await purgePendingFor(this.lifecycle, partitionId, await identityKeyHashOf(identity, snapshot.salt)),
+        redacted: true, coverage: row.coverageCode === 0 ? "empty" : row.coverageCode === 1 ? "bootstrapping" : "complete",
+        syncedThroughEpoch: row.syncedThroughEpoch,
+        counts: { keys: row.keys, contentMissing: row.contentMissing, tombstones: row.tombstones },
+        bytes: row.contentBytes, persisted, purgePending: partitionIntent > 0 || identityIntent > 0,
       };
     } finally {
       db.close();
     }
+  }
+
+  #assertPurgeGate(gate: BrowserGate | undefined, snapshot: ReplicaBrowserGateSnapshot, principalHash: string): void {
+    if (gate === undefined || gate.principalHash === null || gate.incarnation !== snapshot.incarnation ||
+        gate.lifecycleEpoch !== snapshot.lifecycleEpoch || gate.keyId !== snapshot.keyId ||
+        gate.accountKeyId !== snapshot.accountKeyId) {
+      throw gated("stamp_stale", "The replica gate moved before purge.");
+    }
+    if (gate.principalHash !== principalHash) throw gated("principal_mismatch", "Purge belongs to another account.");
   }
 
   /**
@@ -440,21 +533,26 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
     const identity = canonicalReplicationIdentity(target.identity);
     const snapshot = await gateTx.snapshot();
     if (snapshot === null) throw gated("not_established", "No replica gate exists on this origin; there is nothing purge can address.");
+    const principalHash = await gateHash(snapshot.gateHmac, "principal", identity.principal.toLowerCase());
     let db: IDBDatabase | null;
     try {
       db = await openKvDatabase({ create: false });
     } catch (error) {
       throw idbError(error, "Opening the replica database");
     }
-    if (db === null) return;
+    if (db === null) throw gated("gate_unavailable", "The replica database disappeared before purge.");
     try {
-      const partitions = await this.#partitions(db, snapshot, identity, target.prefix, target.sessionDeviceDid === undefined ? [] : [target.sessionDeviceDid]);
+      this.#assertPurgeGate(await requestAsPromise<BrowserGate | undefined>(
+        db.transaction(KV_STORE.gate).objectStore(KV_STORE.gate).get("account")), snapshot, principalHash);
+      const partitions = await this.#partitions(db, snapshot, identity, target.prefix, target.sessionDeviceDid);
       let firstError: unknown;
       for (const partitionId of partitions) {
         try {
-          const tx = db.transaction([...ERASE_STORES, KV_STORE.partitions, KV_STORE.quota], "readwrite", { durability: "strict" });
+          const tx = db.transaction([...ERASE_STORES, KV_STORE.gate, KV_STORE.partitions, KV_STORE.quota], "readwrite", { durability: "strict" });
           const done = transactionDone(tx);
           try {
+            this.#assertPurgeGate(await requestAsPromise<BrowserGate | undefined>(
+              tx.objectStore(KV_STORE.gate).get("account")), snapshot, principalHash);
             const { bytes } = await kvPartitionEraser.erasePartition(tx, partitionId);
             await gateTx.unindexPartition(tx, partitionId);
             await this.#options.ledger?.accountErase(tx, { partitionId, bytes });
@@ -498,7 +596,15 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
  * first `open`, so an app with replication off never starts it.
  */
 export function indexedDbReplicaStorage(options: IndexedDbReplicaStorageOptions = {}): KVReplicaStorage {
-  const gateTx = options.gateTx ?? createIndexedDbGateTx((create) => openKvDatabase({ create }));
-  const lifecycle = options.lifecycle ?? createIndexedDbLifecycle({ ledger: options.ledger });
-  return new IndexedDbReplicaStorage({ ...options, gateTx, lifecycle });
+  const ledger = options.ledger ?? ledgerFor();
+  const lifecycle = options.lifecycle ?? createIndexedDbLifecycle({ ledger });
+  const gateTx = options.gateTx ?? createIndexedDbGateTx((create) => openKvDatabase({ create }), {
+    onConsentExpired: () => {
+      if (!("expireConsent" in lifecycle) || typeof lifecycle.expireConsent !== "function") {
+        throw gated("gate_unavailable", "The lifecycle cannot expire account consent.");
+      }
+      return lifecycle.expireConsent();
+    },
+  });
+  return new IndexedDbReplicaStorage({ ...options, ledger, gateTx, lifecycle });
 }
