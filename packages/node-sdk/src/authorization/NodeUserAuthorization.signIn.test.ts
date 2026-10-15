@@ -183,7 +183,7 @@ test("regular network sign-in does not invent replica issuance when signed SIWE 
     spaceId: params.spaceId,
     verificationMethod: "did:key:verification",
   });
-  const anchors: string[] = [];
+  let observed: TinyCloudSession | undefined;
   const sessionStorage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
     signer: createSigner([]),
@@ -192,17 +192,17 @@ test("regular network sign-in does not invent replica issuance when signed SIWE 
     domain: "example.com",
     tinycloudHosts: ["https://tinycloud.test"],
     sessionStorage,
-    establishReplicaStamp: async ({ siweIssuedAt }) => { anchors.push(siweIssuedAt); return undefined; },
+    establishReplicaStamp: async (signedSession) => { observed = signedSession; return undefined; },
   });
 
   const session = await withSignInHost(() => auth.signIn());
   expect(session.address.toLowerCase()).toBe("0x1234567890abcdef1234567890abcdef12345678");
-  expect(anchors).toEqual([""]);
+  expect(observed).toMatchObject({ siwe: session.siwe, signature: session.signature, delegationCid: "bafy-session" });
   expect((await sessionStorage.load(session.address))?.replicaStamp).toBeUndefined();
 });
 
 test("prepared network sign-in does not invent replica issuance when SIWE is absent", async () => {
-  const anchors: string[] = [];
+  let observed: TinyCloudSession | undefined;
   const sessionStorage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
     signer: createSigner([]),
@@ -211,7 +211,7 @@ test("prepared network sign-in does not invent replica issuance when SIWE is abs
     domain: "example.com",
     tinycloudHosts: ["https://tinycloud.test"],
     sessionStorage,
-    establishReplicaStamp: async ({ siweIssuedAt }) => { anchors.push(siweIssuedAt); return undefined; },
+    establishReplicaStamp: async (signedSession) => { observed = signedSession; return undefined; },
   });
 
   const session = await withSignInHost(() => auth.signInWithPreparedSession({
@@ -221,7 +221,7 @@ test("prepared network sign-in does not invent replica issuance when SIWE is abs
     verificationMethod: "did:key:verification",
   }, "0xsigned", "default", { kty: "OKP" }));
   expect(session.address.toLowerCase()).toBe("0x1234567890abcdef1234567890abcdef12345678");
-  expect(anchors).toEqual([""]);
+  expect(observed).toMatchObject({ siwe: undefined, signature: "0xsigned", delegationCid: "bafy-session" });
   expect((await sessionStorage.load(session.address))?.replicaStamp).toBeUndefined();
 });
 
