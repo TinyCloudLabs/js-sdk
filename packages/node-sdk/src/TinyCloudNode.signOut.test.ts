@@ -271,3 +271,149 @@ describe("TinyCloudNode.signOut and delegated authority", () => {
     expect(node.getRuntimePermissionDelegations()).toEqual([]);
   });
 });
+
+/** A wallet signer whose signatures wait until `release()`. */
+function gatedSigner() {
+  const inner = new PrivateKeySigner(OWNER_KEY);
+  const started = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  let gated = false;
+  return {
+    signer: {
+      getAddress: () => inner.getAddress(),
+      getChainId: () => inner.getChainId(),
+      signMessage: async (message: string | Uint8Array) => {
+        if (gated) {
+          started.resolve();
+          await gate.promise;
+        }
+        return inner.signMessage(message);
+      },
+    },
+    gateNextSignatures: () => { gated = true; },
+    signing: started.promise,
+    release: () => gate.resolve(),
+  };
+}
+
+describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
+  test("a restore that started before sign-out does not establish its session", async () => {
+    recordRequests();
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: new PrivateKeySigner(OWNER_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+    });
+    const restoring = node.restoreSession(await signedSession());
+    await node.signOut();
+
+    await expect(restoring).rejects.toThrow("cancelled by sign-out");
+    expect(node.restorableSession).toBeUndefined();
+    expect(() => node.kv).toThrow("Not signed in");
+    expect(requests).toEqual([]);
+  });
+
+  test("a sign-in still persisting its session when sign-out runs is undone", async () => {
+    requests = [];
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      requests.push(url);
+      const body = url.endsWith("/info")
+        ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
+        : { activated: [], skipped: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const saving = Promise.withResolvers<void>();
+    const releaseSave = Promise.withResolvers<void>();
+    class SlowStorage extends MemorySessionStorage {
+      override async save(...args: Parameters<MemorySessionStorage["save"]>): Promise<void> {
+        saving.resolve();
+        await releaseSave.promise;
+        return super.save(...args);
+      }
+    }
+    const sessionStorage = new SlowStorage();
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: new PrivateKeySigner(OWNER_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      sessionStorage,
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      enablePublicSpace: false,
+      autoCreateSpace: false,
+    });
+    const signingIn = node.signIn();
+    await saving.promise;
+    const signedOut = node.signOut();
+    releaseSave.resolve();
+
+    await expect(signingIn).rejects.toThrow("cancelled by sign-out");
+    await signedOut;
+    expect(node.session).toBeUndefined();
+    expect(node.restorableSession).toBeUndefined();
+    expect(sessionStorage.exists(await new PrivateKeySigner(OWNER_KEY).getAddress())).toBe(false);
+  });
+
+  test("a delegated request in flight is aborted by sign-out", async () => {
+    const proof = await signedSession();
+    const node = new TinyCloudNode({
+      host: HOST,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+    });
+    const access = await node.useDelegation({
+      cid: proof.delegationCid,
+      delegationHeader: proof.delegationHeader,
+      spaceId: proof.spaceId,
+      path: "notes/",
+      actions: ["tinycloud.kv/get"],
+      expiry: new Date(Date.now() + 60 * 60_000),
+      delegateDID: node.did,
+      ownerAddress: proof.address,
+      chainId: proof.chainId,
+      host: HOST,
+    });
+    const requested = Promise.withResolvers<AbortSignal | undefined>();
+    globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
+      requested.resolve(init?.signal ?? undefined);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    }) as unknown as typeof fetch;
+
+    const pending = access.kv.get("notes/a");
+    const signal = await requested.promise;
+    await node.signOut();
+
+    expect(signal?.aborted).toBe(true);
+    const result = await pending.catch(() => ({ ok: false }));
+    expect(result.ok).toBe(false);
+  });
+
+  test("a runtime grant whose wallet signature finishes after sign-out is never activated", async () => {
+    const proof = await signedSession();
+    const gated = gatedSigner();
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: gated.signer,
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+    });
+    await node.restoreSession(proof);
+    recordRequests();
+    gated.gateNextSignatures();
+
+    const granting = node.grantRuntimePermissions([
+      { service: "tinycloud.kv", space: "photos", path: "albums/", actions: ["tinycloud.kv/get"] },
+    ]);
+    await gated.signing;
+    await node.signOut();
+    gated.release();
+
+    await expect(granting).rejects.toThrow("retired");
+    expect(requests).toEqual([]);
+    expect(node.getRuntimePermissionDelegations()).toEqual([]);
+  });
+});

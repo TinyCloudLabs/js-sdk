@@ -792,8 +792,9 @@ export class TinyCloudWeb {
    * calls fail with "Not signed in" until the next sign-in or restore.
    */
   signOut = async (): Promise<void> => {
-    // The persisted entry is keyed by the live session's address.
-    const address = await this.resolveRestoreAddress();
+    // The persisted entry is keyed by the live session's address; read it
+    // before the node ends the session, without awaiting first.
+    const liveAddress = this._node?.address;
     try {
       await this._node?.signOut();
     } finally {
@@ -802,6 +803,7 @@ export class TinyCloudWeb {
       this._shareReceiverService = undefined;
       this._sessionRestoreStatus = "idle";
       this.notificationHandler.cleanup?.();
+      const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
       if (address) await this.clearPersistedSession(address);
     }
   };

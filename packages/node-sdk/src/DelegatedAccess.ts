@@ -12,7 +12,7 @@ import {
   ServiceContext,
   type TelemetryConfig,
 } from "@tinycloud/sdk-core";
-import type { InvokeFunction, InvokeAnyFunction } from "@tinycloud/sdk-services";
+import type { FetchFunction, InvokeFunction, InvokeAnyFunction } from "@tinycloud/sdk-services";
 import { PortableDelegation } from "./delegation";
 
 /**
@@ -53,6 +53,12 @@ export class DelegatedAccess {
   private _duckdb: DuckDbService;
   private _hooks: HooksService;
 
+  /**
+   * @param lifetime - Optional owner of this access: its `fetch` is used for
+   *   requests and the service context is registered with `track`, so the
+   *   owner can cancel and retire the access (TinyCloudNode does this when its
+   *   session is replaced or signed out).
+   */
   constructor(
     session: TinyCloudSession,
     delegation: PortableDelegation,
@@ -60,6 +66,10 @@ export class DelegatedAccess {
     invoke: InvokeFunction,
     invokeAny?: InvokeAnyFunction,
     telemetry?: TelemetryConfig,
+    lifetime?: {
+      fetch: FetchFunction;
+      track(context: ServiceContext): ServiceContext;
+    },
   ) {
     this.session = session;
     this._delegation = delegation;
@@ -70,13 +80,14 @@ export class DelegatedAccess {
     // migration runner batches a CREATE TABLE (ddl) with the tracking-row
     // INSERT (write)); without it those calls throw "multi-resource
     // invocations" not supported.
-    this._serviceContext = new ServiceContext({
+    const context = new ServiceContext({
       invoke,
       invokeAny,
-      fetch: globalThis.fetch.bind(globalThis),
+      fetch: lifetime?.fetch ?? globalThis.fetch.bind(globalThis),
       hosts: [host],
       telemetry,
     });
+    this._serviceContext = lifetime ? lifetime.track(context) : context;
 
     // Create and initialize KV service with path prefix from delegation
     // Strip trailing slash to avoid double-slash in paths
