@@ -157,6 +157,41 @@ describe("consent deadline delivery", () => {
     expect(denials).toHaveLength(1);
   });
 
+  test("a gate timer that shreds first still reports only the opened stamped grant", async () => {
+    let stale = false;
+    let redundantDenials = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => stale ? { status: "gated", gate: "stamp_stale" } : { status: "allow" },
+      onDeny: () => { redundantDenials++; },
+    });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    stale = true;
+    env.controller.observeConsentExpired({ incarnation: "other", lifecycleEpoch: 0 });
+    expect(env.events.some((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toBe(false);
+    env.controller.observeConsentExpired({ incarnation: "test-incarnation", lifecycleEpoch: 0 });
+    env.controller.observeConsentExpired({ incarnation: "test-incarnation", lifecycleEpoch: 0 });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "CONSENT_EXPIRED" }),
+    ]);
+    expect(env.events.filter((event) => event.type === "replication.lifecycle" && event.reason === "consent_expired")).toEqual([
+      expect.objectContaining({ action: "denied" }),
+    ]);
+    expect(env.counters()).toMatchObject({ opens: 1, localReads: 1, networkCalls: 1 });
+    expect(redundantDenials).toBe(0);
+  });
+  test("a committed gate expiry before the first open has no synthetic grant event", async () => {
+    const env = setup({ delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    env.controller.observeConsentExpired({ incarnation: "test-incarnation", lifecycleEpoch: 0 });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events.some((event) => event.type === "replication.grant")).toBe(false);
+    expect(env.events.filter((event) => event.type === "replication.lifecycle" && event.reason === "consent_expired")).toEqual([
+      expect.objectContaining({ action: "denied" }),
+    ]);
+  });
+
   test("an opened replica stops delivery and reports its opaque id exactly once", async () => {
     let decision: "allow" | "consent_expired" | "gated" = "allow";
     let denials = 0;
