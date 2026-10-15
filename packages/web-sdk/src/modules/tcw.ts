@@ -853,7 +853,7 @@ export class TinyCloudWeb {
 
   /** Root authorization CID of the active session, which {@link session} omits. */
   accountAuthorizationCid(): string {
-    const cid = this._node?.session?.delegationCid;
+    const cid = this._node?.restorableSession?.delegationCid;
     if (typeof cid !== "string" || cid.length === 0) {
       throw new Error("Not signed in. Call signIn() first.");
     }
