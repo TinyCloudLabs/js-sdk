@@ -108,8 +108,11 @@ Node/CLI keeps its existing unsalted SHA-256 base32 directory names, which is a 
 
 **Account gate** `ReplicaAccountGate { incarnation, salt, principalHash, lifecycleEpoch, deniedAt }`. It holds no plaintext principal.
 - `incarnation` and `salt` are random, created with the gate store, and replaced when it is recreated.
-- `lifecycleEpoch` goes up by one on every committed deny and never goes down within an incarnation.
-- `deniedAt` is the time of the last committed deny.
+- Browser `lifecycleEpoch` has an origin-wide floor outside the deletable database. Each committed
+  deny advances it by one, including a deny whose IDB commit fails and falls back to database
+  deletion. Node/CLI epochs never decrease within an incarnation.
+- `deniedAt` is the millisecond time of the last committed deny and never decreases: a browser
+  deny uses `max(Date.now(), previous deniedAt + 1)`.
 
 **Partition index** `{ partitionId, principalHash, identityKeyHash, createdAt }`. It holds no principal, prefix or device in clear. A partition is registered with `indexPartition` inside the `run` transaction that creates it, and removed with `unindexPartition` inside its erase.
 
@@ -119,8 +122,22 @@ Node/CLI keeps its existing unsalted SHA-256 base32 directory names, which is a 
 | -- | -- | -- |
 | Gate, index, intents | `gate` (key `"account"`), `partitions`, `purgeIntents` stores in `tinycloud-replica-kv` | `replica-gate.json` (`REPLICA_GATE_FILE`): `{ v: 1, incarnation, salt, principalHash, lifecycleEpoch, deniedAt, intents, firstInstall }`, where `principalHash` is `SaltedHash` hex. Written atomically (temp file + rename) under the profile lock. CLI: `<profile>/replica-gate.json`. The node-sdk `gateFile` option defaults next to `dir`, outside the replication data. The index may be derived from the on-disk layout |
 | First-install anchors | `device` store, key `"firstInstall:" + identityKeyHash` | the gate file's `firstInstall: { [identityKeyHash]: ms }` |
-| Cross-tab/process signal | `localStorage` marker `REPLICA_LOGOUT_MARKER`; BroadcastChannel `REPLICA_KV_CHANNEL`; the `storage` event | the gate file, checked by `run` |
+| Cross-tab/process signal | `localStorage` marker `REPLICA_LOGOUT_MARKER`; durable `REPLICA_DENY_TOMBSTONE`; BroadcastChannel `REPLICA_KV_CHANNEL`; the `storage` event | the gate file, checked by `run` |
 | Session stamp persisted in | sdk-core `PersistedSessionData.replicaStamp` (S3 adds it to the zod schema: `incarnation: string`, `lifecycleEpoch: non-negative int`), next to the SIWE | the profile's persisted session record |
+
+**Browser deny floor.** `REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone"` holds
+`{\"epoch\": <positive safe integer>, \"deniedAt\": <non-negative safe integer ms>}` in origin
+`localStorage`. The origin Web Lock `tinycloud-replica-kv:gate` serializes establish, deny and
+startup recovery; without `navigator.locks`, no mutation runs. Under the lock, each mutation
+re-reads the gate and tombstone. Deny synchronously writes the next floor **before** the IDB
+deny transaction or fallback `deleteDatabase`. A new gate after deletion uses a new incarnation
+and salt but starts at `tombstone.epoch`, with `deniedAt` preserved. Establish compares SIWE
+`issuedAt` (milliseconds) strictly after the maximum of gate and tombstone `deniedAt`; it
+never rounds down. An absent tombstone is valid only before the first deny; unreadable,
+unwritable or malformed storage, a denied gate with a missing floor, or a gate behind the
+tombstone epoch fails closed (`gate_unavailable`). Restore and delivery also consult the floor.
+When the tombstone advances,
+old in-memory stamps are not deliverable in any tab, even before IDB deletion completes.
 
 **The gate is mandatory with replication on.**
 - `indexedDbReplicaStorage()` MUST expose `lifecycle`, and the web runtime refuses storage without it with `RUNTIME_UNSUPPORTED`.
@@ -139,7 +156,9 @@ No `IDBTransaction` and no closure ever crosses postMessage. `ReplicaLifecycleGa
 `ReplicaSessionStamp { incarnation, lifecycleEpoch }` is bound to one session object for its whole life.
 - **Fresh sign-in only:** `establishSessionStamp(principal, { siweIssuedAt })`.
   1. Rejects `logout_pending` or `purge_pending` **before any gate mutation**.
-  2. Rejects `stamp_stale` when `siweIssuedAt ≤ gate.deniedAt`. A SIWE minted before the last deny can't establish; clock rollback is accepted, as in §3.
+  2. Rejects `stamp_stale` when `siweIssuedAt ≤ max(gate.deniedAt, tombstone.deniedAt)`.
+     A SIWE minted before the last deny can't establish, including after database deletion;
+     clock rollback is accepted, as in §3.
   3. Then, by gate principal:
      - null → set it, with no epoch bump (deny already bumped);
      - equal → return the current stamp (tabs of one account share it);
@@ -198,7 +217,7 @@ When the pending store is gated, the whole controller becomes `gated` for that s
 ### Delivery and stale replies
 
 `deliverable(stamp)` is synchronous and takes a **required** stamp. No stamp means not deliverable; `if (stamp && !deliverable(stamp))` is wrong.
-- Browser: the `localStorage` marker plus this tab's gate view.
+- Browser: the `localStorage` marker, origin deny tombstone and this tab's gate view.
 - Node/CLI: this process's view.
 
 The main thread calls it before:
@@ -214,7 +233,8 @@ Worker replies carrying replica-served data are stamped (`ReplicaStampedReply`).
    - Otherwise one commit:
      - moves the gate: principal null (sign-out) or `next` (switch), `lifecycleEpoch + 1`, `deniedAt`;
      - records intents for every indexed partition and pending record of that principal;
-     - clears its `first_install` anchors;
+     - clears its `first_install` anchors and browser `grantInstall:<identityKeyHash>:<cid>`
+       anchors for each denied identity;
      - deletes the owner `device` record. It is rotated: a new one is created on the next activation.
        - **Browser:** this happens in the same IndexedDB transaction.
        - **Node exception:** the gate file and the device record can't commit atomically. Step 1 commits the epoch, the intents and the `firstInstall` clearing in the gate file. The device record is then **durably deleted by the erase of the identity's `pending` intent, before that intent clears**. Replay after a crash is idempotent. Denial is still immediate, because the in-memory view flips first and every guarded transaction checks the gate.

@@ -76,6 +76,9 @@ export const REPLICA_KV_STORES = {
 /** Synchronous, cross-tab `localStorage` marker set when the deny transaction and fallback delete both failed. */
 export const REPLICA_LOGOUT_MARKER = "tinycloud-replica:logout-pending";
 
+/** Origin-wide deny floor outside the deletable replica database; JSON `{ epoch, deniedAt }`. */
+export const REPLICA_DENY_TOMBSTONE = "tinycloud-replica:deny-tombstone";
+
 /** BroadcastChannel name used for lifecycle nudges and peer-commit notifications. */
 export const REPLICA_KV_CHANNEL = "tinycloud-replica-kv";
 

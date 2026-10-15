@@ -6,3 +6,5 @@
 Replication: add the shared replica contract for browser and node/CLI storage adapters: the lifecycle gate (`ReplicaGateTx.run`, session stamps, scoped deny), the grant-lifetime policy, the quota seams, the options `grantTtlMs`, `maxBytes` and `minFreeBytes`, and new status fields and events. It adds two subpaths, `@tinycloud/sdk-services/kv/replication/contractConstants` and `/grantPolicyTypes`. Diagnostics allowlists, `TelemetryEvents` and CLI debug output cover the new values.
 
 Source-breaking for exhaustive consumers (replication is beta): switches over these types must now handle `ReplicaState` `gated`, `ReplicationReason` `replica_gated`, the `replication.grant` and `replication.lifecycle` events, sync `trigger: "peer"` and sync `class: "lifecycle"`.
+
+The browser contract also defines the origin-wide deny tombstone outside the deletable IndexedDB database, its fail-closed gate semantics, and the lock requirement across lifecycle mutations.
