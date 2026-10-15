@@ -128,6 +128,8 @@ export interface Config extends ClientConfig {
 
   /** Prefix for space names when creating spaces */
   spacePrefix?: string;
+  /** Local KV replication. Off unless set; node-sdk owns the storage. */
+  replication?: TinyCloudNodeConfig["replication"];
 
   /** Explicit TinyCloud server hosts. When omitted, signIn resolves the user's host. */
   tinycloudHosts?: string[];
@@ -245,6 +247,99 @@ export interface SessionRestoreResult {
   status: Exclude<SessionRestoreStatus, "idle" | "restoring" | "logging-in">;
   session?: ClientSession;
   error?: Error;
+}
+
+/** Replica recovery gates only local authority; it never prevents network session creation. */
+async function recoveredBrowserReplication(
+  replication: NonNullable<TinyCloudNodeConfig["replication"]>,
+): Promise<NonNullable<TinyCloudNodeConfig["replication"]>> {
+  const storage = replication.storage;
+  const lifecycle = storage.kind === "indexeddb" ? storage.lifecycle : undefined;
+  if (lifecycle?.kind !== "indexeddb") return replication;
+
+  const abort = new AbortController();
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const unavailable = (code: string, remaining?: number): void => {
+    try {
+      replication.onEvent?.({
+        type: "replication.lifecycle", at: new Date().toISOString(), action: "unguarded",
+        reason: "startup", gate: "gate_unavailable", code, ...(remaining === undefined ? {} : { remaining }),
+      });
+    } catch { /* Observability cannot prevent a network session. */ }
+  };
+  const recovery = Promise.resolve().then(() => lifecycle.recover({ signal: abort.signal })).then(
+    (report) => {
+      const failed = report.failed;
+      const remaining = report.remaining;
+      if (timedOut && (failed.length > 0 || remaining > 0)) {
+        unavailable(failed[0]?.code ?? "RECOVERY_INCOMPLETE", remaining);
+      }
+      return report;
+    },
+  ).catch(() => {
+    if (timedOut) unavailable("STORAGE_ERROR");
+    return null;
+  });
+  const timeout = new Promise<null>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      abort.abort();
+      resolve(null);
+    }, 3_000);
+  });
+  const report = await Promise.race([recovery, timeout]);
+  clearTimeout(timeoutId!);
+  if (report && report.failed.length === 0 && report.remaining === 0) return replication;
+  unavailable(report?.failed[0]?.code ?? (timedOut ? "RECOVERY_TIMEOUT" : "STORAGE_ERROR"), report?.remaining);
+
+  // Keep the real deny/erase/recovery methods: signOut must still shred keys, even
+  // when startup recovery failed. Only admission and delivery are blocked.
+  let admitted = false;
+  const refuse = () => Promise.reject(Object.assign(new Error("Replica startup recovery is incomplete."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  }));
+  const throwRefusal = () => { throw Object.assign(new Error("Replica startup recovery is incomplete."), {
+    code: "REPLICA_GATED" as const, gate: "gate_unavailable" as const,
+  }); };
+  const forward = (target: object, property: PropertyKey, cache: Map<PropertyKey, unknown>): unknown => {
+    if (cache.has(property)) return cache.get(property);
+    const value = Reflect.get(target, property, target);
+    if (typeof value !== "function") return value;
+    const bound = value.bind(target);
+    cache.set(property, bound);
+    return bound;
+  };
+  const lifecycleMethods = new Map<PropertyKey, unknown>();
+  const guardedLifecycle = new Proxy(lifecycle, {
+    get(target, property) {
+      if (property === "recover") return async (input: { signal: AbortSignal }) => {
+        const result = await target.recover(input);
+        admitted = result.failed.length === 0 && result.remaining === 0;
+        return result;
+      };
+      if (!admitted) {
+        if (property === "establishSessionStamp" || property === "restoreSessionStamp") return refuse;
+        if (property === "activationAllowed") return () => Promise.resolve(false);
+        if (property === "checkDelivery") return () => ({ status: "gated", gate: "gate_unavailable" });
+        if (property === "deliverable") return () => false;
+        if (property === "consentDeadline") return () => null;
+      }
+      return forward(target, property, lifecycleMethods);
+    },
+  });
+  const storageMethods = new Map<PropertyKey, unknown>();
+  const guardedStorage = new Proxy(storage, {
+    get(target, property) {
+      if (property === "lifecycle") return guardedLifecycle;
+      if (!admitted) {
+        if (property === "open" || property === "inspectStatus") return refuse;
+        if (property === "pendingWrites") return throwRefusal;
+      }
+      return forward(target, property, storageMethods);
+    },
+  });
+  return { ...replication, storage: guardedStorage };
 }
 
 // Share Link Utilities (static, no auth required)
@@ -446,6 +541,11 @@ export class TinyCloudWeb {
       autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
     };
+    if (this.config.replication) {
+      nodeConfig.replication = this.config.replication.enabled
+        ? await recoveredBrowserReplication(this.config.replication)
+        : this.config.replication;
+    }
 
     // Wire up signer if available
     if (this.walletSigner) {
