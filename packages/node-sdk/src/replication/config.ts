@@ -33,4 +33,11 @@ export function assertValidReplicationConfig(
       );
     }
   }
+  const { maxBytes, minFreeBytes } = replication;
+  if (maxBytes !== undefined && !(Number.isSafeInteger(maxBytes) && maxBytes > 0)) {
+    throw new TypeError(`replication.maxBytes must be a positive safe integer, got ${String(maxBytes)}`);
+  }
+  if (minFreeBytes !== undefined && !(Number.isSafeInteger(minFreeBytes) && minFreeBytes >= 0)) {
+    throw new TypeError(`replication.minFreeBytes must be a non-negative safe integer, got ${String(minFreeBytes)}`);
+  }
 }
