@@ -495,7 +495,28 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     expect(requests.length).toBeGreaterThan(before);
   });
 
-  test("a cancelled sign-in's save cleanup keeps a newer sign-in's persisted session", async () => {
+  const SECOND_ACCOUNT_KEY = "8da4ef21b864d2cc526dbdb2a120bd2874c36c9d0a1fb7f8c63d7f7a8b41de8f";
+
+  test.each([
+    {
+      name: "keeps a newer sign-in's record when the old save's acknowledgment is late",
+      hold: "after-write",
+      secondKey: OWNER_KEY,
+      secondSaveFails: false,
+    },
+    {
+      name: "removes its own record when the newer sign-in's save fails",
+      hold: "before-write",
+      secondKey: OWNER_KEY,
+      secondSaveFails: true,
+    },
+    {
+      name: "removes its own record when the newer sign-in is another account",
+      hold: "before-write",
+      secondKey: SECOND_ACCOUNT_KEY,
+      secondSaveFails: false,
+    },
+  ] as const)("a cancelled sign-in's save $name", async ({ hold, secondKey, secondSaveFails }) => {
     requests = [];
     globalThis.fetch = mock(async (input: string | URL | Request) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -505,31 +526,36 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
         : { activated: [], skipped: [] };
       return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
     }) as unknown as typeof fetch;
-    const firstWrite = Promise.withResolvers<void>();
-    const ack = Promise.withResolvers<void>();
-    let delayAck = true;
-    // The first save lands immediately but its acknowledgment is held.
-    class SlowAckStorage extends MemorySessionStorage {
+    const firstSaving = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    // The first save is held, either before or after its write lands.
+    class HeldStorage extends MemorySessionStorage {
+      private saves = 0;
       override async save(...args: Parameters<MemorySessionStorage["save"]>): Promise<void> {
+        const save = ++this.saves;
+        if (save === 2 && secondSaveFails) throw new Error("storage unavailable");
+        if (save === 1 && hold === "before-write") {
+          firstSaving.resolve();
+          await releaseFirst.promise;
+        }
         await super.save(...args);
-        if (delayAck) {
-          delayAck = false;
-          firstWrite.resolve();
-          await ack.promise;
+        if (save === 1 && hold === "after-write") {
+          firstSaving.resolve();
+          await releaseFirst.promise;
         }
       }
     }
-    const sessionStorage = new SlowAckStorage();
-    const inner = new PrivateKeySigner(OWNER_KEY);
+    const sessionStorage = new HeldStorage();
+    let signer = new PrivateKeySigner(OWNER_KEY);
     let signatures = 0;
     const secondSignature = Promise.withResolvers<void>();
     const node = new TinyCloudNode({
       host: HOST,
       signer: {
-        getAddress: () => inner.getAddress(),
-        getChainId: () => inner.getChainId(),
+        getAddress: () => signer.getAddress(),
+        getChainId: () => signer.getChainId(),
         signMessage: async (message: string | Uint8Array) => {
-          const signature = await inner.signMessage(message);
+          const signature = await signer.signMessage(message);
           if (++signatures === 2) secondSignature.resolve();
           return signature;
         },
@@ -541,24 +567,33 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
       enablePublicSpace: false,
       autoCreateSpace: false,
     });
-    const address = await inner.getAddress();
+    const firstAddress = await signer.getAddress();
 
     const first = node.signIn();
     first.catch(() => undefined);
-    await firstWrite.promise;
+    await firstSaving.promise;
     await node.signOut();
+    signer = new PrivateKeySigner(secondKey);
+    const secondAddress = await signer.getAddress();
     const second = node.signIn();
+    second.catch(() => undefined);
     // Let the second sign-in reach its own save before the first resumes.
     await secondSignature.promise;
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, 0);
     await tick.promise;
-    ack.resolve();
+    releaseFirst.resolve();
 
     await expect(first).rejects.toThrow("Sign-in was cancelled by sign-out.");
+    if (secondSaveFails) {
+      await expect(second).rejects.toThrow("storage unavailable");
+      expect(node.session).toBeUndefined();
+      expect(sessionStorage.exists(firstAddress)).toBe(false);
+      return;
+    }
     await second;
-    expect(node.session).toBeDefined();
-    expect(sessionStorage.exists(address)).toBe(true);
-    expect((await sessionStorage.load(address))?.siwe).toBe(node.session?.siwe);
+    expect(node.session?.address).toBe(secondAddress);
+    expect((await sessionStorage.load(secondAddress))?.siwe).toBe(node.session?.siwe);
+    if (secondAddress !== firstAddress) expect(sessionStorage.exists(firstAddress)).toBe(false);
   });
 });

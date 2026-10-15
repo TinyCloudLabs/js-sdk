@@ -332,12 +332,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /** Incremented by resetSession; a sign-in started earlier publishes nothing. */
   private sessionGeneration = 0;
   /**
-   * Sign-in saves and cancellation cleanups run one at a time, in order, so a
-   * cancelled sign-in can neither overwrite nor delete a newer sign-in's record.
+   * Sign-in saves run one at a time, in order, each together with its own
+   * cancellation cleanup, so no later write can land between the two.
    */
   private persistenceQueue: Promise<void> = Promise.resolve();
-  /** The sign-in generation whose record was written last. */
-  private lastPersistedGeneration?: number;
   private extensions: Extension[] = [];
   private _session?: ClientSession;
   private _tinyCloudSession?: TinyCloudSession;
@@ -1524,19 +1522,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
       tinycloudHosts: this.tinycloudHosts,
     };
     await this.enqueuePersistence(async () => {
-      this.lastPersistedGeneration = generation;
       await this.sessionStorage.save(address, persistedData);
+      // Signed out while saving: remove exactly the record this save wrote.
+      // A newer sign-in's save is queued behind this and lands afterwards.
+      if (generation !== this.sessionGeneration) {
+        await this.sessionStorage.clear(address);
+      }
     });
-    if (generation !== this.sessionGeneration) {
-      // Signed out while saving: never publish, and remove this sign-in's
-      // record unless a newer sign-in has written its own since.
-      await this.enqueuePersistence(async () => {
-        if (this.lastPersistedGeneration === generation) {
-          await this.sessionStorage.clear(address);
-        }
-      });
-      this.assertSignInCurrent(generation);
-    }
+    // Never publish a session that was signed out while it was being saved.
+    this.assertSignInCurrent(generation);
 
     // Set current session
     this._session = clientSession;
