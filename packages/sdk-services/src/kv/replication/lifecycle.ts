@@ -284,8 +284,6 @@ export interface ReplicaLifecycleGate {
    * `pendingPurge()` / `purgePending`; a browser closed at expiry catches it on its next load.
    */
   recover(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
-  /** Browser only: reports a committed consent-expiry deny for its exact prior stamp. */
-  subscribeConsentExpired?(listener: (stamp: ReplicaSessionStamp) => void): () => void;
   /**
    * Fresh interactive sign-in ONLY. `consentAnchor` comes from independently validated
    * signed owner SIWE with finite `expirationTime`, verified `issuedAt` and an exact-full-
