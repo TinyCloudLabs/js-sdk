@@ -293,3 +293,39 @@ test("signIn ignores the consent deadline when replication is off", async () => 
 
   expect(node.signIn).not.toHaveBeenCalled();
 });
+
+test("after re-consent with secrets opt-in off, the next restore counts as covered and does not prompt", async () => {
+  // Config validation rejects vault prefixes without allowSecrets, so this case
+  // uses only an app/ prefix. The secrets filter is pinned in replicationReconsent.test.ts.
+  // The covered-check must match the grant node issues, or every load re-consents.
+  const granted = new Set<string>();
+  const replication = { enabled: true, prefixes: ["app/"], storage: replicationStorage };
+  const stamped = persistedRecord({
+    replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 1 },
+    siwe: siweIssuedAt(ONE_DAY_AGO),
+  });
+  const load = () => {
+    const tcw = new TinyCloudWeb({ replication });
+    const { node } = stubRestore(tcw, stamped);
+    // Manifest entries stay covered so the replication check is reached; only app/ is gated.
+    node.hasRuntimePermissions = mock((entries: Array<{ service: string; path?: string }>) =>
+      entries.every((entry) => entry.path?.startsWith("app/") !== true || granted.has(`${entry.service}|${entry.path}`)),
+    );
+    node.signIn = mock(async () => {
+      granted.add("tinycloud.kv|app/");
+    });
+    return { tcw, node };
+  };
+
+  const first = load();
+  await first.tcw.signIn();
+  expect(first.node.signIn).toHaveBeenCalledTimes(1);
+  const requested = (first.node.hasRuntimePermissions as unknown as { mock: { calls: unknown[][][] } }).mock.calls.flat(2);
+  expect(requested).toContainEqual(
+    expect.objectContaining({ service: "tinycloud.kv", space: primarySpace, path: "app/" }),
+  );
+
+  const second = load();
+  await second.tcw.signIn();
+  expect(second.node.signIn).not.toHaveBeenCalled();
+});

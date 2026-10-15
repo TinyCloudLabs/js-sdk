@@ -18,12 +18,47 @@ export function replicationConsentAnchorMs(siwe: string): number | null {
 }
 
 /**
- * True once the consent deadline (anchor + 7 d) has been reached. With no anchor this returns
- * false: storage then uses its first-install anchor and enforces the deadline locally.
+ * True once the consent deadline (anchor + 7 d) has been reached. Fails closed: a missing or
+ * unparseable anchor counts as expired, so the caller requires a fresh sign-in instead of
+ * trusting an unanchored restore.
  */
 export function replicationConsentExpired(siwe: string, now: number): boolean {
   const anchor = replicationConsentAnchorMs(siwe);
-  return anchor !== null && now >= anchor + REPLICATION_CONSENT_WINDOW_MS;
+  return anchor === null || now >= anchor + REPLICATION_CONSENT_WINDOW_MS;
+}
+
+export type RestoreAcceptanceInput = {
+  /** Persisted SIWE of the restored session (carries the consent anchor). */
+  siwe: string;
+  now: number;
+  /** Replica session stamp validated against the principal (S3 `restoreSessionStamp`). */
+  stampValid: boolean;
+  /** Restored session address and chain (candidate A). */
+  sessionAddress: string;
+  sessionChainId: number;
+  /** Connected wallet (B). Undefined when no wallet is connected. */
+  walletAddress: string | undefined;
+  walletChainId: number | undefined;
+  /** Primary space the node resolved for the restored session, undefined when unknown. */
+  resolvedSpace: string | undefined;
+  configuredSpace: string;
+  /** Node reports get+sync covering every required prefix on the primary space. */
+  coversRequired: boolean;
+};
+
+/**
+ * Whether a restored session may be returned as a successful covered restore. Offline and
+ * online follow the same rule; offline only skips network work, it never widens acceptance.
+ * Every check fails closed: any miss means a fresh sign-in.
+ */
+export function replicationRestoreAccepted(input: RestoreAcceptanceInput): boolean {
+  if (!input.stampValid) return false;
+  if (replicationConsentExpired(input.siwe, input.now)) return false;
+  if (input.resolvedSpace === undefined || input.resolvedSpace !== input.configuredSpace) return false;
+  if (!input.coversRequired) return false;
+  if (input.walletAddress === undefined || input.walletChainId === undefined) return false;
+  if (input.walletAddress.toLowerCase() !== input.sessionAddress.toLowerCase()) return false;
+  return input.walletChainId === input.sessionChainId;
 }
 
 /** Mirrors `requiresSecretsOptIn` in sdk-services/kv/replication/scope.ts (same four-line rule). */
