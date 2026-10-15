@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -53,6 +53,7 @@ describe("readGateState", () => {
     expect(state.deniedAt).toBeNull();
     expect(state.intents).toEqual([]);
     expect(state.firstInstall).toEqual({});
+    expect(state.pendingGenerations).toEqual({});
   });
 
   test("returns the same incarnation and salt on every read", async () => {
@@ -94,6 +95,13 @@ describe("readGateState", () => {
     const salt = `${parsed.salt as string}+/`;
     await writeFile(join(dir, REPLICA_GATE_FILE), JSON.stringify({ ...parsed, salt }));
     await expectGated(readGateState(dir), "gate_unavailable");
+  });
+
+  test("refuses a corrupt pending generation map instead of resetting the replay fence", async () => {
+    const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const state = await readGateFile();
+    await writeFile(join(dir, REPLICA_GATE_FILE), JSON.stringify({ ...state, pendingGenerations: null }));
+    await expectGated(restoreSessionStamp(dir, ALICE, stamp), "gate_unavailable");
   });
 
   test("leaves no temp files behind after writes", async () => {
@@ -141,6 +149,13 @@ describe("establishSessionStamp", () => {
     await expectGated(establishSessionStamp(dir, BOB, { siweIssuedAt: 2 }), "principal_mismatch");
   });
 
+  test("rejects a non-finite or missing SIWE anchor without creating a gate file", async () => {
+    for (const siweIssuedAt of [Number.NaN, Number.POSITIVE_INFINITY, -1, undefined]) {
+      await expectGated(establishSessionStamp(dir, ALICE, { siweIssuedAt: siweIssuedAt as number }), "not_established");
+    }
+    expect(await readdir(dir)).toEqual([]);
+  });
+
   test("rejects a sign-in issued at or before deniedAt with stamp_stale", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
     const denied = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
@@ -151,12 +166,18 @@ describe("establishSessionStamp", () => {
     await expectGated(establishSessionStamp(dir, ALICE, { siweIssuedAt: (deniedAt ?? 0) - 1 }), "stamp_stale");
   });
 
-  test("accepts a sign-in issued after deniedAt", async () => {
-    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
-    const deniedAt = (await readGateState(dir)).deniedAt ?? 0;
-    const stamp = await establishSessionStamp(dir, BOB, { siweIssuedAt: deniedAt + 1 });
-    expect(stamp.lifecycleEpoch).toBe(1);
+  test("accepts a sign-in issued strictly after deniedAt when the clock reaches it", async () => {
+    const originalNow = Date.now();
+    try {
+      await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+      await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
+      const deniedAt = (await readGateState(dir)).deniedAt ?? 0;
+      setSystemTime(new Date(deniedAt + 2));
+      const stamp = await establishSessionStamp(dir, BOB, { siweIssuedAt: deniedAt + 1 });
+      expect(stamp.lifecycleEpoch).toBe(1);
+    } finally {
+      setSystemTime(originalNow);
+    }
   });
 
   test("rejects with purge_pending while any intent is outstanding", async () => {
@@ -228,23 +249,22 @@ describe("denyGate", () => {
     expect(after.salt).toBe(before.salt);
   });
 
-  test("passes the old principal hash to collectIntents", async () => {
-    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    const { salt } = await readGateState(dir);
-    let seen: string | undefined;
-    await denyGate(dir, { reason: "sign_out", principal: ALICE }, async (hash) => {
-      seen = hash;
-      return [];
-    });
-    expect(seen).toBe(await principalHashOf(salt, ALICE));
-  });
-
-  test("account_switch moves the principal hash to the next principal, case-insensitively", async () => {
-    await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    const outcome = await denyGate(dir, { reason: "account_switch", principal: ALICE, next: BOB.toUpperCase() }, async () => []);
+  test("account switch clears the old gate; only a fresh post-deny sign-in binds the successor", async () => {
+    const first = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
+    const outcome = await denyGate(dir, { reason: "account_switch", principal: ALICE, next: BOB }, async () => []);
     expect(outcome.status).toBe("denied");
     const after = await readGateState(dir);
-    expect(after.principalHash).toBe(await principalHashOf(after.salt, BOB));
+    expect(after.principalHash).toBeNull();
+    await expectGated(restoreSessionStamp(dir, ALICE, first), "stamp_stale");
+    const originalNow = Date.now();
+    try {
+      setSystemTime(new Date((after.deniedAt ?? 0) + 2));
+      const second = await establishSessionStamp(dir, BOB, { siweIssuedAt: (after.deniedAt ?? 0) + 1 });
+      expect(second.lifecycleEpoch).toBe(first.lifecycleEpoch + 1);
+      expect((await readGateState(dir)).principalHash).toBe(await principalHashOf(after.salt, BOB));
+    } finally {
+      setSystemTime(originalNow);
+    }
   });
 
   test("account_switch without next throws a TypeError", async () => {
@@ -254,16 +274,26 @@ describe("denyGate", () => {
     );
   });
 
-  test("deduplicates intents by id across denies", async () => {
+  test("denial advances a pending identity generation once with its deduplicated intent", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    await denyGate(dir, { reason: "account_switch", principal: ALICE, next: BOB }, async (hash) => [intent("p1", hash)]);
-    const second = await denyGate(dir, { reason: "account_switch", principal: BOB, next: ALICE }, async (hash) => [
-      intent("p1", hash),
-      intent("p2", hash),
-    ]);
-    expect(second).toMatchObject({ status: "denied", intents: 2 });
-    const after = await readGateState(dir);
-    expect(after.intents.map((entry) => entry.id)).toEqual(["p1", "p2"]);
+    const identityKeyHash = "a".repeat(64);
+    const result = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async (principalHash) => {
+      const pending: ReplicaPurgeIntent = {
+        id: `pending:${identityKeyHash}`,
+        kind: "pending",
+        identityKeyHash,
+        principalHash,
+        recordedAt: 1,
+      };
+      return [pending, pending];
+    });
+    expect(result).toMatchObject({ status: "denied", intents: 1 });
+    const state = await readGateState(dir);
+    expect(state.pendingGenerations).toEqual({ [identityKeyHash]: 1 });
+    expect(state.intents).toHaveLength(1);
+    expect(await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []))
+      .toEqual({ status: "stale" });
+    expect((await readGateState(dir)).pendingGenerations).toEqual(state.pendingGenerations);
   });
 
   test("clears every firstInstall anchor", async () => {
