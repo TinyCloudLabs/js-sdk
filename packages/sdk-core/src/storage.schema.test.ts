@@ -185,6 +185,50 @@ describe("PersistedSessionDataSchema", () => {
     });
   });
 
+  describe("replicaStamp (replica gate stamp)", () => {
+    const stamp = { incarnation: "inc-1", lifecycleEpoch: 3 };
+
+    it("round-trips replicaStamp through parse", () => {
+      const data = { ...validPersistedSessionData, replicaStamp: stamp };
+      const result = PersistedSessionDataSchema.safeParse(data);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.replicaStamp).toEqual(stamp);
+      }
+    });
+
+    it("validates without replicaStamp (sessions persisted before replication)", () => {
+      const data = { ...validPersistedSessionData };
+      delete (data as Record<string, unknown>).replicaStamp;
+      const result = PersistedSessionDataSchema.safeParse(data);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.replicaStamp).toBeUndefined();
+      }
+    });
+
+    it("rejects a non-integer or negative lifecycleEpoch", () => {
+      const fractional = PersistedSessionDataSchema.safeParse({
+        ...validPersistedSessionData,
+        replicaStamp: { incarnation: "inc-1", lifecycleEpoch: 1.5 },
+      });
+      const negative = PersistedSessionDataSchema.safeParse({
+        ...validPersistedSessionData,
+        replicaStamp: { incarnation: "inc-1", lifecycleEpoch: -1 },
+      });
+      expect(fractional.success).toBe(false);
+      expect(negative.success).toBe(false);
+    });
+
+    it("rejects an empty incarnation", () => {
+      const result = PersistedSessionDataSchema.safeParse({
+        ...validPersistedSessionData,
+        replicaStamp: { incarnation: "", lifecycleEpoch: 0 },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("address validation", () => {
     it("rejects address without 0x prefix", () => {
       const data = {
