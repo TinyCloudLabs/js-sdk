@@ -8,6 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -61,6 +62,27 @@ function serialGuard(): <T>(section: () => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
   return (section) => {
     const run = tail.then(section);
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+}
+
+/**
+ * Serializing like `serialGuard`, but a call made from inside a running section
+ * rejects instead of queueing behind itself. A real re-entry would hang the
+ * profile lock; this turns that hang into a fast failure.
+ */
+function nonReentrantGuard(): <T>(section: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  const inside = new AsyncLocalStorage<true>();
+  return (section) => {
+    if (inside.getStore()) {
+      return Promise.reject(new Error("guard re-entered inside its own section"));
+    }
+    const run = tail.then(() => inside.run(true, section));
     tail = run.then(
       () => undefined,
       () => undefined,
@@ -1006,6 +1028,15 @@ describe("quota admission (TC-858 S5)", () => {
     // keys (12 KB) would refuse it.
     await expect(docs.sync({ signal: signal(), syncStartEpoch: 1 })).resolves.toBeDefined();
     expect((await docs.status()).bytes).toBe(3_000);
+    await notes.close();
+    await docs.close();
+  });
+
+  test("page commit with maxBytes set completes under a non-reentrant guard (no nested lock)", async () => {
+    const storage = await pairStorage(nonReentrantGuard());
+    const { notes, docs } = await openPair(storage);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    expect((await notes.status()).bytes).toBe(SIX_KB);
     await notes.close();
     await docs.close();
   });
