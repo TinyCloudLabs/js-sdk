@@ -12,6 +12,7 @@ import type {
   KVReplicaSpec,
   KVReplicaStorage,
   ReplicaGatedSpec,
+  ReplicaGatedHandle,
   ReplicaGatedStorage,
   ReplicationAuthority,
   ReplicationEvent,
@@ -138,6 +139,9 @@ type _PreflightStampRequired = Assert<
 type _PreflightReturnsReason = Assert<
   Equal<ReturnType<ReplicaLifecycleGate["checkDelivery"]>, ReplicaDeliveryDecision>
 >;
+type _DurableDeadlineMatchesStamp = Assert<
+  Equal<ReplicaLifecycleGate["consentDeadline"], (stamp: ReplicaSessionStamp) => number | null>
+>;
 type _ConsentExpiryDecisionHasCode = Assert<
   Equal<Extract<ReplicaDeliveryDecision, { status: "consent_expired" }>["code"], "CONSENT_EXPIRED">
 >;
@@ -165,6 +169,14 @@ type _SealedSchemaVersion = Assert<Equal<typeof REPLICA_KV_SCHEMA_VERSION, 2>>;
 type _GatedSpecRequiresStamp = Assert<HasRequiredKey<ReplicaGatedSpec, "stamp">>;
 type _GatedSpecRequiresPolicy = Assert<HasRequiredKey<ReplicaGatedSpec, "grantPolicy">>;
 type _GatedStorageRequiresLifecycle = Assert<HasRequiredKey<ReplicaGatedStorage, "lifecycle">>;
+type _LegacyHandleIdOptional = Assert<Equal<KVReplicaHandle["replicaId"], string | undefined>>;
+type _GatedHandleIdRequired = Assert<Equal<ReplicaGatedHandle["replicaId"], string>>;
+type _GatedHandleHasStampedSpec = Assert<
+  Equal<ReplicaGatedHandle["spec"], ReplicaGatedSpec>
+>;
+type _GatedOpenReturnsOpaqueId = Assert<
+  Equal<Awaited<ReturnType<ReplicaGatedStorage["open"]>>, ReplicaGatedHandle>
+>;
 type _GrantEventHasNoSpace = Assert<
   Equal<"space" extends keyof Extract<ReplicationEvent, { type: "replication.grant" }> ? true : false, false>
 >;

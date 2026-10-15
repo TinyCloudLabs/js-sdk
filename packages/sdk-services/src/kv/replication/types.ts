@@ -201,6 +201,12 @@ export interface KVReplicaHandle {
   /** Always equals `spec.device.did` when an explicit device was provided. */
   readonly deviceDid: string;
   /**
+   * Opaque partition id for events. Required on Phase 2 `ReplicaGatedHandle`; optional here
+   * only for Phase 1 adapters. Browser: private gate-HMAC partition id; node: replica hash.
+   * A controller MUST NOT derive one from raw prefix/space or emit a grant event without it.
+   */
+  readonly replicaId?: string;
+  /**
    * Guarded read. Adapters MUST NOT return value bytes unless the effective authority is `valid`
    * (signed exp, effective expiry, consent deadline, node-attested authority, revocation): they
    * throw GRANT_EXPIRED / GRANT_REVOKED / GRANT_NOT_YET_VALID / CONSENT_EXPIRED inside the read
@@ -238,6 +244,12 @@ export interface KVReplicaHandle {
   /** Cancels and awaits in-flight syncs before closing. */
   close(): Promise<void>;
 }
+
+/** Phase 2 opened handle: immutable stamp/policy and an opaque event identifier. */
+export type ReplicaGatedHandle = KVReplicaHandle & {
+  readonly spec: ReplicaGatedSpec;
+  readonly replicaId: string;
+};
 
 export interface PurgeTarget {
   identity: ReplicationIdentity;
@@ -304,8 +316,11 @@ export interface KVReplicaStorage {
   readonly lifecycle?: ReplicaLifecycleGate;
 }
 
-/** A Phase 2 adapter: the lifecycle gate is present. */
-export type ReplicaGatedStorage = KVReplicaStorage & { readonly lifecycle: ReplicaLifecycleGate };
+/** A Phase 2 adapter: lifecycle and stamped/policy-bound handles with opaque event ids. */
+export type ReplicaGatedStorage = KVReplicaStorage & {
+  readonly lifecycle: ReplicaLifecycleGate;
+  open(spec: ReplicaGatedSpec): Promise<ReplicaGatedHandle>;
+};
 
 export interface PendingWriteRecord {
   opId: string;
@@ -381,13 +396,17 @@ export interface ReplicationAuthority {
     options?: { expiryMs?: number },
   ): Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   /**
-   * Finite consent anchor from validated signed SIWE `issuedAt`, or the independently verified
-   * owner-authorizing compact proof's signed `iat`/`nbf` (never its child leaf). Null if the
-   * proof or its timestamp is unavailable: compact leaf CID/prf alone is insufficient. Storage
-   * may use `first_install` only to bound expiry; null cannot establish a fresh session stamp.
+   * Finite consent anchor from an independently validated signed owner SIWE `issuedAt`
+   * with finite signed `expirationTime` and an exact-full-space verified, uncaveated KV
+   * get+sync witness, or the independently verified **oldest owner-authorizing** compact
+   * proof's signed `iat`/`nbf` (never its child leaf). Null when owner proof bytes,
+   * KV witness, finite SIWE expiration or proof timestamp are unavailable: arbitrary
+   * did:key/empty-prf leaves and compact leaf CID/prf alone are insufficient even with
+   * finite leaf `iat`/`nbf`. Storage may use `first_install` only to bound expiry;
+   * null cannot establish a fresh session stamp.
    */
   consentAnchor?(): ReplicaConsentAnchor | null;
-  /** False for sessions that can't derive (compact delegated / sessionOnly): no silent renewal. */
+  /** True only for verified owner session-key derivation. Compact delegated / sessionOnly cannot silently renew. */
   readonly canRenew?: boolean;
 }
 
@@ -682,7 +701,7 @@ export type ReplicationEvent =
        */
       type: "replication.grant";
       at: string;
-      /** Replica id: browser private gate-HMAC partition id; node replica hash. */
+      /** Opaque id from an opened `ReplicaGatedHandle`, never inferred from raw space/prefix. */
       replicaId: string;
       action:
         | "minted"

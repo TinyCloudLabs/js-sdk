@@ -227,8 +227,10 @@ export interface ReplicaGateTx<Tx, Access extends ReplicaGateAccess = ReplicaGat
    * the gate; following control requests verify both stored nonextractable key records
    * and intents **before any data request**. Compare snapshot incarnation/keyIds, stamp,
    * principalHash and consent deadline; mismatch aborts before `fn` or writes. No WebCrypto
-   * await occurs inside the transaction. `fn` awaits IDB requests only; readwrite uses
-   * strict durability and `run` resolves on IDB `oncomplete`.
+   * await occurs inside the transaction. On active browser expiry, abort/read completion
+   * precedes an awaited main-thread deny/key-shred RPC; failed denial fails closed.
+   * `fn` awaits IDB requests only; readwrite uses strict durability and `run` resolves
+   * on IDB `oncomplete`.
    *
    * Node SQLite mutations hold the mandatory profile lock across rechecked gate and commit;
    * reads check the gate and partition tombstone inside a SQLite read transaction. Node
@@ -283,13 +285,17 @@ export interface ReplicaLifecycleGate {
    */
   recover(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
   /**
-   * Fresh authenticated session ONLY. `consentAnchor` comes from validated signed SIWE
-   * `issuedAt`, or the signed `iat`/`nbf` of an independently verified owner-authorizing proof.
-   * A child leaf freshly minted under an old owner grant does not refresh consent; leaf
-   * signature/CID/audience alone do not prove it. The anchor must be finite ms, clamped to now
-   * at capture and strictly newer than the last deny (browser: also the origin tombstone).
-   * `first_install`, missing proof or non-finite anchors cannot establish (`not_established`);
-   * older anchors reject `stamp_stale`. Rejects
+   * Fresh interactive sign-in ONLY. `consentAnchor` comes from independently validated
+   * signed owner SIWE with finite `expirationTime`, verified `issuedAt` and an exact-full-
+   * space uncaveated KV get+sync witness, or (for a compact-only session) the signed
+   * `iat`/`nbf` of the oldest independently verified owner-authorizing proof. A child
+   * leaf freshly minted under an old owner grant does not refresh consent; leaf
+   * signature/CID/audience alone do not prove it. An invalid/expirationless SIWE
+   * session does NOT fall through to a compact leaf or `first_install`. The anchor
+   * must be finite ms, clamped to now at capture and strictly newer than the last
+   * deny (browser: also the origin tombstone). Missing proof or non-finite anchors
+   * cannot establish (`not_established`); network sign-in/restore remain unaffected.
+   * Older anchors reject `stamp_stale`. Rejects
    * `logout_pending` / `purge_pending` before mutation. Null principal → set it; matching
    * principal → current stamp; another account → `principal_mismatch`.
    */
@@ -303,13 +309,24 @@ export interface ReplicaLifecycleGate {
   /** True only for a matching non-null gate principal, with no old intent or marker. A null principal first establishes a fresh session. */
   activationAllowed(next: string): Promise<boolean>;
   /**
-   * Synchronous, reason-bearing preflight before open, installGrant, get/list, sync or event
-   * delivery. An elapsed browser deadline returns `consent_expired` before grant-expiry checks;
-   * controller emits its deadline event once per active stamp and starts scoped denial. A timer
-   * that already denied instead returns `gated` (`stamp_stale`). No stamp is `not_established`.
-   * This check does not mutate the gate.
+   * Synchronous, reason-bearing preflight before open, installGrant, get/list, sync or
+   * replica-derived event delivery. An elapsed browser deadline returns `consent_expired`
+   * before grant-expiry checks; the controller starts scoped denial and emits one grant
+   * deadline event per **opened** handle with a known opaque replicaId. Pre-open denial has
+   * no fabricated replica id and uses a lifecycle event/recovery report instead. A timer
+   * that already denied returns `gated` (`stamp_stale`). This does not mutate the gate.
    */
   checkDelivery(stamp: ReplicaSessionStamp): ReplicaDeliveryDecision;
+  /**
+   * Finite, immutable deadline from the persisted gate for this matching active stamp,
+   * synchronously available to the main-thread scheduler even when a restored compact
+   * session has no consent anchor. Null if stale, unavailable or not established; never
+   * derive a new deadline from `first_install` or the current session's leaf token.
+   * Browser timers call `checkDelivery` again before notifying/denying; gate checks on
+   * startup/open/read are mandatory independently of whether a timer ran. Node may
+   * return null when its gate has no persisted consent deadline.
+   */
+  consentDeadline(stamp: ReplicaSessionStamp): number | null;
   /**
    * Synchronous main-thread delivery check before replica-served values/list keys/event fields,
    * and before open, installGrant and sync. Browser checks marker, origin deny tombstone,
