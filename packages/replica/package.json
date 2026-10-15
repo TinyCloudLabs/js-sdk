@@ -27,6 +27,18 @@
       "types": "./dist/replica.worker.d.ts",
       "import": "./dist/replica.worker.js"
     },
+    "./kv-storage": {
+      "types": "./dist/kv-storage.d.ts",
+      "import": "./dist/kv-storage.js"
+    },
+    "./kv-storage/worker": {
+      "types": "./dist/kv-storage.worker.d.ts",
+      "import": "./dist/kv-storage.worker.js"
+    },
+    "./kv-storage/testing": {
+      "types": "./dist/kv-storage-testing.d.ts",
+      "import": "./dist/kv-storage-testing.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,

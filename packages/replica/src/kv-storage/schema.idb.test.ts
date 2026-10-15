@@ -86,11 +86,7 @@ describe("partition ids", () => {
 
 describe("the origin database", () => {
   test("opening without create never creates it", async () => {
-    await new Promise<void>((resolve) => {
-      const request = indexedDB.deleteDatabase(KV_DATABASE);
-      request.onsuccess = () => resolve();
-      request.onerror = () => resolve();
-    });
+    await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
     expect(await openKvDatabase({ create: false })).toBeNull();
     expect((await indexedDB.databases()).some((info) => info.name === KV_DATABASE)).toBe(false);
     const db = (await openKvDatabase({ create: true }))!;

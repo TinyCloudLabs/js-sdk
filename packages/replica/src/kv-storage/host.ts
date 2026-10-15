@@ -31,9 +31,10 @@ import { Replica, type ReadMeta } from "../engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
 import { assertGrantInstallable, grantUnconstrained, parseUcanGrant } from "../grant.js";
 import { assertFolderPrefix, requiresSecretsOptIn } from "../scope.js";
-import type { GrantRecord, ReplicaState, ReplicaTransport } from "../types.js";
+import type { GrantRecord, ReplicaTransport } from "../types.js";
 import { idbError, requestAsPromise, transactionDone } from "../browser/idb.js";
 import { IndexedDbReplicaStore, type ReplicaStoreHooks } from "../browser/store.js";
+import { grantInfoOf } from "./grantInfo.js";
 import type { KvChannelMessage, KvEvent, KvGetResult, KvOpenSpec, KvReply, KvRequest, KvResults, KvWireError } from "./protocol.js";
 import { KV_STORE, identityKeyHash, kvLayout, openKvDatabase, partitionIdOf } from "./schema.js";
 
@@ -94,20 +95,6 @@ function wireError(error: unknown): KvWireError {
   }
   if (error instanceof DOMException && error.name === "AbortError") return { code: "ABORTED", message: error.message };
   return { code: "ERROR", message: error instanceof Error ? error.message : String(error) };
-}
-
-/** `ReplicaGrantInfo` for the newest stored grant (a pending install supersedes the active one). */
-function grantInfoOf(state: ReplicaState, spec: KvOpenSpec): ReplicaGrantInfo | null {
-  const record = state.pendingGrant ?? state.grant;
-  if (record === null) return null;
-  const parsed = parseUcanGrant(record.bytes);
-  return {
-    cid: record.cid,
-    parentCid: parsed.prf[0] ?? null,
-    expiresAt: record.expiresAt === null ? null : record.expiresAt * 1000,
-    state: state.pendingGrant !== null && record.cid === state.pendingGrant.cid ? "pending" : "active",
-    unconstrained: grantUnconstrained(parsed, spec.space, spec.prefix),
-  };
 }
 
 export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id: number } & KvRequest): void } {

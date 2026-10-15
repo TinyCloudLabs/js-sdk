@@ -30,11 +30,20 @@ export const KV_DATABASE = REPLICA_KV_DATABASE;
 export const KV_DATABASE_VERSION = 1;
 export const KV_STORE = REPLICA_KV_STORES;
 
+/**
+ * `device` store keys `firstInstall:<identityKeyHash>` → `{ at }` (ms): the
+ * `first_install` consent anchor of an identity whose session has neither
+ * SIWE nor delegation `iat`/`nbf`. Written set-if-absent by the install
+ * transaction; survives partition reset, purge and reinstall; only the
+ * lifecycle gate's `deny` deletes the range.
+ */
+export const FIRST_INSTALL_KEY_PREFIX = "firstInstall:";
+
 /** The scope a partition erase (and the identity-scoped pending erase) needs. */
 export const ERASE_STORES: readonly string[] = [KV_STORE.meta, KV_STORE.entries, KV_STORE.blobs, KV_STORE.pending];
 
 const READ_SCOPE: readonly string[] = [KV_STORE.gate, KV_STORE.purgeIntents];
-const WRITE_SCOPE: readonly string[] = [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quota];
+const WRITE_SCOPE: readonly string[] = [KV_STORE.gate, KV_STORE.partitions, KV_STORE.purgeIntents, KV_STORE.quota, KV_STORE.device];
 
 function createStores(db: IDBDatabase): void {
   db.createObjectStore(KV_STORE.meta);
