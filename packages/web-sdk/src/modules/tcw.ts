@@ -105,11 +105,6 @@ import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
 import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
-import {
-  replicationConsentExpired,
-  replicationPermissionsFor,
-  requiredReplicationPrefixes,
-} from "./replicationReconsent";
 
 declare global {
   interface Window {
@@ -133,9 +128,6 @@ export interface Config extends ClientConfig {
 
   /** Prefix for space names when creating spaces */
   spacePrefix?: string;
-  /** Local KV replication. Off unless set; node-sdk owns the storage. */
-  replication?: TinyCloudNodeConfig["replication"];
-
   /** Local KV replication. Off unless set; node-sdk validates the config and owns the storage. */
   replication?: TinyCloudNodeConfig["replication"];
 
@@ -842,13 +834,6 @@ export class TinyCloudWeb {
         this._sessionRestoreStatus = loaded.status;
         return { status: loaded.status };
       }
-      // A replication-enabled record without a replica stamp was never bound to its
-      // replica. Do not hand it to the node; signIn takes the fresh path instead.
-      if (this.config.replication?.enabled && !("replicaStamp" in loaded.data)) {
-        await this.clearPersistedSession(restoreAddress);
-        this._sessionRestoreStatus = "stale";
-        return { status: "stale" };
-      }
       const node = await this.ensureNode();
       assertNotSignedOut();
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
@@ -918,21 +903,6 @@ export class TinyCloudWeb {
     return permissions.length === 0 || node.hasRuntimePermissions(permissions);
   }
 
-  /**
-   * Replication re-consent (plan §2). A restored session is reused only while the consent
-   * deadline (SIWE Issued At + 7 d) has not passed and the primary space still grants get+sync
-   * on every required prefix. Offline restores are accepted: storage enforces grant expiry locally.
-   */
-  private restoredSessionCoversReplication(node: TinyCloudNode, session: ClientSession): boolean {
-    const replication = this.config.replication;
-    if (!replication?.enabled) return true;
-    if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
-    if (replicationConsentExpired(session.siwe, Date.now())) return false;
-    const space = node.spaceId;
-    if (space === undefined) return false;
-    const prefixes = requiredReplicationPrefixes(replication.prefixes, space, replication.allowSecrets);
-    return prefixes.length === 0 || node.hasRuntimePermissions(replicationPermissionsFor(space, prefixes));
-  }
 
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     const signOuts = this.signOutCount;
@@ -947,7 +917,8 @@ export class TinyCloudWeb {
     if (restored.status === "restored" && restored.session) {
       const node = await this.ensureNode();
       assertNotSignedOut();
-      if (this.restoredSessionCoversConfiguredManifest(node) && this.restoredSessionCoversReplication(node, restored.session)) {
+      if (this.restoredSessionCoversConfiguredManifest(node)) {
+        assertNotSignedOut();
         return restored.session;
       }
       await this.clearPersistedSession(restored.session.address);
@@ -960,6 +931,7 @@ export class TinyCloudWeb {
     assertNotSignedOut();
     this._sessionRestoreStatus = "logging-in";
     await node.signIn(options);
+    assertNotSignedOut();
     this.resetSessionScopedCaches();
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
