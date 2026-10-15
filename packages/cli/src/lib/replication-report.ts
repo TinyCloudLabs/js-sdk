@@ -103,7 +103,7 @@ export function renderReplicationReport(report: ReplicationReport): string {
   }
   for (const replica of report.replicas) {
     const grant = replica.grant ? ` grant=${replica.grant.cid} parent=${replica.grant.parentCid ?? "—"} expires=${replica.grant.expiresAt ?? "—"}` : " grant=missing";
-    lines.push(`  ${replica.prefix}: ${replica.state}; pending in_flight=${replica.pending.inFlight} committed=${replica.pending.committed} ambiguous=${replica.pending.ambiguous}${grant}`);
+    lines.push(`  ${replica.prefix}: ${replica.state}${replica.purgePending ? "; purge pending" : ""}; pending in_flight=${replica.pending.inFlight} committed=${replica.pending.committed} ambiguous=${replica.pending.ambiguous}${grant}`);
     for (const pinned of replica.pinned) lines.push(`    pinned ${pinned.key} ${pinned.state} ${pinned.op} since=${pinned.since} code=${pinned.code ?? "—"} likelyOrphaned=${pinned.likelyOrphaned}`);
   }
   for (const partition of report.partitions) {

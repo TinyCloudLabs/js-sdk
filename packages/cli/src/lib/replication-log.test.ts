@@ -111,6 +111,15 @@ describe("replication diagnostics", () => {
     expect(rendered).toContain("parent=parent");
     expect(rendered).toContain("key until the next sync after the commit");
   });
+  test("marks only the replica whose content purge is still pending", () => {
+    const status: ReplicaStatusEntry[] = [
+      { prefix: "notes/", state: "ready", pending: { inFlight: 0, committed: 0, ambiguous: 0 }, lagMs: 0, pinned: [], purgePending: true },
+      { prefix: "docs/", state: "ready", pending: { inFlight: 0, committed: 0, ambiguous: 0 }, lagMs: 0, pinned: [], purgePending: false },
+    ];
+    const rendered = renderReplicationReport(createReplicationReport("24h", [], status, []));
+    expect(rendered).toContain("notes/: ready; purge pending;");
+    expect(rendered).not.toContain("docs/: ready; purge pending");
+  });
   test("renders read reasons and capped divergence keys with the actual total", () => {
     const now = new Date().toISOString();
     const divergences: ReplicationEvent[] = Array.from({ length: 22 }, (_, index) => ({
