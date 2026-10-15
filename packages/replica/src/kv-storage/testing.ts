@@ -12,6 +12,8 @@ import { kvPartitionEraser } from "./schema.js";
 
 /** Construct a lifecycle with a test eraser without exposing fault wiring to the production entry. */
 export { createIndexedDbLifecycle } from "./lifecycle.js";
+/** Inspect encrypted raw-row sizes without exposing the sealed codec on the production entry. */
+export { measureSealedRow } from "./sealed.js";
 
 /**
  * Terminate the storage's worker as a crash would: in-flight calls reject,
