@@ -11,6 +11,7 @@ import { ucanCid } from "@tinycloud/replica";
 import type { PermissionEntry, TinyCloudSession } from "@tinycloud/sdk-core";
 
 import {
+  assertRenewalParent,
   assertValidReplicationConfig,
   augmentSignInEntriesWithReplication,
   createReplicationAuthority,
@@ -386,6 +387,28 @@ describe("owner-backed consent recency", () => {
     await expect(authority.mint(DEVICE_DID, "notes/", new AbortController().signal)).rejects.toThrow(/consent/i);
     expect(mintDelegation).not.toHaveBeenCalled();
   });
+  test("a renewal cannot silently switch from a session parent to a runtime parent at mint time", async () => {
+    let path: "session" | "runtime" = "session";
+    const mintDelegation = mock(async () => ({ ucan: "minted-ucan", expiresAt: Date.now() + 60_000 }));
+    const authority = createReplicationAuthority(makeHost({
+      verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }),
+      planDelegation: () => ({ path, parentCid: "bafyParent", expiresAt: Date.now() + 60_000 }),
+      mintDelegation,
+    }));
+    expect(authority.plan("notes/")).toMatchObject({ path: "session" });
+    path = "runtime";
+    await expect(authority.mint(DEVICE_DID, "notes/", new AbortController().signal, { expiryMs: 30_000, renewalOnly: true })).rejects.toThrow(/session parent/i);
+    expect(mintDelegation).not.toHaveBeenCalled();
+    await authority.mint(DEVICE_DID, "notes/", new AbortController().signal, { expiryMs: 30_000 });
+    expect(mintDelegation).toHaveBeenCalledTimes(1);
+  });
+  test("prepared renewal grants must be signed by the bound session with its exact parent", () => {
+    const session = fakeSession();
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: [session.delegationCid] }), session)).not.toThrow();
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: ["bafyRuntime"] }), session)).toThrow(/session parent/i);
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: [session.delegationCid, "bafyRuntime"] }), session)).toThrow(/session parent/i);
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: [session.delegationCid] }), fakeSession({ verificationMethod: "did:key:zOther" }))).toThrow(/session parent/i);
+  });
   test("first-install storage time is not an independent authority consent anchor", () => {
     const authority = createReplicationAuthority(makeHost({
       verifiedConsentAnchor: () => ({ at: 1_000_000, source: "first_install" }),
@@ -436,11 +459,9 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
 
 
   test("sessionGrant refuses NOT_COVERED for a non-UCAN header and uncovered prefix", () => {
+    const session = fakeSession({ delegationHeader: { Authorization: "Bearer not-a-ucan" } });
     const authority = createReplicationAuthority(
-      makeHost({
-        replicationSession: () =>
-          fakeSession({ delegationHeader: { Authorization: "Bearer not-a-ucan" } }),
-      }),
+      makeHost({ replicationSession: () => session }),
     );
     expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
     const uncovered = createReplicationAuthority(makeHost());

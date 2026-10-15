@@ -164,8 +164,11 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   }
   function reportGrantExpiry(prefix: string): void {
     const state = replicas.get(prefix);
-    const replicaId = state?.handle?.replicaId;
-    if (!state || !replicaId || state.reportedExpired) return;
+    if (!state) return;
+    state.reason = "grant_expired";
+    state.lastError = "GRANT_EXPIRED";
+    const replicaId = state.handle?.replicaId;
+    if (!replicaId || state.reportedExpired) return;
     state.reportedExpired = true;
     emit({ type: "replication.grant", replicaId, action: "expired", code: "GRANT_EXPIRED" });
   }
@@ -205,6 +208,22 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
   }
 
 
+  function canReuseInstalled(grant: ReplicaGrantInfo | null | undefined, sessionOnly: boolean): boolean {
+    if (!grant?.unconstrained) return false;
+    if (!deps.stamp) return true;
+    if (!sessionOnly && consentAnchor === null) return false;
+    const now = scheduler.now();
+    const deadline = storage.kind === "indexeddb" ? durableDeadline() : policyDeadline ?? grant.consentDeadline;
+    return grant.state === "active" &&
+      typeof grant.installedAt === "number" && Number.isFinite(grant.installedAt) &&
+      typeof grant.effectiveExpiresAt === "number" && Number.isFinite(grant.effectiveExpiresAt) &&
+      typeof grant.consentDeadline === "number" && Number.isFinite(grant.consentDeadline) &&
+      typeof deadline === "number" && Number.isFinite(deadline) &&
+      Number.isFinite(now) && now >= grant.installedAt &&
+      (grant.expiresAt === null || typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt) && now < grant.expiresAt) &&
+      now < Math.min(grant.effectiveExpiresAt, grant.consentDeadline, deadline);
+  }
+
   async function open(prefix: string): Promise<KVReplicaHandle> {
     const delivery = checkDelivery();
     if (delivery.status !== "allow") throw deliveryError(delivery);
@@ -234,6 +253,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       let refusalCode: string | undefined;
       if ("refused" in sessionGrant) refusalCode = sessionGrant.refused;
       if (plan && "refused" in plan) refusalCode ??= plan.refused;
+      if (deps.stamp && consentAnchor === null && !sessionOnly) refusalCode = "REPLICA_GATED";
       let device: ReplicaDevice | undefined;
       if (delegated) { device = delegated.device; state!.strategy = "session"; }
       const spec = { identity, space: session.space, prefix, allowSecrets: options.allowSecrets, grantPolicy, ...(deps.stamp ? { stamp: deps.stamp } : {}), ...(device ? { device } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) };
@@ -247,6 +267,10 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       emit({ type: "replication.state", space: session.space, replica: prefix, state: "opened" });
       const runtimePlan = !sessionOnly && plan && !("refused" in plan) ? plan : undefined;
       let installed = runtimePlan || delegated || (sessionOnly && deps.stamp) ? await handle.grant() : undefined;
+      if (installed && !canReuseInstalled(installed, sessionOnly)) {
+        if (installed.unconstrained) refusalCode = consentAnchor === null && !sessionOnly ? "REPLICA_GATED" : "GRANT_EXPIRED";
+        installed = undefined;
+      }
       let mintedExpiryMs: number | undefined;
       if (delegated && consentAnchor !== null) {
         const beforeInstall = checkDelivery();
@@ -381,7 +405,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     const mintAbort = new AbortController();
     state.mintAbort = mintAbort;
     const job = Promise.resolve().then(async () => {
-      const minted = await authority.mint(handle.deviceDid, prefix, mintAbort.signal, { expiryMs });
+      const minted = await authority.mint(handle.deviceDid, prefix, mintAbort.signal, { expiryMs, renewalOnly: true });
       const beforeInstall = checkDelivery();
       if (beforeInstall.status !== "allow") throw deliveryError(beforeInstall);
       const installed = await handle.installGrant(minted.ucan);
@@ -389,6 +413,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       if (beforeEvent.status !== "allow") throw deliveryError(beforeEvent);
       reportGrantCap(state, handle, installed);
       state.reportedExpired = false;
+      if (state.reason === "grant_expired") state.reason = undefined;
+      if (state.lastError === "GRANT_EXPIRED") state.lastError = undefined;
       if (handle.replicaId) emit({ type: "replication.grant", replicaId: handle.replicaId, action: "renewed", expiryMs });
       if (typeof installed.effectiveExpiresAt === "number" && installed.effectiveExpiresAt > effectiveExpiresAt) {
         scheduleRenewal(prefix, handle, installed, plan);
@@ -401,8 +427,8 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const code = errorCode(error);
       if (code === "CONSENT_EXPIRED" || code === "REPLICA_GATED") throw error;
       if (!isClosed && handle.replicaId) {
-        const refused = typeof error === "object" && error !== null && "refused" in error;
-        emit({ type: "replication.grant", replicaId: handle.replicaId, action: refused ? "renewal_refused" : "renewal_deferred", code });
+        const refused = typeof error === "object" && error !== null && "refused" in error && typeof error.refused === "string" ? error.refused : null;
+        emit({ type: "replication.grant", replicaId: handle.replicaId, action: refused ? "renewal_refused" : "renewal_deferred", code: refused ?? code });
       }
     } finally {
       state.renewing = undefined;
@@ -765,7 +791,12 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const code = errorCode(error);
       const value = await r.network(); readEvent("get", r.path, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" ? deliveryReason(code) : "replica_unavailable", value.ok ? "found" : "error", started, { code }); return value;
     }
-    if (replicas.get(prefix)?.reason === "grant_missing") { const value = await r.network(); readEvent("get", r.path, prefix, "network", "grant_missing", value.ok ? "found" : "error", started, { code: replicas.get(prefix)?.lastError }); return value; }
+    if (replicas.get(prefix)?.reason === "grant_missing") {
+      const code = replicas.get(prefix)?.lastError;
+      const value = await r.network();
+      readEvent("get", r.path, prefix, "network", code === "GRANT_EXPIRED" ? "grant_expired" : code === "REPLICA_GATED" ? "replica_gated" : "grant_missing", value.ok ? "found" : "error", started, { code });
+      return value;
+    }
 
     let fresh: Awaited<ReturnType<typeof freshness>>;
     try { fresh = await freshness(prefix, handle, r.signal); }
@@ -876,7 +907,13 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       readEvent("list", r.listPath, prefix, "network", code === "RUNTIME_UNSUPPORTED" ? "runtime_unsupported" : code === "CONSENT_EXPIRED" || code === "REPLICA_GATED" ? deliveryReason(code) : "replica_unavailable", result.ok ? "found" : "error", started, { code });
       return result;
     }
-    if (replicas.get(prefix)?.reason === "grant_missing") { if (cursor && decoded) return restart(); const result = await r.network(); readEvent("list", r.listPath, prefix, "network", "grant_missing", result.ok ? "found" : "error", started); return result; }
+    if (replicas.get(prefix)?.reason === "grant_missing") {
+      if (cursor && decoded) return restart();
+      const code = replicas.get(prefix)?.lastError;
+      const result = await r.network();
+      readEvent("list", r.listPath, prefix, "network", code === "GRANT_EXPIRED" ? "grant_expired" : code === "REPLICA_GATED" ? "replica_gated" : "grant_missing", result.ok ? "found" : "error", started, { code });
+      return result;
+    }
     let fresh: Awaited<ReturnType<typeof freshness>>;
     try { fresh = await freshness(prefix, handle, r.signal); }
     catch (error) {
@@ -1053,7 +1090,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const full = local && !("redacted" in local) ? local : undefined;
       const revoked = opened?.authorityRevoked === true || full?.authority.state === "revoked";
       const rootUnsupported = opened?.lastError === "REPLICATION_ROOT_UNSUPPORTED";
-      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : rootUnsupported ? "unavailable" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : full?.coverage === "complete" && full.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
+      const state = isClosed ? "closed" as const : revoked ? "revoked" as const : rootUnsupported || opened?.reason === "grant_expired" ? "unavailable" as const : opened?.reason === "grant_missing" ? "grant_missing" as const : full?.coverage === "complete" && full.authority.state === "valid" ? "ready" as const : opened?.reason || inspected.errorCode ? "unavailable" as const : "idle" as const;
       return {
         prefix,
         state,
