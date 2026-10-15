@@ -327,6 +327,7 @@ export class TinyCloudWeb {
   private signOutCount = 0;
   private signOutInFlight = 0;
   private persistedRestoreBlocked = false;
+  private signOutCleanupFailed = false;
   private readonly pendingRestoreAddresses = new Map<string, number>();
   private _secrets = new Map<string, ISecretsService>();
   private _credentialsService?: CredentialsService;
@@ -872,7 +873,12 @@ export class TinyCloudWeb {
         cleaned = true;
       } finally {
         this.signOutInFlight--;
-        if (cleaned && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
+        if (!cleaned) this.signOutCleanupFailed = true;
+        // A successful overlapping sign-out must not release a failed one's
+        // persisted authority. Explicit fresh sign-in remains available.
+        if (this.signOutInFlight === 0 && !this.signOutCleanupFailed) {
+          this.persistedRestoreBlocked = false;
+        }
       }
     }
   };
