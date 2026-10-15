@@ -220,6 +220,16 @@ export async function restoreSessionStamp(
   const state = await readState(profileDir);
   if (state !== undefined && state.intents.length > 0) throw gateRefusal("purge_pending", "A purge is pending for this profile.");
   if (persisted === undefined) throw gateRefusal("not_established", "The session has no replica stamp.");
+  if (
+    typeof persisted !== "object" || persisted === null || Array.isArray(persisted) ||
+    Object.keys(persisted).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(persisted, "incarnation") ||
+    !Object.prototype.hasOwnProperty.call(persisted, "lifecycleEpoch") ||
+    typeof persisted.incarnation !== "string" || persisted.incarnation.length === 0 ||
+    !Number.isSafeInteger(persisted.lifecycleEpoch) || persisted.lifecycleEpoch < 0
+  ) {
+    throw gateRefusal("stamp_stale", "The persisted replica stamp is malformed.");
+  }
   if (state === undefined) throw gateRefusal("stamp_stale", "The replica gate no longer exists.");
   if (persisted.incarnation !== state.incarnation || persisted.lifecycleEpoch !== state.lifecycleEpoch) {
     throw gateRefusal("stamp_stale", "The session stamp is from an earlier sign-in.");
