@@ -314,10 +314,10 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     expect(await page.evaluate(() => window.__kv.get("injected", "notes/a"))).toMatchObject({ ok: false, code: "RESET_REQUIRED" });
   }, 60_000);
 
-  test("purge never creates the database, and inspectStatus never creates a replica", async () => {
+  test("purge without a gate refuses and never creates the database; inspectStatus never creates a replica", async () => {
     const page = await kvPage();
     await page.evaluate(() => window.__kv.createStorage("s", "fake"));
-    expect(await page.evaluate((identity) => window.__kv.purge("s", { identity, space: identity.space, prefix: "notes/" }), identityOf("none"))).toEqual({ ok: true, value: undefined });
+    expect(await page.evaluate((identity) => window.__kv.purge("s", { identity, space: identity.space, prefix: "notes/" }), identityOf("none"))).toMatchObject({ ok: false, code: "REPLICA_GATED", gate: "not_established" });
     expect(await page.evaluate((spec) => window.__kv.inspectStatus("s", spec as never), specOf("none"))).toEqual({ ok: true, value: undefined });
     expect(await page.evaluate(() => window.__kv.databases())).not.toContain("tinycloud-replica-kv");
 
