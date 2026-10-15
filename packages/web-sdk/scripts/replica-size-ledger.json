@@ -26,7 +26,7 @@
       "note": "Replica gzip growth measured against this PR's merge base"
     },
     {
-      "pr": "TC-858 S3 (PR number pending)",
+      "pr": "#553",
       "ticket": "TC-858",
       "index.mjs": 52,
       "index.cjs": 55,
