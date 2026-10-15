@@ -1516,7 +1516,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const replicaStamp = await this.establishReplicaStamp?.({
       address,
       chainId,
-      siweIssuedAt: prepared.siwe.match(/Issued At: (.+)/)?.[1] ?? now.toISOString(),
+      siweIssuedAt: prepared.siwe?.match(/Issued At: (.+)/)?.[1] ?? "",
     });
     // Persist session with TinyCloud-specific data
     const persistedData: PersistedSessionData = {
@@ -1770,8 +1770,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     // Extract expiration from SIWE message (parse the string)
-    const expirationMatch = prepared.siwe.match(/Expiration Time: (.+)/);
-    const issuedAtMatch = prepared.siwe.match(/Issued At: (.+)/);
+    const expirationMatch = prepared.siwe?.match(/Expiration Time: (.+)/);
+    const issuedAtMatch = prepared.siwe?.match(/Issued At: (.+)/);
     const expiresAt =
       expirationMatch?.[1] ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
@@ -1780,7 +1780,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const replicaStamp = await this.establishReplicaStamp?.({
       address,
       chainId,
-      siweIssuedAt: issuedAtMatch?.[1] ?? new Date().toISOString(),
+      siweIssuedAt: issuedAtMatch?.[1] ?? "",
     });
     // Persist session with TinyCloud-specific data
     const persistedData: PersistedSessionData = {
