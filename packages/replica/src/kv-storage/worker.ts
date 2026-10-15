@@ -8,12 +8,13 @@
  *
  * `createIndexedDbGateTx` plugs in as `gateTx` over the origin database. There is
  * no ungated mode: without it every `open` refuses REPLICA_GATED `gate_unavailable`.
- * The quota ledger (`ledgerFor`) is not wired here yet, so quota is unbounded.
+ * The quota ledger shares the gated writer's transaction for every persisted row delta.
  */
 import { initialized } from "@tinycloud/web-sdk-wasm";
 
 import { createIndexedDbGateTx } from "./gateTx.js";
 import { createKvWorkerHost } from "./host.js";
+import { ledgerFor } from "./ledger.js";
 import type { KvRequest } from "./protocol.js";
 import { openKvDatabase } from "./schema.js";
 import { wasmWorkerDeps } from "./wasmDeps.js";
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
   const host = createKvWorkerHost({
     ...wasmWorkerDeps,
     gateTx: createIndexedDbGateTx((create) => openKvDatabase({ create })),
+    ledgerFor,
     post: (message, transfer) => scope.postMessage(message, transfer ?? []),
     ...(navigator.locks === undefined ? {} : { locks: navigator.locks }),
   });
