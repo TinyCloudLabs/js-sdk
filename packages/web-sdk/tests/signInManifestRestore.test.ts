@@ -1,4 +1,10 @@
 import { expect, mock, test } from "bun:test";
+import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
+import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
+import { TinyCloudNode as ReplicationNode, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
+import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
+import { pkhDid } from "@tinycloud/sdk-core";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
 
@@ -588,47 +594,30 @@ test("signIn() does not sign in again after a sign-out during its restore", asyn
 });
 
 async function persistedRealSession(host: string) {
-  const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
-  const manager = wasm.createSessionManager();
-  const sessionKey = manager.jwk("default")!;
-  const jwk = JSON.parse(sessionKey);
-  const address = await signer.getAddress();
-  const chainId = await signer.getChainId();
-  const spaceId = wasm.makeSpaceId(address, chainId, "default");
-  const now = Date.now();
-  const expirationTime = new Date(now + 60 * 60_000).toISOString();
-  const prepared = wasm.prepareSession({
-    abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put"] } },
-    address,
-    chainId,
-    domain: "signout.test",
-    issuedAt: new Date(now).toISOString(),
-    expirationTime,
-    spaceId,
-    jwk,
+  const proof = await signedRestorableSession({
+    abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
   });
-  const signature = await signer.signMessage(prepared.siwe);
-  const completed = wasm.completeSessionSetup({ ...prepared, signature });
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
   const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
   const persisted = {
-    address,
-    chainId,
-    sessionKey,
-    siwe: prepared.siwe,
-    signature,
+    address: proof.address,
+    chainId: proof.chainId,
+    sessionKey: JSON.stringify(proof.jwk),
+    siwe: proof.siwe,
+    signature: proof.signature,
     tinycloudSession: {
-      delegationHeader: completed.delegationHeader,
-      delegationCid: completed.delegationCid,
-      spaceId,
-      verificationMethod: manager.getDID("default"),
+      delegationHeader: proof.delegationHeader,
+      delegationCid: proof.delegationCid,
+      spaceId: proof.spaceId,
+      verificationMethod: proof.verificationMethod,
     },
-    expiresAt: expirationTime,
-    createdAt: new Date(now).toISOString(),
+    expiresAt: proof.expiresAt,
+    createdAt: proof.siwe.match(/^Issued At: (.+)$/m)![1]!,
     version: "1.0",
     tinycloudHosts: [host],
   };
-  return { node, wasm, persisted, address };
+  return { node, wasm, persisted, address: proof.address, signer };
 }
 
 test("signOut() clears an explicit pending restore address even without activeAddress()", async () => {
@@ -882,6 +871,118 @@ test("signIn() rejects and leaves no session when signOut() lands during its per
   expect(stored).toBeNull();
   expect(tcw.session()).toBeUndefined();
   expect(() => tcw.kv).toThrow("Not signed in");
+});
+
+test("signOut during real browser gate restore and awaited storage clear cannot reinstate authority", async () => {
+  const globals = ["indexedDB", "IDBKeyRange", "localStorage", "navigator"] as const;
+  const previous = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
+  const values = new Map<string, string>();
+  const backend = {
+    get length() { return values.size; },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+    clear: () => values.clear(),
+  } satisfies Storage;
+  const setGlobal = (name: string, value: unknown) =>
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+  setGlobal("indexedDB", fakeIndexedDB);
+  setGlobal("IDBKeyRange", fakeIDBKeyRange);
+  setGlobal("localStorage", backend);
+  setGlobal("navigator", { locks: { request: (_name: string, options: unknown, section?: () => Promise<unknown>) =>
+    (typeof options === "function" ? options : section!)() } });
+  const gateEntered = Promise.withResolvers<void>();
+  const releaseGate = Promise.withResolvers<void>();
+  const clearEntered = Promise.withResolvers<void>();
+  const releaseClear = Promise.withResolvers<void>();
+  try {
+    const { KV_DATABASE } = require("../../replica/src/kv-storage/schema");
+    await new Promise<void>((resolve, reject) => {
+      const request = fakeIndexedDB.deleteDatabase(KV_DATABASE);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    const source = await persistedRealSession("https://restore-race.test");
+    const { persisted, address, signer, wasm } = source;
+    let pauseClear = true;
+    class PausedStorage extends BrowserSessionStorage {
+      override async clear(target: string): Promise<void> {
+        if (pauseClear) {
+          pauseClear = false;
+          clearEntered.resolve();
+          await releaseClear.promise;
+        }
+        await super.clear(target);
+      }
+    }
+    const storage = new PausedStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const realGate = createIndexedDbLifecycle();
+    let pauseRestore = false;
+    const lifecycle = {
+      ...realGate,
+      restoreSessionStamp: async (...args: Parameters<typeof realGate.restoreSessionStamp>) => {
+        if (pauseRestore) {
+          gateEntered.resolve();
+          await releaseGate.promise;
+        }
+        return realGate.restoreSessionStamp(...args);
+      },
+    };
+    const replicaStorage = indexedDbReplicaStorage({ lifecycle });
+    registerReplicationLoaders({
+      runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
+      authority: () => import("@tinycloud/node-sdk/replication/authority"),
+      gate: () => import("@tinycloud/replica/profile-gate"),
+    });
+    const replication = { enabled: true, prefixes: ["notes/"], storage: replicaStorage };
+    const node = new ReplicationNode({
+      host: "https://restore-race.test",
+      signer,
+      wasmBindings: wasm,
+      autoBootstrapAccount: false,
+      sessionStorage: storage,
+      replication,
+    });
+    const web = new TinyCloudWeb({
+      sessionStorage: storage,
+      includeAccountRegistryPermissions: false,
+      replication,
+    });
+    await (web as any)._initPromise;
+    (web as any)._node = node;
+
+    expect((await web.restoreSession(address)).status).toBe("restored");
+    expect(storage.exists(address)).toBe(true);
+    const stamp = await realGate.establishSessionStamp(pkhDid(address, persisted.chainId), {
+      consentAnchor: { source: "siwe", at: Date.parse(persisted.createdAt) },
+    });
+    await storage.save(address, { ...persisted, replicaStamp: stamp });
+    pauseRestore = true;
+
+    const restoring = web.restoreSession(address);
+    await gateEntered.promise;
+    const signingOut = web.signOut();
+    await clearEntered.promise;
+    releaseGate.resolve();
+    expect((await restoring).status).toBe("restore-failed");
+    expect(web.session()).toBeUndefined();
+    releaseClear.resolve();
+    await signingOut;
+
+    expect(await storage.loadWithStatus(address)).toEqual({ status: "missing", data: null });
+    expect(realGate.deliverable(stamp)).toBe(false);
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+    expect((await web.restoreSession(address)).status).toBe("missing");
+  } finally {
+    releaseGate.resolve();
+    releaseClear.resolve();
+    globals.forEach((name, index) => {
+      if (previous[index]) Object.defineProperty(globalThis, name, previous[index]);
+      else Reflect.deleteProperty(globalThis, name);
+    });
+  }
 });
 
 test("a restore waiting for SDK initialisation is cancelled by signOut() before the node exists", async () => {
