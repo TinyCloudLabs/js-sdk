@@ -17,7 +17,7 @@ const nodeBuiltinsExternal = {
 
 export default defineConfig([
   {
-    entry: { index: "src/index.ts", sqlite: "src/sqlite/index.ts" },
+    entry: { index: "src/index.ts", sqlite: "src/sqlite/index.ts", "profile-gate": "src/profile-gate/index.ts" },
     format: ["esm", "cjs"],
     target: "es2022",
     dts: true,
@@ -44,7 +44,7 @@ export default defineConfig([
     // The dedicated worker (TC-19). Self-contained ESM: sdk-services and the
     // web-sdk-wasm bundle (WASM inlined) are compiled in so the worker never
     // fetches a module or a .wasm at runtime.
-    entry: { "replica.worker": "src/worker.ts" },
+    entry: { "replica.worker": "src/worker.ts", "kv-storage.worker": "src/kv-storage/worker.ts" },
     format: ["esm"],
     platform: "browser",
     target: "es2022",
@@ -54,5 +54,19 @@ export default defineConfig([
     splitting: false,
     noExternal: [/.*/],
     esbuildPlugins: [nodeBuiltinsExternal],
+  },
+  {
+    // The read-through `KVReplicaStorage` (TC-858 Phase 2) and its test-only
+    // fault seams. ESM only, like `browser`: the worker resolves through
+    // `new URL("./kv-storage.worker.js", import.meta.url)`.
+    entry: { "kv-storage": "src/kv-storage/index.ts", "kv-storage-testing": "src/kv-storage/testing.ts" },
+    format: ["esm"],
+    platform: "browser",
+    target: "es2022",
+    dts: true,
+    clean: false,
+    sourcemap: true,
+    noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
+    splitting: false,
   },
 ]);

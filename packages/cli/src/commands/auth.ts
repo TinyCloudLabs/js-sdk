@@ -294,10 +294,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         // Refuse a profile that does not exist rather than report it logged out.
         await ProfileManager.getProfile(ctx.profile);
-        await ProfileManager.clearSession(ctx.profile);
         const replicasRemoved = options.keepReplicas
           ? []
           : await removeProfileReplicasAndReplication(ctx.profile);
+        await ProfileManager.clearSession(ctx.profile);
         outputJson({
           profile: ctx.profile,
           authenticated: false,

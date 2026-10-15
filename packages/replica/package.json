@@ -23,9 +23,26 @@
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"
     },
+    "./profile-gate": {
+      "types": "./dist/profile-gate.d.ts",
+      "import": "./dist/profile-gate.js",
+      "require": "./dist/profile-gate.cjs"
+    },
     "./worker": {
       "types": "./dist/replica.worker.d.ts",
       "import": "./dist/replica.worker.js"
+    },
+    "./kv-storage": {
+      "types": "./dist/kv-storage.d.ts",
+      "import": "./dist/kv-storage.js"
+    },
+    "./kv-storage/worker": {
+      "types": "./dist/kv-storage.worker.d.ts",
+      "import": "./dist/kv-storage.worker.js"
+    },
+    "./kv-storage/testing": {
+      "types": "./dist/kv-storage-testing.d.ts",
+      "import": "./dist/kv-storage-testing.js"
     },
     "./package.json": "./package.json"
   },

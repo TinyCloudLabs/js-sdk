@@ -79,6 +79,7 @@ const recorded = {
   setProfiles: [] as Array<{ profile: string; data: ProfileLike }>,
   setSessions: [] as Array<{ profile: string; session: object }>,
   clearSessions: [] as string[],
+  replicaRemovalError: null as Error | null,
   startAuthFlows: [] as Array<{
     did: string;
     options: {
@@ -133,6 +134,7 @@ function resetState(): void {
   recorded.setProfiles.length = 0;
   recorded.setSessions.length = 0;
   recorded.clearSessions.length = 0;
+  recorded.replicaRemovalError = null;
   recorded.startAuthFlows.length = 0;
   recorded.localSignIns.length = 0;
   recorded.spinners.length = 0;
@@ -244,6 +246,7 @@ mock.module("../config/profiles.js", () => ({
 }));
 mock.module("../lib/profile-replicas.js", () => ({
   removeProfileReplicasAndReplication: async (profile: string) => {
+    if (recorded.replicaRemovalError) throw recorded.replicaRemovalError;
     recorded.removedReplicaProfiles.push(profile);
     recorded.removedReplicationProfiles.push(profile);
     return ["notes", "replication/idHash/replicaHash"];
@@ -896,6 +899,17 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
       replicasKept: true,
       warning: expect.stringContaining("tc delegation revoke <cid>"),
     })]);
+  });
+  test("logout keeps the session when a replica is still syncing", async () => {
+    profiles.set("owner", makeProfile({ name: "owner" }));
+    sessions.set("owner", { delegationCid: "bafy-session" });
+    recorded.replicaRemovalError = Object.assign(new Error("Cannot log out: replica is syncing. The session was kept and no replicas were removed."), { code: "REPLICA_BUSY" });
+
+    await runAuthCommand(["auth", "logout"]);
+
+    expect(recorded.clearSessions).toEqual([]);
+    expect(sessions.get("owner")).toEqual({ delegationCid: "bafy-session" });
+    expect(recorded.errors).toEqual([expect.objectContaining({ code: "REPLICA_BUSY" })]);
   });
 
   test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {

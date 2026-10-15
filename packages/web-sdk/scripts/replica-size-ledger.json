@@ -24,6 +24,13 @@
       "index.mjs": 235,
       "index.cjs": 180,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#553",
+      "ticket": "TC-858",
+      "index.mjs": 52,
+      "index.cjs": 55,
+      "note": "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)"
     }
   ]
 }

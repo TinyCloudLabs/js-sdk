@@ -586,6 +586,7 @@ function newestGrantInfo(
 class SqliteReplicaHandle implements KVReplicaHandle {
   readonly spec: KVReplicaSpec;
   readonly deviceDid: string;
+  readonly replicaId: string;
   readonly #device: ReplicaDevice;
   readonly #store: SqliteReplicaStore;
   readonly #replicaDir: string;
@@ -605,6 +606,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     spec: KVReplicaSpec;
     device: ReplicaDevice;
     store: SqliteReplicaStore;
+    replicaId: string;
     replicaDir: string;
     replica: ReplicaRuntime;
     guard: MutationGuard;
@@ -614,6 +616,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     ino: number | undefined;
   }) {
     this.spec = input.spec;
+    this.replicaId = input.replicaId;
     this.#device = input.device;
     this.deviceDid = input.device.did;
     this.#store = input.store;
@@ -1000,6 +1003,7 @@ export function createSqliteReplicaStorage(
     }
     return new SqliteReplicaHandle({
       spec,
+      replicaId: replicaHash,
       device,
       store,
       replicaDir,
