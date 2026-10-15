@@ -133,9 +133,13 @@ const api = {
   replicationStatus: () => requireReplication("status")(),
   replicationGet: (key: string, options: Record<string, unknown> = {}) => requireReplication("get")(key, options),
   replicationSync: () => requireReplication("sync")(),
-  /** Fault hooks need the S1-S3 storage and worker seams. Until those land they fail loudly. */
+  /**
+   * Fault hooks live in the shared test-only entry `@tinycloud/replica/kv-storage/testing`
+   * (S1 owns the entry; S3 adds `injectDenyFailure`). Until it exists they fail loudly.
+   */
   injectEraseFailure: () => unwired("injectEraseFailure"),
-  injectDenyFailure: (stage: string) => unwired(`injectDenyFailure(${stage})`),
+  injectDenyFailure: (plan: { stage: "deny_tx" | "delete_database"; code?: string; once?: boolean }) =>
+    unwired(`injectDenyFailure(${plan.stage})`),
   killReplicaWorker: () => unwired("killReplicaWorker"),
 };
 
