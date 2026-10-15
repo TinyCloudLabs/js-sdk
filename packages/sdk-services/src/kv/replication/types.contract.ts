@@ -19,6 +19,7 @@ import type {
 import type {
   ReplicaDenyInput,
   ReplicaGateAccess,
+  ReplicaGateSnapshot,
   ReplicaGateScope,
   ReplicaGateTx,
   ReplicaLifecycleGate,
@@ -74,6 +75,11 @@ type _GateRunScope = Assert<Equal<Parameters<ReplicaGateTx<"tx">["run"]>[0], Rep
 type _GateRunAccess = Assert<Equal<Parameters<ReplicaGateTx<"tx">["run"]>[1], ReplicaGateAccess>>;
 type _GateRunFnGetsTx = Assert<
   Equal<Parameters<Parameters<ReplicaGateTx<"tx">["run"]>[2]>[0], "tx">
+>;
+type _AccessCarriesIncarnation = Assert<HasRequiredKey<ReplicaGateAccess, "incarnation">>;
+type _AccessTakesStoredIds = Assert<Equal<ReplicaGateAccess["partitionId"], string | undefined>>;
+type _SnapshotShape = Assert<
+  Equal<ReplicaGateTx<"tx">["snapshot"], () => Promise<ReplicaGateSnapshot | null>>
 >;
 type _NoPublicAssert = Assert<Equal<"assert" extends keyof ReplicaGateTx<"tx"> ? true : false, false>>;
 type _AccessStampRequired = Assert<HasRequiredKey<ReplicaGateAccess, "stamp">>;

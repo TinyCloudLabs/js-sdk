@@ -4,13 +4,15 @@
  * One interface set, implemented per platform. The browser keeps the gate in the origin
  * database's control stores plus the `localStorage` logout marker; node/CLI keep it in a gate file
  * next to the replicas (`<profile>/replica-gate.json`). `Tx` is the platform's transaction: an
- * `IDBTransaction` inside the browser worker; on node/CLI, the SQLite transaction context (under
- * the profile lock for mutations).
+ * `IDBTransaction` in the browser; on node/CLI, the SQLite transaction context (under the profile
+ * lock for mutations).
  *
- * Construction boundary (browser): `ReplicaGateTx`, `ReplicaPartitionEraser` and
- * `ReplicaQuotaLedger` are constructed INSIDE the worker (`createKvWorkerHost({ gateTx,
- * ledgerFor })`) and never cross postMessage; neither does any `IDBTransaction`.
- * `ReplicaLifecycleGate` is the main-thread facade.
+ * Construction boundary (browser): a `ReplicaGateTx` is constructed alongside whichever context
+ * owns the transaction — the worker for replica open/read/page/repair/GC/erase (with
+ * `ReplicaPartitionEraser` and `ReplicaQuotaLedger`, via `createKvWorkerHost({ gateTx, ledgerFor
+ * })`), and the main thread for the pending store (its `update(mutate)` closure runs there). Both
+ * instances open the same origin database. No `IDBTransaction` and no closure ever crosses
+ * postMessage. `ReplicaLifecycleGate` is the main-thread facade.
  */
 import type { REPLICA_KV_STORES } from "./contractConstants";
 
@@ -42,15 +44,35 @@ export interface ReplicaAccountGate {
   deniedAt: number | null;
 }
 
-/** What a guarded transaction presents to the gate. Access needs stamp AND principal to match. */
+/**
+ * Lowercase hex HMAC-SHA-256 keyed with the base64url-decoded `salt`, over the UTF-8 `material`.
+ * Implemented once in `@tinycloud/replica` (`src/profile-gate/saltedHash.ts`), shared by browser
+ * and node; every salted id (principal hash; browser partitionId and identityKeyHash) uses it.
+ */
+export type SaltedHash = (salt: string, material: string) => Promise<string>;
+
+/** The gate's current incarnation, salt and epoch, read outside any data transaction; null when no gate exists yet. */
+export interface ReplicaGateSnapshot {
+  incarnation: string;
+  salt: string;
+  lifecycleEpoch: number;
+}
+
+/**
+ * What a guarded transaction presents to the gate. Ids are the STORED salted ids, derived by the
+ * caller with `SaltedHash` from a `snapshot()` (never unsalted SHA-256 in the browser); the gate
+ * hashes only `principal`. Access needs stamp AND principal to match.
+ */
 export interface ReplicaGateAccess {
   /** Required: there is no unstamped access when a gate exists. */
   stamp: ReplicaSessionStamp;
-  /** Canonical principal of the handle's identity (hashed by the gate, never stored). */
+  /** Raw canonical principal; the gate hashes it with its salt. Never stored. */
   principal: string;
-  /** Refused while a purge intent covers this partition. */
+  /** Incarnation of the snapshot the salted ids were derived from; a mismatch fails `stamp_stale`. */
+  incarnation: string;
+  /** Salted partition id as stored; refused while a purge intent covers it. */
   partitionId?: string;
-  /** Pending-store transactions set this: refused while a `pending` intent covers the identity. */
+  /** Salted identity key hash as stored; refused while a `pending` intent covers it. */
   identityKeyHash?: string;
 }
 
@@ -122,7 +144,12 @@ export interface ReplicaDenyInput {
  * BEFORE `deny`'s first await.
  */
 export type ReplicaDenyOutcome =
-  /** Gate moved, intents recorded, first-install anchors and the owner device removed, in one commit. */
+  /**
+   * Gate moved, intents recorded, first-install anchors cleared in one commit. Browser: the owner
+   * device record is deleted in that same IDB transaction. Node: the gate file can't commit
+   * atomically with the SQLite/file device record, so the device is durably deleted by the erase
+   * of its identity's `pending` intent before that intent clears (idempotent replay).
+   */
   | { status: "denied"; lifecycleEpoch: number; intents: number }
   /** The caller's principal didn't match the gate: disabled in memory only; gate untouched. */
   | { status: "stale" }
@@ -141,7 +168,7 @@ export interface ReplicaEraseReport {
 }
 
 /**
- * The structural guard (worker-side in the browser). Every transaction that reads or writes a data
+ * The structural guard (browser: one instance per transaction-owning context). Every transaction that reads or writes a data
  * store (`meta`, `entries`, `blobs`, `pending`, and `device`) MUST go through `run`: open, get,
  * list, status, `grant()`, installGrant, every page commit, repair batch, GC pass, sync completion,
  * and every pending-store read/readExisting/update. Only purge/erase transactions are exempt.
@@ -149,9 +176,11 @@ export interface ReplicaEraseReport {
 export interface ReplicaGateTx<Tx> {
   /**
    * Opens the transaction itself over `scope.stores` PLUS every control store (`gate`,
-   * `partitions`, `purgeIntents`, `quota`), asserts `access` as its first step, then runs `fn`.
-   * A refusal rejects {@link ReplicaGatedError} and aborts the transaction; `fn` never runs.
-   * `fn` MUST only await requests on `tx`.
+   * `partitions`, `purgeIntents`, `quota`), asserts `access` as its first step (stamp, principal
+   * hash, `access.incarnation` equality, intents), then runs `fn`. A refusal rejects
+   * {@link ReplicaGatedError} and aborts the transaction; `fn` never runs. `fn` MUST only await
+   * requests on `tx`. Browser: `readwrite` transactions use `{ durability: "strict" }`, and `run`
+   * resolves only on the transaction's `oncomplete` (an abort or error rejects).
    *
    * Node/CLI: `readwrite` takes the profile lock across the gate check and the SQLite commit.
    * `readonly` takes no profile lock; it runs in a SQLite read transaction that checks the gate
@@ -159,6 +188,13 @@ export interface ReplicaGateTx<Tx> {
    * read that began before the tombstone commit linearises before the deny.
    */
   run<T>(scope: ReplicaGateScope, access: ReplicaGateAccess, fn: (tx: Tx) => Promise<T>): Promise<T>;
+  /**
+   * Current incarnation, salt and epoch, read outside any data transaction. Callers derive salted
+   * ids from it (browser pending store: the Web Lock name `REPLICA_PENDING_LOCK_PREFIX +
+   * identityKeyHash`), take the lock, then `run` with `incarnation`; a changed incarnation fails
+   * closed (`stamp_stale`).
+   */
+  snapshot(): Promise<ReplicaGateSnapshot | null>;
   /** Registers a partition in the index, inside the `run` transaction that creates it. Idempotent. */
   indexPartition(tx: Tx, entry: ReplicaPartitionIndexEntry): Promise<void>;
   /** Removes the partition's index entry, inside its erase transaction. Idempotent. */
@@ -223,8 +259,9 @@ export interface ReplicaLifecycleGate {
   /**
    * Step 1. Flips the in-memory view before its first await. If `input.principal` matches the gate:
    * one commit moves the gate (epoch + 1, `deniedAt`), records intents for every indexed partition
-   * and pending record of that principal, clears its `first_install` anchors, and deletes the
-   * owner device record (rotated on next activation). Otherwise outcome `stale`.
+   * and pending record of that principal, and clears its `first_install` anchors. The owner device
+   * record is deleted in the same transaction (browser) or by the identity intent's erase (node;
+   * see `ReplicaDenyOutcome`); it is rotated on next activation. Otherwise outcome `stale`.
    */
   deny(input: ReplicaDenyInput): Promise<ReplicaDenyOutcome>;
   /** Step 3: erase each outstanding intent in its own exempt transaction. */

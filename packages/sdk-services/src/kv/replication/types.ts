@@ -264,7 +264,9 @@ export interface KVReplicaStorage {
    * With a `lifecycle` gate, the store is bound to `options.stamp` for its whole life (callers
    * cache stores per identity AND stamp). Every `read`, `readExisting` and `update` (append,
    * settle, remove, clear, flush) runs through `ReplicaGateTx.run` with `{ stamp, principal:
-   * identity.principal, identityKeyHash }` before touching or initializing storage; a refusal
+   * identity.principal, incarnation, identityKeyHash }` before touching or initializing storage
+   * (browser: on the main thread, ids derived from `snapshot()` outside any transaction, under the
+   * Web Lock named from that snapshot); a refusal
    * rejects REPLICA_GATED and reads/writes nothing. A store obtained without a stamp rejects every
    * call with REPLICA_GATED `not_established`. So after `deny`, a stale tab, worker or process can
    * neither read nor refill the signed-out identity's pending state.

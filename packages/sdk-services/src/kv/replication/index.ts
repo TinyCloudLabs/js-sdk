@@ -42,6 +42,7 @@ export type {
   ReplicaDenyOutcome,
   ReplicaEraseReport,
   ReplicaGateAccess,
+  ReplicaGateSnapshot,
   ReplicaGatedError,
   ReplicaGateReason,
   ReplicaGateScope,
@@ -53,6 +54,7 @@ export type {
   ReplicaPurgeIntent,
   ReplicaSessionStamp,
   ReplicaStampedReply,
+  SaltedHash,
 } from "./lifecycle";
 export type {
   ReplicaAdmitHook,
