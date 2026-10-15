@@ -7,8 +7,23 @@ import type {
   ReplicaGrantInfo,
   ReplicationReason,
 } from "../../index";
-import type { KVReplicaSpec, KVReplicaStorage, ReplicationAuthority, ReplicaStatusEntry } from "./types";
-import type { ReplicaGateTx, ReplicaSessionStamp } from "./lifecycle";
+import type {
+  KVReplicaSpec,
+  KVReplicaStorage,
+  ReplicaGatedSpec,
+  ReplicaGatedStorage,
+  ReplicationAuthority,
+  ReplicationEvent,
+  ReplicaStatusEntry,
+} from "./types";
+import type {
+  ReplicaDenyInput,
+  ReplicaGateAccess,
+  ReplicaGateScope,
+  ReplicaGateTx,
+  ReplicaLifecycleGate,
+  ReplicaSessionStamp,
+} from "./lifecycle";
 import type { ReplicaQuotaLedger } from "./quota";
 
 type Assert<T extends true> = T;
@@ -45,7 +60,7 @@ type _PendingStoreDurabilityIsBoolean = Assert<Equal<PendingWriteStore["durable"
 type _UnprovenSinceStartIsAReason = Assert<
   "REPLICA_UNPROVEN_SINCE_START" extends ReplicationReason ? true : false
 >;
-// Phase 2 contract: every addition is optional so Phase 1 adapters and callers still conform.
+// Phase 2 contract: fields are optional on the Phase 1 types; the gated types require them.
 type _StampIsOptionalOnSpec = Assert<Equal<HasRequiredKey<KVReplicaSpec, "stamp">, false>>;
 type _StampFields = Assert<Equal<keyof ReplicaSessionStamp, "incarnation" | "lifecycleEpoch">>;
 type _PurgePendingOptional = Assert<Equal<HasRequiredKey<LocalReplicaStatus, "purgePending">, false>>;
@@ -54,7 +69,33 @@ type _MintExpiryIsDuration = Assert<
 >;
 type _GatedIsAState = Assert<"gated" extends ReplicaStatusEntry["state"] ? true : false>;
 type _GatedIsAReason = Assert<"replica_gated" extends ReplicationReason ? true : false>;
-type _GateAssertTakesTx = Assert<Equal<Parameters<ReplicaGateTx<"tx">["assert"]>[0], "tx">>;
+// The structural guard: `run` opens the transaction, so `fn` only ever sees a gated `Tx`.
+type _GateRunScope = Assert<Equal<Parameters<ReplicaGateTx<"tx">["run"]>[0], ReplicaGateScope>>;
+type _GateRunAccess = Assert<Equal<Parameters<ReplicaGateTx<"tx">["run"]>[1], ReplicaGateAccess>>;
+type _GateRunFnGetsTx = Assert<
+  Equal<Parameters<Parameters<ReplicaGateTx<"tx">["run"]>[2]>[0], "tx">
+>;
+type _NoPublicAssert = Assert<Equal<"assert" extends keyof ReplicaGateTx<"tx"> ? true : false, false>>;
+type _AccessStampRequired = Assert<HasRequiredKey<ReplicaGateAccess, "stamp">>;
+type _DeliverableStampRequired = Assert<
+  Equal<Parameters<ReplicaLifecycleGate["deliverable"]>, [stamp: ReplicaSessionStamp]>
+>;
+type _NoCaptureStamp = Assert<
+  Equal<"captureSessionStamp" extends keyof ReplicaLifecycleGate ? true : false, false>
+>;
+type _RestoreTakesPersisted = Assert<
+  Equal<Parameters<ReplicaLifecycleGate["restoreSessionStamp"]>[1], ReplicaSessionStamp | undefined>
+>;
+type _DenyNamesCaller = Assert<HasRequiredKey<ReplicaDenyInput, "principal">>;
+type _GatedSpecRequiresStamp = Assert<HasRequiredKey<ReplicaGatedSpec, "stamp">>;
+type _GatedSpecRequiresPolicy = Assert<HasRequiredKey<ReplicaGatedSpec, "grantPolicy">>;
+type _GatedStorageRequiresLifecycle = Assert<HasRequiredKey<ReplicaGatedStorage, "lifecycle">>;
+type _GrantEventHasNoSpace = Assert<
+  Equal<"space" extends keyof Extract<ReplicationEvent, { type: "replication.grant" }> ? true : false, false>
+>;
+type _LifecycleEventHasNoSpace = Assert<
+  Equal<"space" extends keyof Extract<ReplicationEvent, { type: "replication.lifecycle" }> ? true : false, false>
+>;
 type _LedgerAdmitTakesTx = Assert<Equal<Parameters<ReplicaQuotaLedger<"tx">["admitPage"]>[0], "tx">>;
 type _PendingStoreTakesStamp = Assert<
   Equal<

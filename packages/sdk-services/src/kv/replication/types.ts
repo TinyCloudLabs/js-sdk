@@ -79,26 +79,29 @@ export interface ReplicaGrantInfo {
   /** Both get and sync in the grant carry no caveats. */
   unconstrained: boolean;
   /**
-   * ms since epoch, from the storage clock at the FIRST install of this grant CID. Re-installing
-   * the same CID never refreshes it; recompute-at-open uses the stored value.
+   * ms since epoch, from the storage clock at the FIRST install of this grant CID, stored keyed
+   * by CID and set once. Re-installing the same CID never refreshes it; recompute-at-open uses the
+   * stored value.
    */
   installedAt?: number;
   /**
    * min(expiresAt, installedAt + grantTtlMs, consentDeadline), stored with the grant and
    * recomputed at open from the stored `installedAt` and the handle's `spec.grantPolicy`. Serving
-   * requires `now < effectiveExpiresAt` and a finite stored value; anything else (including NaN,
-   * ±Infinity or a missing bound with replication enabled) refuses with GRANT_EXPIRED (authority
-   * `expired`). Present on every Phase 2 grant; absent only on Phase 1 data before recompute.
+   * requires `now < effectiveExpiresAt` with a finite stored value. Otherwise (NaN, ±Infinity,
+   * missing) the effective authority is not `valid`, and get/list throw GRANT_EXPIRED inside the
+   * read transaction without returning bytes or keys. Present on every Phase 2 grant.
    */
   effectiveExpiresAt?: number;
   /**
    * ms since epoch; consent anchor + CONSENT_WINDOW_MS. Serving and minting require
-   * `now < consentDeadline` and a finite value.
+   * `now < consentDeadline` and a finite value (refusal code CONSENT_EXPIRED).
    */
   consentDeadline?: number;
   /**
    * The resolved consent anchor (finite ms, clamped to ≤ now). A `first_install` anchor is keyed by
-   * identity, survives partition reset, purge and reinstall, and is cleared only by `deny`.
+   * identity (node: gate file `firstInstall`; browser: `device` store), survives partition reset,
+   * purge, revocation and reinstall, and is cleared only by `deny`. An unreadable anchor fails
+   * closed (no serving, no mint).
    */
   consentAnchor?: ReplicaConsentAnchor;
 }
@@ -141,15 +144,16 @@ export interface KVReplicaSpec {
   /** Graph-scoped fetch for main-thread adapters; worker adapters ignore it. */
   fetch?: FetchFunction;
   /**
-   * The session stamp this handle is bound to; immutable for the handle's life. Adapters with a
-   * `lifecycle` gate refuse a spec without it (REPLICA_GATED `not_established`) and assert it,
-   * with `identity.principal`, inside every guarded transaction. Adapters without a gate ignore it.
+   * The session stamp this handle is bound to; immutable for the handle's life. With a `lifecycle`
+   * gate (mandatory when replication is on), a spec without it is refused REPLICA_GATED
+   * `not_established`, and every guarded transaction runs through `ReplicaGateTx.run` with it.
+   * Use {@link ReplicaGatedSpec} where the stamp must be present.
    */
   stamp?: ReplicaSessionStamp;
   /**
-   * Grant lifetime policy. The controller MUST set it whenever replication is enabled. An adapter
-   * given a spec without it applies the default policy (DEFAULT_GRANT_TTL_MS, anchor null), never
-   * unbounded serving; "absent = Phase 1" holds only when replication is off.
+   * Grant lifetime policy. Mandatory when replication is on: the controller always sets it, and a
+   * Phase 2 adapter rejects `open` without it (REPLICA_INVALID_ARGUMENT). Optional in the type only
+   * so Phase 1 callers compile.
    */
   grantPolicy?: ReplicaGrantPolicy;
   /** Quota settings; absent means unbounded. */
@@ -170,21 +174,36 @@ export interface ReplicaPeerCommit {
   coverage?: ReplicaCoverage;
 }
 
+/** A spec as a gated adapter accepts it: stamp and grant policy present. */
+export type ReplicaGatedSpec = KVReplicaSpec & {
+  stamp: ReplicaSessionStamp;
+  grantPolicy: ReplicaGrantPolicy;
+};
+
 export interface KVReplicaHandle {
   readonly spec: KVReplicaSpec;
   /** Always equals `spec.device.did` when an explicit device was provided. */
   readonly deviceDid: string;
+  /**
+   * Guarded read. Adapters MUST NOT return value bytes unless the effective authority is `valid`
+   * (signed exp, effective expiry, consent deadline, node-attested authority, revocation): they
+   * throw GRANT_EXPIRED / GRANT_REVOKED / GRANT_NOT_YET_VALID / CONSENT_EXPIRED inside the read
+   * transaction, and the controller falls through to the network with the matching reason. An
+   * erased partition rejects RESET_REQUIRED (by tombstone/generation, not by unlink).
+   */
   get(key: string): Promise<LocalGetResult>;
+  /** Guarded read; same authority rule as `get` (no keys unless authority is `valid`). */
   list(o: {
     prefix: string;
     after?: string;
     limit?: number;
   }): Promise<LocalListResult>;
+  /** Guarded read (runs through `ReplicaGateTx.run`). */
   grant(): Promise<ReplicaGrantInfo | null>;
   /**
    * Installs a grant after validating audience (the handle's device), `kv/get` + `kv/sync` coverage
-   * of the prefix, and no caveats (caveated grants reject GRANT_NOT_COVERING). With
-   * `spec.grantPolicy`, stores `installedAt` and `effectiveExpiresAt`. Gated: REPLICA_GATED.
+   * of the prefix, and no caveats (caveated grants reject GRANT_NOT_COVERING). Stores `installedAt`
+   * on first install of the CID and `effectiveExpiresAt`. Guarded: REPLICA_GATED.
    */
   installGrant(ucan: string): Promise<ReplicaGrantInfo>;
   /**
@@ -225,6 +244,8 @@ export interface KVReplicaStorage {
   /**
    * Read an existing replica's durable status without creating or mutating storage or waiting
    * for a mutation guard. Missing replicas return undefined. Implementations must honor abort.
+   * Ungated (it carries no stamp): a known metadata exposure (counts, bytes, grant CIDs, times),
+   * never values or keys.
    */
   inspectStatus?(spec: KVReplicaSpec, options: { signal: AbortSignal }): Promise<LocalReplicaStatus | undefined>;
   /**
@@ -240,14 +261,13 @@ export interface KVReplicaStorage {
    * B-node's Node/CLI adapter MUST provide a durable store and surface open failures, never
    * silently fall back to memory.
    *
-   * With a `lifecycle` gate configured, the store is bound to `options.stamp` for its whole life
-   * (callers cache stores per identity AND stamp). Every `read`, `readExisting` and `update`
-   * (append, settle, remove, clear, flush) runs `ReplicaGateTx.assert(tx, { stamp, principal:
-   * identity.principal })` first, inside its own transaction / guarded mutation, before touching
-   * or initializing storage; a refusal rejects REPLICA_GATED and writes nothing. A store obtained
-   * without a stamp rejects every call with REPLICA_GATED `not_established`. So after `deny`, a
-   * stale tab, worker or process can neither read nor refill the signed-out identity's pending
-   * state. Without a gate, `options` is ignored (Phase 1).
+   * With a `lifecycle` gate, the store is bound to `options.stamp` for its whole life (callers
+   * cache stores per identity AND stamp). Every `read`, `readExisting` and `update` (append,
+   * settle, remove, clear, flush) runs through `ReplicaGateTx.run` with `{ stamp, principal:
+   * identity.principal, identityKeyHash }` before touching or initializing storage; a refusal
+   * rejects REPLICA_GATED and reads/writes nothing. A store obtained without a stamp rejects every
+   * call with REPLICA_GATED `not_established`. So after `deny`, a stale tab, worker or process can
+   * neither read nor refill the signed-out identity's pending state.
    */
   pendingWrites?(
     identity: ReplicationIdentity,
@@ -255,10 +275,16 @@ export interface KVReplicaStorage {
   ): PendingWriteStore;
   /**
    * The platform lifecycle gate (browser: origin DB control stores + logout marker; node/CLI:
-   * gate file). Absent means Phase 1 behaviour: no stamps, no gate checks.
+   * gate file). Mandatory when replication is on: `indexedDbReplicaStorage()` and
+   * `sqliteReplicaStorage()` expose it (node's `gateFile` defaults next to `dir`), and the web
+   * runtime refuses storage without it with RUNTIME_UNSUPPORTED. Optional in the type only so
+   * Phase 1 test doubles compile; use {@link ReplicaGatedStorage} for Phase 2 adapters.
    */
   readonly lifecycle?: ReplicaLifecycleGate;
 }
+
+/** A Phase 2 adapter: the lifecycle gate is present. */
+export type ReplicaGatedStorage = KVReplicaStorage & { readonly lifecycle: ReplicaLifecycleGate };
 
 export interface PendingWriteRecord {
   opId: string;
@@ -365,7 +391,12 @@ export interface KVReplicationDeps {
   pending: PendingWriteStore;
   /** Node `/info` features discovered on sign-in for protocol gating. */
   nodeFeatures?: readonly string[];
-  /** This session's stamp; forwarded into every `KVReplicaSpec.stamp`. */
+  /**
+   * This session's stamp; forwarded into every `KVReplicaSpec.stamp` and pending store. With
+   * `storage.lifecycle` present, a missing stamp makes the controller `gated` (`not_established`)
+   * and it never opens. A controller is never rebound with a new stamp for an existing session
+   * object: a new stamp requires a new session.
+   */
   stamp?: ReplicaSessionStamp;
   scheduler: ReplicationScheduler;
   emit(event: ReplicationEvent): void;
@@ -619,11 +650,14 @@ export type ReplicationEvent =
       keys?: string[];
     }
   | {
-      /** Grant lifetime and renewal (CONTRACT.md §3). */
+      /**
+       * Grant lifetime and renewal (CONTRACT.md §3). Carries no account identifiers: no `space`,
+       * no prefix, no principal.
+       */
       type: "replication.grant";
       at: string;
-      space: string;
-      replica: string;
+      /** Opaque replica id: browser salted partition id; node replica hash. */
+      replicaId: string;
       action:
         | "minted"
         | "renewed"
@@ -643,11 +677,15 @@ export type ReplicationEvent =
       expiryMs?: number;
     }
   | {
-      /** Sign-out / account-switch lifecycle (CONTRACT.md §2). Never carries a principal. */
+      /** Sign-out / account-switch lifecycle (CONTRACT.md §2). Carries no account identifiers. */
       type: "replication.lifecycle";
       at: string;
+      /** Opaque replica id when the step concerns one partition (same scheme as `replication.grant`). */
+      replicaId?: string;
       action:
         | "denied"
+        /** A stale caller's deny: disabled in memory only; gate untouched. */
+        | "deny_stale"
         | "deny_failed"
         | "database_deleted"
         | "marker_set"

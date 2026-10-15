@@ -264,7 +264,11 @@ export type {
   ReplicaGateAccess,
   ReplicaGatedError,
   ReplicaGateReason,
+  ReplicaGateScope,
+  ReplicaGatedSpec,
+  ReplicaGatedStorage,
   ReplicaGateTx,
+  ReplicaGuardedStore,
   ReplicaGrantPolicy,
   ReplicaLifecycleGate,
   ReplicaPageAdmission,
@@ -274,6 +278,7 @@ export type {
   ReplicaQuotaLedger,
   ReplicaQuotaSpec,
   ReplicaSessionStamp,
+  ReplicaStampedReply,
 } from "./kv/replication";
 export {
   CLEAR_PENDING_WARNING,

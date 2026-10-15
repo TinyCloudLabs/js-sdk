@@ -447,6 +447,8 @@ export const TelemetryEvents = {
   REPLICATION_SYNC: "replication.sync",
   REPLICATION_STATE: "replication.state",
   REPLICATION_DIVERGENCE: "replication.divergence",
+  REPLICATION_GRANT: "replication.grant",
+  REPLICATION_LIFECYCLE: "replication.lifecycle",
   /** Emitted once, on the first write rejected because storage is full. */
   STORAGE_FULL: "storage.full",
 } as const;

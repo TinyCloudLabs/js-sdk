@@ -2,9 +2,12 @@
  * Quota contract (TC-858 Phase 2, CONTRACT.md §4). Types only.
  *
  * Browser: `maxBytes` is origin-wide across every partition in the origin database; the ledger
- * lives in the `quota` control store and is updated inside the page-commit transaction.
- * Node/CLI: `maxBytes` is per profile (per storage `dir`); the `admit` hook runs inside
- * `applyPage`'s guarded mutation. `minFreeBytes` applies only in the browser.
+ * lives in the `quota` control store, is constructed inside the worker (`ledgerFor`), and is
+ * called inside `ReplicaGateTx.run` page-commit transactions and exempt erase transactions.
+ * `accountErase` is idempotent once the partition's entry is gone (crash replay is safe).
+ * Node/CLI: `maxBytes` is per profile (per storage `dir`); there is no ledger — usage is derived
+ * from stored content, so erase replay is safe — and the `admit` hook runs inside `applyPage`'s
+ * guarded mutation (profile lock held). `minFreeBytes` applies only in the browser.
  */
 
 /** Quota settings forwarded from `ReplicationOptions` to storage through `KVReplicaSpec.quota`. */
