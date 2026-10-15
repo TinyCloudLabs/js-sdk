@@ -380,7 +380,7 @@ export class ServiceContext implements IServiceContext {
 
   private assertActive(): void {
     if (this._retired) {
-      throw new Error("Service graph has been retired by session replacement.");
+      throw new Error("Service graph has been retired: its session was replaced or signed out.");
     }
   }
 

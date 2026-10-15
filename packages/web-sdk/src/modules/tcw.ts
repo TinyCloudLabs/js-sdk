@@ -323,6 +323,8 @@ export class TinyCloudWeb {
   private walletSigner?: BrowserWalletSigner;
   private sessionStorage?: ISessionStorage;
   private _sessionRestoreStatus: SessionRestoreStatus = "idle";
+  /** Incremented by signOut; a sign-in that started before it does not complete. */
+  private signOutCount = 0;
   private _secrets = new Map<string, ISecretsService>();
   private _credentialsService?: CredentialsService;
   private _shareReceiverService?: ShareReceiverService;
@@ -760,9 +762,17 @@ export class TinyCloudWeb {
   }
 
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
+    const signOuts = this.signOutCount;
+    const assertNotSignedOut = (): void => {
+      if (this.signOutCount !== signOuts) {
+        throw new Error("Sign-in was cancelled by sign-out.");
+      }
+    };
     const restored = await this.restoreSession();
+    assertNotSignedOut();
     if (restored.status === "restored" && restored.session) {
       const node = await this.ensureNode();
+      assertNotSignedOut();
       if (this.restoredSessionCoversConfiguredManifest(node)) {
         return restored.session;
       }
@@ -770,8 +780,10 @@ export class TinyCloudWeb {
       this._sessionRestoreStatus = "stale";
     }
 
-    this._sessionRestoreStatus = "logging-in";
     const node = await this.ensureNode();
+    // A sign-out during the restore must not fall through to a fresh sign-in.
+    assertNotSignedOut();
+    this._sessionRestoreStatus = "logging-in";
     await node.signIn(options);
     this.resetSessionScopedCaches();
     const session = node.session;
@@ -786,10 +798,27 @@ export class TinyCloudWeb {
     };
   };
 
+  /**
+   * Sign out: end the session on this instance and clear the persisted
+   * session. Afterwards session accessors return `undefined` and service
+   * calls fail with "Not signed in" until the next sign-in or restore.
+   */
   signOut = async (): Promise<void> => {
-    await this.clearPersistedSession();
-    this.resetSessionScopedCaches();
-    this.notificationHandler.cleanup?.();
+    // The persisted entry is keyed by the live session's address; read it
+    // before the node ends the session, without awaiting first.
+    const liveAddress = this._node?.address;
+    this.signOutCount++;
+    try {
+      await this._node?.signOut();
+    } finally {
+      this.resetSessionScopedCaches();
+      this._credentialsService = undefined;
+      this._shareReceiverService = undefined;
+      this._sessionRestoreStatus = "idle";
+      this.notificationHandler.cleanup?.();
+      const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
+      if (address) await this.clearPersistedSession(address);
+    }
   };
 
   session = (): ClientSession | undefined => {

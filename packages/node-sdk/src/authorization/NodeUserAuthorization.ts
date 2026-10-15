@@ -329,6 +329,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
+  /** Incremented by resetSession; a sign-in started earlier publishes nothing. */
+  private sessionGeneration = 0;
+  /**
+   * Sign-in saves run one at a time, in order, each together with its own
+   * cancellation cleanup, so no later write can land between the two.
+   */
+  private persistenceQueue: Promise<void> = Promise.resolve();
   private extensions: Extension[] = [];
   private _session?: ClientSession;
   private _tinyCloudSession?: TinyCloudSession;
@@ -494,6 +501,30 @@ export class NodeUserAuthorization implements IUserAuthorization {
     ) {
       this.tinycloudHosts = [...hosts];
     }
+  }
+
+  /**
+   * @internal End the session: adopt a fresh session manager whose active key
+   * is `sessionKeyId`, and return to the constructed state.
+   */
+  resetSession(sessionManager: ISessionManager, sessionKeyId: string, hosts?: string[]): void {
+    this.sessionGeneration++;
+    this.installRestoredSession(sessionManager, undefined, hosts);
+    this.activeSessionKeyId = sessionKeyId;
+  }
+
+  /** Throws when the session was reset (signed out) after `generation` was read. */
+  private assertSignInCurrent(generation: number): void {
+    if (generation !== this.sessionGeneration) {
+      throw new Error("Sign-in was cancelled by sign-out.");
+    }
+  }
+
+  /** Runs `task` after every earlier queued persistence task has settled. */
+  private enqueuePersistence(task: () => Promise<void>): Promise<void> {
+    const run = this.persistenceQueue.then(task);
+    this.persistenceQueue = run.catch(() => undefined);
+    return run;
   }
 
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
@@ -1367,14 +1398,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
+    const generation = this.sessionGeneration;
     // Get signer address and chain ID
-    this._address = canonicalizeAddress(await this.signer.getAddress());
-    this._chainId = await this.signer.getChainId();
-
-    const address = this._address;
-    const chainId = this._chainId;
+    const address = canonicalizeAddress(await this.signer.getAddress());
+    const chainId = await this.signer.getChainId();
+    this.assertSignInCurrent(generation);
+    this._address = address;
+    this._chainId = chainId;
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
+    this.assertSignInCurrent(generation);
 
     // Create a session key
     const keyId = `session-${Date.now()}`;
@@ -1426,6 +1459,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       type: "siwe",
       purpose: "sign-in",
     });
+    this.assertSignInCurrent(generation);
 
     // Complete session setup with the prepared session + signature
     const session = this.wasm.completeSessionSetup({
@@ -1487,7 +1521,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
     };
-    await this.sessionStorage.save(address, persistedData);
+    await this.enqueuePersistence(async () => {
+      await this.sessionStorage.save(address, persistedData);
+      // Signed out while saving: remove exactly the record this save wrote.
+      // A newer sign-in's save is queued behind this and lands afterwards.
+      if (generation !== this.sessionGeneration) {
+        await this.sessionStorage.clear(address);
+      }
+    });
+    // Never publish a session that was signed out while it was being saved.
+    this.assertSignInCurrent(generation);
 
     // Set current session
     this._session = clientSession;
@@ -1497,16 +1540,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Verify SDK-node protocol compatibility and discover supported features.
     await this.refreshNodeInfo();
+    this.assertSignInCurrent(generation);
 
     // Call extension hooks
     for (const ext of this.extensions) {
       if (ext.afterSignIn) {
         await ext.afterSignIn(clientSession);
+        this.assertSignInCurrent(generation);
       }
     }
 
     // Ensure space exists (creates if needed when autoCreateSpace is true)
     await this.ensureSpaceExists();
+    this.assertSignInCurrent(generation);
 
     return clientSession;
   }
