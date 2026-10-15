@@ -30,6 +30,10 @@ export type {
   RegisterPolicyV3Input,
   RegisterPolicyV3Receipt,
 } from "@tinycloud/node-sdk/core";
+export {
+  registerReplicationLoaders,
+} from "@tinycloud/node-sdk/core";
+export type { ReplicationModuleLoaders } from "@tinycloud/node-sdk/core";
 export type {
   CreateOwnerDelegationParams,
   OwnerDelegationPermission,

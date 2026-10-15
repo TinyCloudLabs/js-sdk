@@ -31,12 +31,19 @@ type Baseline = {
  * 5,756 B ESM / 5,283 B CJS against cbfe21ee (#484, #495). Raising it is a budget
  * decision, made by editing `allowance` in a reviewed PR.
  */
+// web-sdk files that wire replication into the client bundle; their bytes are replica-owned
+// even though the filenames do not match the regex below.
+const replicationWiringPaths = new Set([
+  "packages/web-sdk/src/index.ts",
+  "packages/web-sdk/src/modules/tcw.ts",
+]);
 const replicaOwnedPath = (path: string) =>
   !/\.test\.[cm]?[jt]sx?$/.test(path) && (
     path.startsWith("packages/replica/") ||
     path.startsWith("packages/sdk-services/src/kv/replication/") ||
     path.startsWith("packages/sdk-core/src/replication/") ||
     path.startsWith("packages/node-sdk/src/replication/") ||
+    replicationWiringPaths.has(path) ||
     (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path))
   );
 const distDir = resolve(import.meta.dir, "../dist");
