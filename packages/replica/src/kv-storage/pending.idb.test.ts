@@ -144,7 +144,7 @@ describe("IndexedDB pending-write store", () => {
     await new IndexedDbPendingWriteStore(b, { locks }).update((state) => void (state.seq = 1));
     const db = (await openKvDatabase({ create: false }))!;
     const tx = db.transaction(KV_STORE.pending, "readwrite");
-    await kvPartitionEraser.eraseIdentityPending(tx, replicationIdentityKey(a));
+    await kvPartitionEraser.eraseIdentityPending(tx, identityKeyHash(replicationIdentityKey(a)));
     await transactionDone(tx);
     db.close();
     expect(await new IndexedDbPendingWriteStore(a, { locks }).readExisting()).toBeUndefined();

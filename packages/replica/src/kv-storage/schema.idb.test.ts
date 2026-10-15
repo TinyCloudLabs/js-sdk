@@ -68,7 +68,7 @@ describe("partition ids", () => {
       deviceDid: `${device.did}#${device.did.slice("did:key:".length)}`,
     });
     expect(a).toBe(b);
-    expect(a).toMatch(/^[a-z2-7]{26}$/);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("prefix, device, principal, space and host each name a different partition", () => {
@@ -94,7 +94,7 @@ describe("the origin database", () => {
     expect(await openKvDatabase({ create: false })).toBeNull();
     expect((await indexedDB.databases()).some((info) => info.name === KV_DATABASE)).toBe(false);
     const db = (await openKvDatabase({ create: true }))!;
-    expect([...db.objectStoreNames].sort()).toEqual(Object.values(KV_STORE).sort());
+    expect(Array.from(db.objectStoreNames).sort()).toEqual(Object.values(KV_STORE).sort());
     db.close();
     const again = await openKvDatabase({ create: false });
     expect(again).not.toBeNull();
@@ -171,7 +171,7 @@ describe("transaction seams", () => {
     const hooks: ReplicaStoreHooks = {
       async assert(tx) {
         calls += 1;
-        expect([...tx.objectStoreNames]).toContain(KV_STORE.gate);
+        expect(Array.from(tx.objectStoreNames)).toContain(KV_STORE.gate);
         await requestAsPromise(tx.objectStore(KV_STORE.gate).get("account"));
         if (refuse) throw new ReplicaError(ReplicaErrorCode.STORAGE_ERROR, "gate refused");
       },
@@ -194,7 +194,7 @@ describe("transaction seams", () => {
     await partition({
       hooks: {
         async indexPartition(tx) {
-          expect([...tx.objectStoreNames]).toContain(KV_STORE.partitions);
+          expect(Array.from(tx.objectStoreNames)).toContain(KV_STORE.partitions);
           indexed += 1;
         },
       },

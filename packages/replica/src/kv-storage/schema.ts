@@ -18,6 +18,7 @@
  * and untouched.
  */
 import { sha256 } from "@noble/hashes/sha2";
+import { bytesToHex } from "@noble/hashes/utils";
 import { replicationIdentityKey, type ReplicaPartitionEraser, type ReplicationIdentity } from "@tinycloud/sdk-services/kv/replication";
 import { REPLICA_KV_DATABASE, REPLICA_KV_STORES } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
@@ -46,26 +47,9 @@ function createStores(db: IDBDatabase): void {
   }
 }
 
-/** sha256 → base32, first 26 characters: the partition id and identity-key hash. */
-function hash26(material: string): string {
-  const digest = sha256(new TextEncoder().encode(material));
-  let out = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of digest) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32[(buffer >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  return out.slice(0, 26);
-}
-
-/** The `pending` store key and Web Lock suffix of one identity. */
+/** The `pending` store key and Web Lock suffix of one identity: lowercase hex SHA-256 of its identity key. */
 export function identityKeyHash(identityKey: string): string {
-  return hash26(identityKey);
+  return bytesToHex(sha256(new TextEncoder().encode(identityKey)));
 }
 
 /**
@@ -114,15 +98,15 @@ export function openKvDatabase(options: { create: boolean }): Promise<IDBDatabas
   return promise;
 }
 
-const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-
 /**
- * The partition id: the 26-character hash of the canonical identity key
- * (`replicationIdentityKey`: host, space and lower-cased principal), the
- * prefix and the device principal (any `#fragment` dropped).
+ * The partition id: lowercase hex SHA-256 of `replicationIdentityKey(identity)`
+ * (host, space and lower-cased principal), the prefix and the device DID,
+ * newline-separated. The device DID is taken as its principal (any
+ * `#fragment` dropped), so both spellings of one device key name one partition.
  */
 export function partitionIdOf(input: { identity: ReplicationIdentity; prefix: string; deviceDid: string }): string {
-  return hash26(`${replicationIdentityKey(input.identity)}\n${input.prefix}\n${principalOf(input.deviceDid)}`);
+  const material = `${replicationIdentityKey(input.identity)}\n${input.prefix}\n${principalOf(input.deviceDid)}`;
+  return bytesToHex(sha256(new TextEncoder().encode(material)));
 }
 
 /** The partition-scoped key layout `IndexedDbReplicaStore` runs over. */
@@ -156,7 +140,7 @@ export const kvPartitionEraser: ReplicaPartitionEraser<IDBTransaction> = {
   async erasePartition(tx, partitionId) {
     return { bytes: (await eraseReplicaRows(tx, kvLayout(partitionId))).blobBytes };
   },
-  async eraseIdentityPending(tx, identityKey) {
-    tx.objectStore(KV_STORE.pending).delete(identityKeyHash(identityKey));
+  async eraseIdentityPending(tx, identityKeyHash) {
+    tx.objectStore(KV_STORE.pending).delete(identityKeyHash);
   },
 };
