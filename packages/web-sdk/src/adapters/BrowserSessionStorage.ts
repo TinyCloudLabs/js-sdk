@@ -100,6 +100,19 @@ export class BrowserSessionStorage implements ISessionStorage {
       result.status === "loaded" ? result.data : null,
     );
   }
+  private validateForNetworkRestore(parsed: unknown) {
+    const result = validatePersistedSessionData(parsed);
+    if (result.ok || parsed === null || typeof parsed !== "object" ||
+      Array.isArray(parsed) || !Object.prototype.hasOwnProperty.call(parsed, "replicaStamp")) {
+      return result;
+    }
+    // An invalid replica stamp cannot authorize local reads, but must not erase
+    // an otherwise valid network session. Leave the stored bytes untouched.
+    const networkData: Record<string, unknown> = { ...parsed };
+    delete networkData.replicaStamp;
+    return validatePersistedSessionData(networkData);
+  }
+
 
   async loadWithStatus(address: string): Promise<BrowserSessionLoadResult> {
     if (!this.storage) return { status: "storage-unavailable", data: null };
@@ -110,7 +123,7 @@ export class BrowserSessionStorage implements ISessionStorage {
 
     try {
       const parsed = JSON.parse(raw);
-      const result = validatePersistedSessionData(parsed);
+      const result = this.validateForNetworkRestore(parsed);
       if (!result.ok) {
         this.storage.removeItem(key);
         this.clearActiveAddress(address);
@@ -162,7 +175,7 @@ export class BrowserSessionStorage implements ISessionStorage {
 
     try {
       const parsed = JSON.parse(raw);
-      const result = validatePersistedSessionData(parsed);
+      const result = this.validateForNetworkRestore(parsed);
       if (!result.ok) return false;
       return new Date(result.data.expiresAt).getTime() > Date.now();
     } catch {
