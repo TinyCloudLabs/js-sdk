@@ -698,6 +698,8 @@ export type {
   ReplicaAuthorityState,
   ReplicaCoverage,
   ReplicaDevice,
+  ReplicaGatedHandle,
+  ReplicaInspectedStatus,
   ReplicaGrantInfo,
   ReplicaState,
   ReplicaStatusEntry,
