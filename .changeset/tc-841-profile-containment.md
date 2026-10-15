@@ -1,6 +1,7 @@
 ---
 "@tinycloud/cli": patch
 "@tinycloud/operations": patch
+"@tinycloud/replica": patch
 ---
 
-`tc replica reset --purge` pins the selected replica root across open and deletion and refuses symlinked or replaced entries. Profile reads, writes and purge operations refuse symlinked profile directories.
+Pin profile and replica directories during reset and logout cleanup. Reject whole-profile and replica database symlinks and changed SQLite file identities before mutations. Profile operations and destructive replica cleanup now refuse unsupported platforms rather than risk following a replaced directory.

@@ -1,4 +1,4 @@
-import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
 const { removeProfileReplicasAndReplication, removeProfileReplication } = await import("./profile-replicas.js");
+const { appendGrantHistory, grantHistoryPath, loadLocalGrantArtifacts, localGrantArtifactsPath, readGrantHistory } = await import("./permissions.js");
 
 beforeEach(async () => {
   await rm(home, { recursive: true, force: true });
@@ -20,6 +21,25 @@ beforeEach(async () => {
 });
 
 afterAll(async () => { await rm(home, { recursive: true, force: true }); });
+
+test("local grant artifact reads refuse an alias instead of exposing another profile", async () => {
+  await ProfileManager.setProfile("victim", {
+    name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  await writeFile(localGrantArtifactsPath("victim"), JSON.stringify([{
+    delegationCid: "bafy-victim",
+    delegation: { cid: "bafy-victim", delegationHeader: { Authorization: "Bearer victim" } },
+  }]));
+  await symlink(profilePath("victim"), profilePath("linked"));
+
+  await expect(loadLocalGrantArtifacts("linked")).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+  await writeFile(grantHistoryPath("victim"), "victim-history\n");
+  await expect(readGrantHistory("linked")).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+  await expect(appendGrantHistory("linked", { addedCaps: [], source: "cli" })).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+  expect(await readFile(grantHistoryPath("victim"), "utf8")).toBe("victim-history\n");
+  expect((await loadLocalGrantArtifacts("victim")).map((record) => record.delegationCid)).toEqual(["bafy-victim"]);
+});
 
 test("logout cleanup refuses a linked profile instead of deleting the target profile's replica", async () => {
   await ProfileManager.setProfile("victim", {
@@ -39,6 +59,39 @@ test("logout cleanup refuses a linked profile instead of deleting the target pro
 
   await expect(removeProfileReplicasAndReplication("linked")).rejects.toThrow("symlink");
   expect(await stat(join(replica, "replica.db"))).toBeTruthy();
+});
+
+test("logout refuses a linked replica.db without advancing the victim lease", async () => {
+  await ProfileManager.setProfile("victim", {
+    name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  const selected = join(profilePath("dogfood"), "replicas", "notes");
+  const victim = join(profilePath("victim"), "replicas", "notes");
+  for (const entry of [selected, victim]) {
+    const store = await SqliteReplicaStore.open(entry, { create: true });
+    await store.init({
+      name: "notes", replicaId: "notes", host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+  }
+  const victimDb = join(victim, "replica.db");
+  const sqlite = await loadSqlite();
+  const token = () => {
+    const db = sqlite(victimDb, { readonly: true });
+    try { return db.get<{ lease_token: number }>("SELECT lease_token FROM replica WHERE id = 1")?.lease_token; }
+    finally { db.close(); }
+  };
+  const before = token();
+  await rm(join(selected, "replica.db"));
+  await symlink(victimDb, join(selected, "replica.db"));
+
+  await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toBeDefined();
+  expect(token()).toBe(before);
+  expect(await stat(victimDb)).toBeTruthy();
 });
 
 test("logout refuses a replica swapped for a symlink after opening it", async () => {
@@ -63,6 +116,89 @@ test("logout refuses a replica swapped for a symlink after opening it", async ()
     expect(await stat(join(outside, "replica.db"))).toBeTruthy();
   } finally {
     SqliteReplicaStore.prototype.destroy = originalDestroy;
+  }
+});
+
+test("logout preflight keeps its original root when another real directory replaces its name", async () => {
+  const selectedRoot = join(profilePath("dogfood"), "replicas");
+  const selectedEntry = join(selectedRoot, "notes");
+  const victimRoot = join(home, "victim-replicas");
+  const victimEntry = join(victimRoot, "notes");
+  for (const entry of [selectedEntry, victimEntry]) {
+    const store = await SqliteReplicaStore.open(entry, { create: true });
+    await store.init({
+      name: "notes", replicaId: "notes", host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+  }
+  const sqlite = await loadSqlite();
+  const victimDb = join(victimEntry, "replica.db");
+  const token = (path: string) => {
+    const db = sqlite(path, { readonly: true });
+    try { return db.get<{ lease_token: number }>("SELECT lease_token FROM replica WHERE id = 1")?.lease_token; }
+    finally { db.close(); }
+  };
+  const before = token(victimDb);
+  const originalOpen = SqliteReplicaStore.open;
+  let swapped = false;
+  SqliteReplicaStore.open = async function (dir, options) {
+    if (!swapped && !options.create) {
+      swapped = true;
+      await rename(selectedRoot, `${selectedRoot}.moved`);
+      await rename(victimRoot, selectedRoot);
+    }
+    return originalOpen.call(this, dir, options);
+  };
+  try {
+    await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toBeDefined();
+    expect(swapped).toBe(true);
+    expect(token(join(selectedRoot, "notes", "replica.db"))).toBe(before);
+    expect(await stat(join(selectedRoot, "notes", "replica.db"))).toBeTruthy();
+  } finally {
+    SqliteReplicaStore.open = originalOpen;
+  }
+});
+
+test("logout refuses a real replica entry replaced before SQLite opens it", async () => {
+  await ProfileManager.setProfile("victim", {
+    name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  const selected = join(profilePath("dogfood"), "replicas", "notes");
+  const victim = join(profilePath("victim"), "replicas", "notes");
+  for (const entry of [selected, victim]) {
+    const store = await SqliteReplicaStore.open(entry, { create: true });
+    await store.init({
+      name: "notes", replicaId: "notes", host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+  }
+  const originalOpen = SqliteReplicaStore.open;
+  let sqliteCalled = false;
+  SqliteReplicaStore.open = async function (dir, options) {
+    await rename(selected, `${selected}.original`);
+    await rename(victim, selected);
+    return originalOpen.call(this, dir, {
+      ...options,
+      sqlite: () => {
+        sqliteCalled = true;
+        throw new Error("SQLite must not open the replacement");
+      },
+    });
+  };
+  try {
+    await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toBeDefined();
+    expect(sqliteCalled).toBe(false);
+    expect(await stat(join(selected, "replica.db"))).toBeTruthy();
+    expect(await stat(`${selected}.original/replica.db`)).toBeTruthy();
+  } finally {
+    SqliteReplicaStore.open = originalOpen;
   }
 });
 
@@ -93,6 +229,63 @@ describe("flag-owned logout cleanup", () => {
     expect(await stat(join(replicas, replicaHash, "replica.db"))).toBeTruthy();
     expect(await removeProfileReplication("dogfood")).toEqual([`replication/${idHash}/${replicaHash}`]);
     await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  test("a real replication root swapped after the final store destroy is never recursively removed", async () => {
+    const root = join(profilePath("dogfood"), "replication");
+    const entry = join(root, "a".repeat(26), "replicas", "b".repeat(26));
+    const store = await SqliteReplicaStore.open(entry, { create: true });
+    await store.init({
+      name: "notes", replicaId: "b".repeat(26), host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+    const victim = join(home, "unselected-replication");
+    await mkdir(victim);
+    await writeFile(join(victim, "keep.txt"), "untouched");
+    const originalDestroy = SqliteReplicaStore.prototype.destroy;
+    SqliteReplicaStore.prototype.destroy = async function (lease) {
+      await originalDestroy.call(this, lease);
+      await rename(root, `${root}.moved`);
+      await rename(victim, root);
+    };
+    try {
+      await expect(removeProfileReplication("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+      expect(await readFile(join(root, "keep.txt"), "utf8")).toBe("untouched");
+    } finally {
+      SqliteReplicaStore.prototype.destroy = originalDestroy;
+    }
+  });
+
+  test("a lease guard failure closes the flag store before logout aborts", async () => {
+    const entry = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas", "b".repeat(26));
+    const store = await SqliteReplicaStore.open(entry, { create: true });
+    await store.init({
+      name: "notes", replicaId: "b".repeat(26), host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+    const originalLease = SqliteReplicaStore.prototype.acquireSyncLease;
+    const originalClose = SqliteReplicaStore.prototype.close;
+    let closed = 0;
+    SqliteReplicaStore.prototype.acquireSyncLease = async function () {
+      throw new Error("injected lease guard failure");
+    };
+    SqliteReplicaStore.prototype.close = async function () {
+      closed++;
+      return originalClose.call(this);
+    };
+    try {
+      await expect(removeProfileReplication("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+      expect(closed).toBe(1);
+      expect(await stat(join(entry, "replica.db"))).toBeTruthy();
+    } finally {
+      SqliteReplicaStore.prototype.acquireSyncLease = originalLease;
+      SqliteReplicaStore.prototype.close = originalClose;
+    }
   });
   test("refuses a flag replica whose ancestor is swapped for an outside symlink", async () => {
     const replicas = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas");

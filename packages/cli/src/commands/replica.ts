@@ -15,6 +15,7 @@ import {
   readAdditionalDelegations,
   readSession,
   withProfileLock,
+  withPinnedProfileDirectory,
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
@@ -689,23 +690,25 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        const names = options.replica === undefined ? await replicaNames(profile) : [assertName(options.replica)];
-        const statuses: ReplicaStatus[] = [];
-        for (const name of names) {
-          const store = await openReplica(profile, name);
-          try {
-            statuses.push(await new Replica({ store }).status());
-          } finally {
-            await store.close();
+        await withPinnedProfileDirectory(profile, async () => {
+          const names = options.replica === undefined ? await replicaNames(profile) : [assertName(options.replica)];
+          const statuses: ReplicaStatus[] = [];
+          for (const name of names) {
+            const store = await openReplica(profile, name);
+            try {
+              statuses.push(await new Replica({ store }).status());
+            } finally {
+              await store.close();
+            }
           }
-        }
-        if (shouldOutputJson()) {
-          outputJson(options.replica === undefined ? { replicas: statuses } : statuses[0]);
-        } else if (statuses.length === 0) {
-          process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
-        } else {
-          process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
-        }
+          if (shouldOutputJson()) {
+            outputJson(options.replica === undefined ? { replicas: statuses } : statuses[0]);
+          } else if (statuses.length === 0) {
+            process.stdout.write(theme.muted(`Profile "${profile}" has no replicas.`) + "\n");
+          } else {
+            process.stdout.write(statuses.map(describeStatus).join("\n\n") + "\n");
+          }
+        });
       }),
     );
 
@@ -719,13 +722,13 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const profile = await profileName(cmd);
         const name = await existingReplicaName(profile, options.replica);
         if (options.purge) {
-          await withPinnedReplicaForReset(profile, name, async (path, recheck) => {
+          await withPinnedReplicaForReset(profile, name, async (path, recheck, expectedDirectory) => {
             const profileLock = profileGuard(profile);
             const safeGuard: MutationGuard = (section) => profileLock(async () => {
               await recheck();
               return section();
             });
-            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard });
+            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard, expectedDirectory });
             try {
               await recheck();
               // The store fences the database identity and lease; the root fd
