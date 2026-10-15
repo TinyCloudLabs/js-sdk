@@ -429,13 +429,15 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
    * and the session device (deduplicated by principal), each in its own
    * exempt erase transaction that also unindexes the partition and releases
    * its quota. Never opens, mints or syncs, and never creates the database.
-   * Handles opened earlier fail RESET_REQUIRED on their next call.
+   * Handles opened earlier fail RESET_REQUIRED on their next call. With no
+   * gate on the origin it rejects REPLICA_GATED `not_established` rather than
+   * reporting an erase it could not address.
    */
   async purge(target: PurgeTarget): Promise<void> {
     const gateTx = this.#gateTx();
     const identity = canonicalReplicationIdentity(target.identity);
     const snapshot = await gateTx.snapshot();
-    if (snapshot === null) return;
+    if (snapshot === null) throw gated("not_established", "No replica gate exists on this origin; there is nothing purge can address.");
     let db: IDBDatabase | null;
     try {
       db = await openKvDatabase({ create: false });
