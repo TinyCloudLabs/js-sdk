@@ -628,7 +628,7 @@ async function persistedRealSession(host: string) {
     version: "1.0",
     tinycloudHosts: [host],
   };
-  return { node, persisted, address };
+  return { node, wasm, persisted, address };
 }
 
 test("signOut() clears an explicit pending restore address even without activeAddress()", async () => {
@@ -722,6 +722,59 @@ test("signIn() starting during signOut() cannot reload the session being cleared
   expect(storage.exists(address)).toBe(false);
   expect(tcw.session()).toBeUndefined();
   expect(tcw.sessionRestoreStatus).toBe("idle");
+});
+
+test("signOut() cannot retain web authority when node key rotation fails", async () => {
+  const { node, wasm, persisted, address } = await persistedRealSession("https://restore-race.test");
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => Array.from(entries.keys())[index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const storage = new BrowserSessionStorage({ storage: backend });
+  await storage.save(address, persisted);
+  await node.restoreSession({
+    ...persisted.tinycloudSession,
+    jwk: JSON.parse(persisted.sessionKey),
+    address,
+    chainId: persisted.chainId,
+    siwe: persisted.siwe,
+    signature: persisted.signature,
+    expiresAt: persisted.expiresAt,
+    tinycloudHosts: persisted.tinycloudHosts,
+  });
+  const tcw = new TinyCloudWeb({ sessionStorage: storage });
+  await (tcw as any)._initPromise;
+  (tcw as any)._node = node;
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  try {
+    const retainedKv = tcw.kv;
+    await retainedKv.get("notes/a");
+    const before = requests.length;
+    wasm.createSessionManager = () => {
+      throw new Error("session manager unavailable");
+    };
+
+    await expect(tcw.signOut()).rejects.toThrow("session manager unavailable");
+
+    expect(tcw.session()).toBeUndefined();
+    expect(storage.exists(address)).toBe(false);
+    expect(() => tcw.kv).toThrow("Not signed in");
+    const stale = await retainedKv.put("notes/b", "after failed sign-out").catch(() => ({ ok: false }));
+    expect(stale.ok).toBe(false);
+    expect(requests.length).toBe(before);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale authority", async () => {

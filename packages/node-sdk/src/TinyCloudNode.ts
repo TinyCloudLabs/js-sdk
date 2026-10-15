@@ -2050,12 +2050,20 @@ export class TinyCloudNode {
 
   private async endSession(): Promise<void> {
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
-    this.teardownSession();
+    const leavingAuth = this.auth;
     try {
-      await this.accountRegistryTail;
-      if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
+      this.teardownSession();
     } finally {
-      if (leavingAddress) await this.clearPersistedSessionFor(leavingAddress);
+      try {
+        await this.accountRegistryTail;
+        if (this.replicationRuntime) await (await this.replicationRuntime).unbind();
+      } finally {
+        if (leavingAddress) {
+          await (leavingAuth
+            ? leavingAuth.clearPersistedSession(leavingAddress)
+            : this.config.sessionStorage?.clear(leavingAddress));
+        }
+      }
     }
   }
 
@@ -2068,19 +2076,23 @@ export class TinyCloudNode {
     this.pendingAccountRegistrySync?.controller.abort();
     const oldGraph = this._serviceGraph;
     const oldCore = this.tc;
-    const sessionKey = createDefaultSessionKey(this.wasmBindings);
-    this.sessionManager = sessionKey.manager;
-    this.sessionKeyId = sessionKey.keyId;
-    this.sessionKeyJwk = sessionKey.jwk;
-    this.auth?.resetSession(
-      sessionKey.manager,
-      sessionKey.keyId,
+    const oldAuth = this.auth;
+    // Revoke the old graph and detach its authority before allocating the
+    // replacement key. If key generation fails, this instance stays inert.
+    this.auth = null;
+    this.tc = null;
+    this._address = undefined;
+    this._restoredTcSession = undefined;
+    this._activeServiceSession = undefined;
+    oldGraph.retire();
+    oldCore?.retireServices();
+    oldAuth?.resetSession(
+      this.sessionManager,
+      this.sessionKeyId,
       this.explicitHost ? [this.explicitHost] : undefined,
     );
     this.config.host = this.explicitHost ?? DEFAULT_HOST;
-    this._address = undefined;
     this._chainId = 1;
-    this._restoredTcSession = undefined;
     this._restoredNodeFeatures = undefined;
     this._activeServiceSession = undefined;
     this._serviceContext = undefined;
@@ -2107,8 +2119,17 @@ export class TinyCloudNode {
     this._bootstrapStatus = { skipped: false };
     this.replicationDelegateSession = undefined;
     this.replicationScopeError = undefined;
+    const sessionKey = createDefaultSessionKey(this.wasmBindings);
+    this.sessionManager = sessionKey.manager;
+    this.sessionKeyId = sessionKey.keyId;
+    this.sessionKeyJwk = sessionKey.jwk;
+    oldAuth?.resetSession(
+      sessionKey.manager,
+      sessionKey.keyId,
+      this.explicitHost ? [this.explicitHost] : undefined,
+    );
     this._serviceGraph = this.createServiceGraphLifetime();
-    oldGraph.retire();
+    this.auth = oldAuth;
     // A fresh core: the retired one must not be notified by a later sign-in.
     this.tc = this.auth
       ? new TinyCloud(this.auth, {
@@ -2116,18 +2137,12 @@ export class TinyCloudNode {
         telemetry: this.config.telemetry,
       })
       : null;
-    oldCore?.retireServices();
     // Receiving shared links keeps working without a session, as before sign-in.
     this._capabilityRegistry = new CapabilityKeyRegistry();
     this._keyProvider = new WasmKeyProvider({ sessionManager: this.sessionManager });
     this._sharingService = this.createReceiveOnlySharing();
   }
 
-  private async clearPersistedSessionFor(address: string): Promise<void> {
-    await (this.auth
-      ? this.auth.clearPersistedSession(address)
-      : this.config.sessionStorage?.clear(address));
-  }
 
   /** Throws when a sign-out started after `epoch` was read. */
   private assertSessionEpoch(epoch: number, operation: string): void {
