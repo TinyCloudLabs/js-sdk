@@ -9,22 +9,16 @@ export const REPLICATION_CONSENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const KV_SERVICE = "tinycloud.kv";
 
-/** SIWE `issuedAt` of the sign-in that granted replication, or null when absent or unparseable. */
-export function replicationConsentAnchorMs(siwe: string): number | null {
-  const match = /^Issued At: (.+)$/m.exec(siwe);
-  if (match === null) return null;
-  const at = Date.parse(match[1]!.trim());
-  return Number.isNaN(at) ? null : at;
-}
-
 /**
  * True once the consent deadline (anchor + 7 d) has been reached. Fails closed: a missing or
  * unparseable anchor counts as expired, so the caller requires a fresh sign-in instead of
  * trusting an unanchored restore.
  */
 export function replicationConsentExpired(siwe: string, now: number): boolean {
-  const anchor = replicationConsentAnchorMs(siwe);
-  return anchor === null || now >= anchor + REPLICATION_CONSENT_WINDOW_MS;
+  const match = /^Issued At: (.+)$/m.exec(siwe);
+  if (match === null) return true;
+  const anchor = Date.parse(match[1]!.trim());
+  return Number.isNaN(anchor) || now >= anchor + REPLICATION_CONSENT_WINDOW_MS;
 }
 
 export type RestoreAcceptanceInput = {
@@ -61,20 +55,15 @@ export function replicationRestoreAccepted(input: RestoreAcceptanceInput): boole
   return input.walletChainId === input.sessionChainId;
 }
 
-/** Mirrors `requiresSecretsOptIn` in sdk-services/kv/replication/scope.ts (same four-line rule). */
-function needsSecretsOptIn(space: string, prefix: string): boolean {
-  if (prefix === "/") return true;
-  if (space === "secrets" || space.endsWith(":secrets")) return true;
-  return prefix.split("/", 1)[0] === "vault";
-}
-
 /** Prefixes node's authority sign-in will request: secrets-scoped prefixes are skipped unless `allowSecrets`. */
 export function requiredReplicationPrefixes(
   prefixes: readonly string[],
   space: string,
   allowSecrets: boolean | undefined,
 ): string[] {
-  return prefixes.filter((prefix) => allowSecrets === true || !needsSecretsOptIn(space, prefix));
+  if (allowSecrets === true) return [...prefixes];
+  if (space === "secrets" || space.endsWith(":secrets")) return [];
+  return prefixes.filter((prefix) => prefix !== "/" && prefix !== "vault" && !prefix.startsWith("vault/"));
 }
 
 /** The get+sync entries that replication requires on the primary space, one per prefix. */

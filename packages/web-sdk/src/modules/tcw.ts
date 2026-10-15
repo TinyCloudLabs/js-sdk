@@ -552,8 +552,6 @@ export class TinyCloudWeb {
         this.config.includeAccountRegistryPermissions,
       autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
-      // Present only when configured, so an unconfigured client builds the same node config as before.
-      ...(this.config.replication ? { replication: this.config.replication } : {}),
     };
     if (this.config.replication) {
       nodeConfig.replication = this.config.replication.enabled

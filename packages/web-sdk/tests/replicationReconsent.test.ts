@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { KV } from "@tinycloud/sdk-core";
 import {
   REPLICATION_CONSENT_WINDOW_MS,
-  replicationConsentAnchorMs,
   replicationConsentExpired,
   replicationRestoreAccepted,
   replicationPermissionsFor,
@@ -25,17 +24,6 @@ function siwe(issuedAt: string): string {
     "Expiration Time: 2099-01-01T00:00:00.000Z",
   ].join("\n");
 }
-
-describe("consent anchor", () => {
-  test("reads the SIWE Issued At line", () => {
-    expect(replicationConsentAnchorMs(siwe(ANCHOR_ISO))).toBe(ANCHOR_MS);
-  });
-
-  test("returns null when Issued At is absent or unparseable", () => {
-    expect(replicationConsentAnchorMs("no issued line here")).toBeNull();
-    expect(replicationConsentAnchorMs(siwe("not-a-date"))).toBeNull();
-  });
-});
 
 describe("consent deadline", () => {
   test("window is 7 days", () => {
@@ -118,6 +106,7 @@ describe("replication coverage", () => {
 
   test("root and vault prefixes are excluded without allowSecrets", () => {
     expect(requiredReplicationPrefixes(["vault/key", "notes/"], "space-1", false)).toEqual(["notes/"]);
+    expect(requiredReplicationPrefixes(["vaultish/", "vault/"], "space-1", false)).toEqual(["vaultish/"]);
     expect(requiredReplicationPrefixes(["/", "notes/"], "space-1", false)).toEqual(["notes/"]);
     expect(requiredReplicationPrefixes(["/", "notes/"], "space-1", true)).toEqual(["/", "notes/"]);
   });
