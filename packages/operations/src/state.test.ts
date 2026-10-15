@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 async function isolatedHome(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), "tinycloud-operations-state-"));
+  const home = await mkdtemp(join("/var/tmp", "tinycloud-operations-state-"));
   homes.push(home);
   process.env.TC_HOME = home;
   process.env.HOME = homedir();
@@ -73,6 +73,15 @@ const legacyProfile = {
   did: "did:key:legacy#controller",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
+
+test("refuses writes through a whole-profile symlink without changing the target", async () => {
+  await isolatedHome();
+  await writeSession("victim", { owner: "victim" });
+  await symlink(profilePath("victim"), profilePath("linked"));
+
+  await expect(writeSession("linked", { owner: "attacker" })).rejects.toThrow("symlink");
+  expect(await readSession("victim")).toEqual({ owner: "victim" });
+});
 
 test("reads unversioned format-1 stores and writes format metadata without changing JSON layout", async () => {
   await isolatedHome();

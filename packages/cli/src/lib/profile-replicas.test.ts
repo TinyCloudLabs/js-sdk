@@ -1,10 +1,10 @@
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const home = await mkdtemp(join(tmpdir(), "tc-replica-logout-"));
+const home = await mkdtemp(join("/var/tmp", "tc-replica-logout-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
@@ -20,6 +20,51 @@ beforeEach(async () => {
 });
 
 afterAll(async () => { await rm(home, { recursive: true, force: true }); });
+
+test("logout cleanup refuses a linked profile instead of deleting the target profile's replica", async () => {
+  await ProfileManager.setProfile("victim", {
+    name: "victim", host: "https://node.example.test", did: "did:key:victim", chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  const replica = join(profilePath("victim"), "replicas", "notes");
+  const store = await SqliteReplicaStore.open(replica, { create: true });
+  await store.init({
+    name: "notes", replicaId: "notes", host: "https://node.example.test",
+    space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+    prefix: "notes/", deviceDid: "did:key:victim", allowSecrets: false,
+    localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+  });
+  await store.close();
+  await symlink(profilePath("victim"), profilePath("linked"));
+
+  await expect(removeProfileReplicasAndReplication("linked")).rejects.toThrow("symlink");
+  expect(await stat(join(replica, "replica.db"))).toBeTruthy();
+});
+
+test("logout refuses a replica swapped for a symlink after opening it", async () => {
+  const entry = join(profilePath("dogfood"), "replicas", "notes");
+  const outside = join(home, "moved-logout-replica");
+  const store = await SqliteReplicaStore.open(entry, { create: true });
+  await store.init({
+    name: "notes", replicaId: "notes", host: "https://node.example.test",
+    space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+    prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+    localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+  });
+  await store.close();
+  const originalDestroy = SqliteReplicaStore.prototype.destroy;
+  SqliteReplicaStore.prototype.destroy = async function (lease) {
+    await rename(entry, outside);
+    await symlink(outside, entry);
+    return originalDestroy.call(this, lease);
+  };
+  try {
+    await expect(removeProfileReplicasAndReplication("dogfood")).rejects.toThrow("symlink");
+    expect(await stat(join(outside, "replica.db"))).toBeTruthy();
+  } finally {
+    SqliteReplicaStore.prototype.destroy = originalDestroy;
+  }
+});
 
 describe("flag-owned logout cleanup", () => {
   test("destroys actual flag replica stores and removes every identity partition and event log", async () => {
@@ -49,6 +94,32 @@ describe("flag-owned logout cleanup", () => {
     expect(await removeProfileReplication("dogfood")).toEqual([`replication/${idHash}/${replicaHash}`]);
     await expect(stat(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
+  test("refuses a flag replica whose ancestor is swapped for an outside symlink", async () => {
+    const replicas = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas");
+    const outside = join(home, "moved-flag-replicas");
+    const entry = join(replicas, "b".repeat(26));
+    const store = await SqliteReplicaStore.open(entry, { create: true });
+    await store.init({
+      name: "notes", replicaId: "b".repeat(26), host: "https://node.example.test",
+      space: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+      prefix: "notes/", deviceDid: "did:key:device", allowSecrets: false,
+      localReadPolicy: "whileGrantValid", retentionGrantCid: null,
+    });
+    await store.close();
+    const originalDestroy = SqliteReplicaStore.prototype.destroy;
+    SqliteReplicaStore.prototype.destroy = async function (lease) {
+      await rename(replicas, outside);
+      await symlink(outside, replicas);
+      return originalDestroy.call(this, lease);
+    };
+    try {
+      await expect(removeProfileReplication("dogfood")).rejects.toMatchObject({ code: "REPLICA_PURGE_FAILED" });
+      expect(await stat(join(outside, "b".repeat(26), "replica.db"))).toBeTruthy();
+    } finally {
+      SqliteReplicaStore.prototype.destroy = originalDestroy;
+    }
+  });
+
   test("a busy flag-owned replica prevents deletion of legacy replicas", async () => {
     const flagPath = join(profilePath("dogfood"), "replication", "a".repeat(26), "replicas", "b".repeat(26));
     const legacyPath = join(profilePath("dogfood"), "replicas", "legacy");

@@ -6,6 +6,7 @@ import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/pr
 import { basename, dirname, join, resolve } from "node:path";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { replicationForProfile } from "../lib/replication-registry.js";
+import { assertSafeReplicaForReset } from "../lib/profile-replicas.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
 import {
@@ -174,8 +175,8 @@ export function profileGuard(profile: string): MutationGuard {
   };
 }
 
-async function openReplica(profile: string, name: string): Promise<SqliteReplicaStore> {
-  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard: profileGuard(profile) });
+async function openReplica(profile: string, name: string, guard: MutationGuard = profileGuard(profile)): Promise<SqliteReplicaStore> {
+  return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard });
 }
 
 function assertLegacyLogoutClear(dir: string): void {
@@ -783,7 +784,14 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
       run(async () => {
         const profile = await profileName(cmd);
         const name = await existingReplicaName(profile, options.replica);
-        const store = await openReplica(profile, name);
+        const profileLock = profileGuard(profile);
+        const safeGuard: MutationGuard = (section) => profileLock(async () => {
+          await assertSafeReplicaForReset(profile, name);
+          return section();
+        });
+        const store = options.purge
+          ? await safeGuard(() => openReplica(profile, name, safeGuard))
+          : await openReplica(profile, name);
         try {
           if (options.purge) {
             // The removal is fenced by this lease and the database identity

@@ -10,15 +10,17 @@ import { ExitCode } from "../config/constants.js";
 
 const SYNC_LEASE_MS = 60_000;
 
-function refuseUnsafeReplicaPath(profile: string, detail: string): CLIError {
+function refuseUnsafeReplicaPath(profile: string, detail: string, operation: "logout" | "reset" = "logout"): CLIError {
   return new CLIError(
     "REPLICA_PURGE_FAILED",
-    `Logout for profile "${profile}" cleared the session, but ${detail}; the replicas were left untouched.`,
+    operation === "logout"
+      ? `Logout for profile "${profile}" cleared the session, but ${detail}; the replicas were left untouched.`
+      : `Cannot reset a replica in profile "${profile}": ${detail}; no replica was removed.`,
     ExitCode.ERROR,
   );
 }
 /** Return a real replica root only when it is a real directory inside this profile. */
-async function safeReplicaRoot(profile: string, root: string): Promise<string | null> {
+async function safeReplicaRoot(profile: string, root: string, operation: "logout" | "reset" = "logout"): Promise<string | null> {
   let rootStats: Stats;
   try {
     rootStats = await lstat(root);
@@ -27,39 +29,50 @@ async function safeReplicaRoot(profile: string, root: string): Promise<string | 
     throw error;
   }
   if (rootStats.isSymbolicLink()) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" is a symlink`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" is a symlink`, operation);
   }
   if (!rootStats.isDirectory()) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas path "${root}" is not a real directory`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas path "${root}" is not a real directory`, operation);
   }
 
   const [profileRealPath, rootRealPath] = await Promise.all([realpath(profilePath(profile)), realpath(root)]);
   if (!rootRealPath.startsWith(profileRealPath + sep)) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" resolves outside the selected profile`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" resolves outside the selected profile`, operation);
   }
   return rootRealPath;
 }
 
 /** Refuse symlinks and escaped paths before opening or deleting any replica store. */
-async function safeReplicaEntry(profile: string, root: string, entry: Dirent): Promise<string> {
+async function safeReplicaEntry(profile: string, root: string, entry: Dirent, operation: "logout" | "reset" = "logout"): Promise<string> {
   const entryPath = join(root, entry.name);
-  const rootRealPath = await safeReplicaRoot(profile, root);
+  const rootRealPath = await safeReplicaRoot(profile, root, operation);
   if (rootRealPath === null) {
-    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`);
+    throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`, operation);
   }
   const entryStats = await lstat(entryPath);
   if (entry.isSymbolicLink() || entryStats.isSymbolicLink()) {
-    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`);
+    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`, operation);
   }
   if (!entry.isDirectory() || !entryStats.isDirectory()) {
-    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is not a real directory`);
+    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is not a real directory`, operation);
   }
 
   const entryRealPath = await realpath(entryPath);
   if (!entryRealPath.startsWith(rootRealPath + sep)) {
-    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" resolves outside the replicas directory`);
+    throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" resolves outside the replicas directory`, operation);
   }
   return entryPath;
+}
+
+/** Check the named replica on both sides of opening and inside its mutation guard. */
+export async function assertSafeReplicaForReset(profile: string, name: string): Promise<void> {
+  const root = join(profilePath(profile), "replicas");
+  if (await safeReplicaRoot(profile, root, "reset") === null) {
+    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
+  }
+  const entry = (await readdir(root, { withFileTypes: true })).find((item) => item.name === name);
+  if (!entry) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
+  await safeReplicaEntry(profile, root, entry, "reset");
 }
 
 /** Remove each replica through its fenced store API; refuse before deletion if any sync owns a lease. */
@@ -79,7 +92,10 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
           create: false,
           guard: async (action) => {
             try {
-              return await withProfileLock(profile, action, { requireProfile: true });
+              return await withProfileLock(profile, async () => {
+                await safeReplicaEntry(profile, root, entry);
+                return action();
+              }, { requireProfile: true });
             } catch (error) {
               if (error instanceof ProfileDeletedError) {
                 throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" was deleted; its replicas are gone and nothing was written.`);
@@ -133,6 +149,38 @@ export async function removeProfileReplicas(profile: string, heldLeases?: Readon
       }));
     }
   });
+}
+
+async function assertSafeFlagReplica(profile: string, root: string, partition: string, name: string): Promise<void> {
+  const rootReal = await safeReplicaRoot(profile, root);
+  if (rootReal === null) throw refuseUnsafeReplicaPath(profile, `the replication root "${root}" disappeared`);
+  const partitionPath = join(root, partition);
+  const partitionStats = await lstat(partitionPath);
+  if (partitionStats.isSymbolicLink() || !partitionStats.isDirectory()) {
+    throw refuseUnsafeReplicaPath(profile, `replication entry "${partition}" is not a real directory`);
+  }
+  const partitionReal = await realpath(partitionPath);
+  if (!partitionReal.startsWith(rootReal + sep)) {
+    throw refuseUnsafeReplicaPath(profile, `replication entry "${partition}" resolves outside the replication root`);
+  }
+  const replicasRoot = join(partitionPath, "replicas");
+  const replicasStats = await lstat(replicasRoot);
+  if (replicasStats.isSymbolicLink() || !replicasStats.isDirectory()) {
+    throw refuseUnsafeReplicaPath(profile, `replication replicas path "${replicasRoot}" is not a real directory`);
+  }
+  const replicaPath = join(replicasRoot, name);
+  const replicaStats = await lstat(replicaPath);
+  if (replicaStats.isSymbolicLink() || !replicaStats.isDirectory()) {
+    throw refuseUnsafeReplicaPath(profile, `replication replica "${name}" is not a real directory`);
+  }
+  const replicaReal = await realpath(replicaPath);
+  if (!replicaReal.startsWith(partitionReal + sep)) {
+    throw refuseUnsafeReplicaPath(profile, `replication replica "${name}" resolves outside the partition`);
+  }
+  const database = await lstat(join(replicaPath, "replica.db"));
+  if (database.isSymbolicLink() || !database.isFile()) {
+    throw refuseUnsafeReplicaPath(profile, `replication database "${name}" is not a regular file`);
+  }
 }
 
 /** Purge every flag-owned identity partition and remove its diagnostics root. */
@@ -208,7 +256,13 @@ export async function removeProfileReplication(profile: string, heldLeases?: Rea
           });
           if (!database) continue;
           const name = `replication/${partition.name}/${entry.name}`;
-          const store = await SqliteReplicaStore.open(join(replicasRoot, entry.name), { create: false, guard: async (action) => withProfileLock(profile, action, { requireProfile: true }) });
+          const store = await SqliteReplicaStore.open(join(replicasRoot, entry.name), {
+            create: false,
+            guard: async (action) => withProfileLock(profile, async () => {
+              await assertSafeFlagReplica(profile, root, partition.name, entry.name);
+              return action();
+            }, { requireProfile: true }),
+          });
           if (await store.open() === null) {
             await store.close();
             throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "${name}" has no initialized store.`, ExitCode.ERROR);
@@ -263,7 +317,13 @@ async function acquireLogoutLeases(profile: string): Promise<Array<{ path: strin
             await loadSqlite();
             sqliteLoaded = true;
           }
-          const store = await SqliteReplicaStore.open(path, { create: false, guard: async (action) => withProfileLock(profile, action, { requireProfile: true }) });
+          const store = await SqliteReplicaStore.open(path, {
+            create: false,
+            guard: async (action) => withProfileLock(profile, async () => {
+              await safeReplicaEntry(profile, legacyRoot, entry);
+              return action();
+            }, { requireProfile: true }),
+          });
           if (await store.open() === null) {
             await store.close();
             throw new CLIError("REPLICA_PURGE_FAILED", `Replica "${entry.name}" has no initialized store; logout cleared the session but removed no replicas.`, ExitCode.ERROR);
@@ -325,7 +385,13 @@ async function acquireLogoutLeases(profile: string): Promise<Array<{ path: strin
               await loadSqlite();
               sqliteLoaded = true;
             }
-            const store = await SqliteReplicaStore.open(path, { create: false, guard: async (action) => withProfileLock(profile, action, { requireProfile: true }) });
+            const store = await SqliteReplicaStore.open(path, {
+              create: false,
+              guard: async (action) => withProfileLock(profile, async () => {
+                await assertSafeFlagReplica(profile, replicationRoot, partition.name, replica.name);
+                return action();
+              }, { requireProfile: true }),
+            });
             if (await store.open() === null) {
               await store.close();
               throw new CLIError("REPLICA_PURGE_FAILED", `Logout cleared the session, but flag replica "replication/${partition.name}/${replica.name}" has no initialized store.`, ExitCode.ERROR);
@@ -374,7 +440,7 @@ export async function removeProfileReplicasAndReplication(profile: string): Prom
         .filter((name) => !removedSet.has(name));
       throw new CLIError(
         error instanceof CLIError ? error.code : "REPLICA_PURGE_FAILED",
-        `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}.`,
+        `Logout cleared the session, but replica cleanup failed. Removed: ${removed.join(", ") || "none"}. Not removed: ${remaining.join(", ") || "none"}. ${error instanceof Error ? error.message : String(error)}`,
         error instanceof CLIError ? error.exitCode : ExitCode.ERROR,
         { replicasRemoved: removed, replicasRemaining: remaining },
       );

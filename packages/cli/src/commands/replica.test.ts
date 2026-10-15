@@ -4,9 +4,10 @@
  * nothing is written into it.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
 import {
   Replica,
@@ -20,11 +21,11 @@ import {
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 
 // The profile store reads TC_HOME when it loads (and replica.js loads it), so import them afterwards.
-const home = await mkdtemp(join(tmpdir(), "tc-replica-guard-"));
+const home = await mkdtemp(join("/var/tmp", "tc-replica-guard-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
-const { createReplica, profileGuard, replicaSecretsWarning } = await import("./replica.js");
+const { createReplica, profileGuard, registerReplicaCommand, replicaSecretsWarning } = await import("./replica.js");
 const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
 
 const PROFILE = "doomed";
@@ -53,6 +54,30 @@ async function createProfile(name = PROFILE): Promise<void> {
     spaceName: "default",
     createdAt: "2026-10-01T00:00:00.000Z",
   });
+}
+
+async function resetFromCli(profile: string, name: string): Promise<{ exited: boolean; stderr: string }> {
+  const program = new Command();
+  program.option("--profile <name>").option("--json");
+  registerReplicaCommand(program);
+  const previousExit = process.exit;
+  const previousWrite = process.stderr.write;
+  let stderr = "";
+  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await program.parseAsync(["node", "tc", "--profile", profile, "--json", "replica", "reset", "--replica", name, "--purge"], { from: "node" });
+    return { exited: false, stderr };
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "expected CLI exit") throw error;
+    return { exited: true, stderr };
+  } finally {
+    process.exit = previousExit;
+    process.stderr.write = previousWrite;
+  }
 }
 
 function page(): VerifiedPage {
@@ -217,6 +242,66 @@ describe("replica purge symlink safety", () => {
     });
     expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "victim-replica", "replica.db"))).toBe(true);
+  });
+});
+
+describe("replica reset purge containment", () => {
+  test("refuses a symlinked replicas root without removing the target replica", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await symlink(join(PROFILES_DIR, "victim", "replicas"), join(PROFILES_DIR, PROFILE, "replicas"));
+
+    const result = await resetFromCli(PROFILE, "notes");
+    expect(result.exited).toBe(true);
+    expect(result.stderr).toContain("symlink");
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses a symlinked replica entry without removing its target", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await mkdir(join(PROFILES_DIR, PROFILE, "replicas"));
+    await symlink(join(PROFILES_DIR, "victim", "replicas", "notes"), join(PROFILES_DIR, PROFILE, "replicas", "notes"));
+
+    const result = await resetFromCli(PROFILE, "notes");
+    expect(result.exited).toBe(true);
+    expect(result.stderr).toContain("symlink");
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses a symlinked whole profile without removing the selected target's data", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    const result = await resetFromCli("linked", "notes");
+    expect(result.exited).toBe(true);
+    expect(result.stderr).toContain("symlink");
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses an entry swapped for a symlink after the store opens", async () => {
+    const store = await createReplica(PROFILE, config);
+    await store.close();
+    const entry = join(PROFILES_DIR, PROFILE, "replicas", "notes");
+    const outside = join(home, "moved-replica");
+    const originalDestroy = SqliteReplicaStore.prototype.destroy;
+    SqliteReplicaStore.prototype.destroy = async function (lease) {
+      await rename(entry, outside);
+      await symlink(outside, entry);
+      return originalDestroy.call(this, lease);
+    };
+    try {
+      const result = await resetFromCli(PROFILE, "notes");
+      expect(result.exited).toBe(true);
+      expect(result.stderr).toContain("symlink");
+      expect(await exists(join(outside, "replica.db"))).toBe(true);
+    } finally {
+      SqliteReplicaStore.prototype.destroy = originalDestroy;
+    }
   });
 });
 

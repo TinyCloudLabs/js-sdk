@@ -598,6 +598,13 @@ export async function readProfileStore<T>(
   };
 }
 
+async function assertRealProfileDirectory(profile: string): Promise<void> {
+  const stats = await lstat(profilePath(profile));
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new TypeError(`Profile "${profile}" must be a real directory, not a symlink or other file.`);
+  }
+}
+
 /**
  * Runs a small critical section under the one lock shared by all profile
  * stores (see acquireProfileLock). Lock release verifies its ownership token
@@ -619,7 +626,10 @@ export async function withProfileLock<T>(
   const normalizedProfile = validateProfileName(profile);
   const lockPath = profileLockPath(normalizedProfile);
   const held = (heldProfileLocks.getStore() ?? []).filter((ownership) => ownership.active);
-  if (held.some((ownership) => ownership.lockPath === lockPath)) return action();
+  if (held.some((ownership) => ownership.lockPath === lockPath)) {
+    await assertRealProfileDirectory(normalizedProfile);
+    return action();
+  }
   const acquired = await acquireProfileLock(normalizedProfile, options);
   const ownership: HeldProfileLock = {
     lockPath,
@@ -628,6 +638,7 @@ export async function withProfileLock<T>(
     active: true,
   };
   try {
+    await assertRealProfileDirectory(normalizedProfile);
     return await heldProfileLocks.run([...held, ownership], action);
   } finally {
     ownership.active = false;
@@ -805,6 +816,7 @@ async function acquireProfileLock(
   const directory = profilePath(profile);
   if (options.requireProfile && !(await exists(profileConfigPath(profile)))) throw new ProfileDeletedError(profile);
   if (!options.requireProfile) await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await assertRealProfileDirectory(profile);
   await mkdir(dirname(turnDirectory), { recursive: true, mode: PRIVATE_DIR_MODE });
   // Every store write takes this lock: tighten the tree older releases
   // created 0775 before writing sessions or delegations into it.
