@@ -8,6 +8,9 @@ import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { KILL_WORKER } from "./client.js";
 import { kvPartitionEraser } from "./schema.js";
 
+/** Construct a lifecycle with a test eraser without exposing fault wiring to the production entry. */
+export { createIndexedDbLifecycle } from "./lifecycle.js";
+
 /**
  * Terminate the storage's worker as a crash would: in-flight calls reject,
  * and the next call on any handle respawns the worker and reopens its spec.
