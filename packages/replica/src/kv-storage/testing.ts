@@ -6,6 +6,8 @@ import type { KVReplicaStorage, ReplicaPartitionEraser } from "@tinycloud/sdk-se
 
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";
 import { KILL_WORKER } from "./client.js";
+import type { DenyFaultPoint } from "./lifecycle.js";
+import { denyFaults } from "./lifecycle.js";
 import { kvPartitionEraser } from "./schema.js";
 
 /**
@@ -39,5 +41,18 @@ export function injectEraseFailure(
       return base.erasePartition(tx, partitionId);
     },
     eraseIdentityPending: (tx, identityKeyHash) => base.eraseIdentityPending(tx, identityKeyHash),
+  };
+}
+
+/**
+ * Plans a failure at one deny step: `deny_tx` makes the deny transaction fail
+ * (forcing the fallback delete), `delete_database` makes the fallback delete
+ * fail (forcing the logout marker). `once` (default true) consumes the plan on
+ * first use. Returns a disposer that clears the plan.
+ */
+export function injectDenyFailure(point: DenyFaultPoint, options: { once?: boolean } = {}): () => void {
+  denyFaults[point] = { once: options.once ?? true };
+  return () => {
+    delete denyFaults[point];
   };
 }

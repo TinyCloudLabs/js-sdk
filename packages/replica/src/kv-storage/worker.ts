@@ -6,14 +6,16 @@
  * `invoke` and the session manager come from `@tinycloud/web-sdk-wasm` with
  * the WASM inlined by the build.
  *
- * The lifecycle gate's `createIndexedDbGateTx` and the quota ledger plug in
- * here (`gateTx`, `ledgerFor`). Until the gate is wired every `open` refuses
- * REPLICA_GATED `gate_unavailable`: there is no ungated mode.
+ * `createIndexedDbGateTx` plugs in as `gateTx` over the origin database. There is
+ * no ungated mode: without it every `open` refuses REPLICA_GATED `gate_unavailable`.
+ * The quota ledger (`ledgerFor`) is not wired here yet, so quota is unbounded.
  */
 import { initialized } from "@tinycloud/web-sdk-wasm";
 
+import { createIndexedDbGateTx } from "./gateTx.js";
 import { createKvWorkerHost } from "./host.js";
 import type { KvRequest } from "./protocol.js";
+import { openKvDatabase } from "./schema.js";
 import { wasmWorkerDeps } from "./wasmDeps.js";
 
 const scope = self as unknown as {
@@ -25,6 +27,7 @@ async function main(): Promise<void> {
   await initialized;
   const host = createKvWorkerHost({
     ...wasmWorkerDeps,
+    gateTx: createIndexedDbGateTx((create) => openKvDatabase({ create })),
     post: (message, transfer) => scope.postMessage(message, transfer ?? []),
     ...(navigator.locks === undefined ? {} : { locks: navigator.locks }),
   });

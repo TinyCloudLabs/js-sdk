@@ -37,7 +37,9 @@ import { ReplicaError, ReplicaErrorCode, gatedError as gated } from "../errors.j
 import { assertFolderPrefix } from "../scope.js";
 import { idbError, requestAsPromise, transactionDone } from "../browser/idb.js";
 import { IndexedDbReplicaStore } from "../browser/store.js";
+import { createIndexedDbGateTx } from "./gateTx.js";
 import { grantInfoOf } from "./grantInfo.js";
+import { createIndexedDbLifecycle } from "./lifecycle.js";
 import { IndexedDbPendingWriteStore } from "./pending.js";
 import type { KvEvent, KvOpenSpec, KvReply, KvRequest, KvResults, KvWireError } from "./protocol.js";
 import { ERASE_STORES, KV_STORE, identityKeyHashOf, kvLayout, kvPartitionEraser, openKvDatabase, partitionIdOf } from "./schema.js";
@@ -494,5 +496,7 @@ class IndexedDbReplicaStorage implements KVReplicaStorage {
  * first `open`, so an app with replication off never starts it.
  */
 export function indexedDbReplicaStorage(options: IndexedDbReplicaStorageOptions = {}): KVReplicaStorage {
-  return new IndexedDbReplicaStorage(options);
+  const gateTx = options.gateTx ?? createIndexedDbGateTx((create) => openKvDatabase({ create }));
+  const lifecycle = options.lifecycle ?? createIndexedDbLifecycle({ ledger: options.ledger });
+  return new IndexedDbReplicaStorage({ ...options, gateTx, lifecycle });
 }
