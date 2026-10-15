@@ -24,6 +24,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#548",
+      "ticket": "TC-858",
+      "index.mjs": 361,
+      "index.cjs": 369,
+      "note": "S2 web-sdk replication wiring; gzip -9 growth vs contract head 80a63629"
     }
   ]
 }
