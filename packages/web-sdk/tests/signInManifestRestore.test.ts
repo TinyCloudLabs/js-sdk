@@ -2,7 +2,7 @@ import { expect, mock, test } from "bun:test";
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
 import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
-import { TinyCloudNode as ReplicationNode, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
+import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
 import { pkhDid } from "@tinycloud/sdk-core";
 
@@ -103,6 +103,19 @@ const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
 const { dispatchSDKEvent } = require("../src/notifications");
 const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinycloud/node-sdk");
+
+test("replication opt-in requires explicit browser loaders before construction", () => {
+  let previous: ReturnType<typeof getNodeReplicationLoaders> | undefined;
+  try { previous = getNodeReplicationLoaders(); } catch { /* No registration in this realm. */ }
+  registerReplicationLoaders(undefined as never);
+  try {
+    expect(() => new TinyCloudWeb({
+      replication: { enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" } as never },
+    })).toThrow("registerReplicationLoaders");
+  } finally {
+    registerReplicationLoaders(previous as never);
+  }
+});
 
 test("passes persisted additional spaces and expiry through browser restore data", () => {
   const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";

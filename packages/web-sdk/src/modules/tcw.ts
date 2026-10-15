@@ -13,6 +13,7 @@
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
+  getNodeReplicationLoaders,
   TinyCloudNodeConfig,
   type BootstrapWarning,
   type DelegateToOptions,
@@ -475,6 +476,15 @@ export class TinyCloudWeb {
   };
 
   constructor(config: Config = {}) {
+    if (config.replication?.enabled) {
+      try {
+        getNodeReplicationLoaders();
+      } catch {
+        throw new Error(
+          "TinyCloudWeb replication requires registerReplicationLoaders({ runtime, authority, gate }) from @tinycloud/web-sdk before construction.",
+        );
+      }
+    }
     this.config = config;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
