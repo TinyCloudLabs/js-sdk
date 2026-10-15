@@ -388,6 +388,10 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect((await ordinaryInvoke(f, ordinary, "tinycloud.kv/put", "ordinary before revoke")).status).toBe(200);
     expect((await descendantInvoke(f, "tinycloud.kv/put", "descendant before revoke")).status).toBe(200);
     expect(await ownerRead(f)).toBe("descendant before revoke");
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
+    const liveRegistration = await f.newRegistration();
+    expect(liveRegistration.policyCid).not.toBe(f.registration.policyCid);
+    expect(await registerPolicyV3(liveRegistration)).toMatchObject({ policyCid: liveRegistration.policyCid });
 
     // /revoke targets precisely this third-party grant CID, NOT the owner key.
     const now = seconds();
@@ -427,6 +431,10 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect((await ordinaryInvoke(f, ordinary, "tinycloud.kv/put", "SIWE ordinary before revoke")).status).toBe(200);
     expect((await ordinaryInvoke(f, ordinary, "tinycloud.kv/get")).status).toBe(200);
     expect(await siweOwnerRead(f)).toBe("SIWE ordinary before revoke");
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
+    const liveRegistration = await f.newRegistration();
+    expect(liveRegistration.policyCid).not.toBe(f.registration.policyCid);
+    expect(await registerPolicyV3(liveRegistration)).toMatchObject({ policyCid: liveRegistration.policyCid });
     const now = seconds();
     const revocation = await signCompactUcanAuthorization({ issuerDid: f.registrarDid, audienceDid: f.nodeDid,
       attenuation: { [`urn:cid:${f.grant.cid}`]: { "tinycloud.delegation/revoke": [{}] } },
@@ -477,12 +485,19 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "S0 before key revoke")).status).toBe(200);
     expect((await descendantInvoke(f, "tinycloud.kv/put", "descendant before key revoke")).status).toBe(200);
     expect((await ordinaryInvoke(f, ordinary, "tinycloud.kv/put", "ordinary before key revoke")).status).toBe(200);
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await descendantInvoke(f, "tinycloud.kv/get")).status).toBe(200);
+    expect((await ordinaryInvoke(f, ordinary, "tinycloud.kv/get")).status).toBe(200);
     expect(await ownerRead(f)).toBe("ordinary before key revoke");
 
     // A different principal may sign a structurally valid request, but cannot revoke this key.
     const outsiderKey = key();
     expect(did(outsiderKey)).not.toBe(f.registrarDid);
     expect((await keyRevocationRequest(f.registrarDid, outsiderKey, f.nodeDid)).status).toBe(403);
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
+    const liveRegistration = await f.newRegistration();
+    expect(liveRegistration.policyCid).not.toBe(f.registration.policyCid);
+    expect(await registerPolicyV3(liveRegistration)).toMatchObject({ policyCid: liveRegistration.policyCid });
     expect((await keyRevocationRequest(f.registrarDid, f.registrarKey, f.nodeDid)).status).toBe(200);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "denied S0")).status);
@@ -530,6 +545,7 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     expect((await ordinaryGrandchildInvoke(f, ordinaryGrandchild, "tinycloud.kv/put", "ordinary grandchild before recipient revoke")).status).toBe(200);
     expect(await ownerRead(f)).toBe("ordinary grandchild before recipient revoke");
 
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
     expect((await keyRevocationRequest(f.recipientDid, f.recipientKey, f.nodeDid)).status).toBe(200);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "denied recipient S0")).status);
@@ -563,8 +579,15 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
       facts: [{}], proofs: [], notBefore: seconds(), expiresAt: seconds() + 30, nonce: nonce(), sign: signer(f.ownerKey) });
     expect((await post("/revoke", beforeOwnerRevoke.authorization)).status).toBe(200);
     expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "owner before revoke")).status).toBe(200);
+    expect((await descendantInvoke(f, "tinycloud.kv/get")).status).toBe(200);
+    expect((await descendantInvoke(f, "tinycloud.kv/put", "owner descendant before revoke")).status).toBe(200);
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "owner before revoke")).status).toBe(200);
     expect((await invoke(independent.session, independent.recipientKey, independent.recipientDid, independent.nodeDid, independent.resource, "tinycloud.kv/put", "unrelated before revoke")).status).toBe(200);
     expect(await ownerRead(f)).toBe("owner before revoke");
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
+    const liveRegistration = await f.newRegistration();
+    expect(liveRegistration.policyCid).not.toBe(f.registration.policyCid);
+    expect(await registerPolicyV3(liveRegistration)).toMatchObject({ policyCid: liveRegistration.policyCid });
     expect((await keyRevocationRequest(f.ownerDid, f.ownerKey, f.nodeDid)).status).toBe(200);
     statusDenied((await ownerGet(f)).status);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status);
@@ -597,6 +620,8 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
 
   test("committed key-revoke receipt is stable across self-revoke retries, while nonce conflicts and unrelated signers are rejected", async () => {
     const f = await fixture();
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", "receipt control")).status).toBe(200);
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status).toBe(200);
     const requestNonce = nonce();
     const signed = await signedKeyRevocation(f.registrarDid, f.registrarKey, f.nodeDid, { kind: "global" }, requestNonce);
     const first = await postKeyRevocation(signed);
@@ -664,6 +689,8 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     const scope = { kind: "space", spaceId } as const;
     const requestNonce = nonce();
     const request = await signedKeyRevocation(first.recipientDid, first.ownerKey, first.nodeDid, scope, requestNonce);
+    expect((await descendantInvoke(first, "tinycloud.kv/get")).status).toBe(200);
+    expect((await first.mint()).cid).not.toBe(first.session.cid);
     expect((await postKeyRevocation(request)).status).toBe(200);
     const changed = await signedKeyRevocation(first.recipientDid, first.ownerKey, first.nodeDid, scope, requestNonce, [], 39);
     expect(changed.authorization).not.toBe(request.authorization);
@@ -684,6 +711,10 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     const spaceId = f.resource.split("/kv/", 1)[0]!;
     expect(spaceId).not.toBe(f.secondSpace);
     const request = await signedKeyRevocation(f.recipientDid, f.ownerKey, f.nodeDid, { kind: "space", spaceId });
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.secondResource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await combinedSpaceRead(f)).status).toBe(200);
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
     expect((await postKeyRevocation(request)).status).toBe(200);
 
     const bRead = await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.secondResource, "tinycloud.kv/get");
@@ -722,6 +753,9 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     const f = await twoSpaceFixture();
     const spaceId = f.resource.split("/kv/", 1)[0]!;
     const request = await signedKeyRevocation(f.ownerDid, f.ownerKey, f.nodeDid, { kind: "space", spaceId });
+    expect((await ownerGet(f)).status).toBe(200);
+    expect((await ownerGet({ ...f, resource: f.secondResource })).status).toBe(200);
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
     expect((await postKeyRevocation(request)).status).toBe(200);
     statusDenied((await ownerGet(f)).status);
     expect((await ownerGet({ ...f, resource: f.secondResource })).status).toBe(200);
@@ -736,6 +770,10 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
 
   test("global recipient tombstone denies both spaces under one policy", async () => {
     const f = await twoSpaceFixture();
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.secondResource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await combinedSpaceRead(f)).status).toBe(200);
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
     expect((await keyRevocationRequest(f.recipientDid, f.recipientKey, f.nodeDid)).status).toBe(200);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.secondResource, "tinycloud.kv/get")).status);
@@ -750,6 +788,10 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     const revoked = await signCompactUcanAuthorization({ issuerDid: f.registrarDid, audienceDid: f.nodeDid,
       attenuation: { [`urn:cid:${f.policyRoot.cid}`]: { "tinycloud.delegation/revoke": [{}] } },
       facts: [{}], proofs: [], notBefore: now, expiresAt: now + 40, nonce: nonce(), sign: signer(f.registrarKey) });
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.secondResource, "tinycloud.kv/get")).status).toBe(200);
+    expect((await combinedSpaceRead(f)).status).toBe(200);
+    expect((await f.mint()).cid).not.toBe(f.session.cid);
     expect((await post("/revoke", revoked.authorization)).status).toBe(200);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status);
     statusDenied((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.secondResource, "tinycloud.kv/get")).status);
@@ -762,7 +804,11 @@ describe("TC-1149 policy grant revocation over real node HTTP", () => {
     for (const rootName of ["policyRoot", "enforcementRoot"] as const) {
       const f = await fixture();
       expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/put", rootName)).status).toBe(200);
+      expect((await invoke(f.session, f.recipientKey, f.recipientDid, f.nodeDid, f.resource, "tinycloud.kv/get")).status).toBe(200);
+      expect((await descendantInvoke(f, "tinycloud.kv/get")).status).toBe(200);
+      expect((await descendantInvoke(f, "tinycloud.kv/put", rootName)).status).toBe(200);
       const before = await ownerRead(f);
+      expect((await f.mint()).cid).not.toBe(f.session.cid);
       const now = seconds();
       const revoked = await signCompactUcanAuthorization({ issuerDid: f.registrarDid, audienceDid: f.nodeDid,
         attenuation: { [`urn:cid:${f[rootName].cid}`]: { "tinycloud.delegation/revoke": [{}] } },

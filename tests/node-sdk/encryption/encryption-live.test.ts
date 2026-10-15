@@ -186,6 +186,8 @@ describe("encryption live node-sdk integration", () => {
     const ownerDid = `did:pkh:eip155:1:${wallet.address}`;
     const networkName = `sdk-live-${Date.now()}`;
     const networkId = `urn:tinycloud:encryption:${ownerDid}:${networkName}`;
+    const controlNetworkName = `${networkName}-control`;
+    const controlNetworkId = `urn:tinycloud:encryption:${ownerDid}:${controlNetworkName}`;
     const manifest = {
       manifest_version: 1 as const,
       app_id: "dev.tinycloud.encryption-live",
@@ -196,6 +198,11 @@ describe("encryption live node-sdk integration", () => {
           service: "tinycloud.encryption",
           path: networkId,
           actions: ["network.create", "network.revoke", "decrypt"],
+        },
+        {
+          service: "tinycloud.encryption",
+          path: controlNetworkId,
+          actions: ["network.create", "network.revoke"],
         },
       ],
     };
@@ -316,6 +323,30 @@ describe("encryption live node-sdk integration", () => {
     expect(decryptEntry?.service).toBe("encryption");
     expect(decryptEntry?.path).toBe(networkId);
     expect(decryptEntry?.action).toBe(DECRYPT_ACTION);
+    // Exercise both admin routes with this exact session before cutting it off.
+    // The control network has no decrypt permission, so sign-in does not auto-create it.
+    const controlCreateBody = { ...createBody, name: controlNetworkName };
+    const controlCreateFacts = { ...createFacts, networkId: controlNetworkId,
+      bodyHash: canonicalHashHex(crypto.sha256, controlCreateBody) };
+    const liveCreate = await fetch(`${SERVER_URL}/encryption/networks`, {
+      method: "POST",
+      headers: { Authorization:
+        mintRawNetworkAuthorization(session, nodeId, controlNetworkId, NETWORK_CREATE_ACTION, controlCreateFacts).authorization,
+        "Content-Type": "application/json" },
+      body: canonicalizeEncryptionJson(controlCreateBody),
+    });
+    expect(liveCreate.status).toBe(200);
+    const controlRevokeFacts = {
+      type: NETWORK_ADMIN_TYPE, targetNode: nodeId, networkId: controlNetworkId,
+      bodyHash: canonicalHashHex(crypto.sha256, {}),
+      action: "tinycloud.encryption/network.revoke",
+    };
+    const liveNetworkRevoke = await fetch(
+      `${SERVER_URL}/encryption/networks/${encodeURIComponent(controlNetworkId)}/revoke`,
+      { method: "POST", headers: { Authorization:
+        mintRawNetworkAuthorization(session, nodeId, controlNetworkId, controlRevokeFacts.action, controlRevokeFacts).authorization } },
+    );
+    expect(liveNetworkRevoke.status).toBe(204);
     const sessionDid = session.verificationMethod.split("#", 1)[0]!;
     const encodedSecret = session.jwk.d;
     if (typeof encodedSecret !== "string") throw new Error("sign-in session has no Ed25519 key");
@@ -340,10 +371,10 @@ describe("encryption live node-sdk integration", () => {
     const deniedCreate = await fetch(`${SERVER_URL}/encryption/networks`, {
       method: "POST",
       headers: {
-        Authorization: mintRawNetworkAuthorization(session, nodeId, networkId, NETWORK_CREATE_ACTION, createFacts).authorization,
+        Authorization: mintRawNetworkAuthorization(session, nodeId, controlNetworkId, NETWORK_CREATE_ACTION, controlCreateFacts).authorization,
         "Content-Type": "application/json",
       },
-      body: canonicalizeEncryptionJson(createBody),
+      body: canonicalizeEncryptionJson(controlCreateBody),
     });
     expect([401, 403]).toContain(deniedCreate.status);
     const deniedDecrypt = await service.decryptEnvelope(
@@ -359,9 +390,9 @@ describe("encryption live node-sdk integration", () => {
       action: "tinycloud.encryption/network.revoke",
     };
     const deniedNetworkRevoke = await fetch(
-      `${SERVER_URL}/encryption/networks/${encodeURIComponent(networkId)}/revoke`,
+      `${SERVER_URL}/encryption/networks/${encodeURIComponent(controlNetworkId)}/revoke`,
       { method: "POST", headers: { Authorization:
-        mintRawNetworkAuthorization(session, nodeId, networkId, revokeFacts.action, revokeFacts).authorization } },
+        mintRawNetworkAuthorization(session, nodeId, controlNetworkId, controlRevokeFacts.action, controlRevokeFacts).authorization } },
     );
     expect([401, 403]).toContain(deniedNetworkRevoke.status);
 
