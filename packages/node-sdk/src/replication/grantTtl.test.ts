@@ -19,6 +19,18 @@ describe("grantTtlMs config (§6)", () => {
     ).toThrow(TypeError);
   });
 
+  test("validates grantTtlMs whenever enabled is truthy, matching the runtime gate", () => {
+    expect(() =>
+      assertValidReplicationConfig({ enabled: 1 as never, storage, prefixes: ["notes/"], grantTtlMs: 30 * DAY }),
+    ).toThrow(/grantTtlMs/);
+  });
+
+  test("skips validation when replication is disabled", () => {
+    expect(() =>
+      assertValidReplicationConfig({ enabled: false, storage, prefixes: ["notes/"], grantTtlMs: 30 * DAY }),
+    ).not.toThrow();
+  });
+
   test("rejects non-positive or non-finite grantTtlMs", () => {
     for (const grantTtlMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() =>

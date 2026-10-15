@@ -6,7 +6,7 @@ import type { ReplicationOptions } from "@tinycloud/sdk-core";
 export function assertValidReplicationConfig(
   replication: (ReplicationOptions & { storage?: unknown }) | undefined,
 ): void {
-  if (replication === undefined || replication.enabled !== true) return;
+  if (replication === undefined || !replication.enabled) return;
   if (replication.storage === undefined || replication.storage === null) {
     throw new TypeError("replication.enabled requires replication.storage");
   }
