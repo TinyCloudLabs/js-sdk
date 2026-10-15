@@ -254,7 +254,7 @@ describe("replica reset purge containment", () => {
 
     const result = await resetFromCli(PROFILE, "notes");
     expect(result.exited).toBe(true);
-    expect(result.stderr).toContain("symlink");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICA_PURGE_FAILED" } });
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
   });
 
@@ -267,7 +267,7 @@ describe("replica reset purge containment", () => {
 
     const result = await resetFromCli(PROFILE, "notes");
     expect(result.exited).toBe(true);
-    expect(result.stderr).toContain("symlink");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICA_PURGE_FAILED" } });
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
   });
 
@@ -279,8 +279,85 @@ describe("replica reset purge containment", () => {
 
     const result = await resetFromCli("linked", "notes");
     expect(result.exited).toBe(true);
-    expect(result.stderr).toContain("symlink");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("rejects a whole-profile alias before reading or writing its key and session", async () => {
+    await createProfile("victim");
+    const key = { kty: "OKP", d: "victim-private-key" };
+    const session = { delegationCid: "victim-session" };
+    await ProfileManager.setKey("victim", key);
+    await ProfileManager.setSession("victim", session);
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    for (const access of [
+      () => ProfileManager.getProfile("linked"),
+      () => ProfileManager.getKey("linked"),
+      () => ProfileManager.getSession("linked"),
+      () => ProfileManager.setKey("linked", { kty: "OKP", d: "attacker" }),
+      () => ProfileManager.resolveContext({ profile: "linked" }, { storedSession: "unused" }),
+    ]) {
+      await expect(access()).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+    }
+    expect(await ProfileManager.getKey("victim")).toEqual(key);
+    expect(await ProfileManager.getSession("victim")).toEqual(session);
+  });
+
+  test("refuses an entry replaced after lookup, before opening the store", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const entry = join(PROFILES_DIR, PROFILE, "replicas", "notes");
+    const originalOpen = SqliteReplicaStore.open;
+    let swapped = false;
+    SqliteReplicaStore.open = async function (dir, options) {
+      if (!swapped && dir.endsWith("/notes") && !options.create) {
+        swapped = true;
+        await rename(entry, `${entry}.original`);
+        await symlink(join(PROFILES_DIR, "victim", "replicas", "notes"), entry);
+      }
+      return originalOpen.call(this, dir, options);
+    };
+    try {
+      const result = await resetFromCli(PROFILE, "notes");
+      expect(result.exited).toBe(true);
+      expect(swapped).toBe(true);
+      expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+      expect(await exists(`${entry}.original/replica.db`)).toBe(true);
+    } finally {
+      SqliteReplicaStore.open = originalOpen;
+    }
+  });
+
+  test("purges only its selected replica when the replicas root moves during open", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const root = join(PROFILES_DIR, PROFILE, "replicas");
+    const originalOpen = SqliteReplicaStore.open;
+    let swapped = false;
+    SqliteReplicaStore.open = async function (dir, options) {
+      if (!swapped && dir.endsWith("/notes") && !options.create) {
+        swapped = true;
+        await rename(root, `${root}.original`);
+        await symlink(join(PROFILES_DIR, "victim", "replicas"), root);
+      }
+      return originalOpen.call(this, dir, options);
+    };
+    try {
+      const result = await resetFromCli(PROFILE, "notes");
+      expect(swapped).toBe(true);
+      expect(result.exited).toBe(false);
+      expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+      expect(await exists(`${root}.original/notes/replica.db`)).toBe(false);
+    } finally {
+      SqliteReplicaStore.open = originalOpen;
+    }
   });
 
   test("refuses an entry swapped for a symlink after the store opens", async () => {
@@ -297,7 +374,7 @@ describe("replica reset purge containment", () => {
     try {
       const result = await resetFromCli(PROFILE, "notes");
       expect(result.exited).toBe(true);
-      expect(result.stderr).toContain("symlink");
+      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICA_PURGE_FAILED" } });
       expect(await exists(join(outside, "replica.db"))).toBe(true);
     } finally {
       SqliteReplicaStore.prototype.destroy = originalDestroy;

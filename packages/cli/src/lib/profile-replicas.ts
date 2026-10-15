@@ -1,5 +1,5 @@
-import { lstat, readdir, realpath, rm } from "node:fs/promises";
-import type { Dirent, Stats } from "node:fs";
+import { lstat, open, readdir, realpath, rm } from "node:fs/promises";
+import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { ProfileDeletedError, profilePath, withProfileLock } from "@tinycloud/operations/state";
 import { ReplicaError, ReplicaErrorCode, type LeaseToken } from "@tinycloud/replica";
@@ -64,15 +64,50 @@ async function safeReplicaEntry(profile: string, root: string, entry: Dirent, op
   return entryPath;
 }
 
-/** Check the named replica on both sides of opening and inside its mutation guard. */
-export async function assertSafeReplicaForReset(profile: string, name: string): Promise<void> {
-  const root = join(profilePath(profile), "replicas");
-  if (await safeReplicaRoot(profile, root, "reset") === null) {
-    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
-  }
-  const entry = (await readdir(root, { withFileTypes: true })).find((item) => item.name === name);
-  if (!entry) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
-  await safeReplicaEntry(profile, root, entry, "reset");
+/**
+ * Pin the checked replicas root while SQLite opens and removes its entry.
+ * A concurrent rename of the root cannot redirect removal into another profile.
+ */
+export async function withPinnedReplicaForReset<T>(
+  profile: string,
+  name: string,
+  action: (path: string, recheck: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  return withProfileLock(profile, async () => {
+    const root = join(profilePath(profile), "replicas");
+    if (await safeReplicaRoot(profile, root, "reset") === null) {
+      throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
+    }
+    if (process.platform !== "linux" && process.platform !== "darwin") {
+      throw refuseUnsafeReplicaPath(profile, "pinned replica removal is unavailable on this platform", "reset");
+    }
+    const handle = await open(root, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+    try {
+      const [namedRoot, pinnedRoot] = await Promise.all([lstat(root), handle.stat()]);
+      if (!namedRoot.isDirectory() || namedRoot.dev !== pinnedRoot.dev || namedRoot.ino !== pinnedRoot.ino) {
+        throw refuseUnsafeReplicaPath(profile, "the replicas directory changed during inspection", "reset");
+      }
+      const fdRoot = process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : `/dev/fd/${handle.fd}`;
+      const entry = (await readdir(fdRoot, { withFileTypes: true })).find((item) => item.name === name);
+      if (!entry) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
+      await safeReplicaEntry(profile, root, entry, "reset");
+      const path = join(fdRoot, entry.name);
+      const initial = await lstat(path);
+      if (!initial.isDirectory() || initial.isSymbolicLink()) {
+        throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" is not a real directory`, "reset");
+      }
+      const recheck = async () => {
+        const current = await lstat(path);
+        if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) {
+          throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" changed during removal`, "reset");
+        }
+      };
+      await recheck();
+      return await action(path, recheck);
+    } finally {
+      await handle.close();
+    }
+  });
 }
 
 /** Remove each replica through its fenced store API; refuse before deletion if any sync owns a lease. */
