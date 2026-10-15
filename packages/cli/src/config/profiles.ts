@@ -2,6 +2,8 @@ import { chmod, lstat, readdir, rm, rmdir } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { join } from "node:path";
 import {
+  assertRealProfileDirectory,
+  ProfileSymlinkError,
   profilePath,
   readSession,
   recordProfileDeletion,
@@ -68,6 +70,7 @@ export class ProfileManager {
   /** Owner-only profile directory (0700), created or tightened before any write into it. */
   static async ensureProfileDir(name: string): Promise<string> {
     await ProfileManager.ensureConfigDir();
+    await assertRealProfileDirectory(name);
     const profileDir = join(PROFILES_DIR, name);
     await ensureDir(profileDir);
     await chmod(profileDir, PRIVATE_DIR_MODE);
@@ -102,6 +105,7 @@ export class ProfileManager {
    * Throws CLIError if the profile doesn't exist.
    */
   static async getProfile(name: string): Promise<ProfileConfig> {
+    await assertRealProfileDirectory(name);
     const profilePath = join(PROFILES_DIR, name, "profile.json");
     const profile = await readJson<ProfileConfig>(profilePath);
     if (!profile) {
@@ -132,6 +136,7 @@ export class ProfileManager {
    * Returns true if a profile directory exists.
    */
   static async profileExists(name: string): Promise<boolean> {
+    await assertRealProfileDirectory(name);
     return fileExists(join(PROFILES_DIR, name, "profile.json"));
   }
 
@@ -202,6 +207,7 @@ export class ProfileManager {
    * Returns the parsed JWK for a profile, or null if no key exists.
    */
   static async getKey(name: string): Promise<object | null> {
+    await assertRealProfileDirectory(name);
     return readJson<object>(join(PROFILES_DIR, name, "key.json"));
   }
 
@@ -298,7 +304,8 @@ export class ProfileManager {
     try {
       profileConfig = await ProfileManager.getProfile(profile);
       profileHost = profileConfig.host;
-    } catch {
+    } catch (error) {
+      if (error instanceof ProfileSymlinkError) throw error;
       // Profile may not exist yet (e.g., during `tc init`)
     }
 

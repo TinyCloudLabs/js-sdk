@@ -6,7 +6,7 @@ import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/pr
 import { basename, dirname, join, resolve } from "node:path";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { replicationForProfile } from "../lib/replication-registry.js";
-import { assertSafeReplicaForReset } from "../lib/profile-replicas.js";
+import { withPinnedReplicaForReset } from "../lib/profile-replicas.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
 import {
@@ -784,27 +784,33 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
       run(async () => {
         const profile = await profileName(cmd);
         const name = await existingReplicaName(profile, options.replica);
-        const profileLock = profileGuard(profile);
-        const safeGuard: MutationGuard = (section) => profileLock(async () => {
-          await assertSafeReplicaForReset(profile, name);
-          return section();
-        });
-        const store = options.purge
-          ? await safeGuard(() => openReplica(profile, name, safeGuard))
-          : await openReplica(profile, name);
-        try {
-          if (options.purge) {
-            // The removal is fenced by this lease and the database identity
-            // this store opened, so it never removes a replica another process
-            // took over or recreated. A revoked replica is removed too.
-            const lease = await store.acquireSyncLease(60_000);
-            if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
-            await store.destroy(lease);
-          } else {
+        if (options.purge) {
+          await withPinnedReplicaForReset(profile, name, async (path, recheck) => {
+            const profileLock = profileGuard(profile);
+            const safeGuard: MutationGuard = (section) => profileLock(async () => {
+              await recheck();
+              return section();
+            });
+            const store = await SqliteReplicaStore.open(path, { create: false, guard: safeGuard });
+            try {
+              await recheck();
+              // The store fences the database identity and lease; the root fd
+              // keeps deletion in the selected directory if its name moves.
+              const lease = await store.acquireSyncLease(60_000);
+              if (lease === null) throw new ReplicaError(ReplicaErrorCode.BUSY, "Another process is syncing this replica.");
+              await recheck();
+              await store.destroy(lease);
+            } finally {
+              await store.close();
+            }
+          });
+        } else {
+          const store = await openReplica(profile, name);
+          try {
             await new Replica({ store }).reset("manual");
+          } finally {
+            await store.close();
           }
-        } finally {
-          await store.close();
         }
         outputJson({ replica: name, reset: true, purged: options.purge === true });
       }),

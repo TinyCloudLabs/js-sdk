@@ -547,12 +547,14 @@ async function writeFileDurably(path: string, contents: string): Promise<void> {
 export async function readProfile<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
+  await assertRealProfileDirectory(profile);
   return readJson<T>(profileConfigPath(profile));
 }
 
 export async function readSession<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
+  await assertRealProfileDirectory(profile);
   await readStoreMetadata(profile, "session");
   return readJson<T>(sessionPath(profile));
 }
@@ -573,6 +575,7 @@ export async function readStoreMetadata(
   profile: string,
   store: ProfileStoreName,
 ): Promise<StoreMetadata> {
+  await assertRealProfileDirectory(profile);
   const metadata = await readJson<StoreMetadata>(profileStoreMetadataPath(profile, store));
   if (metadata === null) return { formatVersion: 1 };
   if (
@@ -588,6 +591,7 @@ export async function readProfileStore<T>(
   profile: string,
   store: Exclude<ProfileStoreName, "session">,
 ): Promise<ProfileStoreContents<T>> {
+  await assertRealProfileDirectory(profile);
   const [metadata, raw] = await Promise.all([
     readStoreMetadata(profile, store),
     readJson<unknown>(profileStorePath(profile, store)),
@@ -598,11 +602,22 @@ export async function readProfileStore<T>(
   };
 }
 
-async function assertRealProfileDirectory(profile: string): Promise<void> {
-  const stats = await lstat(profilePath(profile));
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new TypeError(`Profile "${profile}" must be a real directory, not a symlink or other file.`);
+export class ProfileSymlinkError extends Error {
+  readonly code = "PROFILE_SYMLINK";
+
+  constructor(profile: string) {
+    super(`Profile "${profile}" must be a real directory, not a symlink or another file type.`);
+    this.name = "ProfileSymlinkError";
   }
+}
+
+/** Missing profiles retain their existing read/create behavior; aliases never do. */
+export async function assertRealProfileDirectory(profile: string): Promise<void> {
+  const stats = await lstat(profilePath(profile)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (stats && (!stats.isDirectory() || stats.isSymbolicLink())) throw new ProfileSymlinkError(profile);
 }
 
 /**
@@ -814,6 +829,7 @@ async function acquireProfileLock(
   const turnDirectory = profileTurnLockPath(profile);
 
   const directory = profilePath(profile);
+  await assertRealProfileDirectory(profile);
   if (options.requireProfile && !(await exists(profileConfigPath(profile)))) throw new ProfileDeletedError(profile);
   if (!options.requireProfile) await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   await assertRealProfileDirectory(profile);
