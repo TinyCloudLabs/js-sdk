@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -410,6 +410,130 @@ test("discard plus online revoke retains all local files on 503 then erases only
   await expect(readFile(paths.key)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.db)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(paths.unknown)).rejects.toMatchObject({ code: "ENOENT" });
+}, 30_000);
+
+test("corrupt-gate orphan revoke commits v2 marker before node receipt and never mints a replacement gate", async () => {
+  const { home, paths, sessionCid, revokedCids, atRevoke, setOnRevocationReceipt } = await fixture();
+  await addUnknown(paths.unknown);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const gatePath = join(paths.directory, REPLICA_GATE_FILE);
+  await writeFile(gatePath, "{corrupt");
+  setOnRevocationReceipt(async () => {
+    expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({
+      v: 2, scope: "orphan_profile", remotePending: true,
+    });
+    await expect(readFile(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await Bun.file(paths.session).exists()).toBe(true);
+    expect(await Bun.file(paths.key).exists()).toBe(true);
+    expect(await Bun.file(paths.db).exists()).toBe(true);
+  });
+
+  const logout = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(logout.exitCode, logout.stderr).toBe(0);
+  expect(atRevoke()).toEqual({ session: true, key: true, replica: true, unknown: true });
+  expect(revokedCids).toEqual([sessionCid]);
+  for (const file of [paths.session, paths.key, paths.db, paths.unknown, markerPath, gatePath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+}, 30_000);
+
+test("corrupt-gate orphan revoke failure keeps the remote-pending marker and all retry credentials", async () => {
+  const { home, paths, sessionCid, networkPaths, revokedCids, setMode } = await fixture();
+  await addUnknown(paths.unknown);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const gatePath = join(paths.directory, REPLICA_GATE_FILE);
+  await writeFile(gatePath, "{corrupt");
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  setMode("fail");
+
+  const refused = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("REVOCATION_FAILED");
+  expect(networkPaths).toContain("/revoke");
+  expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({
+    v: 2, scope: "orphan_profile", remotePending: true,
+  });
+  await expect(readFile(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+  expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
+  const blocked = await run(home, ["auth", "status"]);
+  expect(blocked.exitCode).toBeGreaterThan(0);
+  expect(revokedCids).toEqual([]);
+
+  setMode("success");
+  const retried = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(retried.exitCode, retried.stderr).toBe(0);
+  expect(revokedCids).toEqual([sessionCid]);
+  for (const file of [paths.session, paths.key, paths.db, paths.unknown, markerPath, gatePath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}, 30_000);
+
+test("markerless deferred v1 gate refuses online revoke before node I/O and retains the owner session", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const principal = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+  const purge = createProfileReplicaPurge({
+    profileDir: paths.directory,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+  });
+  const denied = await purge.deny({ reason: "sign_out", principal }, { deferErase: true });
+  expect(denied).toMatchObject({ status: "denied", resumeToken: expect.any(Object) });
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  expect(await Bun.file(markerPath).exists()).toBe(false);
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const before = networkPaths.length;
+
+  const refused = await run(home, ["auth", "logout", "--revoke"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toMatch(/REPLICA_GATED|stamp_stale/i);
+  expect(networkPaths).toHaveLength(before);
+  expect(await Bun.file(markerPath).exists()).toBe(false);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+  expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
+}, 30_000);
+
+test("an approved unknown SQLite sidecar name cannot become a different regular file on revoke retry", async () => {
+  if (process.platform !== "linux") return;
+  const { home, paths, networkPaths, setMode } = await fixture();
+  const sidecar = `${paths.db}-shm`;
+  const outside = join(home, "outside-sentinel");
+  await writeFile(outside, "outside-stays");
+  await rm(sidecar, { force: true });
+  await symlink(outside, sidecar);
+  expect((await lstat(sidecar)).isSymbolicLink()).toBe(true);
+  setMode("fail");
+  const first = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(first.exitCode).toBeGreaterThan(0);
+  expect(first.stderr).toContain("REVOCATION_FAILED");
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const marker = await readFile(markerPath);
+  expect(JSON.parse(marker.toString()).remotePending).toBe(true);
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const before = networkPaths.length;
+  await rm(sidecar);
+  await writeFile(sidecar, "replacement-sidecar");
+  setMode("success");
+
+  const refused = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await Bun.file(paths.db).exists()).toBe(true);
+  expect(await readFile(sidecar, "utf8")).toBe("replacement-sidecar");
+  expect(await readFile(outside, "utf8")).toBe("outside-stays");
 }, 30_000);
 
 test("a new unknown path after online success retains the marker and requires fresh approval without another revoke", async () => {
