@@ -1,11 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { approvedFixRequiredRatchet, approvedGatedOnlyRatchet, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
   ...current,
+  canonicalToolchainCorrection: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -93,5 +94,71 @@ describe("TC-858 reviewed fix-required root and first-import ratchet", () => {
     const syntheticAllowance = copy(current);
     syntheticAllowance.allowance["index.mjs"]++;
     expect(() => validateLedger(syntheticAllowance)).toThrow();
+  });
+});
+
+describe("TC-858 CI Rust toolchain measurement correction", () => {
+  const corrected = copy(current) as Ledger & { canonicalToolchainCorrection?: unknown };
+  corrected.canonicalToolchainCorrection = {
+    label: "TC-858 #548 canonical CI toolchain measurement correction, zero headroom",
+    approvedSource: "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    policyOnlyThrough: "2acd4ac57697333ebe780bc69a54e9586e164998",
+    ciRun: "38958197518",
+    ciJob: "117166290134",
+    toolchain: { bun: "1.3.14", rustc: "1.99.0" },
+    historical: {
+      master: { "index.mjs": 1460603, "index.cjs": 1390460 },
+      approvedDelta: { "index.mjs": 1431, "index.cjs": 1339 },
+      rootCeiling: { "index.mjs": 1462034, "index.cjs": 1391799 },
+      firstImportCeiling: { "replica.mjs": 51785, "replica.cjs": 66995 },
+      activation: { "activation.mjs": 23071, "activation.cjs": 24650 },
+    },
+    measured: {
+      master: { "index.mjs": 1462685, "index.cjs": 1393687 },
+      delta: { "index.mjs": 1504, "index.cjs": 1348 },
+      rootCeiling: { "index.mjs": 1464189, "index.cjs": 1395035 },
+      firstImportCeiling: { "replica.mjs": 51786, "replica.cjs": 66995 },
+      activationCeiling: { "activation.mjs": 23073, "activation.cjs": 24653 },
+    },
+    reason: "The approved shipped source is unchanged from ddc032ca; CI rustc 1.99.0 and Bun 1.3.14 rebuild master and candidate with the same WASM. The old values remain in the historical rows; measured candidate ceilings add no headroom.",
+  };
+
+  it("accepts exactly the measured CI correction while preserving the old Phase 2 and fix-required rows", () => {
+    expect(() => validateLedger(corrected)).not.toThrow();
+    expect(corrected.phase2Ratchet).toEqual(current.phase2Ratchet);
+    expect(corrected.fixRequiredRatchet).toEqual(current.fixRequiredRatchet);
+    expect(corrected.entries).toEqual(current.entries);
+  });
+
+  it("rejects extra root bytes or a modified historical measurement", () => {
+    const growth = copy(corrected);
+    growth.canonicalToolchainCorrection!.measured.rootCeiling["index.mjs"]++;
+    expect(() => validateLedger(growth)).toThrow();
+    const history = copy(corrected);
+    history.fixRequiredRatchet!.rootCeiling["index.cjs"]++;
+    expect(() => validateLedger(history)).toThrow();
+  });
+
+  it("does not attach the CI correction to a historical Bun 1.4.3 Phase 2 base", () => {
+    const mixed = copy(corrected);
+    mixed.phase2Ratchet!.toolchain = historical.phase2Ratchet!.toolchain;
+    expect(() => validateLedger(mixed, true)).toThrow();
+  });
+
+  it("accepts the CI Node-size job toolchain and rejects a wrong local Bun or Rust compiler", () => {
+    expect(() => assertCiSizeToolchain("1.3.14", "rustc 1.99.0 (b940084d7 2026-09-28)", corrected.canonicalToolchainCorrection!)).not.toThrow();
+    expect(() => assertCiSizeToolchain("1.4.3", "rustc 1.99.0 (b940084d7 2026-09-28)", corrected.canonicalToolchainCorrection!)).toThrow(/toolchain/i);
+    expect(() => assertCiSizeToolchain("1.3.14", "rustc 1.97.1 (wrong)", corrected.canonicalToolchainCorrection!)).toThrow(/toolchain/i);
+    expect(() => assertCiSizeToolchain("1.3.14", "not rustc", corrected.canonicalToolchainCorrection!)).toThrow(/toolchain/i);
+  });
+
+  it("permits one exact CI correction transition but refuses changing or removing it later", () => {
+    expect(() => validateCiToolchainTransition(undefined, corrected.canonicalToolchainCorrection)).not.toThrow();
+    expect(() => validateCiToolchainTransition(corrected.canonicalToolchainCorrection, corrected.canonicalToolchainCorrection)).not.toThrow();
+    const extra = structuredClone(corrected.canonicalToolchainCorrection!);
+    extra.measured.rootCeiling["index.cjs"]++;
+    expect(() => validateCiToolchainTransition(undefined, extra)).toThrow();
+    expect(() => validateCiToolchainTransition(corrected.canonicalToolchainCorrection, extra)).toThrow();
+    expect(() => validateCiToolchainTransition(corrected.canonicalToolchainCorrection, undefined)).toThrow();
   });
 });

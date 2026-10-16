@@ -28,7 +28,36 @@ export type FixRequiredRatchet = {
   }[];
   s4Marginal: string;
 };
-export type Ledger = { allowance: GzipSizes; entries: LedgerEntry[]; phase2Ratchet?: Phase2Ratchet; fixRequiredRatchet?: FixRequiredRatchet };
+export type CiToolchainCorrection = {
+  label: string;
+  approvedSource: string;
+  policyOnlyThrough: string;
+  ciRun: string;
+  ciJob: string;
+  toolchain: { bun: string; rustc: string };
+  historical: {
+    master: GzipSizes;
+    approvedDelta: GzipSizes;
+    rootCeiling: GzipSizes;
+    firstImportCeiling: FirstImportSizes;
+    activation: { "activation.mjs": number; "activation.cjs": number };
+  };
+  measured: {
+    master: GzipSizes;
+    delta: GzipSizes;
+    rootCeiling: GzipSizes;
+    firstImportCeiling: FirstImportSizes;
+    activationCeiling: { "activation.mjs": number; "activation.cjs": number };
+  };
+  reason: string;
+};
+export type Ledger = {
+  allowance: GzipSizes;
+  entries: LedgerEntry[];
+  phase2Ratchet?: Phase2Ratchet;
+  fixRequiredRatchet?: FixRequiredRatchet;
+  canonicalToolchainCorrection?: CiToolchainCorrection;
+};
 
 const formats = ["index.mjs", "index.cjs"] as const;
 export const approvedPhase2 = {
@@ -66,6 +95,30 @@ export const approvedFixRequiredRatchet: FixRequiredRatchet = {
   ],
   s4Marginal: "S4 GRANT_REVOKED network-read projection from 28addd98 integrated as d3930dee; standalone gzip marginal was not isolated and grouped measurements are nonadditive.",
 };
+/** Approved code ddc032ca is unchanged; only the compiler used to measure it changed. */
+export const approvedCiToolchainCorrection: CiToolchainCorrection = {
+  label: "TC-858 #548 canonical CI toolchain measurement correction, zero headroom",
+  approvedSource: "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+  policyOnlyThrough: "2acd4ac57697333ebe780bc69a54e9586e164998",
+  ciRun: "38958197518",
+  ciJob: "117166290134",
+  toolchain: { bun: "1.3.14", rustc: "1.99.0" },
+  historical: {
+    master: { "index.mjs": 1460603, "index.cjs": 1390460 },
+    approvedDelta: { "index.mjs": 1431, "index.cjs": 1339 },
+    rootCeiling: { "index.mjs": 1462034, "index.cjs": 1391799 },
+    firstImportCeiling: { "replica.mjs": 51785, "replica.cjs": 66995 },
+    activation: { "activation.mjs": 23071, "activation.cjs": 24650 },
+  },
+  measured: {
+    master: { "index.mjs": 1462685, "index.cjs": 1393687 },
+    delta: { "index.mjs": 1504, "index.cjs": 1348 },
+    rootCeiling: { "index.mjs": 1464189, "index.cjs": 1395035 },
+    firstImportCeiling: { "replica.mjs": 51786, "replica.cjs": 66995 },
+    activationCeiling: { "activation.mjs": 23073, "activation.cjs": 24653 },
+  },
+  reason: "The approved shipped source is unchanged from ddc032ca; CI rustc 1.99.0 and Bun 1.3.14 rebuild master and candidate with the same WASM. The old values remain in the historical rows; measured candidate ceilings add no headroom.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -99,7 +152,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -143,5 +196,27 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.phase2Ratchet ||
        JSON.stringify(value.fixRequiredRatchet) !== JSON.stringify(approvedFixRequiredRatchet))) {
     throw new Error("Only Naomi's exact ddc032ca fix-required root and first-import ratchet is approved.");
+  }
+  if (value.canonicalToolchainCorrection !== undefined &&
+      (!value.fixRequiredRatchet || value.phase2Ratchet?.toolchain !== approvedPhase2.toolchain ||
+       JSON.stringify(value.canonicalToolchainCorrection) !== JSON.stringify(approvedCiToolchainCorrection))) {
+    throw new Error("Only the exact Rust 1.99.0 / Bun 1.3.14 CI measurement correction is approved.");
+  }
+}
+
+export function assertCiSizeToolchain(bun: string, rustcOutput: string, row: CiToolchainCorrection): void {
+  const rustc = /^rustc (\d+\.\d+\.\d+)(?:\s|$)/.exec(rustcOutput)?.[1];
+  if (bun !== row.toolchain.bun || rustc !== row.toolchain.rustc) {
+    throw new Error(`TC-858 size toolchain mismatch: expected Bun ${row.toolchain.bun} and rustc ${row.toolchain.rustc}; received Bun ${bun} and ${rustcOutput}.`);
+  }
+}
+
+export function validateCiToolchainTransition(
+  base?: CiToolchainCorrection,
+  current?: CiToolchainCorrection,
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedCiToolchainCorrection) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The CI Rust 1.99.0 size correction may be introduced once and must remain unchanged thereafter.");
   }
 }

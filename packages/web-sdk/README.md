@@ -84,27 +84,29 @@ stamp. Local reads recheck the connected account before returning replica data.
 
 Size accounting uses the replica-e2e **Node size job** (Bun 1.3.14,
 Rust 1.99.0), an absolute web-root ceiling, and separate opt-in first-import,
-activation, and worker ceilings.
-TC-858 Phase 2 is capped at 1,461,925 B ESM /
-1,391,665 B CJS gzip for the root: +1,322 / +1,205 B against the official
-master `9891ed9d` build (1,460,603 / 1,390,460 B). Base re-measured with
-the official recipe; the provisional base is superseded. This approved ratchet
-replaces further cumulative headroom for the #548 stack; the historical
-388 / 861 B allowance and #546/#553 entries remain unchanged.
+activation, and worker ceilings. The historical Phase 2 allowance of
+1,461,925 B ESM / 1,391,665 B CJS was measured against master `9891ed9d`
+at 1,460,603 / 1,390,460 B; the reviewed fix-required row at `ddc032ca`
+raised that historical ceiling to 1,462,034 / 1,391,799 B for copied-proof
+restore, gated read events, durable denial, and GRANT_REVOKED projection.
+The old 388 / 861 B allowance and #546/#553 ledger entries remain unchanged.
+The historical file marginals are nonadditive; no synchronous TC-1208 fence moved.
 
-The separately reviewed fix-required row at `ddc032ca` caps the integrated
-root at 1,462,034 B ESM / 1,391,799 B CJS (+109 / +134 B over that Phase 2
-ceiling). It covers copied-proof restore, gated network-read observability,
-the committed sign-out event, and GRANT_REVOKED projection; the grouped
-nonadditive measurements and exact source commits are in the size ledger.
-Neither the #546/#553 historical rows nor synchronous TC-1208 fences changed.
+The canonical Rust 1.99.0 rebuild of the **same approved shipped source**
+measured master at 1,462,685 / 1,393,687 B and the candidate at
+1,464,189 / 1,395,035 B: +1,504 / +1,348 B, with zero headroom.
+The former combined +1,431 / +1,339 B and root ceilings remain in the ledger
+as historical evidence, not additive allowance. The diff from `ddc032ca` to
+`2acd4ac5` changes only web size scripts, ledgers, tests and this README;
+no shipped source or build input changed. The checker refuses mismatched local
+Bun/Rust versions and later changes to this one corrected ratchet.
 
-The opt-in first-import ceiling is 51,785 B ESM / 66,995 B CJS gzip
+The opt-in first-import ceiling is 51,786 B ESM / 66,995 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
-factory has a separate 23,081 B / 24,886 B ceiling. The content-hashed worker
+factory has a separate 23,073 B / 24,653 B ceiling. The content-hashed worker
 and WASM asset has an 818,196 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 893,062 B ESM /
-910,077 B CJS incremental gzip beyond the already-loaded web root; those
+A compliant first local open therefore costs at most 893,055 B ESM /
+909,844 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
@@ -114,16 +116,16 @@ at 926 B ESM / 1,014 B CJS gzip. Successful opt-ins and replica-off clients
 never fetch it; sign-out uses the already-loaded authority. If this observer
 cannot load, the signed network session remains usable and local reads stay gated.
 
-The original 51,201/66,132 B first-import ceiling was a toolchain measurement
-correction, not adapter allowance: exact `ce52494d` built with Bun 1.3.14
-measured 51,201/66,132 B versus 45,538/65,096 B with Bun 1.4.3 on the same
-SDK. Both builds resolved the same 25 modules; Bun's emitted graph differed.
-The fix-required row separately adds 584/863 B, with no further headroom.
+The original 51,201/66,132 B first-import ceiling was a Bun toolchain
+measurement correction, not adapter allowance: exact `ce52494d` built with
+Bun 1.3.14 measured 51,201/66,132 B versus 45,538/65,096 B with Bun 1.4.3
+on the same SDK. The approved fix-required row added 584/863 B; the subsequent
+CI Rust 1.99.0 rebuild measured +1 ESM first-import and +2/+3 B activation
+without a shipped-code change, and the corrected amounts have zero headroom.
 The [replica-e2e Node size job 117166290134](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166290134)
-pins Bun 1.3.14 and Rust 1.99.0 for the Phase-1 size step; its separate
-browser job uses a different Rust version. The official checker remains
-authoritative for the root; local Rust/WASM rebuild differences do not change
-its absolute ceiling.
+ran rustc 1.99.0 for WASM and the Phase-1 size step; the separate
+[Chromium job 117166289795](https://github.com/TinyCloudLabs/js-sdk/actions/runs/38958197518/job/117166289795)
+ran rustc 1.99.1 and does not set the web-root size baseline.
 
 ## Basic Storage Operations
 

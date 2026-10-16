@@ -7,44 +7,45 @@ import {
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 const copy = () => structuredClone(current);
-const observed = { "replica.mjs": 51785, "replica.cjs": 66995, "activation.mjs": 23071, "activation.cjs": 24650 };
+const observed = { "replica.mjs": 51786, "replica.cjs": 66995, "activation.mjs": 23073, "activation.cjs": 24653 };
 
 describe("TC-858 optional loaded-byte policy", () => {
   it("accepts the exact approved first-import, activation and refused-admission ledger", () => {
-    expect(() => validateOptionalLedger(current, true)).not.toThrow();
+    expect(() => validateOptionalLedger(current, true, true)).not.toThrow();
     const beforeFix = copy();
     beforeFix.allowance = correctedOptionalAllowance;
+    beforeFix.entries = [];
     expect(() => validateOptionalLedger(beforeFix)).not.toThrow();
   });
 
   it("rejects one extra first-import ESM byte", () => {
     const changed = copy();
     changed.allowance["replica.mjs"]++;
-    expect(() => validateOptionalLedger(changed, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
   });
 
   it("rejects one extra deferred activation CJS byte", () => {
     const changed = copy();
     changed.allowance["activation.cjs"]++;
-    expect(() => validateOptionalLedger(changed, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
   });
 
   it("rejects a changed measurement correction witness", () => {
     const changed = copy();
     (changed.measurementCorrection as { ciJob: string }).ciJob = "unreviewed job";
-    expect(() => validateOptionalLedger(changed, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
   });
 
   it("rejects removing the canonical toolchain measurement correction", () => {
     const changed = copy();
     delete changed.measurementCorrection;
-    expect(() => validateOptionalLedger(changed, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
   });
 
   it("rejects a mutated paired root-to-optional relocation", () => {
     const changed = copy();
     (changed.relocations as Array<{ "replica.mjs"?: number }>)[1]["replica.mjs"]!++;
-    expect(() => validateOptionalLedger(changed, true)).toThrow();
+    expect(() => validateOptionalLedger(changed, true, true)).toThrow();
   });
 });
 
@@ -77,5 +78,11 @@ describe("TC-858 merge-base optional ledger prefix", () => {
     expect(() => validateOptionalEntryTransition(
       [current.entries[0]], [current.entries[0], current.entries[0]], observed, "#548",
     )).toThrow();
+  });
+});
+
+describe("TC-858 Rust 1.99.0 optional measurement correction", () => {
+  it("requires the root's exact CI correction before accepting rebuilt optional measurements", () => {
+    expect(() => validateOptionalLedger(current, true)).toThrow();
   });
 });

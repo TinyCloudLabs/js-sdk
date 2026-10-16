@@ -84,5 +84,28 @@
       }
     ],
     "s4Marginal": "S4 GRANT_REVOKED network-read projection from 28addd98 integrated as d3930dee; standalone gzip marginal was not isolated and grouped measurements are nonadditive."
+  },
+  "canonicalToolchainCorrection": {
+    "label": "TC-858 #548 canonical CI toolchain measurement correction, zero headroom",
+    "approvedSource": "ddc032caef81a2177e7f9c30a6a28a8f593a4580",
+    "policyOnlyThrough": "2acd4ac57697333ebe780bc69a54e9586e164998",
+    "ciRun": "38958197518",
+    "ciJob": "117166290134",
+    "toolchain": { "bun": "1.3.14", "rustc": "1.99.0" },
+    "historical": {
+      "master": { "index.mjs": 1460603, "index.cjs": 1390460 },
+      "approvedDelta": { "index.mjs": 1431, "index.cjs": 1339 },
+      "rootCeiling": { "index.mjs": 1462034, "index.cjs": 1391799 },
+      "firstImportCeiling": { "replica.mjs": 51785, "replica.cjs": 66995 },
+      "activation": { "activation.mjs": 23071, "activation.cjs": 24650 }
+    },
+    "measured": {
+      "master": { "index.mjs": 1462685, "index.cjs": 1393687 },
+      "delta": { "index.mjs": 1504, "index.cjs": 1348 },
+      "rootCeiling": { "index.mjs": 1464189, "index.cjs": 1395035 },
+      "firstImportCeiling": { "replica.mjs": 51786, "replica.cjs": 66995 },
+      "activationCeiling": { "activation.mjs": 23073, "activation.cjs": 24653 }
+    },
+    "reason": "The approved shipped source is unchanged from ddc032ca; CI rustc 1.99.0 and Bun 1.3.14 rebuild master and candidate with the same WASM. The old values remain in the historical rows; measured candidate ceilings add no headroom."
   }
 }

@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 import {
   approvedMeasurementCorrection, approvedRelocations, correctedOptionalAllowance,
-  fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
+  ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
   relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -84,7 +84,14 @@ async function gzipSizes(directory: string): Promise<GzipSizes> {
 }
 
 validateLedger(ledger);
-validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined);
+const ciCorrection = ledger.canonicalToolchainCorrection;
+if (ciCorrection) {
+  const bun = command("bun", ["--version"]);
+  const rustc = command("rustc", ["--version"]);
+  assertCiSizeToolchain(bun, rustc, ciCorrection);
+  console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
+}
+validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const format of optionalFormats) {
   const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
@@ -126,7 +133,8 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
+  const ceiling = ciCorrection?.measured.rootCeiling[format] ??
+    ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
   if (ceiling !== undefined) {
     console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
     if (currentSizes[format] > ceiling) {
@@ -157,6 +165,7 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -170,7 +179,8 @@ if (prBaseSha) {
   } else {
     throw new Error(`Unable to read base ${baseOptionalPath}: ${optionalResult.stderr.trim()}`);
   }
-  validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined);
+  validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
+    baseLedger.canonicalToolchainCorrection !== undefined);
   validateGatedOnlyRatchet(optionalLedger.gatedOnlyRatchet, baseOptional.gatedOnlyRatchet);
   if (optionalLedger.gatedOnlyRatchet !== undefined && baseOptional.gatedOnlyRatchet === undefined &&
       spawnSync("git", ["merge-base", "--is-ancestor", approvedGatedOnlyRatchet.sourceCommit, "HEAD"], {
@@ -198,9 +208,10 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === priorOptionalAllowance[format] &&
         optionalLedger.allowance[format] ===
-          (ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format]
-            : optionalLedger.measurementCorrection === undefined
-              ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
+          (ciCorrection !== undefined ? ciOptionalAllowance[format]
+            : ledger.fixRequiredRatchet !== undefined ? fixRequiredOptionalAllowance[format]
+              : optionalLedger.measurementCorrection === undefined
+                ? relocatedOptionalAllowance[format] : correctedOptionalAllowance[format]));
     const measurementCorrection = JSON.stringify(baseOptional.relocations) === JSON.stringify(approvedRelocations) &&
       baseOptional.measurementCorrection === undefined &&
       JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
@@ -216,13 +227,42 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === correctedOptionalAllowance[format] &&
         optionalLedger.allowance[format] === fixRequiredOptionalAllowance[format]);
-    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact paired relocation, Bun correction or ddc032ca reviewed fix-required ratchet.`);
+    const ciCorrectionTransition = baseLedger.canonicalToolchainCorrection === undefined &&
+      ciCorrection !== undefined &&
+      JSON.stringify(optionalLedger.relocations) === JSON.stringify(approvedRelocations) &&
+      JSON.stringify(optionalLedger.measurementCorrection) === JSON.stringify(approvedMeasurementCorrection) &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === priorOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === ciOptionalAllowance[format]);
+    if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with the exact paired relocation, Bun correction, ddc032ca reviewed fix, or CI Rust 1.99.0 measurement correction.`);
       failed = true;
     }
   }
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
   const phase2Introduced = ledger.phase2Ratchet !== undefined && baseLedger.phase2Ratchet === undefined;
+  const ciCorrectionIntroduced = ciCorrection !== undefined &&
+    baseLedger.canonicalToolchainCorrection === undefined;
+  if (ciCorrectionIntroduced) {
+    const policyOnly = new Set([
+      "packages/web-sdk/README.md",
+      "packages/web-sdk/scripts/check-phase1-replica-dist.ts",
+      "packages/web-sdk/scripts/check-replica-built-entry.ts",
+      "packages/web-sdk/scripts/replica-optional-size-ledger.json",
+      "packages/web-sdk/scripts/replica-optional-size-policy.test.ts",
+      "packages/web-sdk/scripts/replica-optional-size-policy.ts",
+      "packages/web-sdk/scripts/replica-size-ledger.json",
+      "packages/web-sdk/scripts/replica-size-policy.test.ts",
+      "packages/web-sdk/scripts/replica-size-policy.ts",
+    ]);
+    const afterApprovedSource = command("git", ["diff", "--name-only", `${approvedCiToolchainCorrection.approvedSource}...HEAD`])
+      .split("\n").filter(Boolean);
+    if (spawnSync("git", ["merge-base", "--is-ancestor", approvedCiToolchainCorrection.approvedSource, "HEAD"],
+        { cwd: repoRoot }).status !== 0 || afterApprovedSource.some((path) => !policyOnly.has(path))) {
+      console.error("CI toolchain size correction requires unchanged approved shipped sources since ddc032ca.");
+      failed = true;
+    }
+  }
   const reviewedFixIntroduced = ledger.fixRequiredRatchet !== undefined && baseLedger.fixRequiredRatchet === undefined;
   if (baseLedger.fixRequiredRatchet !== undefined &&
       JSON.stringify(ledger.fixRequiredRatchet) !== JSON.stringify(baseLedger.fixRequiredRatchet)) {
@@ -346,9 +386,13 @@ if (prBaseSha) {
       for (const format of formats) {
         console.log(`${phase2Introduced ? "approved master9891" : "merge-base"}=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
       }
+      if (ciCorrection) {
+        console.log(`Controlled-master size toolchain: Bun ${ciCorrection.toolchain.bun}; rustc ${ciCorrection.toolchain.rustc} (same HEAD WASM)`);
+      }
       if (phase2Introduced &&
-          formats.some((format) => Math.abs(baseSizes[format] - approvedPhase2.baseline[format]) > 2)) {
-        console.error("Official master9891 build differs by more than 2 B from the approved TC-858 Phase 2 baseline.");
+          formats.some((format) => Math.abs(baseSizes[format] -
+            (ciCorrection?.measured.master[format] ?? approvedPhase2.baseline[format])) > 2)) {
+        console.error("Official master9891 build differs by more than 2 B from the approved TC-858 Phase 2 baseline for this toolchain.");
         failed = true;
       }
       const baseOptionalSizes = await measureReplicaOptionalLoaded(resolve(worktree, "packages/web-sdk/dist"));
