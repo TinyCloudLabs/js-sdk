@@ -338,6 +338,49 @@ describe("replica reset purge containment", () => {
     }
   });
 
+  test("sync pins the selected profile through its SQLite open after a real-directory swap", async () => {
+    await createProfile("victim");
+    await ProfileManager.setKey(PROFILE, { kty: "OKP", d: "selected-key" });
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    const victimDb = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const db = sqlite(victimDb);
+    try {
+      db.exec("PRAGMA user_version = 0");
+    } finally {
+      db.close();
+    }
+    const before = await readFile(victimDb);
+    const selected = join(PROFILES_DIR, PROFILE);
+    const moved = `${selected}.moved`;
+    const originalGetKey = ProfileManager.getKey;
+    let swapped = false;
+    ProfileManager.getKey = async function (name) {
+      const key = await originalGetKey.call(this, name);
+      if (name === PROFILE && !swapped) {
+        swapped = true;
+        await rename(selected, moved);
+        await symlink(join(PROFILES_DIR, "victim"), selected);
+      }
+      return key;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "sync", "--replica", "notes"]);
+      expect(swapped).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(await readFile(victimDb)).toEqual(before);
+      const readonly = sqlite(victimDb, { readonly: true });
+      try {
+        expect(readonly.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(0);
+      } finally {
+        readonly.close();
+      }
+    } finally {
+      ProfileManager.getKey = originalGetKey;
+    }
+  });
+
   test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {
     await createProfile("victim");
     const own = await createReplica(PROFILE, config);
