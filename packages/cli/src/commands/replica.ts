@@ -5,7 +5,7 @@ import { constants as fsConstants, lstatSync } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { ensureAuthenticated } from "../lib/sdk.js";
-import { replicationForProfile } from "../lib/replication-registry.js";
+import { closeReplication, replicationForProfile } from "../lib/replication-registry.js";
 import { withPinnedReplicaForReset } from "../lib/profile-replicas.js";
 import { CLEAR_PENDING_WARNING, createReplicationReport, renderReplicationReport, type ReplicationPartitionSummary } from "../lib/replication-report.js";
 import { parseDuration } from "../lib/duration.js";
@@ -472,43 +472,49 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
         const profile = await profileName(cmd);
         await withPinnedProfileDirectory(profile, async (directory) => {
           if (directory === null) throw new CLIError("PROFILE_NOT_FOUND", `Profile "${profile}" does not exist.`, ExitCode.ERROR);
-          const globals = cmd.optsWithGlobals();
-          const context = await ProfileManager.resolveContext(globals);
-          const node = context.replication ? await ensureAuthenticated(context) : undefined;
-          let durationMs: number;
           try {
-            durationMs = parseDuration(options.since);
-          } catch (error) {
-            throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
-          }
-          const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
-          let cleared: number | undefined;
-          let purged: unknown;
-          let warning: string | undefined;
-          if (options.clearPending || options.purge) {
-            if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
-            warning = CLEAR_PENDING_WARNING;
-            process.stderr.write(`Warning: ${warning}\n`);
-            if (options.clearPending) cleared = await control.clearPending();
-            if (options.purge) purged = await control.purge();
-          }
-          const sinceMs = Date.now() - durationMs;
-          const [events, partitions, replicas] = await Promise.all([
-            readReplicationEvents(profile, sinceMs),
-            replicationPartitions(profile),
-            node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
-          ]);
-          const report = createReplicationReport(options.since, events, replicas, partitions, warning);
-          if (shouldOutputJson()) {
-            outputJson({
-              ...report,
-              ...(cleared === undefined ? {} : { cleared }),
-              ...(purged === undefined ? {} : { purged }),
-            });
-          } else {
-            process.stdout.write(`${renderReplicationReport(report)}\n`);
-            if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
-            if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
+            const globals = cmd.optsWithGlobals();
+            const context = await ProfileManager.resolveContext(globals);
+            const node = context.replication ? await ensureAuthenticated(context) : undefined;
+            let durationMs: number;
+            try {
+              durationMs = parseDuration(options.since);
+            } catch (error) {
+              throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+            }
+            const control: ReplicationControl | undefined = node?.replication ?? replicationForProfile(profile);
+            let cleared: number | undefined;
+            let purged: unknown;
+            let warning: string | undefined;
+            if (options.clearPending || options.purge) {
+              if (!control) throw new CLIError("REPLICATION_UNAVAILABLE", "No replication runtime is registered for this profile.", ExitCode.ERROR);
+              warning = CLEAR_PENDING_WARNING;
+              process.stderr.write(`Warning: ${warning}\n`);
+              if (options.clearPending) cleared = await control.clearPending();
+              if (options.purge) purged = await control.purge();
+            }
+            const sinceMs = Date.now() - durationMs;
+            const [events, partitions, replicas] = await Promise.all([
+              readReplicationEvents(profile, sinceMs),
+              replicationPartitions(profile),
+              node?.replication ? node.replication.status() : control ? control.status() : Promise.resolve([]),
+            ]);
+            const report = createReplicationReport(options.since, events, replicas, partitions, warning);
+            if (shouldOutputJson()) {
+              outputJson({
+                ...report,
+                ...(cleared === undefined ? {} : { cleared }),
+                ...(purged === undefined ? {} : { purged }),
+              });
+            } else {
+              process.stdout.write(`${renderReplicationReport(report)}\n`);
+              if (cleared !== undefined) process.stdout.write(`Cleared ${cleared} pending write record(s).\n`);
+              if (purged !== undefined) process.stdout.write(`Purge: ${JSON.stringify(purged)}\n`);
+            }
+          } finally {
+            // The event sink and SQLite storage capture this pinned profile path.
+            // Shut down the runtime before the descriptor backing it is released.
+            await closeReplication();
           }
         });
       }),

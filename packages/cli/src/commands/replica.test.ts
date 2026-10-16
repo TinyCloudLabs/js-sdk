@@ -27,6 +27,9 @@ const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
 const { createReplica, profileGuard, registerReplicaCommand, replicaSecretsWarning } = await import("./replica.js");
 const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
+const { profilePath } = await import("@tinycloud/operations/state");
+const { createReplicationEventSink } = await import("../lib/replication-log.js");
+const { registerReplication, closeReplication } = await import("../lib/replication-registry.js");
 
 const PROFILE = "doomed";
 const NOT_FOUND = { code: ReplicaErrorCode.NOT_FOUND };
@@ -405,6 +408,43 @@ describe("replica reset purge containment", () => {
       expect(result.stdout).not.toContain("victim-space");
     } finally {
       ProfileManager.resolveContext = originalResolve;
+    }
+  });
+
+  test.skipIf(process.platform !== "linux")("report closes its replication runtime before releasing the pinned profile", async () => {
+    const originalResolve = ProfileManager.resolveContext;
+    const selected = await stat(join(PROFILES_DIR, PROFILE));
+    let closedWhilePinned = false;
+    ProfileManager.resolveContext = async function (globals) {
+      const context = await originalResolve.call(this, globals);
+      const root = profilePath(PROFILE);
+      const sink = createReplicationEventSink(root, { debug: false, quiet: true });
+      registerReplication(PROFILE, {
+        status: async () => [],
+        sync: async () => undefined,
+        purge: async () => ({ purged: [], failed: [] }),
+        clearPending: async () => 0,
+        close: async () => {
+          const pinned = await stat(root).then(
+            (entry) => entry.isDirectory() && entry.dev === selected.dev && entry.ino === selected.ino,
+            () => false,
+          );
+          if (!pinned) return;
+          sink({ type: "replication.state", at: new Date().toISOString(), space: "default", replica: "notes/", state: "closed" });
+          closedWhilePinned = true;
+        },
+      });
+      return context;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "report"]);
+      expect(result.exited).toBe(false);
+      expect(closedWhilePinned).toBe(true);
+      const events = await readFile(join(PROFILES_DIR, PROFILE, "replication", "events.jsonl"), "utf8");
+      expect(events).toContain('"state":"closed"');
+    } finally {
+      ProfileManager.resolveContext = originalResolve;
+      await closeReplication();
     }
   });
 
