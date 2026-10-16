@@ -504,3 +504,66 @@ describe("TC-858 policy-only source identity", () => {
     }
   });
 });
+
+describe("TC-858 emitted-map coverage for measured Node and worker entries", () => {
+  const node = [{ entry: { index: "src/index.ts", core: "src/core.ts" }, format: ["esm", "cjs"], sourcemap: true }];
+  const worker = [{ entry: {
+    "replica.worker": "src/worker.ts", "kv-storage.worker": "src/kv-storage/worker.ts",
+  }, format: ["esm"], platform: "browser", sourcemap: true }];
+
+  function putMap(root: string, name: string, sources: string[]): void {
+    const path = join(root, name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 3, sources }));
+  }
+
+  function putCompleteNodeMaps(root: string): void {
+    for (const format of ["js", "cjs"]) {
+      putMap(root, `packages/node-sdk/dist/index.${format}.map`, ["../src/index.ts"]);
+      putMap(root, `packages/node-sdk/dist/core.${format}.map`, ["../src/core.ts"]);
+    }
+  }
+
+  it("refuses an unrelated Node map in place of expected entry maps", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tc858-incomplete-maps-"));
+    try {
+      putMap(root, "packages/node-sdk/dist/unrelated.js.map", ["../src/unrelated.ts"]);
+      putMap(root, "packages/replica/dist/replica.worker.js.map", ["../src/worker.ts"]);
+      putMap(root, "packages/replica/dist/kv-storage.worker.js.map", ["../src/kv-storage/worker.ts"]);
+      const { collectNodeWorkerSourceMaps } = await import("./replica-size-inputs");
+      expect(() => collectNodeWorkerSourceMaps(root, node, worker)).toThrow(/source-map coverage incomplete/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a required worker map with no source evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tc858-empty-maps-"));
+    try {
+      putCompleteNodeMaps(root);
+      putMap(root, "packages/replica/dist/replica.worker.js.map", ["../src/worker.ts"]);
+      putMap(root, "packages/replica/dist/kv-storage.worker.js.map", []);
+      const { collectNodeWorkerSourceMaps } = await import("./replica-size-inputs");
+      expect(() => collectNodeWorkerSourceMaps(root, node, worker)).toThrow(/source-map coverage incomplete/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses complete non-empty maps for each configured Node and worker output", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tc858-complete-maps-"));
+    try {
+      putCompleteNodeMaps(root);
+      putMap(root, "packages/replica/dist/replica.worker.js.map", ["../src/worker.ts"]);
+      putMap(root, "packages/replica/dist/kv-storage.worker.js.map", ["../src/kv-storage/worker.ts"]);
+      const { collectNodeWorkerSourceMaps } = await import("./replica-size-inputs");
+      const inputs = collectNodeWorkerSourceMaps(root, node, worker);
+      expect(inputs.has("packages/node-sdk/src/index.ts")).toBe(true);
+      expect(inputs.has("packages/node-sdk/src/core.ts")).toBe(true);
+      expect(inputs.has("packages/replica/src/worker.ts")).toBe(true);
+      expect(inputs.has("packages/replica/src/kv-storage/worker.ts")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

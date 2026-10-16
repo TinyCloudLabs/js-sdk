@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export type EntryBuild = { entries: string[]; target: "browser" | "bun" };
+type TsupEntryConfig = { entry: unknown; format?: string | string[]; sourcemap?: boolean; platform?: string };
 export type MeasuredInputGraph = { bundleInputs: ReadonlySet<string>; sourceMapInputs: ReadonlySet<string> };
 
 function projectPath(root: string, path: string): string | undefined {
@@ -47,27 +48,70 @@ function sourceMapsIn(dir: string): string[] {
   });
 }
 
-/** Corroborate Node and worker reachability with maps emitted by the real tsup builds. */
-export function collectNodeWorkerSourceMaps(root: string): Set<string> {
-  const node = join(root, "packages/node-sdk/dist");
-  const worker = join(root, "packages/replica/dist");
-  const nodeMaps = sourceMapsIn(node);
-  const workerMaps = sourceMapsIn(worker);
-  if (nodeMaps.length === 0 || !workerMaps.some((map) => map.endsWith("/kv-storage.worker.js.map"))) {
-    throw new Error("Missing Node SDK or replica worker build source maps");
-  }
-  const inputs = new Set<string>();
-  for (const map of [...nodeMaps, ...workerMaps]) {
-    const metadata = JSON.parse(readFileSync(map, "utf8")) as { sourceRoot?: string; sources?: string[] };
-    if (!Array.isArray(metadata.sources)) throw new Error(`Missing sources in ${map}`);
-    for (const path of metadata.sources) {
-      const name = projectPath(root, resolve(dirname(map), metadata.sourceRoot ?? "", path));
-      if (name) inputs.add(name);
+/** Require usable emitted maps for every declared Node entry and both worker entries. */
+export function collectNodeWorkerSourceMaps(
+  root: string, nodeConfigs: readonly TsupEntryConfig[], replicaConfigs: readonly TsupEntryConfig[],
+): Set<string> {
+  const required = new Map<string, string>();
+  const register = (map: string, source: string): void => {
+    if (required.has(map)) throw new Error(`source-map coverage incomplete: duplicate ${map}`);
+    required.set(map, source);
+  };
+  if (nodeConfigs.length === 0) throw new Error("source-map coverage incomplete: no Node entries");
+  for (const config of nodeConfigs) {
+    const formats = typeof config.format === "string" ? [config.format] : config.format;
+    if (config.sourcemap !== true || !formats?.includes("esm") || !formats.includes("cjs")) {
+      throw new Error("source-map coverage incomplete: Node formats or source maps disabled");
     }
+    for (const [name, source] of namedEntries(config.entry)) {
+      for (const format of formats) {
+        if (format !== "esm" && format !== "cjs") throw new Error("source-map coverage incomplete: Node format");
+        register(join(root, "packages/node-sdk/dist", `${name}.${format === "esm" ? "js" : "cjs"}.map`),
+          join(root, "packages/node-sdk", source));
+      }
+    }
+  }
+  const workerSources = new Set(["src/worker.ts", "src/kv-storage/worker.ts"]);
+  for (const config of replicaConfigs) {
+    for (const [name, source] of namedEntries(config.entry)) {
+      if (!workerSources.has(source)) continue;
+      if (config.sourcemap !== true || config.platform !== "browser" ||
+          !(typeof config.format === "string" ? [config.format] : config.format)?.includes("esm")) {
+        throw new Error("source-map coverage incomplete: worker config");
+      }
+      register(join(root, "packages/replica/dist", `${name}.js.map`), join(root, "packages/replica", source));
+      workerSources.delete(source);
+    }
+  }
+  if (workerSources.size !== 0) throw new Error("source-map coverage incomplete: worker entry missing");
+  const nodeMaps = sourceMapsIn(join(root, "packages/node-sdk/dist"));
+  const workerMaps = sourceMapsIn(join(root, "packages/replica/dist"));
+  const emitted = new Set([...nodeMaps, ...workerMaps]);
+  const inputs = new Set<string>();
+  for (const map of required.keys()) {
+    if (!emitted.has(map)) throw new Error(`source-map coverage incomplete: ${map} missing`);
+  }
+  for (const map of emitted) {
+    const metadata = JSON.parse(readFileSync(map, "utf8")) as { sourceRoot?: string; sources?: string[] };
+    if (!Array.isArray(metadata.sources)) throw new Error(`source-map coverage incomplete: ${map} sources missing`);
+    const mapped = metadata.sources.map((path) =>
+      projectPath(root, resolve(dirname(map), metadata.sourceRoot ?? "", path))).filter((name): name is string => name !== undefined);
+    if (required.has(map) && (mapped.length === 0 || !mapped.includes(projectPath(root, required.get(map)!)))) {
+      throw new Error(`source-map coverage incomplete: ${map} has no entry source`);
+    }
+    for (const name of mapped) inputs.add(name);
   }
   return inputs;
 }
 
+function namedEntries(entry: unknown): [string, string][] {
+  if (entry && typeof entry === "object" && !Array.isArray(entry) &&
+      Object.entries(entry).length > 0 &&
+      Object.values(entry).every((source) => typeof source === "string")) {
+    return Object.entries(entry) as [string, string][];
+  }
+  throw new Error("source-map coverage incomplete: unnamed entry declaration");
+}
 function entryValues(entry: unknown): string[] {
   if (typeof entry === "string") return [entry];
   if (Array.isArray(entry) && entry.every((path) => typeof path === "string")) return entry;
@@ -88,6 +132,8 @@ export async function collectMeasuredArtifactInputs(root: string): Promise<Measu
     if (!webEntries.includes(expected)) throw new Error(`Missing measured web entry ${expected}`);
   }
   const builds: EntryBuild[] = [{ entries: [...new Set(webEntries)], target: "browser" }];
+  let nodeConfigs: TsupEntryConfig[] = [];
+  let replicaConfigs: TsupEntryConfig[] = [];
   for (const name of ["node-sdk", "sdk-services", "sdk-core", "replica", "bootstrap", "share-sdk", "share-envelope"]) {
     const configFile = join(root, "packages", name, "tsup.config.ts");
     const module = await import(pathToFileURL(configFile).href) as { default: unknown };
@@ -100,9 +146,11 @@ export async function collectMeasuredArtifactInputs(root: string): Promise<Measu
       builds.push({ entries: entryValues(entry).map((path) => join("packages", name, path)),
         target: platform === "browser" ? "browser" : "bun" });
     }
+    if (name === "node-sdk") nodeConfigs = configs as TsupEntryConfig[];
+    if (name === "replica") replicaConfigs = configs as TsupEntryConfig[];
   }
   return {
     bundleInputs: collectBuildInputs(root, builds),
-    sourceMapInputs: collectNodeWorkerSourceMaps(root),
+    sourceMapInputs: collectNodeWorkerSourceMaps(root, nodeConfigs, replicaConfigs),
   };
 }
