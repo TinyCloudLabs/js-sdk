@@ -34,7 +34,7 @@ import { generateNonce, SiweMessage } from "siwe";
  */
 
 import { assertValidReplicationConfig } from "./replication/config";
-import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
+import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationEvent, ReplicationOptions } from "@tinycloud/sdk-core";
 import type { ReplicaConsentAnchor, ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
@@ -2138,11 +2138,12 @@ export class TinyCloudNode {
     const leavingChainId = this._chainId;
     const leavingPrincipal = this.replicaSessionPrincipal
       ?? (leavingAddress ? pkhDid(leavingAddress, leavingChainId) : undefined);
+    const leavingContext = this._serviceContext;
     this.teardownSession();
     // Browser denial clears this tab's cached delivery permission synchronously,
     // before waiting on account-registry work or worker shutdown.
     const denial = leavingPrincipal
-      ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal })
+      ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal }, leavingContext)
       : Promise.resolve(undefined);
     let denied: { status: string; code?: string } | undefined;
     try {
@@ -2164,18 +2165,32 @@ export class TinyCloudNode {
    * Step 1 of replica sign-out. Never rejects: failures come back as `unguarded` so the session
    * is still cleared. Returns `undefined` when replication is off.
    */
-  private async denyReplicaGate(input: ReplicaDenyInput): Promise<{ status: string; code?: string } | undefined> {
+  private async denyReplicaGate(
+    input: ReplicaDenyInput,
+    context = this._serviceContext,
+  ): Promise<{ status: string; code?: string } | undefined> {
     const replication = this.config.replication;
     if (!replication?.enabled) return undefined;
     try {
-      if (replication.storage.kind === "indexeddb") {
-        const lifecycle = replication.storage.lifecycle;
-        if (lifecycle?.kind !== "indexeddb") return { status: "unguarded", code: "gate_unavailable" };
-        return await lifecycle.deny(input);
-      }
       const lifecycle = replication.storage.lifecycle;
-      if (lifecycle?.kind !== "file") return { status: "unguarded", code: "gate_unavailable" };
-      return await lifecycle.deny(input);
+      if (lifecycle?.kind !== (replication.storage.kind === "indexeddb" ? "indexeddb" : "file")) {
+        return { status: "unguarded", code: "gate_unavailable" };
+      }
+      const result = await lifecycle.deny(input);
+      if (result.status === "denied" || result.status === "deleted" || result.status === "marker") {
+        const event: Extract<ReplicationEvent, { type: "replication.lifecycle" }> = {
+          type: "replication.lifecycle",
+          at: new Date().toISOString(),
+          reason: input.reason,
+          action: result.status === "denied" ? "denied" : result.status === "deleted" ? "database_deleted" : "marker_set",
+          ...(result.status === "denied" ? { partitions: result.intents } : {}),
+          ...(result.status === "marker" ? { code: result.code } : {}),
+        };
+        try { replication.onEvent?.(event); } catch { /* Observability cannot undo a committed denial. */ }
+        const { type, ...data } = event;
+        try { context?.emit(type, data); } catch { /* Observability cannot undo a committed denial. */ }
+      }
+      return result;
     } catch (error) {
       const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
         ? error.code
