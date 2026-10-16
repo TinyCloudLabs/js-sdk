@@ -32,10 +32,12 @@ export interface ReplicaPageAdmission {
 
 /**
  * Browser page admission uses the exact signed net application-encoded byte change of
- * persisted ciphertext entries, blobs and meta. S5's browser ledger separately combines
- * measured device-row deltas for owner/stamp writes in a reserved device bucket. New rows
- * are sealed before opening the transaction; old stored rows are measured inside it.
- * Replacements/GC may release space. Node's page admission stays unchanged.
+ * persisted ciphertext entries, blobs and active meta. Erase retains a keyless opaque/numeric
+ * purged meta tombstone, charged to the partition until replacement or physical deletion;
+ * the same row metric measures it. S5's browser ledger separately combines measured device-row
+ * deltas for owner/stamp writes in a reserved device bucket. New rows are sealed before opening
+ * the transaction; old stored rows are measured inside it. Replacements/GC may release space.
+ * Node's page admission stays unchanged.
  */
 export interface ReplicaBrowserPageAdmission {
   partitionId: string;

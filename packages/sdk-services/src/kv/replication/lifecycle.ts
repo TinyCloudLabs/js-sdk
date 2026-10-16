@@ -215,12 +215,19 @@ export interface ReplicaEraseReport {
 }
 
 /**
- * The structural guard (browser: one instance per transaction-owning context). Every transaction that reads or writes a data
- * store (`meta`, `entries`, `blobs`, `pending`, and `device`) MUST go through `run`: open, get,
- * list, status, `grant()`, installGrant, every page commit, repair batch, GC pass, sync completion,
- * and every pending-store read/readExisting/update. Only purge/erase transactions are exempt.
+ * The structural guard (browser: one instance per transaction-owning context). Every
+ * session-bound transaction reading or writing `meta`, `entries`, `blobs`, `pending` or
+ * `device` MUST go through `run`: open, get/list, status, `grant()`, installGrant,
+ * page/repair/GC/sync completion and pending reads/updates. Narrow exceptions:
+ * purge/erase, pre-transaction key/control `snapshot()` and ungated bounded read-only
+ * `inspectStatus` (§1), which rechecks the gate key and reads only opaque numeric controls,
+ * never acquiring the account key, decrypting payloads or returning values/list keys.
  */
-export interface ReplicaGateTx<Tx, Access extends ReplicaGateAccess = ReplicaGateAccess> {
+export interface ReplicaGateTx<
+  Tx,
+  Access extends ReplicaGateAccess = ReplicaGateAccess,
+  Snapshot extends ReplicaGateSnapshot = ReplicaGateSnapshot,
+> {
   /**
    * Opens the guarded operation. Browser: spans `scope.stores` plus all control stores
    * (`gate`, `partitions`, `purgeIntents`, `quota`, `device`). The FIRST IDB request reads
@@ -240,11 +247,13 @@ export interface ReplicaGateTx<Tx, Access extends ReplicaGateAccess = ReplicaGat
    */
   run<T>(scope: ReplicaGateScope, access: Access, fn: (tx: Tx) => Promise<T>): Promise<T>;
   /**
-   * Snapshot outside any data transaction. Browser callers asynchronously derive private
-   * gate-HMAC ids, take the opaque Web Lock if needed, then `run` rechecks key ids and stamp
-   * before data access. Node callers derive their salted principal hash before guarded work.
+   * Snapshot outside any guarded data transaction. Browser callers obtain the
+   * nonextractable gate-HMAC key and key ids, derive private hashes asynchronously,
+   * take the opaque Web Lock if needed, then `run` rechecks key ids/stamp before data.
+   * This control/key read never acquires the account key for ungated inspection.
+   * Node callers derive their salted principal hash before guarded work.
    */
-  snapshot(): Promise<ReplicaGateSnapshot | null>;
+  snapshot(): Promise<Snapshot | null>;
   /** Registers a partition in the index, inside the `run` transaction that creates it. Idempotent. */
   indexPartition(tx: Tx, entry: ReplicaPartitionIndexEntry): Promise<void>;
   /** Removes the partition's index entry, inside its erase transaction. Idempotent. */
@@ -252,6 +261,9 @@ export interface ReplicaGateTx<Tx, Access extends ReplicaGateAccess = ReplicaGat
   /** Removes the intent `id`, in the same transaction as the erase it records (node: after it, see CONTRACT.md §2). */
   clearIntent(tx: Tx, id: string): Promise<void>;
 }
+
+/** Browser guard: typed private snapshot and required prehashed/key-bound access. */
+export type ReplicaBrowserGateTx<Tx> = ReplicaGateTx<Tx, ReplicaBrowserGateAccess, ReplicaBrowserGateSnapshot>;
 
 /**
  * Erase seam implemented by the storage adapter, driven by the gate (worker-side in the browser).
@@ -262,8 +274,12 @@ export interface ReplicaGateTx<Tx, Access extends ReplicaGateAccess = ReplicaGat
  */
 export interface ReplicaPartitionEraser<Tx> {
   /**
-   * Writes the partition's tombstone (so open handles fail RESET_REQUIRED by generation, not by
-   * unlink) and removes entries, blobs, grant, config and authority. Returns bytes released.
+   * Browser: writes a keyless `purged: true` meta tombstone with only opaque pid/numeric
+   * controls (so open handles fail RESET_REQUIRED by generation), then removes entries,
+   * blobs, grant, config and authority. `bytes` is the old application-encoded rows
+   * minus the tombstone; its measured size stays charged until replacement/deletion,
+   * and replay returns zero without releasing it twice. Node: a SQLite tombstone
+   * fences open handles; its erasure has no browser quota-ledger semantics.
    */
   erasePartition(tx: Tx, partitionId: string): Promise<{ bytes: number }>;
   /** Removes identity pending state (node: also `device.jwk`) durably before intent clear. */

@@ -316,8 +316,8 @@ export interface KVReplicaStorage {
   readonly lifecycle?: ReplicaLifecycleGate;
 }
 
-/** A Phase 2 adapter: lifecycle and stamped/policy-bound handles with opaque event ids. */
-export type ReplicaGatedStorage = KVReplicaStorage & {
+/** A Phase 2 adapter: the unstamped Phase 1 `open` overload is deliberately absent. */
+export type ReplicaGatedStorage = Omit<KVReplicaStorage, "open" | "lifecycle"> & {
   readonly lifecycle: ReplicaLifecycleGate;
   open(spec: ReplicaGatedSpec): Promise<ReplicaGatedHandle>;
 };
@@ -374,11 +374,12 @@ export type AuthorityRefusal = {
 export interface ReplicationAuthority {
   /**
    * Compact delegated/session-only authority: never consult `plan`, mint or silently renew.
-   * A matching persisted session stamp MAY serve a previously installed, independently
-   * verified active grant in its own identity/device partition while the grant's effective
-   * expiry and durable gate deadline remain valid, even if `sessionGrant(prefix)` now refuses.
-   * Without that stamp and stored valid grant, use network KV. A stored grant never
-   * establishes fresh consent or changes the session's own authority.
+   * A matching persisted stamp and independently verified, active installed grant are not
+   * enough to serve locally: the CURRENT session must also have uncaveated get authority
+   * for each requested key/list prefix. If `sessionGrant(prefix)` refuses NOT_COVERED,
+   * CAVEATED_AUTHORITY or SESSION_EXPIRING, use network KV even while that stored grant
+   * remains active. A stored grant never establishes fresh consent or replaces the
+   * current session's own authority.
    */
   sessionOnly?: boolean;
   sessionGrant(
