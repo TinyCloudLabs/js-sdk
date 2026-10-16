@@ -1034,11 +1034,14 @@ export {
 export {
   // Errors
   CaveatedDelegationUnsupportedError,
+  RevokeGrantDisabledError,
   PermissionNotInManifestError,
   SessionExpiredError,
   // Functions
   isCapabilitySubset,
   actionContains,
+  assertDelegationGrantEnabled,
+  isRootRevocationGrant,
   isExplicitOnlyAction,
   canonicalizeRecapCaveats,
   parseRecapCapabilities,

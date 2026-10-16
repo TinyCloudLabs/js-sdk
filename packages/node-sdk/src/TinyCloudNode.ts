@@ -125,6 +125,7 @@ import {
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
   isCapabilitySubset,
+  assertDelegationGrantEnabled,
   isExplicitOnlyAction,
   parseRecapCapabilities,
   // Manifest-driven sign-in
@@ -5240,6 +5241,14 @@ export class TinyCloudNode {
    * @internal
    */
   private createDelegationWrapper(params: CreateDelegationWasmParams): CreateDelegationWasmResult {
+    for (const service in params.abilities) {
+      if (!Object.prototype.hasOwnProperty.call(params.abilities, service)) continue;
+      const paths = params.abilities[service];
+      for (const path in paths) {
+        if (!Object.prototype.hasOwnProperty.call(paths, path)) continue;
+        assertDelegationGrantEnabled(path, paths[path]);
+      }
+    }
     // Convert ServiceSession to the format WASM expects
     const wasmSession = {
       delegationHeader: params.session.delegationHeader,
@@ -5298,6 +5307,7 @@ export class TinyCloudNode {
     if (!session) throw new Error("Owner session is required");
     const ownerDid = pkhDid(session.address, session.chainId);
     for (const permission of permissions) {
+      assertDelegationGrantEnabled(permission.path, permission.actions);
       if (
         permission.service === ENCRYPTION_PERMISSION_SERVICE
         && !principalDidEquals(parseNetworkId(permission.path).ownerDid, ownerDid)
@@ -6740,6 +6750,9 @@ export class TinyCloudNode {
     //    both see canonical form. This also deep-copies the entries so
     //    we don't mutate caller-owned data.
     const expandedEntries = this.expandPermissionEntries(permissions);
+    for (const entry of expandedEntries) {
+      assertDelegationGrantEnabled(entry.path, entry.actions);
+    }
 
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw
@@ -8529,6 +8542,7 @@ export class TinyCloudNode {
     const abilities: Record<string, Record<string, string[]>> = {};
     const rawAbilities: Record<string, string[]> = {};
     for (const resource of requestedResources) {
+      assertDelegationGrantEnabled(resource.path, resource.actions);
       const service = resource.service.replace(/^tinycloud\./, "");
       if (service === "encryption") {
         rawAbilities[resource.path] = [...resource.actions];

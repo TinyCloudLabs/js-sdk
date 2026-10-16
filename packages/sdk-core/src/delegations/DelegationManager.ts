@@ -34,6 +34,7 @@ import {
   DelegationApiResponse,
 } from "./types";
 import { EXPIRY } from "../expiry";
+import { assertDelegationGrantEnabled, RevokeGrantDisabledError } from "../capabilities";
 
 /**
  * Delegation action constants.
@@ -199,6 +200,7 @@ export class DelegationManager {
     }
 
     try {
+      assertDelegationGrantEnabled(params.path, params.actions);
       const body = JSON.stringify({
         delegateDID: params.delegateDID,
         path: params.path,
@@ -243,6 +245,12 @@ export class DelegationManager {
 
       return { ok: true, data: delegation };
     } catch (error) {
+      if (error instanceof RevokeGrantDisabledError) {
+        return {
+          ok: false,
+          error: createError(DelegationErrorCodes.REVOKE_GRANT_DISABLED, error.message, error),
+        };
+      }
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
