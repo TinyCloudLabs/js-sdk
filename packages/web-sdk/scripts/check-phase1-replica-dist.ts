@@ -6,7 +6,17 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 
 type GzipSizes = { "index.mjs": number; "index.cjs": number };
 type LedgerEntry = { pr: string; ticket: string; "index.mjs": number; "index.cjs": number; note: string };
-type Ledger = { allowance: GzipSizes; entries: LedgerEntry[] };
+type Phase2Ratchet = {
+  label: string;
+  base: string;
+  toolchain: string;
+  baseline: GzipSizes;
+  delta: GzipSizes;
+  ceiling: GzipSizes;
+  rationale: { module: string; controlledMarginalBeforeSafeCuts: GzipSizes; requiredAtLoad: string }[];
+  safeCuts: string;
+};
+type Ledger = { allowance: GzipSizes; entries: LedgerEntry[]; phase2Ratchet?: Phase2Ratchet };
 type OptionalEntry = LoadedSizes & { pr: string; ticket: string; note: string };
 type OptionalLedger = { allowance: LoadedSizes; entries: OptionalEntry[]; relocations?: unknown };
 type Baseline = {
@@ -19,8 +29,9 @@ type Baseline = {
  * - Per-PR: replica-touching PRs compare core gzip and two optional loaded
  *   buckets (first import with parser/noble, then IDB factory activation) against
  *   their git merge base. The already-loaded root is external and counted once.
- * - Cumulative: add one measured row to each separate ledger without raising
- *   the core ceiling. The worker has its own #550-owned immutable asset ratchet.
+ * - Cumulative: the historical core ledger stays unchanged for the approved
+ *   Phase 2 absolute-root ratchet; the optional and #550 worker buckets are
+ *   separately enforced. Other replica PRs append measured rows as before.
  * - Non-replica PRs are never charged; they only validate the ledger shape.
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
@@ -28,13 +39,14 @@ type Baseline = {
  * and packages/web-sdk/src/** paths containing "replica" or "replication".
  * Test files (`*.test.*`) under those paths are not replica-owned: they never
  * reach a web bundle, so a test-only edit cannot grow it.
- * Build noise tolerance is 64 gzip bytes: an entry may be up to 64 bytes below
- * the measured positive delta; always record the exact observed delta when possible.
- *
- * The ledger allowance (388 B ESM / 861 B CJS) is the replica headroom left after
- * TC-858 Phase 1: Sam's 6,144 B gzip budget minus Phase 1's measured growth of
- * 5,756 B ESM / 5,283 B CJS against cbfe21ee (#484, #495). Raising it is a budget
- * decision, made by editing `allowance` in a reviewed PR.
+ * Ordinary per-PR core rows retain the existing 64 B build-noise tolerance.
+ * The original 388/861 allowance and historical entries remain immutable.
+ * TC-858 Phase 2 has a separately approved, exact master9891-relative
+ * absolute root ceiling. It replaces additive headroom for this stack, not
+ * the first-import/activation/worker ratchets. Later growth above that
+ * ceiling needs policy review; an exact controlled re-baseline lowers it.
+ * Phase 1's 388/861 allowance was Sam's 6,144 B gzip budget minus its
+ * measured growth of 5,756 B ESM / 5,283 B CJS against cbfe21ee.
  */
 // web-sdk files that wire replication into the client bundle; their bytes are replica-owned
 // even though the filenames do not match the regex below.
@@ -73,11 +85,23 @@ const approvedRelocations = [
   { commit: relocationCommit, bucket: "web-core", "index.mjs": -143, "index.cjs": -130 },
   { commit: relocationCommit, bucket: "web-optional:first-import", "replica.mjs": 150, "replica.cjs": 170 },
 ];
+const approvedPhase2 = {
+  label: "TC-858 Phase 2 (#548 stack): security fences + required sync paths, approved by Naomi 2026-10-16",
+  base: "9891ed9dddc19a57198ed156804948e04d8ea025",
+  toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
+  baseline: { "index.mjs": 1460603, "index.cjs": 1390460 },
+  delta: { "index.mjs": 1322, "index.cjs": 1205 },
+  ceiling: { "index.mjs": 1461925, "index.cjs": 1391665 },
+} as const;
+const preexistingS3Entry: LedgerEntry = {
+  pr: "#553", ticket: "TC-858", "index.mjs": 52, "index.cjs": 55,
+  note: "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)",
+};
 let failed = false;
 
 function validateLedger(value: Ledger): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as (typeof formats)[number]))) {
@@ -94,6 +118,27 @@ function validateLedger(value: Ledger): void {
         typeof entry.pr !== "string" || typeof entry.ticket !== "string" || typeof entry.note !== "string" ||
         formats.some((format) => !Number.isFinite(entry[format]))) {
       throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json entries[] item");
+    }
+  }
+  const row = value.phase2Ratchet;
+  if (row !== undefined) {
+    if (value.allowance["index.mjs"] !== 388 || value.allowance["index.cjs"] !== 861 ||
+        !row || Object.keys(row).some((key) =>
+          !["label", "base", "toolchain", "baseline", "delta", "ceiling", "rationale", "safeCuts"].includes(key)) ||
+        row.label !== approvedPhase2.label || row.base !== approvedPhase2.base ||
+        row.toolchain !== approvedPhase2.toolchain ||
+        formats.some((format) => row.baseline?.[format] !== approvedPhase2.baseline[format] ||
+          row.delta?.[format] !== approvedPhase2.delta[format] ||
+          row.ceiling?.[format] !== approvedPhase2.ceiling[format] ||
+          row.baseline[format] + row.delta[format] !== row.ceiling[format]) ||
+        !Array.isArray(row.rationale) || row.rationale.length < 3 ||
+        row.rationale.some((item) => !item || Object.keys(item).some((key) =>
+          !["module", "controlledMarginalBeforeSafeCuts", "requiredAtLoad"].includes(key)) ||
+          typeof item.module !== "string" || item.module.length === 0 ||
+          typeof item.requiredAtLoad !== "string" || item.requiredAtLoad.length < 40 ||
+          formats.some((format) => !Number.isSafeInteger(item.controlledMarginalBeforeSafeCuts?.[format]))) ||
+        typeof row.safeCuts !== "string" || row.safeCuts.length < 40) {
+      throw new Error("TC-858 Phase 2 root ratchet must match Naomi's exact master9891 approval and document nonadditive file marginals");
     }
   }
 }
@@ -163,6 +208,14 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
+  const ceiling = ledger.phase2Ratchet?.ceiling[format];
+  if (ceiling !== undefined) {
+    console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
+    if (currentSizes[format] > ceiling) {
+      console.error(`${format}: TC-858 Phase 2 absolute root ceiling exceeded; later growth requires policy review.`);
+      failed = true;
+    }
+  }
 }
 
 const prBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
@@ -224,6 +277,25 @@ if (prBaseSha) {
     }
   }
   const replicaPaths = changedPaths.filter(replicaOwnedPath);
+  const phase2Introduced = ledger.phase2Ratchet !== undefined && baseLedger.phase2Ratchet === undefined;
+  if (baseLedger.phase2Ratchet !== undefined &&
+      JSON.stringify(ledger.phase2Ratchet) !== JSON.stringify(baseLedger.phase2Ratchet)) {
+    console.error("The approved TC-858 Phase 2 ratchet must remain unchanged after its introduction.");
+    failed = true;
+  }
+  if (phase2Introduced) {
+    const oldEntriesAdded = ledger.entries.slice(baseLedger.entries.length);
+    const inheritedS3Only = oldEntriesAdded.length === 0 ||
+      (oldEntriesAdded.length === 1 &&
+        JSON.stringify(oldEntriesAdded[0]) === JSON.stringify(preexistingS3Entry) &&
+        spawnSync("git", ["merge-base", "--is-ancestor", "0241ba9b", "HEAD"], { cwd: repoRoot }).status === 0);
+    if (!inheritedS3Only || replicaPaths.length === 0 ||
+        formats.some((format) => baseLedger.allowance[format] !== ledger.allowance[format]) ||
+        spawnSync("git", ["merge-base", "--is-ancestor", approvedPhase2.base, "HEAD"], { cwd: repoRoot }).status !== 0) {
+      console.error("TC-858 Phase 2 may introduce only Naomi's exact master9891-relative root ratchet, preserving the old #546/#553 entries.");
+      failed = true;
+    }
+  }
   const prefixMatches = ledger.entries.length >= baseLedger.entries.length &&
     baseLedger.entries.every((entry, index) => {
       const current = ledger.entries[index];
@@ -269,7 +341,10 @@ if (prBaseSha) {
     const tempDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-merge-base-"));
     const worktree = join(tempDir, "worktree");
     try {
-      command("git", ["worktree", "add", "--detach", worktree, mergeBase]);
+      // A first Phase 2 row must compare to the approved master, even when
+      // #553 has already merged and is the PR's ordinary merge base.
+      const measuredRef = phase2Introduced ? approvedPhase2.base : mergeBase;
+      command("git", ["worktree", "add", "--detach", worktree, measuredRef]);
       execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: worktree, stdio: "inherit" });
       if (!rustChanged) {
         for (const directory of ["web-sdk-wasm", "node-sdk-wasm"]) {
@@ -303,7 +378,12 @@ if (prBaseSha) {
       const baseSizes = await gzipSizes(resolve(worktree, "packages/web-sdk/dist"));
       const deltas = Object.fromEntries(formats.map((format) => [format, currentSizes[format] - baseSizes[format]])) as GzipSizes;
       for (const format of formats) {
-        console.log(`${format}: merge-base=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
+        console.log(`${phase2Introduced ? "approved master9891" : "merge-base"}=${baseSizes[format]} gzip-bytes current=${currentSizes[format]} delta=${deltas[format]} bytes`);
+      }
+      if (phase2Introduced &&
+          formats.some((format) => Math.abs(baseSizes[format] - approvedPhase2.baseline[format]) > 2)) {
+        console.error("Official master9891 build differs by more than 2 B from the approved TC-858 Phase 2 baseline.");
+        failed = true;
       }
       const baseOptionalSizes = await measureReplicaOptionalLoaded(resolve(worktree, "packages/web-sdk/dist"));
       const optionalDeltas = Object.fromEntries(optionalFormats.map((format) =>
@@ -325,7 +405,12 @@ if (prBaseSha) {
         failed = true;
       }
       const appended = ledger.entries.slice(baseLedger.entries.length);
-      if (!prefixMatches || appended.length !== 1) {
+      if (phase2Introduced) {
+        // The separately approved row replaces a cumulative #548 entry; #553
+        // remains its own unchanged upstream ledger entry.
+        if (!prefixMatches) failed = true;
+        console.log("TC-858 Phase 2 uses its exact absolute-root policy row, not additive old headroom.");
+      } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
         console.error("Replica-touching PR must append exactly one ledger entry to packages/web-sdk/scripts/replica-size-ledger.json entries[]. Add this entry:");
@@ -344,7 +429,7 @@ if (prBaseSha) {
           }
         }
       }
-      if (prefixMatches && appended.length !== 1) failed = true;
+      if (!phase2Introduced && prefixMatches && appended.length !== 1) failed = true;
       console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
     } finally {
       try {

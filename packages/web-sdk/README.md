@@ -82,16 +82,22 @@ wallet. An unknown, unavailable, or different provider account leaves network
 use intact and gates local reads; restoring never creates or repairs a replica
 stamp. Local reads recheck the connected account before returning replica data.
 
-Size accounting uses three separate no-growth ratchets under Bun 1.4.3.
+Size accounting under Bun 1.4.3 has an absolute web-root ceiling and separate
+opt-in first-import, activation, and worker ceilings. TC-858 Phase 2 is capped
+at 1,461,925 B ESM / 1,391,665 B CJS gzip for the root: +1,322 / +1,205 B
+against the official master `9891ed9d` build (1,460,603 / 1,390,460 B).
+Base re-measured with the official recipe; the provisional base is superseded.
+This approved ratchet replaces further cumulative headroom for the #548 stack;
+the historical 388 / 861 B allowance and #546/#553 entries remain unchanged.
+
 The opt-in first-import ceiling is 45,657 B ESM / 65,176 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
 factory has a separate 23,081 B / 24,886 B ceiling. The content-hashed worker
 and WASM asset has an 818,196 B ceiling owned by `@tinycloud/replica`.
 A compliant first local open therefore costs at most about 886,934 B ESM /
 908,258 B CJS incremental gzip beyond the already-loaded web root; those
-assets can then be cached. The web root retains its unchanged 388 B ESM /
-861 B CJS replica budget. These are ceilings, not a claim that this branch
-passes all three gates.
+assets can then be cached. These byte ceilings do not replace real-worker
+Chromium acceptance of local reads, denial, expiry, and sign-out.
 
 ## Basic Storage Operations
 

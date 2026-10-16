@@ -32,5 +32,31 @@
       "index.cjs": 55,
       "note": "Replica gzip growth measured against this PR's merge base 9516f840 (includes S1 #550 kv-storage code merged into this branch)"
     }
-  ]
+  ],
+  "phase2Ratchet": {
+    "label": "TC-858 Phase 2 (#548 stack): security fences + required sync paths, approved by Naomi 2026-10-16",
+    "base": "9891ed9dddc19a57198ed156804948e04d8ea025",
+    "toolchain": "Bun 1.4.3; production webpack; gzip -9 -c",
+    "baseline": { "index.mjs": 1460603, "index.cjs": 1390460 },
+    "delta": { "index.mjs": 1322, "index.cjs": 1205 },
+    "ceiling": { "index.mjs": 1461925, "index.cjs": 1391665 },
+    "rationale": [
+      {
+        "module": "packages/node-sdk/src/TinyCloudNode.ts",
+        "controlledMarginalBeforeSafeCuts": { "index.mjs": 1073, "index.cjs": 975 },
+        "requiredAtLoad": "The web root exports the Node class. Its synchronous sign-out delivery denial, TC-1208 epoch/attempt/signOutCount fences and independent non-replica OpenKey retry cannot move behind an asynchronous replica loader. The measured whole-file marginal includes OpenKey and gzip interactions; it is not a replica-only charge."
+      },
+      {
+        "module": "packages/web-sdk/src/index.ts + packages/web-sdk/src/modules/tcw.ts",
+        "controlledMarginalBeforeSafeCuts": { "index.mjs": 312, "index.cjs": 293 },
+        "requiredAtLoad": "The root owns the explicit enabled-constructor registration and synchronous invalid-config refusal; sign-in/restore and wallet selection retain the TC-1208 fences. The optional recovery, storage, authority and worker remain outside the root."
+      },
+      {
+        "module": "packages/web-sdk/src/index.ts shared root exports",
+        "controlledMarginalBeforeSafeCuts": { "index.mjs": 103, "index.cjs": 189 },
+        "requiredAtLoad": "The separately built optional entry calls the root's existing SDK parser and SIWE helpers through these exports, sharing one registry/session and avoiding a second copy of SDK code. This marginal overlaps the index.ts/tcw.ts row and must not be summed."
+      }
+    ],
+    "safeCuts": "Bun 1.4.3 controlled combined root reduction -385/-279 against the pre-cut S2 stack: optional-only pure scope predicate reuse -77/-36, then registered synchronous Node config validation -308/-243. S4 event correction changed root by 0. Marginals are nonadditive before-cut attribution, not fabricated exact post-cut per-file gzip; the absolute built combined root ceiling is binding. Base re-measured with the official recipe; earlier provisional base superseded."
+  }
 }
