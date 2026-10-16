@@ -8540,6 +8540,8 @@ var init_dist2 = __esm({
       REPLICATION_SYNC: "replication.sync",
       REPLICATION_STATE: "replication.state",
       REPLICATION_DIVERGENCE: "replication.divergence",
+      REPLICATION_GRANT: "replication.grant",
+      REPLICATION_LIFECYCLE: "replication.lifecycle",
       /** Emitted once, on the first write rejected because storage is full. */
       STORAGE_FULL: "storage.full"
     };
@@ -8559,21 +8561,27 @@ var init_dist2 = __esm({
       "fetched",
       "pages",
       "lagMs",
-      "pendingCleared"
+      "pendingCleared",
+      "partitions",
+      "remaining",
+      "expiryMs"
     ]);
-    SAFE_BOOLEAN_FIELDS = /* @__PURE__ */ new Set(["authenticated", "ok", "persisted"]);
+    SAFE_BOOLEAN_FIELDS = /* @__PURE__ */ new Set(["authenticated", "ok", "persisted", "purgePending"]);
     SAFE_REPLICATION_FIELDS = {
       source: ["replica", "network", "none"],
-      reason: ["hit", "absent", "deleted", "content_missing", "coverage_incomplete", "not_covered", "pending_write", "grant_missing", "grant_expired", "grant_revoked", "grant_not_yet_valid", "stale", "replica_error", "runtime_unsupported", "replica_unavailable", "unsupported_option", "network_cursor", "cursor_restart", "aborted", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED"],
+      reason: ["hit", "absent", "deleted", "content_missing", "coverage_incomplete", "not_covered", "pending_write", "grant_missing", "grant_expired", "grant_revoked", "grant_not_yet_valid", "stale", "replica_error", "runtime_unsupported", "replica_unavailable", "unsupported_option", "network_cursor", "cursor_restart", "aborted", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED", "replica_gated", "sign_out", "account_switch", "consent_expired", "startup"],
       op: ["get", "list", "put", "delete", "batchPut"],
-      trigger: ["start", "interval", "stale_read", "manual"],
+      trigger: ["start", "interval", "stale_read", "manual", "peer"],
+      origin: ["peer"],
       outcome: ["found", "not_found", "error", "committed", "failed", "ambiguous", "ok", "busy", "aborted"],
-      class: ["offline", "authority", "storage", "node"],
-      state: ["opened", "grant_installed", "grant_missing", "runtime_unsupported", "unavailable", "revoked", "recreated", "purged", "purge_failed", "pending_store_error", "pinned", "pending_cleared", "closed", "idle", "ready"],
+      class: ["offline", "authority", "storage", "node", "lifecycle"],
+      state: ["opened", "grant_installed", "grant_missing", "runtime_unsupported", "unavailable", "revoked", "recreated", "purged", "purge_failed", "pending_store_error", "pinned", "pending_cleared", "closed", "idle", "ready", "gated"],
+      action: ["minted", "renewed", "renewal_refused", "renewal_deferred", "capped", "expired", "consent_deadline_reached", "denied", "deny_stale", "deny_failed", "database_deleted", "marker_set", "marker_cleared", "unguarded", "drained", "erased", "erase_failed", "activation_blocked", "activated", "recovered"],
+      gate: ["not_established", "stamp_stale", "principal_mismatch", "purge_pending", "logout_pending", "gate_unavailable"],
       kind: ["value", "missing_local", "extra_local", "keys", "order"],
       coverage: ["empty", "bootstrapping", "complete"],
       authority: ["valid", "expired", "revoked", "not-yet-valid"],
-      code: ["NETWORK_ERROR", "TIMEOUT", "ABORTED", "REPLICA_BUSY", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED", "INTEGRITY_ERROR", "STORAGE_ERROR", "REPLICA_CLOSED", "RUNTIME_UNSUPPORTED", "GRANT_EXPIRED", "GRANT_REVOKED", "GRANT_NOT_YET_VALID", "GRANT_MISSING", "GRANT_INVALID", "SOURCE_CHANGED", "PROTOCOL_ERROR", "SCOPE_VIOLATION", "NODE_ERROR", "CONTENT_MISMATCH", "STORAGE_FULL"],
+      code: ["NETWORK_ERROR", "TIMEOUT", "ABORTED", "REPLICA_BUSY", "REPLICA_BEHIND_OWN_WRITES", "REPLICA_UNPROVEN_SINCE_START", "NETWORK_REQUESTED", "INTEGRITY_ERROR", "STORAGE_ERROR", "REPLICA_CLOSED", "RUNTIME_UNSUPPORTED", "GRANT_EXPIRED", "GRANT_REVOKED", "GRANT_NOT_YET_VALID", "GRANT_MISSING", "GRANT_INVALID", "SOURCE_CHANGED", "PROTOCOL_ERROR", "SCOPE_VIOLATION", "NODE_ERROR", "CONTENT_MISMATCH", "STORAGE_FULL", "REPLICA_GATED", "RESET_REQUIRED", "STORAGE_BUDGET", "CONSENT_EXPIRED"],
       pendingState: ["in_flight", "committed", "ambiguous"],
       strategy: ["session", "minted", "installed"],
       verify: ["match", "diverged", "error", "aborted"]
@@ -14903,7 +14911,14 @@ function createReplicationEventSink(profileRoot, options) {
 `);
       } else if (event.type === "replication.sync") {
         const pending = event.pendingCleared === void 0 ? "" : ` pendingCleared:${event.pendingCleared}`;
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}
+        const origin = event.origin === void 0 ? "" : ` origin:${event.origin}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}${origin}
+`);
+      } else if (event.type === "replication.grant") {
+        process.stderr.write(`[replication] grant ${event.replicaId} ${event.action}${event.code ? ` ${event.code}` : ""}${event.effectiveExpiresAt ? ` effectiveExpiresAt:${event.effectiveExpiresAt}` : ""}
+`);
+      } else if (event.type === "replication.lifecycle") {
+        process.stderr.write(`[replication] lifecycle ${event.action}${event.reason ? ` ${event.reason}` : ""}${event.gate ? ` gate:${event.gate}` : ""}${event.code ? ` ${event.code}` : ""}${event.remaining === void 0 ? "" : ` remaining:${event.remaining}`}
 `);
       }
     }

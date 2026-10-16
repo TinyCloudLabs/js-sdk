@@ -8,6 +8,13 @@
   filename for immutable caching; retain the stable worker export for explicit
   custom-worker imports without immutable caching.
 
+## 0.2.4-beta.1
+
+### Patch Changes
+
+- Updated dependencies [9891ed9]
+  - @tinycloud/sdk-services@3.2.6-beta.4
+
 ## 0.2.4-beta.0
 
 ### Patch Changes
