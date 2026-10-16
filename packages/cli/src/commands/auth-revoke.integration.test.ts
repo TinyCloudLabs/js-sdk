@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProfileReplicaPurge, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
@@ -159,9 +159,9 @@ async function seedWithPublicLogin(home: string, host: string): ReturnType<typeo
   };
 }
 
-async function server(mode: "fail" | "hold" | "success", cid: () => string) {
+async function server(mode: "fail" | "fail-after-first" | "hold" | "success", cid: () => string) {
   const requests: string[] = [];
-  const snapshots: Array<{ session: boolean; db: boolean }> = [];
+  const snapshots: Array<{ session: boolean; db: boolean; unknown?: boolean }> = [];
   const revokedCids: string[] = [];
   const queryRequests: string[] = [];
   const authorizationKinds: Array<{ scheme: string; encoding: string; prefix: string; dots: number }> = [];
@@ -170,6 +170,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
   const started = Promise.withResolvers<void>();
   let state = mode;
   let localPaths: { session: string; db: string } | undefined;
+  let unknownPath: string | undefined;
   const node = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -183,6 +184,7 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
         requests.push(request.headers.get("authorization") ?? "");
         if (localPaths) snapshots.push({
           session: await exists(localPaths.session), db: await exists(localPaths.db),
+          ...(unknownPath ? { unknown: await exists(unknownPath) } : {}),
         });
         started.resolve();
         if (state === "hold") return new Promise<Response>(() => {});
@@ -204,6 +206,9 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
           const target = signed.audience.startsWith("ucan:") ? signed.audience.slice("ucan:".length) : "";
           if (target.length === 0) return new Response("CID-bound owner proof required", { status: 403 });
           revokedCids.push(target);
+          if (state === "fail-after-first" && requests.length === 2) {
+            return new Response("node unavailable after first revoke", { status: 503 });
+          }
           return Response.json({ cid: target, revoked: true });
         }
         if (state === "fail") return new Response("node unavailable", { status: 503 });
@@ -226,8 +231,9 @@ async function server(mode: "fail" | "hold" | "success", cid: () => string) {
     authorizationKinds,
     snapshots,
     started: started.promise,
-    setMode(value: "fail" | "hold" | "success") { state = value; },
+    setMode(value: "fail" | "fail-after-first" | "hold" | "success") { state = value; },
     setPaths(paths: { session: string; db: string }) { localPaths = paths; },
+    setUnknownPath(path: string) { unknownPath = path; },
     stop() { node.stop(true); servers.splice(servers.indexOf(node), 1); },
   };
 }
@@ -631,6 +637,66 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     expect(await exists(paths.session)).toBe(false);
     expect(await exists(paths.db)).toBe(false);
     expect(await exists(paths.key)).toBe(false);
+  }, 30_000);
+
+  test("explicit discard lists unknown files and preserves them until all online revokes succeed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc841-revoke-discard-"));
+    homes.push(home);
+    let delegationCid = "";
+    const node = await server("fail-after-first", () => delegationCid);
+    const paths = await seedWithPublicLogin(home, node.host);
+    delegationCid = paths.delegationCid;
+    node.setPaths(paths);
+    const unknown = join(home, ".tinycloud", "profiles", PROFILE, "replication", "unknown-child", "private.bin");
+    await mkdir(join(unknown, ".."), { recursive: true });
+    const unknownBytes = Buffer.from("unsynced owner data");
+    await writeFile(unknown, unknownBytes);
+    node.setUnknownPath(unknown);
+    const sessionBefore = await readFile(paths.session);
+    const keyBefore = await readFile(paths.key);
+    const args = ["auth", "logout", "--revoke", "--discard-local-changes"];
+    const issuedCid = new NodeWasmBindings().computeCid(new TextEncoder().encode("tc841-discard-owner-grant"), 0x55n);
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    await withTinyCloudStateRoot(home, () =>
+      writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"), JSON.stringify({
+        ts: new Date().toISOString(), profile: PROFILE, source: "cli",
+        delegationCid: issuedCid, expiry: future, addedCaps: [],
+      }) + "\n", { mode: 0o600 }));
+    node.setQueryRecords([{
+      cid: issuedCid, direction: "granted", delegatorDid: paths.ownerDid,
+      delegateDid: "did:key:z6MkRecipientTc841",
+      resources: [{ resource: `${paths.spaceId}/kv/notes/`, actions: ["tinycloud.kv/get"], caveats: [] }],
+      parents: [], issuedAt: new Date(Date.now() - 60_000).toISOString(),
+      notBefore: null, expiresAt: future, status: "active",
+    }]);
+
+    const failed = await run(home, args);
+    expect(failed.exitCode).toBeGreaterThan(0);
+    expect(failed.stderr).toMatch(/revocation failed/i);
+    expect(`${failed.stdout}\n${failed.stderr}`).toContain("unknown-child");
+    expect(node.requests).toHaveLength(2);
+    expect(node.revokedCids).toEqual([issuedCid, delegationCid]);
+    expect(node.snapshots).toEqual([
+      { session: true, db: true, unknown: true },
+      { session: true, db: true, unknown: true },
+    ]);
+    await expectDeniedButRetained(home, paths, sessionBefore, keyBefore);
+    expect(await readFile(unknown)).toEqual(unknownBytes);
+
+    node.setMode("success");
+    const retried = await run(home, args);
+    expect(retried.exitCode).toBe(0);
+    expect(node.requests).toHaveLength(4);
+    expect(node.revokedCids).toEqual([issuedCid, delegationCid, issuedCid, delegationCid]);
+    expect(node.snapshots).toEqual(Array.from({ length: 4 },
+      () => ({ session: true, db: true, unknown: true })));
+    await expect(readFile(unknown)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await exists(paths.db)).toBe(false);
+    expect(await exists(paths.session)).toBe(false);
+    expect(await exists(paths.key)).toBe(false);
+    const profile = JSON.parse(await withTinyCloudStateRoot(home, () =>
+      readFile(profileConfigPath(PROFILE), "utf8"))) as { authSignedOut?: boolean };
+    expect(profile.authSignedOut).toBe(true);
   }, 30_000);
 
   test("history-only owner grants revoke before the session, while imported and expired source-cli rows are excluded", async () => {
