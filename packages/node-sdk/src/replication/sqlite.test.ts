@@ -1035,6 +1035,66 @@ describe("mandatory Node lifecycle gate", () => {
     ]);
   });
 
+  test("plain-logout challenge visibly binds known, unknown, root and missing identities", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const legacy = await makeLegacyMirror(profileDir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const original = await purge.preflightLogout({ principal: PRINCIPAL });
+    await purge.prepareLogoutPending({ principal: PRINCIPAL, approval: original, remotePending: true });
+    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true })).status)
+      .toBe("denied");
+    const markerPath = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
+    const marker = await readFile(markerPath, "utf8");
+    const database = join(legacy, "replica.db");
+    const replacement = join(legacy, "replacement");
+    await writeFile(replacement, await readFile(database));
+    await rename(replacement, database);
+    const unknown = join(legacy, "new-unsynced");
+    await writeFile(unknown, "Y");
+    await mkdir(join(profileDir, "replicas", "empty"));
+    const changed = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    expect(changed.knownEntries).toContainEqual(expect.objectContaining({ path: "replicas/notes/replica.db" }));
+    expect(changed.unknownEntries).toContainEqual(expect.objectContaining({ path: "replicas/notes/new-unsynced" }));
+    expect(changed.missingDatabases).toContain("replicas/empty/replica.db");
+    let refusal: Error & { inventoryApprovalToken?: string; inventoryApprovalEntries?: {
+      path: string; kind: string; dev: string; ino: string;
+    }[] } | undefined;
+    try {
+      await purge.abandonRemoteLogout({ principal: PRINCIPAL, approval: changed, discardLocalChanges: true });
+    } catch (error) {
+      refusal = error as typeof refusal;
+    }
+    expect(refusal).toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(refusal!.inventoryApprovalToken).toMatch(/^[0-9a-f]{32}$/);
+    const listed = [
+      ...changed.unknownEntries, ...changed.knownEntries,
+      ...changed.knownRoots.map((root) => ({ ...root, kind: "directory" })),
+      ...changed.missingDatabases.map((path) => ({ path, kind: "missing", dev: "", ino: "" })),
+    ];
+    expect(refusal!.inventoryApprovalEntries).toEqual(expect.arrayContaining(listed));
+    expect(refusal!.inventoryApprovalEntries).toHaveLength(listed.length);
+    for (const { path, kind, dev, ino } of listed) {
+      expect(refusal!.message).toContain(JSON.stringify({ path, kind, dev, ino }));
+    }
+    expect(await readFile(markerPath, "utf8")).toBe(marker);
+    const other = join(legacy, "other-unsynced");
+    await writeFile(other, "Y");
+    await rename(other, unknown);
+    const afterReplace = await purge.preflightLogout({ principal: PRINCIPAL, discardLocalChanges: true });
+    let nextToken = "";
+    try {
+      await purge.abandonRemoteLogout({
+        principal: PRINCIPAL, approval: afterReplace, discardLocalChanges: true,
+      });
+    } catch (error) {
+      nextToken = (error as { inventoryApprovalToken: string }).inventoryApprovalToken;
+    }
+    expect(nextToken).toMatch(/^[0-9a-f]{32}$/);
+    expect(nextToken).not.toBe(refusal!.inventoryApprovalToken);
+    expect(await readFile(markerPath, "utf8")).toBe(marker);
+  });
+
   test("consumed deferred denial still accepts remote completion or explicit abandon at its original epoch", async () => {
     for (const transition of ["completeRemoteLogout", "abandonRemoteLogout"] as const) {
       const dir = await makeDir();
