@@ -6,27 +6,41 @@ import { canonicalReplicationIdentity } from "./identity";
 import { createKVReplication } from "./controller";
 import { encodeTcr1 } from "./listLocal";
 import { createMemoryPendingStore } from "./memoryPendingStore";
-import type { KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
+import type { AuthorityRefusal, KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
 import { RequestTimeoutError, wrapError } from "../../errors";
+import { CONSENT_WINDOW_MS, DEFAULT_GRANT_TTL_MS } from "./contractConstants";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
 const options: ResolvedReplicationOptions = { enabled: true, prefixes: ["notes/"], allowSecrets: false, syncIntervalMs: 60_000, maxStalenessMs: 120_000, staleSyncTimeoutMs: 10_000, verify: false };
+function lastEvent(events: readonly ReplicationEvent[], matches: (event: ReplicationEvent) => boolean): ReplicationEvent | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (matches(events[index]!)) return events[index];
+  }
+  return undefined;
+}
 
-function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false }: {
+
+function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusOverrides = {}, localGetStatus = "present", localGetErrorCode = "INTEGRITY_ERROR", beforeLocalGet, syncOutcome = "synced", mode = "foreground", purgeImpl, verify = false, openError, runtimeMint, sessionOnly = false, sessionRefused = false, sessionRefusal, canRenew = false, planPath = "runtime", setTimeoutImpl = () => () => undefined, beforePendingRead, afterPendingRead, statusImpl, inspectStatus, prefixes = options.prefixes, nodeFeatures, allowSecrets = false, delivery, onDeny, consentAnchor, durableDeadline, anchorError = false }: {
+  durable?: boolean;
   pendingStore?: PendingWriteStore;
   initialEpoch?: number;
   onSync?: (epoch: number, signal: AbortSignal) => Promise<void> | void;
   statusOverrides?: Partial<LocalReplicaStatus>;
   localGetStatus?: "present" | "absent" | "deleted" | "content_missing" | "throw";
+  localGetErrorCode?: string;
+  beforeLocalGet?: () => void;
   syncOutcome?: "synced" | "busy" | "network_error" | "node_error";
   mode?: "background" | "foreground";
   purgeImpl?: (target: { sessionDeviceDid?: string }) => void | Promise<void>;
   verify?: boolean;
   openError?: string;
-  runtimeMint?: (signal: AbortSignal) => Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
+  runtimeMint?: (signal: AbortSignal, options?: { expiryMs: number }) => Promise<{ ucan: string; parentCid: string; expiresAt: number }>;
   sessionOnly?: boolean;
   sessionRefused?: boolean;
+  sessionRefusal?: () => AuthorityRefusal["refused"] | null;
+  canRenew?: boolean;
+  planPath?: "session" | "runtime";
   setTimeoutImpl?: (fn: () => void, ms: number) => () => void;
   beforePendingRead?: () => void | Promise<void>;
   afterPendingRead?: () => void | Promise<void>;
@@ -35,13 +49,23 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
   prefixes?: string[];
   nodeFeatures?: readonly string[];
   allowSecrets?: boolean;
+  delivery?: () => { status: "allow" } | { status: "consent_expired"; code: "CONSENT_EXPIRED" } | { status: "gated"; gate: "stamp_stale" };
+  onDeny?: (input: { reason: string; principal: string }) => void | Promise<void>;
+  consentAnchor?: { at: number; source: "siwe" | "first_install" };
+  durableDeadline?: number | null;
+  anchorError?: boolean;
 } = {}) {
   let now = 1_000_000;
   let listReads = 0;
-  let localStatus = { ...status(initialEpoch), ...statusOverrides };
+  let localStatus = {
+    ...status(initialEpoch),
+    ...(delivery ? { grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000 + DEFAULT_GRANT_TTL_MS, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS } } : {}),
+    ...statusOverrides,
+  };
   let localReads = 0;
   let syncs = 0;
   let opens = 0;
+  let installs = 0;
   let statusCalls = 0;
   let networkCalls = 0;
   const events: ReplicationEvent[] = [];
@@ -57,16 +81,17 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
     return snapshot;
   };
   const handle = {
-    spec: { identity, space: identity.space, prefix: "notes/", allowSecrets: false }, deviceDid: identity.principal,
+    spec: { identity, space: identity.space, prefix: "notes/", allowSecrets: false }, deviceDid: identity.principal, replicaId: "opaque-partition",
     async get(key: string) {
       localReads++;
-      if (localGetStatus === "throw") throw Object.assign(new Error("local read failed"), { code: "INTEGRITY_ERROR" });
+      beforeLocalGet?.();
+      if (localGetStatus === "throw") throw Object.assign(new Error("local read failed"), { code: localGetErrorCode });
       const meta = { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch };
       if (localGetStatus !== "present") return { status: localGetStatus, key, meta };
       return { status: "present" as const, key, value: new TextEncoder().encode('"local"'), etag: '"blake3-local"', metadata: { "content-type": "application/json" }, meta };
     },
     async list() { listReads++; return { keys: ["notes/a"], meta: { asOf: new Date(now).toISOString(), coverage: localStatus.coverage, authority: localStatus.authority.state, syncedThroughEpoch: localStatus.syncedThroughEpoch } }; },
-    async grant() { return localStatus.grant; }, async installGrant() { return localStatus.grant!; },
+    async grant() { return localStatus.grant; }, async installGrant() { installs++; return localStatus.grant!; },
     async sync({ signal, syncStartEpoch }: { signal: AbortSignal; syncStartEpoch: number }) {
       syncs++;
       await onSync?.(syncStartEpoch, signal);
@@ -78,21 +103,542 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
     async status() { statusCalls++; return statusImpl ? statusImpl(statusCalls) : localStatus; }, async close() {},
   } as unknown as KVReplicaHandle;
   const storage: KVReplicaStorage = {
-    kind: "sqlite",
+    kind: delivery ? "indexeddb" : "sqlite",
+    ...(delivery ? { lifecycle: {
+      kind: "indexeddb" as const,
+      consentDeadline: () => durableDeadline === undefined ? 1_000_000 + CONSENT_WINDOW_MS : durableDeadline,
+      checkDelivery: delivery,
+      async deny(input: { reason: string; principal: string }) { await onDeny?.(input); return { status: "denied" as const, lifecycleEpoch: 1, intents: 1 }; },
+    } as unknown as NonNullable<KVReplicaStorage["lifecycle"]> } : {}),
     async open() { opens++; if (openError) throw Object.assign(new Error("open failed"), { code: openError }); return handle; },
     ...(inspectStatus ? { inspectStatus: async (_spec: KVReplicaSpec, { signal }: { signal: AbortSignal }) => inspectStatus(signal) } : {}),
     async purge(target) { await purgeImpl?.(target); },
     pendingWrites() { return pending; },
   };
-  const authority = { sessionOnly, sessionGrant: () => sessionRefused || runtimeMint ? { refused: "NOT_COVERED" as const } : ({ ucan: "token", device: { did: identity.principal, jwk: {} } }), plan: () => { if (sessionOnly) throw new Error("session-only authority consulted the plan"); return runtimeMint ? ({ path: "runtime" as const, parentCid: "parent", expiresAt: now + 60_000 }) : ({ refused: "NOT_COVERED" as const }); }, async mint(_deviceDid: string, _prefix: string, signal: AbortSignal) { return runtimeMint ? runtimeMint(signal) : Promise.reject(new Error("unexpected mint")); } };
+  const authority = {
+    sessionOnly,
+    canRenew,
+    consentAnchor: () => { if (anchorError) throw new Error("authority proof unavailable"); return consentAnchor ?? null; },
+    sessionGrant: () => {
+      const refusal = sessionRefusal?.();
+      return refusal ? { refused: refusal } : sessionRefused || runtimeMint
+        ? { refused: "NOT_COVERED" as const }
+        : { ucan: "token", device: { did: identity.principal, jwk: {} } };
+    },
+    plan: () => {
+      if (sessionOnly) throw new Error("session-only authority consulted the plan");
+      return runtimeMint ? { path: planPath, parentCid: "parent", expiresAt: now + 60_000 } : { refused: "NOT_COVERED" as const };
+    },
+    async mint(_deviceDid: string, _prefix: string, signal: AbortSignal, options?: { expiryMs: number }) {
+      return runtimeMint ? runtimeMint(signal, options) : Promise.reject(new Error("unexpected mint"));
+    },
+  };
   const scheduler = { now: () => now, setTimeout: setTimeoutImpl };
-  const createController = () => createKVReplication({ options: { ...options, prefixes, verify, allowSecrets }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event), nodeFeatures });
+  const createController = () => createKVReplication({ options: { ...options, prefixes, verify, allowSecrets }, mode, storage, identity, session: { id: "session", did: identity.principal, space: identity.space }, authority, pending, scheduler, emit: (event) => events.push(event), nodeFeatures, ...(delivery ? { stamp: { incarnation: "test-incarnation", lifecycleEpoch: 0 } } : {}) });
   const controller = createController();
-  return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
+  return { controller, createController, storage, pending, events, counters: () => ({ localReads, syncs, opens, installs, networkCalls }), listReads: () => listReads, network: async (): Promise<Result<KVResponse<unknown>>> => { networkCalls++; return ok({ data: "network", headers: { get: () => null } }); }, setNow: (value: number) => { now = value; }, setStatus: (value: LocalReplicaStatus) => { localStatus = value; } };
 }
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
+
+describe("consent deadline delivery", () => {
+  test("an expired unopened session never opens a replica or fabricates a grant event", async () => {
+    let decision: "allow" | "consent_expired" | "gated" = "consent_expired";
+    const denials: Array<{ reason: string; principal: string }> = [];
+    const env = setup({
+      delivery: () => decision === "allow" ? { status: "allow" } : decision === "consent_expired" ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "gated", gate: "stamp_stale" },
+      onDeny: (input) => { denials.push(input); decision = "gated"; },
+    });
+    const first = await env.controller.get(readRequest(env.network));
+    expect(first.ok && first.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events.filter((event) => event.type === "replication.grant")).toEqual([]);
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED" }));
+    expect(denials).toEqual([{ reason: "consent_expired", principal: identity.principal }]);
+
+    await env.controller.get(readRequest(env.network));
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 2 });
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "replica_gated", code: "REPLICA_GATED" }));
+    expect(denials).toHaveLength(1);
+  });
+
+  test("a gate timer that shreds first still reports only the opened stamped grant", async () => {
+    let stale = false;
+    let redundantDenials = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => stale ? { status: "gated", gate: "stamp_stale" } : { status: "allow" },
+      onDeny: () => { redundantDenials++; },
+    });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    stale = true;
+    env.controller.observeConsentExpired({ incarnation: "other", lifecycleEpoch: 0 });
+    expect(env.events.some((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toBe(false);
+    env.controller.observeConsentExpired({ incarnation: "test-incarnation", lifecycleEpoch: 0 });
+    env.controller.observeConsentExpired({ incarnation: "test-incarnation", lifecycleEpoch: 0 });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "CONSENT_EXPIRED" }),
+    ]);
+    expect(env.events.filter((event) => event.type === "replication.lifecycle" && event.reason === "consent_expired")).toEqual([
+      expect.objectContaining({ action: "denied" }),
+    ]);
+    expect(env.counters()).toMatchObject({ opens: 1, localReads: 1, networkCalls: 1 });
+    expect(redundantDenials).toBe(0);
+  });
+  test("a committed gate expiry before the first open has no synthetic grant event", async () => {
+    const env = setup({ delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    env.controller.observeConsentExpired({ incarnation: "test-incarnation", lifecycleEpoch: 0 });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events.some((event) => event.type === "replication.grant")).toBe(false);
+    expect(env.events.filter((event) => event.type === "replication.lifecycle" && event.reason === "consent_expired")).toEqual([
+      expect.objectContaining({ action: "denied" }),
+    ]);
+  });
+
+  test("an opened replica stops delivery and reports its opaque id exactly once", async () => {
+    let decision: "allow" | "consent_expired" | "gated" = "allow";
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => decision === "allow" ? { status: "allow" } : decision === "consent_expired" ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "gated", gate: "stamp_stale" },
+      onDeny: () => { denials++; decision = "gated"; },
+    });
+    const local = await env.controller.get(readRequest(env.network));
+    expect(local.ok && local.data.data).toBe("local");
+    decision = "consent_expired";
+    const expired = await env.controller.get(readRequest(env.network));
+    expect(expired.ok && expired.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ opens: 1, localReads: 1, networkCalls: 1 });
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "CONSENT_EXPIRED" }),
+    ]);
+    expect(denials).toBe(1);
+
+    await env.controller.get(readRequest(env.network));
+    expect(env.counters()).toMatchObject({ opens: 1, localReads: 1, networkCalls: 2 });
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toHaveLength(1);
+    expect(denials).toBe(1);
+  });
+  test("a worker deadline race never leaks a local result and shares the single denial", async () => {
+    let decision: "allow" | "consent_expired" | "gated" = "allow";
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => decision === "allow" ? { status: "allow" } : decision === "consent_expired" ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "gated", gate: "stamp_stale" },
+      onDeny: () => { denials++; decision = "gated"; },
+      localGetStatus: "throw",
+      localGetErrorCode: "CONSENT_EXPIRED",
+      beforeLocalGet: () => { decision = "consent_expired"; },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED" }));
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "CONSENT_EXPIRED" }),
+    ]);
+    expect(denials).toBe(1);
+  });
+  test("the active deadline timer denies opened consent without waiting for a read", async () => {
+    const timers: Array<{ run: () => void; ms: number }> = [];
+    let expired = false;
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
+      delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+      onDeny: () => { denials++; },
+      setTimeoutImpl: (run, ms) => { timers.push({ run, ms }); return () => undefined; },
+    });
+    expect((await env.controller.get(readRequest(env.network))).ok).toBe(true);
+    const deadline = timers.find((timer) => timer.ms === CONSENT_WINDOW_MS);
+    expect(deadline).toBeDefined();
+    env.setNow(1_000_000 + CONSENT_WINDOW_MS);
+    expired = true;
+    deadline!.run();
+    expect(env.events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached")).toEqual([
+      expect.objectContaining({ replicaId: "opaque-partition", code: "CONSENT_EXPIRED" }),
+    ]);
+    expect(denials).toBe(1);
+    expect(env.counters()).toMatchObject({ localReads: 1, networkCalls: 0 });
+  });
+  test("a restored stamped grant schedules the gate's earlier durable deadline, not first_install", async () => {
+    const timers: number[] = [];
+    const env = setup({
+      durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
+      sessionOnly: true,
+      statusOverrides: { grant: { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000 + DEFAULT_GRANT_TTL_MS, consentDeadline: 1_000_000 + 2 * CONSENT_WINDOW_MS } },
+      delivery: () => ({ status: "allow" }),
+      setTimeoutImpl: (_run, ms) => { timers.push(ms); return () => undefined; },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("local");
+    expect(timers).toContain(CONSENT_WINDOW_MS);
+    expect(timers).not.toContain(2 * CONSENT_WINDOW_MS);
+  });
+  test("a newer same-principal SIWE cannot move the stamped gate's earlier deadline", async () => {
+    const timers: number[] = [];
+    const earlier = CONSENT_WINDOW_MS - 24 * 60 * 60_000;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      durableDeadline: 1_000_000 + earlier,
+      delivery: () => ({ status: "allow" }),
+      setTimeoutImpl: (_run, ms) => { timers.push(ms); return () => undefined; },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("local");
+    expect(timers).toContain(earlier);
+    expect(timers).not.toContain(CONSENT_WINDOW_MS);
+  });
+  test("the durable deadline timer denies an unopened session without a grant event", async () => {
+    const timers: Array<{ run: () => void; ms: number }> = [];
+    let expired = false;
+    let denials = 0;
+    const env = setup({
+      durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
+      delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+      onDeny: () => { denials++; },
+      setTimeoutImpl: (run, ms) => { timers.push({ run, ms }); return () => undefined; },
+    });
+    const deadline = timers.find((timer) => timer.ms === CONSENT_WINDOW_MS);
+    expect(deadline).toBeDefined();
+    env.setNow(1_000_000 + CONSENT_WINDOW_MS);
+    expired = true;
+    deadline!.run();
+    expect(env.counters().opens).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.grant")).toEqual([]);
+    expect(denials).toBe(1);
+  });
+  test("an expired unopened list never reveals keys, and status reports the gated transition", async () => {
+    let denials = 0;
+    const env = setup({
+      delivery: () => ({ status: "consent_expired", code: "CONSENT_EXPIRED" }),
+      onDeny: () => { denials++; },
+    });
+    const listed = await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network"] })));
+    expect(listed).toMatchObject({ ok: true, data: { keys: ["network"] } });
+    expect(env.listReads()).toBe(0);
+    expect(env.counters().opens).toBe(0);
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", op: "list", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED" }));
+    expect(env.events.filter((event) => event.type === "replication.grant")).toEqual([]);
+    expect(await env.controller.status()).toMatchObject([
+      { prefix: "notes/", state: "gated", reason: "replica_gated", gate: "stamp_stale", errorCode: "REPLICA_GATED" },
+    ]);
+    expect(denials).toBe(1);
+  });
+  test("a sync that crosses the deadline cannot report a delivered success", async () => {
+    let expired = false;
+    let denials = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+      onDeny: () => { denials++; },
+      onSync: () => { expired = true; },
+    });
+    await expect(env.controller.sync()).rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.sync", outcome: "error", class: "lifecycle", code: "CONSENT_EXPIRED" }));
+    expect(env.events.some((event) => event.type === "replication.sync" && event.outcome === "ok")).toBe(false);
+    expect(denials).toBe(1);
+  });
+  test("an unavailable lifecycle preflight fails closed to network without throwing", async () => {
+    const env = setup({
+      delivery: () => { throw new Error("gate unavailable"); },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "replica_gated", code: "REPLICA_GATED" }));
+  });
+  test("an authority proof failure cannot fail the network session or open a replica", async () => {
+    const env = setup({
+      anchorError: true,
+      delivery: () => ({ status: "allow" }),
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "replica_gated", code: "REPLICA_GATED" }));
+  });
+  test("a verified get cannot return bytes or a divergence after consent expires during network comparison", async () => {
+    let expired = false;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      verify: true,
+      delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+    });
+    const result = await env.controller.get(readRequest(async () => {
+      expired = true;
+      return ok({ data: "network", headers: { get: () => null } });
+    }));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED" }));
+  });
+  test("a verified list cannot return keys or a divergence after consent expires during network comparison", async () => {
+    let expired = false;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      verify: true,
+      delivery: () => expired ? { status: "consent_expired", code: "CONSENT_EXPIRED" } : { status: "allow" },
+    });
+    const result = await env.controller.list(listRequest(undefined, async () => {
+      expired = true;
+      return ok({ keys: ["network"] });
+    }));
+    expect(result).toMatchObject({ ok: true, data: { keys: ["network"] } });
+    expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "CONSENT_EXPIRED" }));
+  });
+  test("verified get drops local bytes when compact session authority disappears during network comparison", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({ sessionOnly: true, verify: true, sessionRefusal: () => refused, delivery: () => ({ status: "allow" }) });
+    const result = await env.controller.get(readRequest(async () => {
+      refused = "NOT_COVERED";
+      return ok({ data: "network", headers: { get: () => null } });
+    }));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
+  });
+  test("verified list drops local keys when compact session authority disappears during network comparison", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({ sessionOnly: true, verify: true, sessionRefusal: () => refused, delivery: () => ({ status: "allow" }) });
+    const result = await env.controller.list(listRequest(undefined, async () => {
+      refused = "CAVEATED_AUTHORITY";
+      return ok({ keys: ["network/a"] });
+    }));
+    expect(result).toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+    expect(env.events.some((event) => event.type === "replication.divergence")).toBe(false);
+  });
+  test("browser refuses local serving when its durable deadline is unavailable despite a signed anchor", async () => {
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      durableDeadline: null,
+      delivery: () => ({ status: "allow" }),
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ opens: 0, localReads: 0, networkCalls: 1 });
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "replica_gated", code: "REPLICA_GATED" }));
+  });
+  test("browser mint duration is capped by the older durable deadline", async () => {
+    const durations: number[] = [];
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      durableDeadline: 1_010_000,
+      delivery: () => ({ status: "allow" }),
+      runtimeMint: async (_signal, options) => {
+        durations.push(options?.expiryMs ?? Number.NaN);
+        return { ucan: "minted-token", parentCid: "parent", expiresAt: 1_010_000 };
+      },
+    });
+    await env.controller.get(readRequest(env.network));
+    expect(durations).toEqual([10_000]);
+  });
+  test("a first-install expiry bound cannot authorize a fresh browser mint", async () => {
+    let mints = 0;
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "first_install" },
+      delivery: () => ({ status: "allow" }),
+      statusOverrides: { grant: null },
+      runtimeMint: async () => {
+        mints++;
+        return { ucan: "minted-token", parentCid: "parent", expiresAt: 2_000_000 };
+      },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(mints).toBe(0);
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ installs: 0, localReads: 0, networkCalls: 1 });
+  });
+
+  test("an unanchored node session cannot mint a fresh replica grant", async () => {
+    let mints = 0;
+    const env = setup({
+      statusOverrides: { grant: null },
+      runtimeMint: async () => {
+        mints++;
+        return { ucan: "minted-token", parentCid: "parent", expiresAt: 2_000_000 };
+      },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(mints).toBe(0);
+    expect(result.ok && result.data.data).toBe("network");
+  });
+  test("node mint uses the verified owner deadline when no durable gate deadline exists", async () => {
+    const durations: number[] = [];
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      runtimeMint: async (_signal, options) => {
+        durations.push(options?.expiryMs ?? Number.NaN);
+        return { ucan: "minted-token", parentCid: "parent", expiresAt: 2_000_000 };
+      },
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("local");
+    expect(durations).toEqual([DEFAULT_GRANT_TTL_MS]);
+  });
+  test("a matching compact restore serves only an active installed grant covered by its current session", async () => {
+    const env = setup({
+      sessionOnly: true,
+      durableDeadline: 1_000_000 + CONSENT_WINDOW_MS,
+      delivery: () => ({ status: "allow" }),
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("local");
+    expect(env.counters()).toMatchObject({ installs: 0, networkCalls: 0 });
+  });
+  test("a valid installed compact grant never overrides a current-session refusal", async () => {
+    for (const refused of ["NOT_COVERED", "CAVEATED_AUTHORITY", "SESSION_EXPIRING"] as const) {
+      const env = setup({
+        sessionOnly: true,
+        sessionRefusal: () => refused,
+        delivery: () => ({ status: "allow" }),
+      });
+      const get = await env.controller.get(readRequest(env.network));
+      const list = await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] })));
+      expect(get.ok && get.data.data).toBe("network");
+      expect(list).toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+      expect(env.counters()).toMatchObject({ localReads: 0, installs: 0, networkCalls: 1 });
+      expect(env.listReads()).toBe(0);
+    }
+  });
+  test("a compact current-session refusal after open blocks further local get and list", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+    });
+    const local = await env.controller.get(readRequest(env.network));
+    expect(local.ok && local.data.data).toBe("local");
+    refused = "SESSION_EXPIRING";
+    const network = await env.controller.get(readRequest(env.network));
+    expect(network.ok && network.data.data).toBe("network");
+    expect(await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] }))))
+      .toMatchObject({ ok: true, data: { keys: ["network/a"] } });
+    expect(env.counters()).toMatchObject({ localReads: 1, networkCalls: 1 });
+    expect(env.listReads()).toBe(0);
+  });
+  test("a compact authority refusal restarts an existing local list cursor without exposing keys", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+    });
+    const first = await env.controller.list(listRequest(undefined, async () => ok({ keys: ["network/a"] })));
+    expect(first).toMatchObject({ ok: true, data: { keys: ["notes/a"] } });
+    refused = "CAVEATED_AUTHORITY";
+    let networkCalls = 0;
+    const cursor = encodeTcr1(identity.space, "notes/", "notes/a");
+    const next = await env.controller.list(listRequest({ cursor }, async () => {
+      networkCalls++;
+      return ok({ keys: ["network/a"] });
+    }));
+    expect(next.ok).toBe(false);
+    if (!next.ok) expect(next.error.meta).toMatchObject({ replication: "cursor_restart" });
+    expect(env.listReads()).toBe(1);
+    expect(networkCalls).toBe(0);
+  });
+  test("a compact refusal after open cannot sync through the stored grant", async () => {
+    let refused: AuthorityRefusal["refused"] | null = null;
+    const env = setup({
+      sessionOnly: true,
+      sessionRefusal: () => refused,
+      delivery: () => ({ status: "allow" }),
+    });
+    const local = await env.controller.get(readRequest(env.network));
+    expect(local.ok && local.data.data).toBe("local");
+    refused = "NOT_COVERED";
+    await env.controller.sync().catch(() => undefined);
+    expect(env.counters().syncs).toBe(0);
+  });
+  test("a stale installed compact grant cannot serve even with current-session coverage", async () => {
+    for (const grant of [
+      { ...status().grant!, installedAt: 1_000_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS },
+      { ...status().grant!, installedAt: 1_000_000, effectiveExpiresAt: 1_000_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS },
+    ]) {
+      const env = setup({
+        sessionOnly: true,
+        statusOverrides: { grant },
+        delivery: () => ({ status: "allow" }),
+      });
+      const result = await env.controller.get(readRequest(env.network));
+      expect(result.ok && result.data.data).toBe("network");
+      expect(env.counters()).toMatchObject({ localReads: 0, installs: 0, networkCalls: 1 });
+    }
+  });
+  test("a full expirationless session cannot reuse an installed grant without a verified owner anchor", async () => {
+    const env = setup({ delivery: () => ({ status: "allow" }) });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ localReads: 0, installs: 0, networkCalls: 1 });
+  });
+  test("silent renewal requires a verified owner session plan for this prefix", async () => {
+    for (const planPath of ["session", "runtime"] as const) {
+      let mints = 0;
+      const env = setup({
+        consentAnchor: { at: 1_000_000, source: "siwe" },
+        canRenew: true,
+        planPath,
+        statusOverrides: { grant: { ...status().grant!, parentCid: "parent", installedAt: 1_000_000, effectiveExpiresAt: 1_010_000 } },
+        runtimeMint: async () => {
+          mints++;
+          return { ucan: "renewed-token", parentCid: "parent", expiresAt: 1_020_000 };
+        },
+      });
+      await env.controller.get(readRequest(env.network));
+      env.setNow(1_008_000);
+      await env.controller.sync();
+      expect(mints).toBe(planPath === "session" ? 1 : 0);
+      expect(env.events.some((event) => event.type === "replication.grant" && event.action === "renewed")).toBe(planPath === "session");
+    }
+  });
+  test("offline renewal keeps the current grant serving until its effective expiry", async () => {
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      canRenew: true,
+      planPath: "session",
+      statusOverrides: { grant: { ...status().grant!, parentCid: "parent", installedAt: 1_000_000, effectiveExpiresAt: 1_010_000 } },
+      runtimeMint: async () => { throw Object.assign(new Error("offline"), { code: "NETWORK_ERROR" }); },
+    });
+    await env.controller.get(readRequest(env.network));
+    env.setNow(1_008_000);
+    await env.controller.sync();
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("local");
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.grant", replicaId: "opaque-partition", action: "renewal_deferred" }));
+  });
+  test("an overlong installed grant reports its local cap using only the opaque replica id", async () => {
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => ({ status: "allow" }),
+      statusOverrides: { grant: { ...status().grant!, expiresAt: 2_000_000, installedAt: 1_000_000, effectiveExpiresAt: 1_010_000, consentDeadline: 1_000_000 + CONSENT_WINDOW_MS } },
+    });
+    await env.controller.get(readRequest(env.network));
+    expect(env.events).toContainEqual(expect.objectContaining({
+      type: "replication.grant",
+      replicaId: "opaque-partition",
+      action: "capped",
+      effectiveExpiresAt: new Date(1_010_000).toISOString(),
+    }));
+  });
+  test("a locally expired grant falls through to network and reports the opaque grant transition", async () => {
+    const env = setup({
+      consentAnchor: { at: 1_000_000, source: "siwe" },
+      delivery: () => ({ status: "allow" }),
+      localGetStatus: "throw",
+      localGetErrorCode: "GRANT_EXPIRED",
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "grant_expired", code: "GRANT_EXPIRED" }));
+    expect(env.events).toContainEqual(expect.objectContaining({ type: "replication.grant", replicaId: "opaque-partition", action: "expired", code: "GRANT_EXPIRED" }));
+    expect(await env.controller.status()).toMatchObject([{ prefix: "notes/", state: "unavailable", reason: "grant_expired", errorCode: "GRANT_EXPIRED" }]);
+  });
+});
 
 describe("whole-space replication", () => {
   test("reports unsupported nodes and serves covered reads when advertised", async () => {
@@ -152,12 +698,12 @@ describe("whole-space replication", () => {
 });
 describe("KVReplication fallback and pending behavior", () => {
   test("session-only refusal ignores an installed grant and serves the network", async () => {
-    const env = setup({ sessionOnly: true, sessionRefused: true });
+    const env = setup({ sessionOnly: true, sessionRefused: true, delivery: () => ({ status: "allow" }) });
     const result = await env.controller.get(readRequest(env.network));
     expect(result.ok && result.data.data).toBe("network");
     expect(env.counters().localReads).toBe(0);
     expect(env.counters().networkCalls).toBe(1);
-    expect(env.events.some((event) => event.type === "replication.state" && event.state === "grant_missing")).toBe(true);
+    expect(env.counters().opens).toBe(0);
     expect(env.events.some((event) => event.type === "replication.read" && event.source === "network" && event.reason === "grant_missing")).toBe(true);
   });
   test("a previously installed grant cannot outlive the current session authority", async () => {
@@ -249,6 +795,24 @@ describe("KVReplication fallback and pending behavior", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
     expect(env.counters().localReads).toBe(0);
+  });
+  test("a gated pending store does not block covered network writes or recreate local records", async () => {
+    const pending = createMemoryPendingStore(identity);
+    let touched = false;
+    pending.update = async () => { touched = true; throw Object.assign(new Error("gated"), { code: "REPLICA_GATED", gate: "stamp_stale" }); };
+    const env = setup({ pendingStore: pending, delivery: () => ({ status: "gated", gate: "stamp_stale" }) });
+    let dispatched = 0;
+    const result = await env.controller.write({
+      op: "put",
+      space: identity.space,
+      entries: [{ path: "notes/a", body: "network-value" }],
+      signal: new AbortController().signal,
+      network: async () => { dispatched++; return ok({ stored: true }); },
+    });
+    expect(result).toMatchObject({ ok: true, data: { stored: true } });
+    expect(dispatched).toBe(1);
+    expect(touched).toBe(false);
+    expect((await pending.read()).records).toEqual([]);
   });
 });
   test("bare nested LIST range falls back for in-flight and ambiguous writes", async () => {
@@ -348,7 +912,7 @@ describe("KVReplication list parity and cursor rules", () => {
     expect(result.ok).toBe(true);
     expect(networkCalls).toBe(1);
     expect(env.listReads()).toBe(0);
-    expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 0 });
+    expect(env.counters()).toMatchObject({ localReads: 0, syncs: 0, opens: 0, networkCalls: 0 });
     const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
     expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
   });
@@ -689,7 +1253,7 @@ describe("KVReplication controller catch-up fence", () => {
     await env.pending.update((state) => { state.committedEpoch = 4; });
     const value = await env.controller.get(readRequest(env.network));
     expect(value.ok && value.data.data).toBe("local");
-    expect(env.counters()).toEqual({ localReads: 1, syncs: 1, opens: 1, networkCalls: 0 });
+    expect(env.counters()).toMatchObject({ localReads: 1, syncs: 1, opens: 1, networkCalls: 0 });
     expect(env.events.some((event) => event.type === "replication.sync" && event.outcome === "ok")).toBe(true);
   });
 
@@ -715,7 +1279,7 @@ describe("KVReplication controller catch-up fence", () => {
     const env = setup();
     const value = await env.controller.get({ ...readRequest(env.network), options: { source: "network" } });
     expect(value.ok).toBe(true);
-    expect(env.counters()).toEqual({ localReads: 0, syncs: 0, opens: 0, networkCalls: 1 });
+    expect(env.counters()).toMatchObject({ localReads: 0, syncs: 0, opens: 0, networkCalls: 1 });
     const event = env.events.find((item) => item.type === "replication.read" && item.reason === "NETWORK_REQUESTED");
     expect(event?.type === "replication.read" ? [event.outcome, event.latencyMs] : undefined).toEqual(["found", 0]);
   });
@@ -792,7 +1356,7 @@ describe("A2 lifecycle review regressions", () => {
           expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
           expect(networkCalls).toBe(0);
         } else {
-          expect(result.ok && (op === "get" ? result.data.data : result.data.keys[0])).toBe(op === "get" ? "network" : "notes/server");
+          expect(result.ok && (op === "get" && "data" in result.data ? result.data.data : "keys" in result.data ? result.data.keys[0] : undefined)).toBe(op === "get" ? "network" : "notes/server");
           expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(1);
           if (op === "get") expect(env.counters().networkCalls).toBe(1);
           else expect(networkCalls).toBe(1);
@@ -881,10 +1445,10 @@ describe("A2 lifecycle review regressions", () => {
             expect(!result.ok && result.error.meta?.replication).toBe("cursor_restart");
             expect(networkCalls).toBe(0);
           } else {
-            expect(result.ok && result.data.data).toBe("network");
+            expect(result.ok && "data" in result.data && result.data.data).toBe("network");
             expect(env.counters().networkCalls).toBe(1);
             expect(env.counters().localReads).toBe(0);
-            expect(env.events.findLast((event) => event.type === "replication.read" && event.source === "network")).toMatchObject({ code: failure === "throw" ? "STATUS_FAILURE" : "STATUS_TIMEOUT" });
+            expect(lastEvent(env.events, (event) => event.type === "replication.read" && event.source === "network")).toMatchObject({ code: failure === "throw" ? "STATUS_FAILURE" : "STATUS_TIMEOUT" });
           }
           expect(timers.every((timer) => timer.cancelled)).toBe(true);
         }
@@ -960,7 +1524,7 @@ describe("A2 lifecycle review regressions", () => {
         await started;
         timers.find((timer) => timer.ms === options.staleSyncTimeoutMs && !timer.cancelled)!.fn();
         const result = await request;
-        const event = env.events.findLast((item) => item.type === "replication.read");
+        const event = lastEvent(env.events, (item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
         expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(0);
         expect(op === "get" ? env.counters().networkCalls : networkCalls).toBe(1);
@@ -1013,7 +1577,7 @@ describe("A2 lifecycle review regressions", () => {
         else if (!("aborted" in scenario)) finishSync();
         const result = await request;
         const localReads = op === "get" ? env.counters().localReads : env.listReads();
-        const event = env.events.findLast((item) => item.type === "replication.read");
+        const event = lastEvent(env.events, (item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
         expect(localReads).toBe(scenario.local);
         expect(op === "get" ? env.counters().networkCalls : listNetworkCalls).toBe(scenario.network);
@@ -1145,7 +1709,7 @@ describe("A2 lifecycle review regressions", () => {
       expect(result.ok && result.data.keys).toEqual(["notes/server"]);
       expect(env.listReads()).toBe(0);
       expect(networkCalls).toBe(1);
-      expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+      expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
         type: "replication.read", source: "network", reason: "REPLICA_BEHIND_OWN_WRITES",
       });
     }
@@ -1173,7 +1737,7 @@ describe("A2 lifecycle review regressions", () => {
       expect(result.ok && result.data.keys).toEqual(["notes/server"]);
       expect(env.listReads()).toBe(0);
       expect(networkCalls).toBe(1);
-      expect(env.events.findLast((event) => event.type === "replication.read")).toMatchObject({
+      expect(lastEvent(env.events, (event) => event.type === "replication.read")).toMatchObject({
         type: "replication.read", source: "network", reason: "REPLICA_BEHIND_OWN_WRITES",
       });
     }
@@ -1271,7 +1835,7 @@ describe("A2 lifecycle review regressions", () => {
         else await env.controller.purge();
         const result = await waiter;
         await owner;
-        const event = env.events.findLast((item) => item.type === "replication.read");
+        const event = lastEvent(env.events, (item) => item.type === "replication.read");
         expect(result.ok).toBe(true);
         expect(op === "get" ? env.counters().localReads : env.listReads()).toBe(0);
         expect(networkCalls).toBe(1);
@@ -1342,7 +1906,7 @@ describe("A2 lifecycle review regressions", () => {
   test("close aborts an in-flight authority mint and drains its open", async () => {
     const { promise: mintStarted, resolve: markMintStarted } = Promise.withResolvers<void>();
     let mintSignal: AbortSignal | undefined;
-    const env = setup({ runtimeMint: (signal) => {
+    const env = setup({ consentAnchor: { at: 1_000_000, source: "siwe" }, runtimeMint: (signal) => {
       mintSignal = signal;
       markMintStarted();
       return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
@@ -1357,7 +1921,7 @@ describe("A2 lifecycle review regressions", () => {
   test("purge aborts an in-flight authority mint", async () => {
     const { promise: mintStarted, resolve: markMintStarted } = Promise.withResolvers<void>();
     let mintSignal: AbortSignal | undefined;
-    const env = setup({ runtimeMint: (signal) => {
+    const env = setup({ consentAnchor: { at: 1_000_000, source: "siwe" }, runtimeMint: (signal) => {
       mintSignal = signal;
       markMintStarted();
       return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));

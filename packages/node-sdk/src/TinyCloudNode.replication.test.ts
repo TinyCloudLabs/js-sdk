@@ -432,26 +432,6 @@ describe("replicationAuthority (§4.2)", () => {
     expect(authority.plan("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  test("plan routes through planDelegation with one get+sync folder entry", async () => {
-    const node = sessionOnlyNode(makeFakeWasmBindings(), fakeSession());
-    const planDelegationSpy = mock(() => ({
-      path: "runtime" as const,
-      parentCid: "bafyP",
-      expiresAt: 1_700_000_000_000,
-      effectiveExpiration: new Date(1_700_000_000_000),
-    }));
-    Reflect.set(node, "planDelegation", planDelegationSpy);
-    const authority = await replicationAuthorityForTest(node);
-    expect(authority.plan("notes/")).toEqual({
-      path: "runtime",
-      parentCid: "bafyP",
-      expiresAt: 1_700_000_000_000,
-    });
-    const entries = planDelegationSpy.mock.calls[0]![0] as PermissionEntry[];
-    expect(entries).toEqual([
-      { service: "tinycloud.kv", space: SPACE_ID, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
-    ]);
-  });
 });
 
 // ---------------------------------------------------------------------------

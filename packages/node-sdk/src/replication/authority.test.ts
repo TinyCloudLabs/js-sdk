@@ -11,6 +11,7 @@ import { ucanCid } from "@tinycloud/replica";
 import type { PermissionEntry, TinyCloudSession } from "@tinycloud/sdk-core";
 
 import {
+  assertRenewalParent,
   assertValidReplicationConfig,
   augmentSignInEntriesWithReplication,
   createReplicationAuthority,
@@ -275,14 +276,16 @@ function base58(bytes: Uint8Array): string {
 const KEY_MULTIBASE = `z${base58(Uint8Array.from([0xed, 0x01, ...SESSION_PUBLIC]))}`;
 const SESSION_DID = `did:key:${KEY_MULTIBASE}#${KEY_MULTIBASE}`;
 
-function fakeSessionUcan(att: Record<string, Record<string, unknown>>): string {
+function fakeSessionUcan(att: Record<string, Record<string, unknown>>, claims: { prf?: string[]; iat?: number; nbf?: number } = {}): string {
   const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const header = b64({ alg: "EdDSA" });
   const payload = b64({
     iss: SESSION_DID.split("#", 1)[0],
     aud: SESSION_DID,
     att,
-    prf: ["bafyParent"],
+    prf: claims.prf ?? ["bafyParent"],
+    ...(claims.iat === undefined ? {} : { iat: claims.iat }),
+    ...(claims.nbf === undefined ? {} : { nbf: claims.nbf }),
     exp: Math.floor(Date.now() / 1000) + 3_600,
   });
   const signingInput = `${header}.${payload}`;
@@ -316,8 +319,10 @@ function fakeSession(over: Partial<TinyCloudSession> = {}): TinyCloudSession {
 }
 
 function makeHost(over: Partial<ReplicationAuthorityHost> = {}): ReplicationAuthorityHost {
+  const session = fakeSession();
   return {
-    replicationSession: () => fakeSession(),
+    replicationSession: () => session,
+    verifiedConsentAnchor: (bound) => bound.siwe === undefined ? null : { at: 1_000_000, source: "siwe" },
     siweExpiration: () => new Date(Date.now() + 86_400_000),
     planDelegation: mock(() => ({
       path: "runtime" as const,
@@ -331,6 +336,88 @@ function makeHost(over: Partial<ReplicationAuthorityHost> = {}): ReplicationAuth
     ...over,
   };
 }
+
+describe("owner-backed consent recency", () => {
+  test("arbitrary did:key compact leaves cannot establish consent from iat, nbf or empty prf", () => {
+    const claims = [
+      { prf: [], iat: Math.floor(Date.now() / 1000) },
+      { prf: ["bafyOldOwner"], nbf: Math.floor(Date.now() / 1000) },
+      { prf: [] },
+    ];
+    for (const leaf of claims) {
+      const session = fakeSession({ delegationHeader: { Authorization: fakeSessionUcan({}, leaf) } });
+      const authority = createReplicationAuthority(makeHost({
+        replicationSession: () => ({ ...session, siwe: undefined }),
+      }));
+      expect(authority.consentAnchor?.()).toBeNull();
+      expect(authority.canRenew).toBe(false);
+    }
+  });
+  test("a bound owner anchor cannot move to a replacement session or renew its grants", () => {
+    let current = fakeSession();
+    const authority = createReplicationAuthority(makeHost({
+      replicationSession: () => current,
+      verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }),
+    }));
+    expect(authority.consentAnchor?.()).toEqual({ at: 1_000_000, source: "siwe" });
+    expect(authority.canRenew).toBe(true);
+    current = fakeSession({ address: "0x0000000000000000000000000000000000000002" });
+    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.canRenew).toBe(false);
+  });
+  test("a replaced owner session cannot reuse the old authority to plan or mint", async () => {
+    let current = fakeSession();
+    const mintDelegation = mock(async () => ({ ucan: "unexpected", expiresAt: 2_000_000 }));
+    const authority = createReplicationAuthority(makeHost({
+      replicationSession: () => current,
+      verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }),
+      mintDelegation,
+    }));
+    current = fakeSession({ address: "0x0000000000000000000000000000000000000002" });
+    expect(authority.sessionGrant("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
+    expect(authority.plan("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
+    await expect(authority.mint(DEVICE_DID, "notes/", new AbortController().signal)).rejects.toThrow(/session|consent/i);
+    expect(mintDelegation).not.toHaveBeenCalled();
+  });
+  test("a full SIWE without independently verified finite expiry cannot mint", async () => {
+    const mintDelegation = mock(async () => ({ ucan: "unexpected", expiresAt: 2_000_000 }));
+    const authority = createReplicationAuthority(makeHost({
+      verifiedConsentAnchor: () => null,
+      mintDelegation,
+    }));
+    await expect(authority.mint(DEVICE_DID, "notes/", new AbortController().signal)).rejects.toThrow(/consent/i);
+    expect(mintDelegation).not.toHaveBeenCalled();
+  });
+  test("a renewal cannot silently switch from a session parent to a runtime parent at mint time", async () => {
+    let path: "session" | "runtime" = "session";
+    const mintDelegation = mock(async () => ({ ucan: "minted-ucan", expiresAt: Date.now() + 60_000 }));
+    const authority = createReplicationAuthority(makeHost({
+      verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }),
+      planDelegation: () => ({ path, parentCid: "bafyParent", expiresAt: Date.now() + 60_000 }),
+      mintDelegation,
+    }));
+    expect(authority.plan("notes/")).toMatchObject({ path: "session" });
+    path = "runtime";
+    await expect(authority.mint(DEVICE_DID, "notes/", new AbortController().signal, { expiryMs: 30_000, renewalOnly: true })).rejects.toThrow(/session parent/i);
+    expect(mintDelegation).not.toHaveBeenCalled();
+    await authority.mint(DEVICE_DID, "notes/", new AbortController().signal, { expiryMs: 30_000 });
+    expect(mintDelegation).toHaveBeenCalledTimes(1);
+  });
+  test("prepared renewal grants must be signed by the bound session with its exact parent", () => {
+    const session = fakeSession();
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: [session.delegationCid] }), session)).not.toThrow();
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: ["bafyRuntime"] }), session)).toThrow(/session parent/i);
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: [session.delegationCid, "bafyRuntime"] }), session)).toThrow(/session parent/i);
+    expect(() => assertRenewalParent(fakeSessionUcan({}, { prf: [session.delegationCid] }), fakeSession({ verificationMethod: "did:key:zOther" }))).toThrow(/session parent/i);
+  });
+  test("first-install storage time is not an independent authority consent anchor", () => {
+    const authority = createReplicationAuthority(makeHost({
+      verifiedConsentAnchor: () => ({ at: 1_000_000, source: "first_install" }),
+    }));
+    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.canRenew).toBe(false);
+  });
+});
 
 describe("createReplicationAuthority (§4.2-4.3)", () => {
   test("sessionGrant returns the session UCAN when it carries unconstrained get+sync", () => {
@@ -373,11 +460,9 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
 
 
   test("sessionGrant refuses NOT_COVERED for a non-UCAN header and uncovered prefix", () => {
+    const session = fakeSession({ delegationHeader: { Authorization: "Bearer not-a-ucan" } });
     const authority = createReplicationAuthority(
-      makeHost({
-        replicationSession: () =>
-          fakeSession({ delegationHeader: { Authorization: "Bearer not-a-ucan" } }),
-      }),
+      makeHost({ replicationSession: () => session }),
     );
     expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
     const uncovered = createReplicationAuthority(makeHost());
@@ -443,7 +528,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     const plan = { path: "runtime" as const, parentCid: "bafyB", expiresAt: 1_800_000_000_000 };
     const mintDelegation = mock(async () => ({ ucan: "signed-ucan", expiresAt: plan.expiresAt }));
     const authority = createReplicationAuthority(
-      makeHost({ planDelegation: () => plan, mintDelegation }),
+      makeHost({ verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }), planDelegation: () => plan, mintDelegation }),
     );
     const result = await authority.mint(DEVICE_DID, "notes/", new AbortController().signal);
     expect(result).toEqual({ ucan: "signed-ucan", parentCid: "bafyB", expiresAt: plan.expiresAt });
@@ -457,7 +542,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     ]);
 
     const refused = createReplicationAuthority(
-      makeHost({ planDelegation: () => ({ refused: "NOT_COVERED" as const }) }),
+      makeHost({ verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }), planDelegation: () => ({ refused: "NOT_COVERED" as const }) }),
     );
     await expect(
       refused.mint(DEVICE_DID, "notes/", new AbortController().signal),
@@ -465,7 +550,7 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
   });
 
   test("mint honours abort", async () => {
-    const authority = createReplicationAuthority(makeHost());
+    const authority = createReplicationAuthority(makeHost({ verifiedConsentAnchor: () => ({ at: 1_000_000, source: "siwe" }) }));
     const controller = new AbortController();
     controller.abort();
     await expect(

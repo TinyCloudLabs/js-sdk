@@ -98,6 +98,7 @@ function harness(options: {
   sessionGrant?: ReplicationAuthority["sessionGrant"];
   plan?: ReplicationAuthority["plan"];
   mint?: ReplicationAuthority["mint"];
+  ownerAnchor?: boolean;
   scheduler?: ReplicationScheduler;
 } = {}) {
   const pendingByIdentity = new Map<string, PendingWriteStore>();
@@ -164,6 +165,7 @@ function harness(options: {
     },
   };
   const authority: ReplicationAuthority = {
+    consentAnchor: () => options.ownerAnchor ? { at: now, source: "siwe" } : null,
     sessionGrant: options.sessionGrant ?? (() => ({ refused: "NOT_COVERED" })),
     plan: options.plan ?? (() => ({ refused: "NOT_COVERED" })),
     async mint(deviceDid, prefix, signal) {
@@ -241,6 +243,7 @@ describe("node replication integration", () => {
 
   test("partial authority opens only covered prefixes and preserves pending state on re-sign-in", async () => {
     const env = harness({
+      ownerAnchor: true,
       prefixes: ["notes/", "photos/"],
       sessionGrant: (prefix) => prefix === "notes/"
         ? { ucan: "session-grant", device: { did: "did:key:zSession", jwk: {} } }
@@ -290,6 +293,7 @@ describe("node replication integration", () => {
 
   test("unconstrained installed grants survive an offline mint failure near expiry", async () => {
     const env = harness({
+      ownerAnchor: true,
       initialGrant: () => ({ cid: "bafy-installed", parentCid: "bafy-old-parent", expiresAt: expiringAt, state: "active", unconstrained: true }),
       plan: () => ({ path: "runtime", parentCid: "bafy-parent", expiresAt: expiringAt }),
       mint: async () => { throw new Error("offline"); },
@@ -517,17 +521,10 @@ describe("node replication integration", () => {
         tinycloudHosts: ["https://signed-restore.example"],
       });
       expect(closed).toEqual(["https://signed-restore.example"]);
-      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "ready" }]);
-      expect(opened).toHaveLength(1);
-      expect(closed).toEqual(["https://signed-restore.example"]);
-      await node.replication!.sync();
-      expect(opened).toHaveLength(2);
-      expect(opened[1]!.spec.identity).toMatchObject({
-        host: "https://signed-restore.example",
-        space: delegateSpace.toLowerCase(),
-        principal: `did:pkh:eip155:${signed.chainId}:${signed.address.toLowerCase()}`,
-      });
       expect((await node.replication!.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
+      expect(opened).toHaveLength(1);
+      await expect(node.replication!.sync()).rejects.toMatchObject({ code: "NOT_COVERED" });
+      expect(opened).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
       await node.replication?.close();
@@ -836,7 +833,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     }
   }, 120_000);
 
-  test("compact delegate restore works offline and serves its covered replica scope", async () => {
+  test("a compact leaf without owner proof cannot sync or serve another session's cached bytes offline", async () => {
     const replicaDir = await mkdtemp(join(tmpdir(), "tc858-delegate-offline-"));
     const storage = createSqliteReplicaStorage({ dir: replicaDir });
     const owner = new TinyCloudNode({
@@ -855,7 +852,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const compactSession = JSON.parse(manager.jwk(keyId)!);
     const verificationMethod = manager.getDID(keyId);
     const offlineEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
-    const offlineOptions = {
+    const offline = new TinyCloudNode({
       host,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
@@ -864,12 +861,10 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         enabled: true,
         prefixes: ["notes/"],
         storage,
-        mode: "foreground" as const,
+        mode: "foreground",
         onEvent: (event: import("@tinycloud/sdk-services").ReplicationEvent) => offlineEvents.push(event),
       },
-    };
-    const onlineDelegate = new TinyCloudNode(offlineOptions);
-    const offline = new TinyCloudNode(offlineOptions);
+    });
     const originalFetch = globalThis.fetch;
     try {
       await owner.signIn();
@@ -883,16 +878,6 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         path: "notes/",
         actions: ["tinycloud.kv/get", "tinycloud.kv/sync"],
       }]);
-      await onlineDelegate.restoreSession({
-        delegationHeader: grant.delegation.delegationHeader,
-        delegationCid: grant.delegation.cid,
-        spaceId,
-        jwk: compactSession,
-        verificationMethod,
-        tinycloudHosts: [host],
-      });
-      await onlineDelegate.replication!.sync();
-      await onlineDelegate.replication!.close();
       let delegatePosts = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith("/delegate")) delegatePosts++;
@@ -907,15 +892,22 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         tinycloudHosts: [host],
       });
       expect(delegatePosts).toBe(0);
+      await expect(offline.replication!.sync()).rejects.toMatchObject({ code: "NOT_COVERED" });
       const read = await offline.kv.get("notes/covered");
-      expect(read.data?.data).toBe("cached");
+      expect(read.ok).toBe(false);
+      expect(read.data?.data).not.toBe("cached");
+      expect(offlineEvents.some((event) =>
+        event.type === "replication.read" && event.key === "notes/covered" &&
+        event.source === "network"
+      )).toBe(true);
       expect(offlineEvents.some((event) =>
         event.type === "replication.read" && event.key === "notes/covered" &&
         event.source === "replica" && event.reason === "hit"
-      )).toBe(true);
+      )).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
-      await Promise.all([owner.replication?.close(), onlineDelegate.replication?.close(), offline.replication?.close()]);
+      await Promise.all([owner.replication?.close(), offline.replication?.close()]);
+      await rm(replicaDir, { recursive: true, force: true });
     }
   }, 120_000);
 });
