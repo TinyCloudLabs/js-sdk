@@ -77,10 +77,10 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   }>;
   deferredErase(): Promise<ProfileReplicaDeferredToken | null>;
   resumeDeferredErase(token: ProfileReplicaDeferredToken, options: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
-  prepareLogoutPending(input: { principal: string }): Promise<ProfileReplicaLogoutPending | null>;
+  prepareLogoutPending(input: { principal: string; discardLocalChanges?: boolean }): Promise<ProfileReplicaLogoutPending | null>;
   recoverLogoutPending(options: {
     signal: AbortSignal;
-    /** Remove both session.json and key.json; the facade verifies absence and fsyncs the profile. */
+    /** CLI atomically fsyncs authSignedOut=true before unlinking+fsyncing session.json/key.json; a failure rejects. */
     clearCredentials: () => Promise<void>;
     /** Idempotently erase only <profile>/replicas after the gate commits; never touch <profile>/replication. */
     eraseLegacyReplicas: () => Promise<void>;
@@ -89,12 +89,17 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
 
 /** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
 export const REPLICA_LOGOUT_PENDING_FILE = "replica-logout-pending.json";
-export interface ProfileReplicaLogoutPending {
+export type ProfileReplicaLogoutPending = {
   v: 1;
   incarnation: string;
   lifecycleEpoch: number;
   principalHash: string;
-}
+} | {
+  v: 2;
+  scope: "orphan_profile";
+  /** Random opaque marker identity; never a fabricated principal or gate epoch. */
+  nonce: string;
+};
 
 /** Every CLI read path, including legacy replica commands, checks this marker before delivery. */
 export function assertProfileLogoutClear(profileDir: string): void {
@@ -114,18 +119,85 @@ function assertLogoutClear(path: string | undefined): void {
 function logoutMarkerOf(value: unknown): ProfileReplicaLogoutPending {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw gated("gate_unavailable");
   const row = value as Record<string, unknown>;
+  if (row.v === 2 && Object.keys(row).length === 3 &&
+      row.scope === "orphan_profile" && typeof row.nonce === "string" &&
+      /^[0-9a-f]{32}$/.test(row.nonce)) return row as ProfileReplicaLogoutPending;
   if (Object.keys(row).length !== 4 || row.v !== 1 ||
       typeof row.incarnation !== "string" || row.incarnation.length === 0 ||
       !Number.isSafeInteger(row.lifecycleEpoch) || (row.lifecycleEpoch as number) < 0 ||
       typeof row.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(row.principalHash)) {
     throw gated("gate_unavailable");
   }
-  return row as unknown as ProfileReplicaLogoutPending;
+  return row as ProfileReplicaLogoutPending;
 }
 
 async function readLogoutMarker(path: string): Promise<ProfileReplicaLogoutPending | null> {
   const value = await readJsonFile(path);
   return value === undefined ? null : logoutMarkerOf(value);
+}
+
+/** Only the selected profile's real replica directories may be wiped. */
+async function orphanRoot(profileDir: string, name: "replication" | "replicas"): Promise<string | null> {
+  const root = join(profileDir, name);
+  let entry;
+  try {
+    entry = await lstat(root);
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+  if (!entry.isDirectory() || !(await lstat(profileDir)).isDirectory() ||
+      await realpath(root) !== join(await realpath(profileDir), name)) {
+    throw gated("gate_unavailable");
+  }
+  return root;
+}
+
+/** Without a readable gate, uncertain pending files are treated as local changes. */
+async function hasOrphanPending(profileDir: string, name: "replication" | "replicas"): Promise<boolean> {
+  const root = await orphanRoot(profileDir, name);
+  if (root === null) return false;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) return true;
+    const dir = join(root, entry.name);
+    try {
+      if (!(await lstat(dir)).isDirectory()) return true;
+    } catch {
+      return true;
+    }
+    if (name === "replicas") {
+      if (await pathExists(join(dir, "pending.json"))) return true;
+      continue;
+    }
+    if (!/^[a-z2-7]{26}$/.test(entry.name)) return true;
+    const pendingFile = join(dir, "pending.json");
+    let text: string;
+    try {
+      const pending = await lstat(pendingFile);
+      if (!pending.isFile()) return true;
+      text = await readFile(pendingFile, "utf8");
+    } catch (error) {
+      if (isNotFound(error)) continue;
+      return true;
+    }
+    try {
+      const identityFile = join(dir, "identity.json");
+      if (!(await lstat(identityFile)).isFile()) return true;
+      const identity = identityRecordOf(await readJsonFile(identityFile));
+      if (identity === undefined || parsePendingState(text, pendingFile, identity).records.length !== 0) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+function localChangesRefusal(): Error & { code: "REPLICA_GATED"; gate: string } {
+  const error = gated("gate_unavailable");
+  error.message = "Unsynced local replica writes may be lost; sync first, or retry logout with --discard-local-changes.";
+  return error;
 }
 
 
@@ -1403,14 +1475,47 @@ export function createSqliteReplicaStorage(
       await profileSection(async () => (await fileGate()).resumeDeferredGate(profileDir, token));
       return lifecycle.erasePending({ signal });
     },
-    async prepareLogoutPending({ principal }) {
+    async prepareLogoutPending({ principal, discardLocalChanges = false }) {
       const gate = await fileGate();
       return profileSection(async () => {
-        const state = await gate.readGateSnapshot(profileDir);
-        if (state === undefined) return null;
-        const principalHash = await gate.principalHashOf(state.salt, principal);
         const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
         const previous = await readLogoutMarker(path);
+        let state: FileGateState | undefined;
+        let corruptGate = false;
+        try {
+          state = await gate.readGateSnapshot(profileDir);
+        } catch (error) {
+          if (typeof error === "object" && error !== null && "code" in error &&
+              error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
+            corruptGate = true;
+          } else {
+            throw error;
+          }
+        }
+        if (state === undefined) {
+          if (previous !== null) {
+            if (previous.v !== 2) throw gated("stamp_stale");
+            return previous;
+          }
+          const flagRoot = await orphanRoot(profileDir, "replication");
+          const legacyRoot = await orphanRoot(profileDir, "replicas");
+          if (flagRoot === null && legacyRoot === null && !corruptGate) return null;
+          if (!discardLocalChanges && (corruptGate ||
+              await hasOrphanPending(profileDir, "replication") ||
+              await hasOrphanPending(profileDir, "replicas"))) {
+            throw localChangesRefusal();
+          }
+          const marker: ProfileReplicaLogoutPending = {
+            v: 2, scope: "orphan_profile", nonce: randomBytes(16).toString("hex"),
+          };
+          await writeJsonAtomic(path, marker, options.dirSync);
+          visibleStamp = undefined;
+          visiblePrincipalHash = undefined;
+          checkedGate = undefined;
+          return marker;
+        }
+        if (previous?.v === 2) throw gated("stamp_stale");
+        const principalHash = await gate.principalHashOf(state.salt, principal);
         if (previous !== null) {
           if (previous.incarnation !== state.incarnation ||
               previous.principalHash !== principalHash ||
@@ -1444,12 +1549,46 @@ export function createSqliteReplicaStorage(
         remaining: 1,
       });
       let found = false;
+      let orphaned = false;
+      let noMarkerRemaining = 0;
       try {
         await profileSection(async () => {
           const marker = await readLogoutMarker(path);
           if (marker === null) return;
           found = true;
           signal.throwIfAborted();
+          if (marker.v === 2) {
+            orphaned = true;
+            const gate = await fileGate();
+            try {
+              if (await gate.readGateSnapshot(profileDir) !== undefined) throw gated("stamp_stale");
+            } catch (error) {
+              if (!(typeof error === "object" && error !== null && "code" in error &&
+                    error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable")) {
+                throw error;
+              }
+            }
+            await clearCredentials();
+            for (const file of ["session.json", "key.json"]) {
+              try {
+                await lstat(join(profileDir, file));
+                throw gated("gate_unavailable");
+              } catch (error) {
+                if (!isNotFound(error)) throw error;
+              }
+            }
+            await (options.dirSync ?? fsyncDir)(profileDir);
+            for (const name of ["replication", "replicas"] as const) {
+              const root = await orphanRoot(profileDir, name);
+              if (root !== null) await rm(root, { recursive: true, force: true });
+            }
+            if (await orphanRoot(profileDir, "replication") !== null ||
+                await orphanRoot(profileDir, "replicas") !== null) throw gated("gate_unavailable");
+            await (options.dirSync ?? fsyncDir)(profileDir);
+            await rm(path);
+            await (options.dirSync ?? fsyncDir)(profileDir);
+            return;
+          }
           const gate = await fileGate();
           const state = await gate.readGateSnapshot(profileDir);
           if (state === undefined || state.incarnation !== marker.incarnation ||
@@ -1499,7 +1638,8 @@ export function createSqliteReplicaStorage(
       } catch (error) {
         return failure(error);
       }
-      if (!found) return { erased: [], failed: [], remaining: 0 };
+      if (!found) return { erased: [], failed: [], remaining: noMarkerRemaining };
+      if (orphaned) return { erased: [], failed: [], remaining: 0 };
       return lifecycle.erasePending({ signal });
     },
     async pendingPurge() {
