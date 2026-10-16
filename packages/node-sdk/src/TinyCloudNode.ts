@@ -33,7 +33,6 @@ import { generateNonce, SiweMessage } from "siwe";
  * ```
  */
 
-import { assertValidReplicationConfig } from "./replication/config";
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
 import type { ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
@@ -1638,10 +1637,9 @@ export class TinyCloudNode {
    * ```
    */
   constructor(config: TinyCloudNodeConfig = {}) {
-    // Fail fast on a malformed replication config (TC-858 §3.1). Runs only
-    // when `enabled` is true so flag-off configs stay inert; the
-    // space-dependent secrets check runs at sign-in and open (§10.1).
-    assertValidReplicationConfig(config.replication);
+    // An enabled client must validate before scheduling any runtime work. The
+    // loader is registered synchronously; disabled clients do not load replica policy.
+    if (config.replication?.enabled) getNodeReplicationLoaders().validateConfig(config.replication);
     this.explicitHost = config.host;
 
     // Store config with default host

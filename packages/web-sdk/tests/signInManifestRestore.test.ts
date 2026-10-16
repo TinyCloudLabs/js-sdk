@@ -3,6 +3,7 @@ import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake
 import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
 import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
 import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
+import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
 import { pkhDid } from "@tinycloud/sdk-core";
 import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/memoryPendingStore";
@@ -713,6 +714,7 @@ test.each([
     consentDeadline: () => expiresAt,
   };
   registerReplicationLoaders({
+    validateConfig: assertValidReplicationConfig,
     runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
     authority: () => import("@tinycloud/node-sdk/replication/authority"),
     gate: () => import("@tinycloud/replica/profile-gate"),
@@ -1137,6 +1139,7 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
     };
     const replicaStorage = indexedDbReplicaStorage({ lifecycle });
     registerReplicationLoaders({
+      validateConfig: assertValidReplicationConfig,
       runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
       authority: () => import("@tinycloud/node-sdk/replication/authority"),
       gate: () => import("@tinycloud/replica/profile-gate"),

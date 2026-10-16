@@ -12,6 +12,7 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
+import { assertValidReplicationConfig } from "./replication/config";
 import { createSqliteReplicaStorage } from "./replication/sqlite";
 // @ts-ignore node-sdk moduleResolution "node" cannot read replica exports (see replica-contract.ts)
 import * as replicaGate from "@tinycloud/replica/profile-gate";
@@ -44,6 +45,7 @@ class StubRuntime {
 
 function loaders(): ReplicationModuleLoaders {
   return {
+    validateConfig: assertValidReplicationConfig,
     runtime: () => import("./replication/runtime"),
     authority: () => import("./replication/authority"),
     gate: () => import("@tinycloud/replica/profile-gate"),

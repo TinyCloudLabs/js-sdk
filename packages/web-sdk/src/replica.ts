@@ -168,6 +168,7 @@ async function recoveredBrowserReplication(
 export const browserReplicaPlugin: BrowserReplicaPlugin = {
   validateConfig: assertValidReplicationConfig,
   loaders: {
+    validateConfig: assertValidReplicationConfig,
     runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
     authority: () => import("@tinycloud/node-sdk/replication/authority"),
     gate: () => import("@tinycloud/replica/profile-gate"),

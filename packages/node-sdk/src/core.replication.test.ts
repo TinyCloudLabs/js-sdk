@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { TinyCloudNodeConfig } from "./TinyCloudNode";
 import { getNodeReplicationLoaders, registerReplicationLoaders, TinyCloudNode } from "./core";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
+import { assertValidReplicationConfig } from "./replication/config";
 
 const storage = {
   kind: "sqlite" as const,
@@ -11,6 +12,7 @@ const storage = {
 
 function loaders(): ReplicationModuleLoaders {
   return {
+    validateConfig: assertValidReplicationConfig,
     runtime: () => import("./replication/runtime"),
     authority: () => import("./replication/authority"),
     gate: () => import("@tinycloud/replica/profile-gate"),
@@ -37,6 +39,39 @@ test("/core without replication does not register or load replica modules", () =
 });
 
 
+test("/core validates enabled replication synchronously through its registered loader", () => {
+  let validated = 0;
+  registerReplicationLoaders({
+    ...loaders(),
+    validateConfig: (replication) => {
+      validated++;
+      assertValidReplicationConfig(replication);
+    },
+  });
+  expect(() => new TinyCloudNode({
+    wasmBindings,
+    replication: { enabled: true, prefixes: ["notes/"], storage },
+  })).not.toThrow();
+  expect(validated).toBe(1);
+  expect(() => new TinyCloudNode({
+    wasmBindings,
+    replication: { enabled: true, prefixes: ["notes/", "notes/sub/"], storage },
+  })).toThrow(TypeError);
+  expect(() => new TinyCloudNode({
+    wasmBindings,
+    replication: { enabled: true, prefixes: ["vault/private/"], storage },
+  })).toThrow(TypeError);
+  expect(() => new TinyCloudNode({
+    wasmBindings,
+    replication: { enabled: true, prefixes: ["notes/"], storage, grantTtlMs: 8 * 24 * 60 * 60 * 1000 },
+  })).toThrow(TypeError);
+  registerReplicationLoaders(undefined as never);
+  expect(() => new TinyCloudNode({
+    wasmBindings,
+    replication: { enabled: true, prefixes: ["notes/"], storage },
+  })).toThrow("registering replication controller loaders");
+});
+
 test("/core enables replication when browser-safe controller loaders are registered", async () => {
   let runtimeLoads = 0;
   class InjectedRuntime {
@@ -54,6 +89,7 @@ test("/core enables replication when browser-safe controller loaders are registe
       runtimeLoads++;
       return { ReplicationRuntime: InjectedRuntime } as never;
     },
+    validateConfig: assertValidReplicationConfig,
     authority: async () => import("./replication/authority"),
     gate: async () => import("@tinycloud/replica/profile-gate"),
   });
