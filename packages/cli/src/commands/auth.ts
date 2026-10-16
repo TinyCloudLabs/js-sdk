@@ -190,12 +190,14 @@ async function existingReplicaRoots(profile: string): Promise<string[]> {
 
 type LogoutApproval = Awaited<ReturnType<ReturnType<typeof profilePurge>["preflightLogout"]>>;
 
-function displayLogoutInventory(approval: LogoutApproval): void {
-  if (approval.unknownPaths.length === 0) return;
+function displayLogoutInventory(approval: LogoutApproval, discardLocalChanges: boolean): void {
+  if (approval.unknownPaths.length === 0 && !discardLocalChanges) return;
   process.stderr.write(`Local replica paths requiring explicit discard approval: ${JSON.stringify({
     paths: approval.unknownPaths,
-    entries: approval.unknownEntries,
-    missingDatabases: approval.missingDatabases,
+    unknownEntries: approval.unknownEntries,
+    knownRoots: approval.knownRoots.map(({ path, dev, ino }) => ({ path, kind: "directory", dev, ino })),
+    knownEntries: approval.knownEntries,
+    missingDatabases: approval.missingDatabases.map((path) => ({ path, kind: "missing", dev: "", ino: "" })),
   })}\n`);
 }
 
@@ -205,7 +207,7 @@ async function preflightLogout(
   // The permissive pass is only an inventory, never deletion authority. Show
   // identities before the strict check or a marker/online request.
   const approval = await purge.preflightLogout({ principal, discardLocalChanges: true });
-  displayLogoutInventory(approval);
+  displayLogoutInventory(approval, discardLocalChanges);
   if (!discardLocalChanges) await purge.preflightLogout({ principal });
   return approval;
 }
@@ -404,12 +406,33 @@ export async function finishProfileLogout(
             pendingMarker = pending;
             remotePending = pending.remotePending === true;
           } catch (error) {
-            if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
+            if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+              // No durable logout was started.
+            } else {
+              throw new CLIError("REPLICA_GATED",
+                "The durable replica logout marker is unreadable; credentials and replica files remain for recovery.",
+                ExitCode.ERROR);
+            }
           }
           // A previously signed-out, cleanup-ready marker is already the
           // durable approval. Retry its guarded recovery before preflighting
           // an orphaned, denied gate as if this were a new logout.
-          if (pendingMarker && profile.authSignedOut === true && !remotePending &&
+          if (pendingMarker?.remoteAbandoned === true && !remotePending &&
+              profile.authSignedOut !== true && options.approveInventory === undefined) {
+            // A crash after the plain override leaves credentials intact. Recheck
+            // the complete approved inventory before the facade's guarded
+            // owner/version validation and credential shred.
+            const approval = await preflightLogout(purge, principal, pendingMarker.discardLocalChanges === true);
+            if (JSON.stringify(pendingMarker.approvedUnknown) !== JSON.stringify(approval.unknownEntries) ||
+                JSON.stringify(pendingMarker.knownRoots) !== JSON.stringify(approval.knownRoots) ||
+                JSON.stringify(pendingMarker.knownEntries) !== JSON.stringify(approval.knownEntries) ||
+                JSON.stringify(pendingMarker.missingDatabases) !== JSON.stringify(approval.missingDatabases)) {
+              throw new CLIError("REPLICA_GATED",
+                "Replica inventory changed after plain logout was committed; credentials and files remain, and the durable marker still denies local reads.",
+                ExitCode.ERROR);
+            }
+            marker = pendingMarker;
+          } else if (pendingMarker && profile.authSignedOut === true && !remotePending &&
               options.approveInventory === undefined && options.discardLocalChanges !== true) {
             marker = pendingMarker;
           } else {

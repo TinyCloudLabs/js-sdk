@@ -142,6 +142,88 @@ test("plain logout overrides a failed remote revocation and ends the retained se
   await expect(readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE))).rejects.toMatchObject({ code: "ENOENT" });
 }, 30_000);
 
+test("plain logout retries a durable remote-abandoned marker after a pre-shred crash", async () => {
+  const { home, paths, networkPaths, setMode } = await fixture();
+  setMode("fail");
+  expect((await run(home, ["auth", "logout", "--revoke"])).exitCode).toBeGreaterThan(0);
+  const principal = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+  const purge = createProfileReplicaPurge({
+    profileDir: paths.directory,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+  });
+  const approval = await purge.preflightLogout({ principal });
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  expect(await purge.abandonRemoteLogout({ principal, approval })).toMatchObject({
+    v: 1, remoteAbandoned: true,
+  });
+  expect(JSON.parse(await readFile(markerPath, "utf8")).remotePending).not.toBe(true);
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
+  for (const file of [paths.session, paths.key, paths.db]) expect(await Bun.file(file).exists()).toBe(true);
+  const before = networkPaths.length;
+
+  const retried = await run(home, ["auth", "logout"]);
+  expect(retried.exitCode, retried.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(before);
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
+  for (const file of [paths.session, paths.key, paths.db, markerPath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}, 30_000);
+
+test("plain retry after remote abandonment retains credentials when an approved DB identity changes", async () => {
+  const { home, paths, networkPaths, setMode } = await fixture();
+  setMode("fail");
+  expect((await run(home, ["auth", "logout", "--revoke"])).exitCode).toBeGreaterThan(0);
+  const principal = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+  const purge = createProfileReplicaPurge({
+    profileDir: paths.directory,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+  });
+  await purge.abandonRemoteLogout({ principal, approval: await purge.preflightLogout({ principal }) });
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  const marker = await readFile(markerPath);
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  await copyFile(paths.db, `${paths.db}.replacement`);
+  await rename(`${paths.db}.replacement`, paths.db);
+  const changedDb = await readFile(paths.db);
+  const before = networkPaths.length;
+
+  const refused = await run(home, ["auth", "logout"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("REPLICA_GATED");
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(changedDb);
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
+}, 30_000);
+
+test("malformed durable logout marker refuses with a typed error before mutation or node I/O", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  await writeFile(markerPath, "{invalid marker json");
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const gate = await readGateSnapshot(paths.directory);
+  const before = networkPaths.length;
+
+  const refused = await run(home, ["auth", "logout"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("REPLICA_GATED");
+  expect(refused.stderr).not.toContain("SyntaxError");
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath, "utf8")).toBe("{invalid marker json");
+  expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+}, 30_000);
+
 test("a changed known SQLite inode needs a second explicit token before plain logout", async () => {
   const { home, paths, networkPaths, setMode } = await fixture();
   setMode("fail");
@@ -344,6 +426,22 @@ test("unknown legacy file refuses plain and online logout before marker, credent
     expect(refusal.exitCode).toBeGreaterThan(0);
     expect(refusal.stderr).toContain("--discard-local-changes");
     expect(refusal.stderr).toContain("future-write.pending");
+    const proposal = refusal.stderr.match(/^Local replica paths requiring explicit discard approval: (.+)$/m)?.[1];
+    expect(proposal).toBeDefined();
+    const inventory = JSON.parse(proposal!);
+    const dbIdentity = await stat(paths.db, { bigint: true });
+    const unknownIdentity = await stat(paths.unknown, { bigint: true });
+    expect(inventory.knownEntries).toContainEqual({
+      path: "replicas/notes/replica.db", kind: "file",
+      dev: dbIdentity.dev.toString(), ino: dbIdentity.ino.toString(),
+    });
+    expect(inventory.knownRoots).toContainEqual(expect.objectContaining({
+      path: "replicas/notes", kind: "directory", dev: expect.any(String), ino: expect.any(String),
+    }));
+    expect(inventory.unknownEntries).toContainEqual({
+      path: "replicas/notes/future-write.pending", kind: "file",
+      dev: unknownIdentity.dev.toString(), ino: unknownIdentity.ino.toString(),
+    });
     expect(networkPaths).toHaveLength(before);
     expect(await readGateSnapshot(paths.directory)).toEqual(gate);
     expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(false);
