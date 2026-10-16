@@ -155,20 +155,41 @@ const cjsConfig = {
   },
 };
 
-// Keep the optional browser adapter external: kv-storage has an ESM-only entry,
-// while the authority parser and profile gate also expose CJS entrypoints.
-const replicaExternals = (moduleType) => ({ request }, callback) => {
+// Browser adapter and Node-only profile gate stay external and load on demand.
+// The parser remains a package external so web-sdk never embeds replica source.
+const replicaExternals = (moduleType) => ({ context, request }, callback) => {
+  if (request === "./index" && context === path.resolve(__dirname, "src")) {
+    callback(null, `${moduleType} @tinycloud/web-sdk`);
+    return;
+  }
   if (request && /^@tinycloud\/replica(?:\/|$)/.test(request)) {
-    callback(null, `${request === "@tinycloud/replica/kv-storage" ? "import" : moduleType} ${request}`);
+    const deferred = request === "@tinycloud/replica/kv-storage" || request === "@tinycloud/replica/profile-gate";
+    callback(null, `${deferred ? "import" : moduleType} ${request}`);
     return;
   }
   callback();
 };
 
+const replicaSharedPlugins = [
+  new webpack.NormalModuleReplacementPlugin(
+    /^@tinycloud\/sdk-core$/,
+    path.resolve(__dirname, "src/replica-core-bridge.ts")
+  ),
+  new webpack.NormalModuleReplacementPlugin(
+    /^@tinycloud\/sdk-services$/,
+    path.resolve(__dirname, "src/replica-services-bridge.ts")
+  ),
+  new webpack.NormalModuleReplacementPlugin(
+    /^siwe$/,
+    path.resolve(__dirname, "src/replica-siwe-bridge.ts")
+  ),
+];
+
 const replicaEsmConfig = {
   ...esmConfig,
   entry: "./src/replica.ts",
   externals: replicaExternals("module"),
+  plugins: [...esmConfig.plugins, ...replicaSharedPlugins],
   output: { ...esmConfig.output, filename: "replica.mjs" },
 };
 
@@ -176,6 +197,7 @@ const replicaCjsConfig = {
   ...cjsConfig,
   entry: "./src/replica.ts",
   externals: replicaExternals("commonjs"),
+  plugins: [...cjsConfig.plugins, ...replicaSharedPlugins],
   output: {
     ...cjsConfig.output,
     filename: "replica.cjs",
