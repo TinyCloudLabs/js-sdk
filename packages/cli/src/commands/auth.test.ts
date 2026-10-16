@@ -900,18 +900,6 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
       warning: expect.stringContaining("tc delegation revoke <cid>"),
     })]);
   });
-  test("logout keeps the session when a replica is still syncing", async () => {
-    profiles.set("owner", makeProfile({ name: "owner" }));
-    sessions.set("owner", { delegationCid: "bafy-session" });
-    recorded.replicaRemovalError = Object.assign(new Error("Cannot log out: replica is syncing. The session was kept and no replicas were removed."), { code: "REPLICA_BUSY" });
-
-    await runAuthCommand(["auth", "logout"]);
-
-    expect(recorded.clearSessions).toEqual([]);
-    expect(sessions.get("owner")).toEqual({ delegationCid: "bafy-session" });
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "REPLICA_BUSY" })]);
-  });
-
   test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
     await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
 

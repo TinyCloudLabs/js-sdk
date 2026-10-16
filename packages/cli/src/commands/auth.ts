@@ -7,9 +7,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { createProfileReplicaPurge, grantAuthRequest, principalDidEquals, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
+import { profilePath } from "@tinycloud/operations/state";
 import { removeProfileReplicasAndReplication } from "../lib/profile-replicas.js";
+import { readGateSnapshot } from "@tinycloud/replica/profile-gate";
 import { ProfileManager } from "../config/profiles.js";
 import {
   outputJson,
@@ -292,12 +294,52 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
-        // Refuse a profile that does not exist rather than report it logged out.
-        await ProfileManager.getProfile(ctx.profile);
-        const replicasRemoved = options.keepReplicas
-          ? []
-          : await removeProfileReplicasAndReplication(ctx.profile);
-        await ProfileManager.clearSession(ctx.profile);
+        let replicasRemoved: string[] = [];
+        let cleanupError: unknown;
+        await ProfileManager.withLock(ctx.profile, async () => {
+          // Refuse a profile that does not exist rather than report it logged out.
+          const profile = await ProfileManager.getProfile(ctx.profile);
+          const session = await ProfileManager.getSession(ctx.profile);
+          const sessionOwner = session && "ownerDid" in session && typeof session.ownerDid === "string"
+            ? session.ownerDid : undefined;
+          const principal = sessionOwner ?? profile.ownerDid ?? profile.did;
+          const purge = createProfileReplicaPurge({
+            profileDir: profilePath(ctx.profile),
+            guard: (section) => ProfileManager.withLock(ctx.profile, section, { requireProfile: true }),
+          });
+          try {
+            const deferred = await purge.deferredErase();
+            if (deferred) {
+              const report = await purge.resumeDeferredErase(deferred, { signal: new AbortController().signal });
+              if (report.failed.length || report.remaining) {
+                throw new CLIError("REPLICA_PURGE_FAILED", "Replica erasure is pending after a previous revocation attempt.", ExitCode.ERROR);
+              }
+            }
+            if (ctx.replication || profile.replication?.prefixes.length || deferred) {
+              if (!principal) {
+                throw new CLIError("REPLICA_GATED", "Replica denial needs the session owner DID; local replicas were not erased.", ExitCode.ERROR);
+              }
+              const denied = await purge.deny({ reason: "sign_out", principal });
+              const alreadyDenied = denied.status === "stale" &&
+                (await readGateSnapshot(profilePath(ctx.profile)))?.principalHash === null;
+              if (denied.status !== "denied" && !alreadyDenied) {
+                throw new CLIError("REPLICA_GATED", `Replica denial was not durable (${denied.status}); local replicas were not erased.`, ExitCode.ERROR);
+              }
+              if (denied.status === "denied") {
+                const report = await purge.erasePending({ signal: new AbortController().signal });
+                if (report.failed.length || report.remaining) {
+                  throw new CLIError("REPLICA_PURGE_FAILED", "Replica erasure is pending; retry logout to finish local cleanup.", ExitCode.ERROR);
+                }
+              }
+            }
+            replicasRemoved = options.keepReplicas ? [] : await removeProfileReplicasAndReplication(ctx.profile);
+          } catch (error) {
+            cleanupError = error;
+          }
+          // Explicit logout ends the network session even when erasure is pending.
+          await ProfileManager.clearSession(ctx.profile);
+        });
+        if (cleanupError) throw cleanupError;
         outputJson({
           profile: ctx.profile,
           authenticated: false,
