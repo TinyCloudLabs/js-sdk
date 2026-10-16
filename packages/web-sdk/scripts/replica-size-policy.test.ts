@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { assertCiSizeToolchain, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type Ledger } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 const historical: Ledger = {
@@ -233,6 +233,56 @@ describe("TC-858 policy-only source identity", () => {
       git(root, "mv", source, ".changeset/removed.md");
       git(root, "commit", "-qm", "rename shipped source");
       expect(isPolicyOnlySinceApprovedSource(root, base, paths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts the merged ddc032ca-to-a335 policy paths through the official checker allowlist, but not worker source", () => {
+    const { root, base } = fixture();
+    try {
+      const reviewedPaths = [
+        ".changeset/replica-grant-policy.md",
+        "packages/replica/CHANGELOG.md",
+        "packages/replica/README.md",
+        "packages/replica/scripts/check-worker-size.test.ts",
+        "packages/replica/scripts/check-worker-size.ts",
+        "packages/web-sdk/README.md",
+        "packages/web-sdk/scripts/check-phase1-replica-dist.ts",
+        "packages/web-sdk/scripts/check-replica-built-entry.ts",
+        "packages/web-sdk/scripts/replica-optional-size-ledger.json",
+        "packages/web-sdk/scripts/replica-optional-size-policy.test.ts",
+        "packages/web-sdk/scripts/replica-optional-size-policy.ts",
+        "packages/web-sdk/scripts/replica-size-ledger.json",
+        "packages/web-sdk/scripts/replica-size-policy.test.ts",
+        "packages/web-sdk/scripts/replica-size-policy.ts",
+      ];
+      for (const path of reviewedPaths) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), "reviewed policy or release note\n");
+      }
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "merged policy-only history");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+
+      const workerSource = "packages/replica/src/kv-storage/worker.ts";
+      mkdirSync(dirname(join(root, workerSource)), { recursive: true });
+      writeFileSync(join(root, workerSource), "export const changedWorker = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "changed shipped worker source");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a real Git rename of shipped source into an approved worker-policy script", () => {
+    const { root, base } = fixture();
+    try {
+      mkdirSync(join(root, "packages/replica/scripts"), { recursive: true });
+      git(root, "mv", source, "packages/replica/scripts/check-worker-size.ts");
+      git(root, "commit", "-qm", "rename shipped code into worker-policy script");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

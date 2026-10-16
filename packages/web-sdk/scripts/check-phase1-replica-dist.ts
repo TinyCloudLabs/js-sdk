@@ -9,7 +9,7 @@ import {
   ciOptionalAllowance, fixRequiredOptionalAllowance, optionalFormats, priorOptionalAllowance,
   relocatedOptionalAllowance, relocationCommit, validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
+import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, isPolicyOnlySinceApprovedSource, validateCiToolchainTransition, validateGatedOnlyRatchet, validateLedger, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -244,18 +244,7 @@ if (prBaseSha) {
   const ciCorrectionIntroduced = ciCorrection !== undefined &&
     baseLedger.canonicalToolchainCorrection === undefined;
   if (ciCorrectionIntroduced) {
-    const policyOnly = new Set([
-      "packages/web-sdk/README.md",
-      "packages/web-sdk/scripts/check-phase1-replica-dist.ts",
-      "packages/web-sdk/scripts/check-replica-built-entry.ts",
-      "packages/web-sdk/scripts/replica-optional-size-ledger.json",
-      "packages/web-sdk/scripts/replica-optional-size-policy.test.ts",
-      "packages/web-sdk/scripts/replica-optional-size-policy.ts",
-      "packages/web-sdk/scripts/replica-size-ledger.json",
-      "packages/web-sdk/scripts/replica-size-policy.test.ts",
-      "packages/web-sdk/scripts/replica-size-policy.ts",
-    ]);
-    if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, policyOnly)) {
+    if (!isPolicyOnlySinceApprovedSource(repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths)) {
       console.error("CI toolchain size correction requires unchanged approved shipped sources since ddc032ca.");
       failed = true;
     }

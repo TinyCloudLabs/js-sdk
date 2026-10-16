@@ -223,6 +223,24 @@ export function validateCiToolchainTransition(
   }
 }
 
+// Only policy and release-note paths reviewed for the canonical CI measurement
+// transition. Shipped replica source and worker build inputs remain forbidden.
+export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
+  "packages/replica/CHANGELOG.md",
+  "packages/replica/README.md",
+  "packages/replica/scripts/check-worker-size.test.ts",
+  "packages/replica/scripts/check-worker-size.ts",
+  "packages/web-sdk/README.md",
+  "packages/web-sdk/scripts/check-phase1-replica-dist.ts",
+  "packages/web-sdk/scripts/check-replica-built-entry.ts",
+  "packages/web-sdk/scripts/replica-optional-size-ledger.json",
+  "packages/web-sdk/scripts/replica-optional-size-policy.test.ts",
+  "packages/web-sdk/scripts/replica-optional-size-policy.ts",
+  "packages/web-sdk/scripts/replica-size-ledger.json",
+  "packages/web-sdk/scripts/replica-size-policy.test.ts",
+  "packages/web-sdk/scripts/replica-size-policy.ts",
+]);
+
 export function isPolicyOnlySinceApprovedSource(root: string, approvedSource: string, allowed: ReadonlySet<string>): boolean {
   if (spawnSync("git", ["merge-base", "--is-ancestor", approvedSource, "HEAD"], { cwd: root }).status !== 0) {
     return false;
