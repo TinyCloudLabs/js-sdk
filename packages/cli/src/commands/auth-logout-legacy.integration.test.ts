@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -572,6 +572,58 @@ test("corrupt-gate orphan revoke failure keeps the remote-pending marker and all
   for (const file of [paths.session, paths.key, paths.db, paths.unknown, markerPath, gatePath]) {
     await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
   }
+}, 30_000);
+
+test("crash after v2 marker fsync keeps a corrupt gate and refuses a direct retry until repaired", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  await addUnknown(paths.unknown);
+  const principal = JSON.parse(await readFile(paths.session, "utf8")).ownerDid as string;
+  const gatePath = join(paths.directory, REPLICA_GATE_FILE);
+  const markerPath = join(paths.directory, REPLICA_LOGOUT_PENDING_FILE);
+  await writeFile(gatePath, "{corrupt original gate");
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const gateBytes = await readFile(gatePath);
+  const before = networkPaths.length;
+  const interrupted = createProfileReplicaPurge({
+    profileDir: paths.directory,
+    guard: <T>(section: () => Promise<T>): Promise<T> =>
+      withTinyCloudStateRoot(home, () => withProfileLock(PROFILE, section, { requireProfile: true })),
+    dirSync: async (path) => {
+      const directory = await open(path, "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+      throw new Error("simulated interruption after logout marker fsync");
+    },
+  });
+  const approval = await interrupted.preflightLogout({ principal, discardLocalChanges: true });
+  await expect(interrupted.prepareLogoutPending({ principal, approval, discardLocalChanges: true }))
+    .rejects.toThrow("simulated interruption");
+  expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({ v: 2, scope: "orphan_profile" });
+  expect(await readFile(gatePath)).toEqual(gateBytes);
+  const marker = await readFile(markerPath);
+
+  const refused = await run(home, ["auth", "logout", "--discard-local-changes"]);
+  expect(refused.exitCode).toBeGreaterThan(0);
+  expect(refused.stderr).toContain("REPLICA_GATED");
+  expect(refused.stderr).toMatch(/replica-gate\.json|corrupt gate.*(remove|resolve)/i);
+  expect(networkPaths).toHaveLength(before);
+  expect(await readFile(markerPath)).toEqual(marker);
+  expect(await readFile(gatePath)).toEqual(gateBytes);
+  expect(await readFile(paths.session)).toEqual(session);
+  expect(await readFile(paths.key)).toEqual(key);
+  expect(await readFile(paths.db)).toEqual(db);
+  expect(await readFile(paths.unknown, "utf8")).toBe("unsynced future bytes");
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).not.toBe(true);
+
+  await rm(gatePath);
+  const resumed = await run(home, ["auth", "logout", "--discard-local-changes"]);
+  expect(resumed.exitCode, resumed.stderr).toBe(0);
+  expect(networkPaths).toHaveLength(before);
+  for (const file of [paths.session, paths.key, paths.db, paths.unknown, markerPath, gatePath]) {
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
 }, 30_000);
 
 for (const replacement of ["corrupt", "valid"] as const)
