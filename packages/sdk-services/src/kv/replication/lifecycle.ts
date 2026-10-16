@@ -47,7 +47,7 @@ export interface ReplicaAccountGate {
   /** Active account's principal hash; null after sign-out. */
   principalHash: string | null;
   lifecycleEpoch: number;
-  /** ms since epoch of the last committed deny; null if none in this incarnation. */
+  /** ms since epoch of the last deny (browser: preserved across database recreation). */
   deniedAt: number | null;
   /** Browser: finite ms, fixed from verified fresh consent at establish; mandatory while active. */
   consentDeadline?: number | null;
