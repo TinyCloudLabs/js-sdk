@@ -269,6 +269,37 @@ describe("replica gate: restore", () => {
     expect((await node.replication!.status())[0]).toMatchObject({ state: "gated", gate: "principal_mismatch" });
   });
 
+  test("keeps a stamped network restore gated without the mandatory profile guard", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    });
+    const stamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        profileDir: dir,
+        storage: createSqliteReplicaStorage({ dir: join(dir, "replicas") }),
+      },
+    });
+
+    await node.restoreSession({ ...proof, replicaStamp: stamp });
+    expect(node.address).toBe(proof.address);
+    expect(node.replicaStamp).toBeUndefined();
+    expect((await node.replication!.status())[0]).toMatchObject({
+      state: "gated", gate: "gate_unavailable", errorCode: "REPLICA_GATED",
+    });
+    await expect(node.replication!.sync()).rejects.toMatchObject({
+      code: "REPLICA_GATED", gate: "gate_unavailable",
+    });
+  });
+
   test("keeps the network session without a replica profile directory", async () => {
     const proof = await signedRestorableSession();
 
