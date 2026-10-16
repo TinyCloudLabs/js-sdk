@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createProfileReplicaPurge, PrivateKeySigner, REPLICA_LOGOUT_PENDING_FILE } from "@tinycloud/node-sdk";
@@ -119,6 +120,33 @@ test("source-created legacy SQLite layout logs out normally without discard", as
   expect(JSON.parse(await readFile(join(paths.directory, "profile.json"), "utf8")).authSignedOut).toBe(true);
 }, 30_000);
 
+test("unexpected SQLite outbox refuses logout before a marker, credentials or node request", async () => {
+  const { home, paths, networkPaths } = await fixture();
+  const database = new Database(paths.db);
+  try {
+    database.exec("CREATE TABLE pending_outbox (id TEXT PRIMARY KEY, payload BLOB NOT NULL)");
+    database.exec("INSERT INTO pending_outbox VALUES ('unsynced', X'01')");
+  } finally {
+    database.close();
+  }
+  const session = await readFile(paths.session);
+  const key = await readFile(paths.key);
+  const db = await readFile(paths.db);
+  const gate = await readGateSnapshot(paths.directory);
+  const before = networkPaths.length;
+  for (const args of [["auth", "logout"], ["auth", "logout", "--revoke"]]) {
+    const refusal = await run(home, args);
+    expect(refusal.exitCode).toBeGreaterThan(0);
+    expect(refusal.stderr).toMatch(/--discard-local-changes|pending_outbox/);
+    expect(networkPaths).toHaveLength(before);
+    expect(await Bun.file(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE)).exists()).toBe(false);
+    expect(await readGateSnapshot(paths.directory)).toEqual(gate);
+    expect(await readFile(paths.session)).toEqual(session);
+    expect(await readFile(paths.key)).toEqual(key);
+    expect(await readFile(paths.db)).toEqual(db);
+  }
+}, 30_000);
+
 test("unknown legacy file refuses plain and online logout before marker, credentials, gate or node request", async () => {
   const { home, paths, networkPaths } = await fixture();
   await addUnknown(paths.unknown);
@@ -182,6 +210,12 @@ test("discard plus online revoke retains all local files on 503 then erases only
   expect(networkPaths).toContain("/revoke");
   expect(atRevoke()).toEqual({ session: true, key: true, replica: true, unknown: true });
   expect((await readGateSnapshot(paths.directory))?.principalHash).toBeNull();
+  expect(JSON.parse(await readFile(join(paths.directory, REPLICA_LOGOUT_PENDING_FILE), "utf8")).remotePending).toBe(true);
+  const requestsBeforeStatus = networkPaths.length;
+  const blocked = await run(home, ["auth", "status"]);
+  expect(blocked.exitCode).toBeGreaterThan(0);
+  expect(blocked.stdout).not.toContain("unsynced future bytes");
+  expect(networkPaths).toHaveLength(requestsBeforeStatus);
   await expectRetained(paths, session, key);
   setMode("success");
   const retried = await run(home, ["auth", "logout", "--revoke", "--discard-local-changes"]);
