@@ -4,13 +4,14 @@
  */
 import { loadSqlite } from "./sqlite/driver.js";
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { FakeNode, NODE_DID, SPACE, config, deviceGrant, etagOf, newStore, removeTempDirs, tempDir, type TestStoreOptions } from "../test/fixtures.js";
 import { Replica, contentHash } from "./engine.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "./errors.js";
 import { FAULTS, SqliteReplicaStore } from "./sqlite/store.js";
+import { inspectSqliteReplicaLayout, removeSqliteReplicaLayout } from "./sqlite/layout.js";
 import { kvSyncTransport, type KVSyncClient } from "./transport.js";
 import type { GrantRecord, ReplicaStore, VerifiedChange } from "./types.js";
 
@@ -564,19 +565,289 @@ describe("replica removal (reset --purge)", () => {
     expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
   });
 
-  test("explicit discard removes unknown nested files but never follows an outside symlink", async () => {
+  test("adapter fence files are known only with the explicit adapter option", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "fence.json"), "{}");
+    expect((await inspectSqliteReplicaLayout(dir)).unknownPaths).toContain("fence.json");
+    expect((await inspectSqliteReplicaLayout(dir, { allowAdapterFence: true })).unknownPaths).toEqual([]);
+    await removeSqliteReplicaLayout(dir, { allowAdapterFence: true });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("explicit approval lists every unknown nested entry and does not traverse a symlink", async () => {
     const dir = await tempDir();
     const outside = await tempDir();
     const store = await newStore(dir);
-    const lease = (await store.acquireSyncLease(60_000))!;
     await writeFile(join(outside, "keep"), "outside");
     await mkdir(join(dir, "future"));
     await writeFile(join(dir, "future", "pending-v2.json"), "unreviewed");
     await symlink(outside, join(dir, "future", "outside"), "dir");
-    await store.destroy(lease, { discardLocalChanges: true });
+    const report = await inspectSqliteReplicaLayout(dir);
+    expect(report.unknownEntries.map(({ path, kind }) => [path, kind])).toEqual([
+      ["future", "directory"],
+      ["future/outside", "symlink"],
+      ["future/pending-v2.json", "file"],
+    ]);
+    expect(report.unknownEntries.every(({ dev, ino }) => /^[0-9]+$/.test(dev) && /^[0-9]+$/.test(ino))).toBe(true);
+    await store.destroy((await store.acquireSyncLease(60_000))!, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    });
     expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
     expect(await stat(join(outside, "keep")).then(() => "exists", () => "gone")).toBe("exists");
   });
+
+  test("an unknown added after approval refuses removal before touching the database", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "approved"), "approved");
+    const { unknownEntries } = await inspectSqliteReplicaLayout(dir);
+    await writeFile(join(dir, "later"), "later");
+    await expect(removeSqliteReplicaLayout(dir, { approvedUnknown: unknownEntries })).rejects.toThrow(/unknown|approval/i);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await readdir(dir)).toContain("approved");
+  });
+
+  test("new allowlisted files after approval cannot be silently deleted", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    const report = await inspectSqliteReplicaLayout(dir);
+    await writeFile(join(dir, "replica.db-journal"), "new known file");
+    await expect(removeSqliteReplicaLayout(dir, {
+      expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/known|identity|approval/i);
+    expect(await stat(join(dir, "replica.db-journal")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("a replaced known file or directory fails before deletion", async () => {
+    for (const name of ["replica.db-journal", "blobs"]) {
+      const dir = await tempDir();
+      const outside = await tempDir();
+      const store = await newStore(dir);
+      await store.close();
+      if (name === "replica.db-journal") await writeFile(join(dir, name), "original");
+      const report = await inspectSqliteReplicaLayout(dir);
+      expect(report.knownEntries).toContainEqual(expect.objectContaining({ path: name }));
+      await rename(join(dir, name), join(outside, name));
+      if (name === "blobs") await mkdir(join(dir, name));
+      else await writeFile(join(dir, name), "replacement");
+      await expect(removeSqliteReplicaLayout(dir, {
+        expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
+      })).rejects.toThrow(/known|identity|approval/i);
+      expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    }
+  });
+
+  test("recovery accepts previously approved known files already deleted", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "replica.db-journal"), "sidecar");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rm(join(dir, "replica.db-journal"));
+    await removeSqliteReplicaLayout(dir, {
+      expectedKnown: report.knownEntries, expectedRoot: report.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("missing database needs exact approval before removing an unknown child", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await rm(join(dir, "replica.db"));
+    await writeFile(join(dir, "pending-v2.json"), "unsynced");
+    const report = await inspectSqliteReplicaLayout(dir);
+    expect(report.unknownPaths).toContain("replica.db");
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedKnown: report.knownEntries,
+      expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/database.*missing/i);
+    await writeFile(join(dir, "later"), "new unsynced data");
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedKnown: report.knownEntries,
+      expectedRoot: report.rootIdentity, allowMissingDatabase: true,
+    })).rejects.toThrow(/later/);
+    expect(await stat(join(dir, "pending-v2.json")).then(() => "exists", () => "gone")).toBe("exists");
+    await rm(join(dir, "later"));
+    await removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedKnown: report.knownEntries,
+      expectedRoot: report.rootIdentity, allowMissingDatabase: true,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("approval of a directory does not approve files later added inside it", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await mkdir(join(dir, "future"));
+    await writeFile(join(dir, "future", "approved"), "approved");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await writeFile(join(dir, "future", "later"), "later");
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/unknown|approval/i);
+    expect(await stat(join(dir, "future", "approved")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("retry accepts only already-approved unknown entries that are now absent", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "first"), "first");
+    await writeFile(join(dir, "second"), "second");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rm(join(dir, "first"));
+    await removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("a retry re-inspects and rejects a replaced approved inode", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "approved"), "original");
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rm(join(dir, "approved"));
+    await writeFile(join(dir, "replacement"), "new");
+    await writeFile(join(dir, "approved"), "replacement");
+    await rm(join(dir, "replacement"));
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: report.unknownEntries, expectedRoot: report.rootIdentity,
+    })).rejects.toThrow(/identity|approval/i);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    const refreshed = await inspectSqliteReplicaLayout(dir);
+    await removeSqliteReplicaLayout(dir, {
+      approvedUnknown: refreshed.unknownEntries, expectedRoot: refreshed.rootIdentity,
+    });
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test("a forged approval path never authorizes an uninspected entry", async () => {
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "approved"), "original");
+    const { unknownEntries } = await inspectSqliteReplicaLayout(dir);
+    await expect(removeSqliteReplicaLayout(dir, {
+      approvedUnknown: [{ ...unknownEntries[0]!, path: "../outside" }],
+    })).rejects.toThrow(/approval|unknown/i);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("non-Linux refuses a replacement root between approval and removal", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const original = await tempDir();
+    await rm(original, { recursive: true });
+    const store = await newStore(dir);
+    await store.close();
+    const report = await inspectSqliteReplicaLayout(dir);
+    await rename(dir, original);
+    await mkdir(dir);
+    await writeFile(join(dir, "replica.db"), "replacement");
+    // Child scripts load layout only after changing platform; static imports run too early.
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      const { removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      try {
+        await removeSqliteReplicaLayout(${JSON.stringify(dir)}, { expectedRoot: ${JSON.stringify(report.rootIdentity)} });
+        throw Error("removed replacement root");
+      } catch (error) { if (!/root identity changed/i.test(error.message)) throw error; }`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(original, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("non-Linux named paths reject a symlink in a component and at the leaf", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const outside = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(outside, "keep"), "outside");
+    await symlink(outside, join(dir, "outside"), "dir");
+    // Child scripts load layout only after changing platform; static imports run too early.
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      const { inspectSqliteReplicaLayout, removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      for (const op of [inspectSqliteReplicaLayout, removeSqliteReplicaLayout]) {
+        try { await op(${JSON.stringify(dir)}); throw Error("followed symlink"); }
+        catch (error) { if (!/symlink/i.test(error.message)) throw error; }
+      }
+      try { await inspectSqliteReplicaLayout(${JSON.stringify(join(dir, "outside", "keep"))}); throw Error("followed component"); }
+      catch (error) { if (!/symlink/i.test(error.message)) throw error; }`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(outside, "keep")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
+  test("non-Linux named-path deletion removes an allowlisted mirror", async () => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const store = await newStore(dir);
+    await store.close();
+    // Loading after changing process.platform confines the simulated platform to the child.
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      const { removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      await removeSqliteReplicaLayout(${JSON.stringify(dir)});`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(dir).then(() => "exists", () => "gone")).toBe("gone");
+  });
+
+  test.each(["directory", "file"] as const)("non-Linux stops after a %s swap mid-deletion", async (swap) => {
+    if (process.platform !== "linux") return;
+    const dir = await tempDir();
+    const moved = await tempDir();
+    await rm(moved, { recursive: true });
+    const store = await newStore(dir);
+    await store.close();
+    await writeFile(join(dir, "replica.db-journal"), "first unlink");
+    await writeFile(join(dir, "replica.db-wal"), "must survive");
+    const script = `Object.defineProperty(process, "platform", { value: "darwin" });
+      // Delayed import exercises the mock boundary in this isolated subprocess.
+      const fs = await import("node:fs/promises");
+      const { mock } = await import("bun:test");
+      const { unlink, rename, mkdir, writeFile } = fs;
+      let swapped = false;
+      mock.module("node:fs/promises", () => ({
+        ...fs, unlink: async (path) => {
+          await unlink(path);
+          if (swapped) return;
+          swapped = true;
+          if (${JSON.stringify(swap)} === "directory") {
+            await rename(${JSON.stringify(dir)}, ${JSON.stringify(moved)});
+            await mkdir(${JSON.stringify(dir)});
+            await writeFile(${JSON.stringify(join(dir, "replica.db"))}, "replacement");
+          } else {
+            await rename(${JSON.stringify(join(dir, "replica.db-wal"))}, ${JSON.stringify(join(dir, "replica.db-wal.previous"))});
+            await writeFile(${JSON.stringify(join(dir, "replica.db-wal"))}, "replacement");
+          }
+        },
+      }));
+      const { removeSqliteReplicaLayout } = await import(${JSON.stringify(join(import.meta.dir, "sqlite/layout.ts"))});
+      try { await removeSqliteReplicaLayout(${JSON.stringify(dir)}); throw Error("removed replacement"); }
+      catch (error) { if (!/changed|identity|mismatch/i.test(error.message)) throw error; }
+      if (!swapped) throw Error("swap hook was not exercised");`;
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const stderr = new Response(child.stderr).text();
+    expect(await child.exited, await stderr).toBe(0);
+    expect(await stat(join(dir, "replica.db")).then(() => "exists", () => "gone")).toBe("exists");
+    expect(await stat(join(swap === "directory" ? moved : dir, "replica.db-wal")).then(() => "exists", () => "gone")).toBe("exists");
+  });
+
 });
 
 describe("deleted replica directory", () => {

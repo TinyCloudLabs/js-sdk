@@ -21,7 +21,7 @@ import type {
   VerifiedPage,
 } from "../types.js";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
-import { removeSqliteReplicaLayout } from "./layout.js";
+import { removeSqliteReplicaLayout, type SqliteLayoutEntry } from "./layout.js";
 
 const SCHEMA_VERSION = 2;
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
@@ -1071,9 +1071,15 @@ export class SqliteReplicaStore implements ReplicaStore {
 
   /**
    * Remove the source-created mirror layout under a live lease. Unknown files
-   * are refused unless the caller explicitly accepted their loss.
+   * are removed only when their exact preflight identities were approved.
    */
-  async destroy(t: LeaseToken, options: { discardLocalChanges?: boolean; allowAdapterFence?: boolean } = {}): Promise<void> {
+  async destroy(t: LeaseToken, options: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    expectedRoot?: { dev: string; ino: string };
+    allowMissingDatabase?: boolean;
+    allowAdapterFence?: boolean;
+  } = {}): Promise<void> {
     await this.#mutate(async () => {
       try {
         this.#db.exec("BEGIN IMMEDIATE");
