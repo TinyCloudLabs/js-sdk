@@ -503,6 +503,75 @@ describe("TC-858 policy-only source identity", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it("accepts exact master-origin measured source and build metadata, but not a PR edit", () => {
+    const { root, base } = fixture();
+    const check = isPolicyOnlySinceApprovedSource;
+    try {
+      git(root, "switch", "-qc", "master-next");
+      writeFileSync(join(root, source), "export const reviewedMasterSource = true;\n");
+      writeFileSync(join(root, "bun.lock"), "reviewed release lockfile\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "master source and dependency update");
+      const masterBase = git(root, "rev-parse", "HEAD");
+      git(root, "switch", "-qc", "feature", base);
+      writeFileSync(join(root, allowed), "export const policy = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "feature policy");
+      git(root, "merge", "--no-ff", "-qm", "normal master merge", "master-next");
+      expect(check(root, base, paths, undefined, {}, masterBase)).toBe(true);
+      writeFileSync(join(root, source), "export const unreviewedPrSource = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "PR changes master source");
+      expect(check(root, base, paths, undefined, {}, masterBase)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a measured-source rename into CLI after a normal master merge", () => {
+    const { root, base } = fixture();
+    const check = isPolicyOnlySinceApprovedSource;
+    try {
+      git(root, "switch", "-qc", "master-next");
+      writeFileSync(join(root, source), "export const reviewedMasterSource = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "master source update");
+      const masterBase = git(root, "rev-parse", "HEAD");
+      git(root, "switch", "-qc", "feature", base);
+      writeFileSync(join(root, allowed), "export const policy = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "feature policy");
+      git(root, "merge", "--no-ff", "-qm", "normal master merge", "master-next");
+      const destination = "packages/cli/src/removed.ts";
+      mkdirSync(dirname(join(root, destination)), { recursive: true });
+      git(root, "mv", source, destination);
+      git(root, "commit", "-qm", "PR renames reviewed master source into CLI");
+      expect(check(root, base, paths, {
+        bundleInputs: new Set(), sourceMapInputs: new Set(),
+      }, {}, masterBase)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an unmerged or substituted PR base SHA", () => {
+    const { root, base } = fixture();
+    const check = isPolicyOnlySinceApprovedSource;
+    try {
+      git(root, "switch", "-qc", "master-next");
+      writeFileSync(join(root, source), "export const reviewedMasterSource = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "master source update");
+      const masterBase = git(root, "rev-parse", "HEAD");
+      git(root, "switch", "-qc", "feature", base);
+      writeFileSync(join(root, allowed), "export const policy = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "feature policy without master");
+      expect(check(root, base, paths, undefined, {}, masterBase)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("TC-858 emitted-map coverage for measured Node and worker entries", () => {

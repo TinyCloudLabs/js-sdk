@@ -148,6 +148,10 @@ for (const format of formats) {
 const prBaseSha = process.env.REPLICA_BUDGET_PR_BASE_SHA;
 if (prBaseSha) {
   const baseRef = /^refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_REF ?? "") ? "HEAD^1" : prBaseSha;
+  if (baseRef === "HEAD^1" && command("git", ["rev-parse", baseRef]) !== prBaseSha) {
+    console.error("The pull-request merge parent differs from GitHub's reported base SHA.");
+    failed = true;
+  }
   const mergeBase = command("git", ["merge-base", baseRef, "HEAD"]);
   const changedPaths = command("git", ["diff", "--name-only", "--no-renames", `${mergeBase}...HEAD`])
     .split("\n").filter(Boolean);
@@ -259,7 +263,7 @@ if (prBaseSha) {
     const graph = await collectMeasuredArtifactInputs(repoRoot);
     if (!isPolicyOnlySinceApprovedSource(
       repoRoot, approvedCiToolchainCorrection.approvedSource, ciCorrectionPolicyOnlyPaths, graph,
-      optionalLedger.fixRequired?.[0]?.measuredPaths,
+      optionalLedger.fixRequired?.[0]?.measuredPaths, prBaseSha,
     )) {
       console.error("CI toolchain size correction requires unchanged measured inputs except exact ruled source blobs since ddc032ca.");
       failed = true;

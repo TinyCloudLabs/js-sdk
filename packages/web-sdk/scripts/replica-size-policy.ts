@@ -305,26 +305,44 @@ export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
   "packages/web-sdk/scripts/replica-size-inputs.ts",
 ]);
 
+function changedPaths(root: string, from: string, to: string): Set<string> {
+  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", from, to], { cwd: root });
+  return new Set(output.toString("utf8").split("\0").filter(Boolean));
+}
+
+function blobAt(root: string, ref: string, path: string): string | undefined {
+  const result = spawnSync("git", ["rev-parse", `${ref}:${path}`], {
+    cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
 export function isPolicyOnlySinceApprovedSource(
   root: string, approvedSource: string, allowed: ReadonlySet<string>, graph?: MeasuredInputGraph,
-  approvedMeasuredBlobs: Readonly<Record<string, string>> = {},
+  approvedMeasuredBlobs: Readonly<Record<string, string>> = {}, masterBase?: string,
 ): boolean {
   if (spawnSync("git", ["merge-base", "--is-ancestor", approvedSource, "HEAD"], { cwd: root }).status !== 0) {
     return false;
   }
-  const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${approvedSource}...HEAD`], { cwd: root });
-  return changed.toString("utf8").split("\0").filter(Boolean).every((path) => {
-    if (allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path) || path === unbundledContract) return true;
-    if (isMeasuredArtifactInput(path) && !isMeasuredTest(path)) {
-      if (!Object.hasOwn(approvedMeasuredBlobs, path)) return false;
-      try {
-        return execFileSync("git", ["rev-parse", `HEAD:${path}`], {
-          cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-        }).trim() === approvedMeasuredBlobs[path];
-      } catch {
-        return false;
-      }
+  let masterOrigin: ReadonlySet<string> = new Set();
+  if (masterBase !== undefined) {
+    if (spawnSync("git", ["merge-base", "--is-ancestor", masterBase, "HEAD"], { cwd: root }).status !== 0) {
+      return false;
     }
+    const oldBase = execFileSync("git", ["merge-base", approvedSource, masterBase], { cwd: root, encoding: "utf8" }).trim();
+    const sourceToMaster = changedPaths(root, approvedSource, masterBase);
+    masterOrigin = new Set([...changedPaths(root, oldBase, masterBase)].filter((path) => sourceToMaster.has(path)));
+  }
+  const changed = changedPaths(root, approvedSource, "HEAD");
+  return [...changed].every((path) => {
+    if (Object.hasOwn(approvedMeasuredBlobs, path)) {
+      return blobAt(root, "HEAD", path) === approvedMeasuredBlobs[path];
+    }
+    if (masterOrigin.has(path) && blobAt(root, "HEAD", path) === blobAt(root, masterBase!, path)) {
+      return true;
+    }
+    if (allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path) || path === unbundledContract) return true;
+    if (isMeasuredArtifactInput(path) && !isMeasuredTest(path)) return false;
     if (!isMeasuredTest(path) && !isCliNonInput(path)) return false;
     return graph !== undefined && !graph.bundleInputs.has(path) && !graph.sourceMapInputs.has(path);
   });
