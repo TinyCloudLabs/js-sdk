@@ -612,6 +612,7 @@ export type ReplicationReason =
   | "pending_write"
   | "grant_missing"
   | "grant_expired"
+  /** A revoked grant, including a stale-read sync refusal; read-through uses network with code GRANT_REVOKED. */
   | "grant_revoked"
   | "grant_not_yet_valid"
   | "stale"

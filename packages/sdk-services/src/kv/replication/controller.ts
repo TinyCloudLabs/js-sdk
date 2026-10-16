@@ -892,7 +892,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (r.signal.aborted) return abortedResult(r.signal);
     if (fresh.failure) {
       const code = fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError;
-      return fallback(prefix, code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "stale",
+      return fallback(prefix, code === "GRANT_REVOKED" ? "grant_revoked" : code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "stale",
         { code, syncedBeforeRead: fresh.syncedBeforeRead });
     }
     let pendingState: PendingWriteState;
@@ -1029,7 +1029,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
     if (behind) return fallback(prefix, "REPLICA_BEHIND_OWN_WRITES");
     if (fresh.failure) {
       const code = fresh.failure === "busy" ? "REPLICA_BUSY" : fresh.syncError;
-      return fallback(prefix, code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "stale", { code });
+      return fallback(prefix, code === "GRANT_REVOKED" ? "grant_revoked" : code === "REPLICA_GATED" || code === "CONSENT_EXPIRED" || code === "GRANT_EXPIRED" ? deliveryReason(code) : "stale", { code });
     }
     if (pendingRange) return fallback(prefix, "pending_write", { pendingState: pendingRange.state });
     if (!pending.durable && !inProcessProof.has(prefix)) return fallback(prefix, "REPLICA_UNPROVEN_SINCE_START");

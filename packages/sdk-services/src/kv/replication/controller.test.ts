@@ -252,6 +252,33 @@ describe("rejected network read-through events", () => {
       ]);
     });
   }
+
+  test("revoked stale-sync grants report their refusal while get/list stay network-only", async () => {
+    const env = setup({
+      onSync: () => { throw Object.assign(new Error("grant revoked by owner"), { code: "GRANT_REVOKED" }); },
+    });
+    env.setNow(1_300_000);
+    let requests = 0;
+    const get = await env.controller.get(readRequest(async () => {
+      requests++;
+      return ok({ data: "network", headers: { get: () => null } });
+    }));
+    const offline = Object.assign(new Error("offline"), { code: "NETWORK_ERROR" });
+    await expect(env.controller.list(listRequest(undefined, async () => {
+      requests++;
+      throw offline;
+    }))).rejects.toBe(offline);
+
+    expect(get.ok && get.data.data).toBe("network");
+    expect(requests).toBe(2);
+    expect(env.counters()).toMatchObject({ localReads: 0, syncs: 2 });
+    expect(env.listReads()).toBe(0);
+    expect(env.events.filter((event) => event.type === "replication.read")).toEqual([
+      expect.objectContaining({ op: "get", source: "network", reason: "grant_revoked", code: "GRANT_REVOKED", syncedBeforeRead: false, outcome: "found" }),
+      expect.objectContaining({ op: "list", source: "network", reason: "grant_revoked", code: "GRANT_REVOKED", outcome: "error" }),
+    ]);
+  });
+
   test("a gate revoked during pending-state read keeps the gated reason on offline get/list", async () => {
     const env = setup({
       delivery: () => ({ status: "allow" }),
