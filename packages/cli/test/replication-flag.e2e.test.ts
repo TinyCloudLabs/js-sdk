@@ -160,6 +160,24 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     await writeFile(file, bytes);
     return tc(["kv", "put", key, "--file", file], { profile, ...(replication ? { replication } : {}) });
   }
+  async function withoutReplicaStamp<T>(profile: string, action: () => Promise<T>): Promise<T> {
+    const path = join(home, ".tinycloud", "profiles", profile, "session.json");
+    const persisted = await readFile(path, "utf8");
+    const session: unknown = JSON.parse(persisted);
+    if (session === null || typeof session !== "object" || Array.isArray(session) || !("replicaStamp" in session)) {
+      throw new Error("Explicit local sign-in did not persist a replica stamp.");
+    }
+    const stamp = session.replicaStamp;
+    expect(stamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: expect.any(Number) });
+    const networkSession = { ...session };
+    Reflect.deleteProperty(networkSession, "replicaStamp");
+    await writeFile(path, JSON.stringify(networkSession));
+    try {
+      return await action();
+    } finally {
+      await writeFile(path, persisted);
+    }
+  }
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "tc-replication-flag-home-"));
@@ -181,7 +199,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
   test("covers the 12 Phase 1 CLI acceptance steps", async () => {
     // 1. The local-key sign-in recap must request get+sync for the configured prefix.
     const bareLogin = await tc(["auth", "login", "--method", "local", "--replication-prefix", "notes"], { profile: "bare-login" });
-    expect(bareLogin.code).toBe(2);
+    expect(bareLogin.code, bareLogin.stderr).toBe(2);
     expect(bareLogin.stderr).toContain("notes/");
     const bareReplica = await tc(["replica", "sync", "--prefix", "notes"], { profile: "bare-replica" });
     expect(bareReplica.code).toBe(2);
@@ -190,6 +208,13 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const login = await ok<{ spaceId: string }>(["auth", "login", "--method", "local", "--replication-prefix", "notes/", "--replication-prefix", "variables/"]);
     space = login.spaceId;
     expect(space).toMatch(/^tinycloud:/);
+    const signedSession: unknown = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "owner", "session.json"), "utf8"));
+    expect(signedSession).toEqual(expect.objectContaining({
+      replicaStamp: expect.objectContaining({
+        incarnation: expect.any(String),
+        lifecycleEpoch: expect.any(Number),
+      }),
+    }));
 
     // 2. Seed covered and uncovered keys, including the vars namespace.
     for (const [key, value] of Object.entries(initial)) {
@@ -200,12 +225,27 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(profile.replication?.prefixes).toEqual(["notes/", "variables/"]);
     const varsPut = await tc(["vars", "put", "flag", "one"], { profile: "owner", extraEnv: { TC_PRIVATE_KEY: profile.privateKey } });
     expect(varsPut.code).toBe(0);
-    // 11. A report may inspect status but must not initialize a never-opened replica partition.
+    // A restored network session with no persisted stamp cannot inspect or open
+    // configured replicas. Restore the genuine sign-in stamp for activation.
     const profileDir = join(home, ".tinycloud", "profiles", "owner", "replication");
-    const beforeActivationReport = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on" });
-    expect(beforeActivationReport.code).toBe(0);
-    expect(JSON.parse(beforeActivationReport.stdout.toString()).replicas).toEqual([]);
-    await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await withoutReplicaStamp("owner", async () => {
+      const report = await tc(["replica", "report", "--json"], { profile: "owner", replication: "on" });
+      expect(report.code, report.stderr).toBe(0);
+      const body: unknown = JSON.parse(report.stdout.toString());
+      if (body === null || typeof body !== "object" || !("replicas" in body) || !Array.isArray(body.replicas)) {
+        throw new Error("Replica report omitted configured statuses.");
+      }
+      expect(body.replicas).toHaveLength(2);
+      expect(body.replicas).toEqual(expect.arrayContaining([
+        expect.objectContaining({ prefix: "notes/", state: "gated", gate: "not_established", errorCode: "REPLICA_GATED" }),
+        expect.objectContaining({ prefix: "variables/", state: "gated", gate: "not_established", errorCode: "REPLICA_GATED" }),
+      ]));
+      await expect(readdir(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+      const networkRead = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "on" });
+      expect(networkRead.code, networkRead.stderr).toBe(0);
+      expect(networkRead.stdout.toString()).toBe("v1");
+      expect(networkRead.stderr).not.toContain("replica hit");
+    });
     // Before any replica is opened, flag-off and default reads are identical and leave no state or log.
     const flagOffBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", replication: "off" });
     const defaultBeforeActivation = await tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner" });
@@ -232,6 +272,11 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(variable.stderr).toContain("replica hit");
     const outside = await tc(["kv", "get", "other/x"], { profile: "owner", replication: "on" });
     expect(outside.stderr).toContain("not_covered");
+    const untrustedOfflineRead = await withoutReplicaStamp("owner", () =>
+      tc(["kv", "get", "notes/a.txt", "--raw"], { profile: "owner", preload: NO_NETWORK, replication: "on" }));
+    expect(untrustedOfflineRead.code).not.toBe(0);
+    expect(untrustedOfflineRead.stdout).toHaveLength(0);
+    expect(untrustedOfflineRead.stderr).not.toContain("replica hit");
     // TC-721 expected-unsupported: exercise the real compact-delegate revocation endpoint.
     const manager = new NodeWasmBindings().createSessionManager();
     const recipientKey = manager.createSessionKey("tc-721-compact-delegate");
@@ -604,6 +649,13 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(invalidSavedPrefix.stderr).toContain("INVALID_REPLICATION_PREFIX");
     expect(invalidSavedPrefix.stderr).toContain("purging a replica alone does not change this profile setting");
     await writeFile(profilePath, JSON.stringify(saved, null, 2));
+    const gatedRoot = await withoutReplicaStamp("root-prefix", () =>
+      ok<{ replicas: Array<{ prefix: string; state: string; gate?: string; errorCode?: string }> }>(
+        ["replica", "report", "--json"], "root-prefix", { replication: "on" }));
+    expect(gatedRoot.replicas.find((entry) => entry.prefix === "/")).toMatchObject({
+      state: "gated", gate: "not_established", errorCode: "REPLICA_GATED",
+    });
+    expect(await filesNamed(join(home, ".tinycloud", "profiles", "root-prefix", "replication"), "replica.db")).toEqual([]);
 
     const firstRead = await tc(["kv", "get", "notes/a", "--raw"], { profile: "root-prefix", replication: "on" });
     expect(firstRead.code, firstRead.stderr).toBe(0);
