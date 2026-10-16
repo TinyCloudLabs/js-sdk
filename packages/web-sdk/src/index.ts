@@ -40,8 +40,8 @@ export type {
   OwnerSharePolicyRegistrationReceipt,
 } from "@tinycloud/sdk-core";
 
-// The optional replica bundle imports these from this root bundle, not a second
-// sdk-core/sdk-services copy. Keep the bridge narrow so core remains inert.
+// The optional replica bundle imports shared SDK core and SIWE from this root
+// bundle, never from a separately instantiated registry or session cache.
 export {
   actionContains as __replicaActionContains,
   KV as __replicaKV,
@@ -52,7 +52,6 @@ export {
   pkhDid as __replicaPkhDid,
   principalDid as __replicaPrincipalDid,
 } from "@tinycloud/sdk-core";
-export { requiresSecretsOptIn as __replicaRequiresSecretsOptIn } from "@tinycloud/sdk-services";
 export { SiweMessage as __replicaSiweMessage } from "siwe";
 
 // Browser Adapters

@@ -1,2 +1,3 @@
-// Resolved to the root package external by the optional webpack build.
-export { __replicaRequiresSecretsOptIn as requiresSecretsOptIn } from "./index";
+// Pure predicate from the already-loaded optional replication controller entry;
+// no sdk-services module is duplicated in the root bundle.
+export { requiresSecretsOptIn } from "@tinycloud/sdk-services/kv/replication";
