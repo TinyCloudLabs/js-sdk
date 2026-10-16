@@ -152,6 +152,79 @@ afterEach(() => {
   }
 });
 
+async function withSignInHost<T>(run: () => Promise<T>): Promise<T> {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+test("regular network sign-in does not invent replica issuance when signed SIWE omits Issued At", async () => {
+  const wasm = createWasmBindings([]);
+  wasm.prepareSession = (params: Record<string, unknown>) => ({
+    siwe: `Expiration Time: ${String(params.expirationTime)}`,
+    jwk: params.jwk,
+    spaceId: params.spaceId,
+    verificationMethod: "did:key:verification",
+  });
+  let observed: TinyCloudSession | undefined;
+  const sessionStorage = new MemorySessionStorage();
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage,
+    establishReplicaStamp: async (signedSession) => { observed = signedSession; return undefined; },
+  });
+
+  const session = await withSignInHost(() => auth.signIn());
+  expect(session.address.toLowerCase()).toBe("0x1234567890abcdef1234567890abcdef12345678");
+  expect(observed).toMatchObject({ siwe: session.siwe, signature: session.signature, delegationCid: "bafy-session" });
+  expect((await sessionStorage.load(session.address))?.replicaStamp).toBeUndefined();
+});
+
+test("prepared network sign-in does not invent replica issuance when SIWE is absent", async () => {
+  let observed: TinyCloudSession | undefined;
+  const sessionStorage = new MemorySessionStorage();
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings([]),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage,
+    establishReplicaStamp: async (signedSession) => { observed = signedSession; return undefined; },
+  });
+
+  const session = await withSignInHost(() => auth.signInWithPreparedSession({
+    siwe: undefined as never,
+    jwk: { kty: "OKP" },
+    spaceId: "space://test",
+    verificationMethod: "did:key:verification",
+  }, "0xsigned", "default", { kty: "OKP" }));
+  expect(session.address.toLowerCase()).toBe("0x1234567890abcdef1234567890abcdef12345678");
+  expect(observed).toMatchObject({ siwe: undefined, signature: "0xsigned", delegationCid: "bafy-session" });
+  expect((await sessionStorage.load(session.address))?.replicaStamp).toBeUndefined();
+});
+
 test("NodeUserAuthorization.signIn keeps constructor siweConfig.nonce when no per-call nonce is provided", async () => {
   const captured: Array<Record<string, unknown>> = [];
   const signedMessages: string[] = [];

@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import { chmod, link, mkdir, open, readFile, readdir, rm, rmdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { ReplicaConsentAnchor } from "@tinycloud/sdk-services/kv/replication";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../errors.js";
 import { assertFolderPrefix, effectiveAuthority } from "../scope.js";
 import type {
@@ -21,7 +22,7 @@ import type {
 } from "../types.js";
 import { loadSqlite, type SqliteDatabase, type SqliteOpener, type SqlValue } from "./driver.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 export const DURABILITY = "sqlite-wal-synchronous-full+fsynced-blobs";
 
 const SCHEMA = `
@@ -83,6 +84,14 @@ CREATE TABLE IF NOT EXISTS entry (
   )
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS entry_hash ON entry (hash) WHERE hash IS NOT NULL;
+CREATE TABLE IF NOT EXISTS grant_install (
+  cid TEXT PRIMARY KEY,
+  installed_at INTEGER NOT NULL,
+  effective_expires_at INTEGER NOT NULL,
+  consent_deadline INTEGER NOT NULL,
+  consent_anchor_at INTEGER NOT NULL,
+  consent_anchor_source TEXT NOT NULL
+) STRICT, WITHOUT ROWID;
 `;
 
 type ReplicaRow = {
@@ -189,6 +198,20 @@ async function entriesOf(path: string): Promise<string[]> {
   }
 }
 
+export type SqliteGrantInstall = {
+  installedAt: number;
+  effectiveExpiresAt: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
+export type SqliteGrantPolicy = {
+  at: number;
+  ttlMs: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
 /** Crash- and race-test seam: called at the durability boundaries of `applyPage`. */
 export type StoreFaults = {
   /** Blobs are durable; no row references them yet. */
@@ -230,17 +253,19 @@ type InternalOptions = SqliteReplicaStoreOptions & { [FAULTS]?: StoreFaults };
 export class SqliteReplicaStore implements ReplicaStore {
   readonly dir: string;
   readonly #db: SqliteDatabase;
-  readonly #holder = `${process.pid}-${randomBytes(6).toString("hex")}`;
+  #holder: string | undefined;
   readonly #now: () => number;
+  readonly #opener: SqliteOpener;
   readonly #faults: StoreFaults;
   readonly #guard: MutationGuard;
   /** Identity of the database file this store opened: a deleted-and-recreated replica is a different file. */
   readonly #ino: number;
 
-  private constructor(dir: string, db: SqliteDatabase, ino: number, options: SqliteReplicaStoreOptions) {
+  private constructor(dir: string, db: SqliteDatabase, ino: number, options: SqliteReplicaStoreOptions, opener: SqliteOpener) {
     this.dir = dir;
     this.#db = db;
     this.#ino = ino;
+    this.#opener = opener;
     this.#now = options.now ?? Date.now;
     this.#faults = (options as InternalOptions)[FAULTS] ?? {};
     this.#guard = options.guard ?? ((section) => section());
@@ -255,7 +280,7 @@ export class SqliteReplicaStore implements ReplicaStore {
   static async inspect(
     dir: string,
     options: { now?: () => number; signal?: AbortSignal } = {},
-  ): Promise<{ state: ReplicaState; status: ReplicaStatus } | null> {
+  ): Promise<{ state: ReplicaState; status: ReplicaStatus; grantInstall: SqliteGrantInstall | null; activeGrantInstall: SqliteGrantInstall | null } | null> {
     const checkAbort = () => {
       if (options.signal?.aborted) throw options.signal.reason ?? new ReplicaError(ReplicaErrorCode.CLOSED, "Replica status inspection was cancelled.");
     };
@@ -276,17 +301,22 @@ export class SqliteReplicaStore implements ReplicaStore {
       db = opener(dbPath, { readonly: true });
       db.exec("PRAGMA busy_timeout = 0");
       checkAbort();
-      const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) });
+      const store = new SqliteReplicaStore(dir, db, ino, { create: false, ...(options.now ? { now: options.now } : {}) }, opener);
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
         const state = await store.open();
         checkAbort();
         if (state === null) return null;
         const status = await store.status();
+        const latest = state.pendingGrant ?? state.grant;
+        const version = db.get<{ user_version: number }>("PRAGMA user_version")?.user_version ?? 0;
+        const grantInstall = latest === null || version < 2 ? null : await store.getGrantInstall(latest.cid);
+        const activeGrantInstall = state.grant === null || version < 2 ? null
+          : state.grant === latest ? grantInstall : await store.getGrantInstall(state.grant.cid);
         await new Promise<void>((resolve) => setImmediate(resolve));
         checkAbort();
         const after = db.get<{ data_version: number }>("PRAGMA data_version")!.data_version;
-        if (before === after) return { state, status };
+        if (before === after) return { state, status, grantInstall, activeGrantInstall };
       }
       throw new ReplicaError(ReplicaErrorCode.BUSY, "The replica changed during status inspection.");
     } catch (error) {
@@ -344,7 +374,7 @@ export class SqliteReplicaStore implements ReplicaStore {
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         db.exec("COMMIT");
       }
-      store = new SqliteReplicaStore(dir, db, ino, options);
+      store = new SqliteReplicaStore(dir, db, ino, options, opener);
     } catch (error) {
       throw storageError(error, `Opening the replica at ${dir}`);
     }
@@ -355,6 +385,61 @@ export class SqliteReplicaStore implements ReplicaStore {
       await store.#finishRevocationPurge().catch(() => undefined);
     }
     return store;
+  }
+
+  /**
+   * Session-bound read on a dedicated readonly SQLite connection. The first
+   * query fixes the WAL snapshot and reads the partition tombstone generation.
+   * `checkGate` inspects the gate file while this transaction is open, before
+   * any replica data query and again before results may leave the adapter.
+   * No profile lock is taken; deny/erase may advance the gate concurrently,
+   * and a reader that started first linearizes at this snapshot.
+   */
+  async readTransaction<T>(
+    generation: number,
+    checkGate: () => Promise<void>,
+    section: (store: SqliteReplicaStore) => Promise<T>,
+  ): Promise<T> {
+    const path = join(this.dir, "replica.db");
+    let ino: number;
+    try {
+      ino = (await stat(path)).ino;
+    } catch (error) {
+      if (errnoOf(error) === "ENOENT") {
+        throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was erased; reopen it to continue.");
+      }
+      throw storageError(error, "Opening the replica read snapshot");
+    }
+    if (ino !== this.#ino) {
+      throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica was replaced; reopen it to continue.");
+    }
+    let db: SqliteDatabase;
+    try {
+      db = this.#opener(path, { readonly: true });
+    } catch (error) {
+      throw storageError(error, "Opening the replica read snapshot");
+    }
+    let active = false;
+    try {
+      db.exec("BEGIN");
+      active = true;
+      const tombstone = db.get<{ generation: number }>("SELECT generation FROM replica WHERE id = 1");
+      await checkGate();
+      if (tombstone === undefined || tombstone.generation !== generation) {
+        throw new ReplicaError(ReplicaErrorCode.RESET_REQUIRED, "The replica generation changed; reopen it to continue.");
+      }
+      const snapshot = new SqliteReplicaStore(this.dir, db, ino, { create: false, now: this.#now }, this.#opener);
+      const result = await section(snapshot);
+      await checkGate();
+      db.exec("COMMIT");
+      active = false;
+      return result;
+    } finally {
+      if (active) {
+        try { db.exec("ROLLBACK"); } catch { /* Preserve the original error. */ }
+      }
+      db.close();
+    }
   }
 
   #row(): ReplicaRow | undefined {
@@ -514,6 +599,95 @@ export class SqliteReplicaStore implements ReplicaStore {
     });
   }
 
+  /** Per-CID first-install anchor and policy bound share the pending-grant transaction. */
+  #grantInstall(cid: string): SqliteGrantInstall | null {
+    const row = this.#db.get<{
+      installed_at: number;
+      effective_expires_at: number;
+      consent_deadline: number;
+      consent_anchor_at: number;
+      consent_anchor_source: string;
+    }>(
+      "SELECT installed_at, effective_expires_at, consent_deadline, consent_anchor_at, consent_anchor_source FROM grant_install WHERE cid = ?",
+      cid,
+    );
+    if (row === undefined) return null;
+    if (!(row.consent_anchor_source === "siwe" || row.consent_anchor_source === "delegation_iat" ||
+          row.consent_anchor_source === "delegation_nbf" || row.consent_anchor_source === "first_install") ||
+        !Number.isSafeInteger(row.installed_at) || row.installed_at < 0 ||
+        !Number.isSafeInteger(row.effective_expires_at) || row.effective_expires_at < 0 ||
+        !Number.isSafeInteger(row.consent_deadline) || row.consent_deadline < 0 ||
+        !Number.isSafeInteger(row.consent_anchor_at) || row.consent_anchor_at < 0) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The stored grant expiry or consent anchor is invalid.");
+    }
+    return {
+      installedAt: row.installed_at,
+      effectiveExpiresAt: row.effective_expires_at,
+      consentDeadline: row.consent_deadline,
+      consentAnchor: { at: row.consent_anchor_at, source: row.consent_anchor_source },
+    };
+  }
+
+  async getGrantInstall(cid: string): Promise<SqliteGrantInstall | null> {
+    return this.#grantInstall(cid);
+  }
+
+  #storeGrantPolicy(g: GrantRecord, policy: SqliteGrantPolicy, existing: SqliteGrantInstall | null): SqliteGrantInstall {
+    const installedAt = existing?.installedAt ?? policy.at;
+    const effectiveExpiresAt = Math.min(
+      g.expiresAt === null ? Infinity : g.expiresAt * 1000,
+      installedAt + policy.ttlMs,
+      policy.consentDeadline,
+    );
+    if (!Number.isSafeInteger(installedAt) || installedAt < 0 ||
+        !Number.isSafeInteger(effectiveExpiresAt) || effectiveExpiresAt < 0 ||
+        !Number.isSafeInteger(policy.consentDeadline) || policy.consentDeadline < 0 ||
+        !Number.isSafeInteger(policy.consentAnchor.at) || policy.consentAnchor.at < 0 ||
+        !Number.isSafeInteger(policy.ttlMs) || policy.ttlMs <= 0) {
+      throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The replica grant has no finite effective expiry.");
+    }
+    this.#db.run(
+      `INSERT INTO grant_install (cid, installed_at, effective_expires_at, consent_deadline, consent_anchor_at, consent_anchor_source)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (cid) DO UPDATE SET effective_expires_at = excluded.effective_expires_at,
+         consent_deadline = excluded.consent_deadline, consent_anchor_at = excluded.consent_anchor_at,
+         consent_anchor_source = excluded.consent_anchor_source`,
+      g.cid, installedAt, effectiveExpiresAt, policy.consentDeadline,
+      policy.consentAnchor.at, policy.consentAnchor.source,
+    );
+    return { installedAt, effectiveExpiresAt, consentDeadline: policy.consentDeadline, consentAnchor: policy.consentAnchor };
+  }
+
+  async installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall> {
+    return this.#guardedWrite("Installing the gated grant", () => {
+      const row = this.#row();
+      if (row === undefined) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
+      const previous = this.#grantInstall(g.cid);
+      if (previous === null && (row.grant_cid === g.cid || row.pending_grant_cid === g.cid)) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The installed grant has no durable first-install time.");
+      }
+      const next = this.#storeGrantPolicy(g, policy, previous);
+      if (next.effectiveExpiresAt <= this.#now()) {
+        throw new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, "The replica grant expired under the current policy.");
+      }
+      if (row.grant_cid !== g.cid && row.pending_grant_cid !== g.cid) {
+        this.#db.run(
+          `UPDATE replica SET pending_grant_cid = ?, pending_grant_bytes = ?, pending_grant_audience = ?,
+             pending_grant_issuer = ?, pending_grant_nbf = ?, pending_grant_exp = ?, pending_grant_error = NULL WHERE id = 1`,
+          g.cid, g.bytes, g.audience, g.issuer, g.notBefore, g.expiresAt,
+        );
+      }
+      return next;
+    });
+  }
+
+  async recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null> {
+    return this.#guardedWrite("Recomputing the gated grant", () => {
+      const previous = this.#grantInstall(g.cid);
+      return previous === null ? null : this.#storeGrantPolicy(g, policy, previous);
+    });
+  }
+
   async installGrant(g: GrantRecord): Promise<void> {
     await this.#guardedWrite("Installing the grant", () => {
       const row = this.#row();
@@ -576,13 +750,14 @@ export class SqliteReplicaStore implements ReplicaStore {
       const now = this.#now();
       if (row.lease_holder !== null && row.lease_expires_at !== null && row.lease_expires_at > now) return null;
       const token = row.lease_token + 1;
+      const holder = this.#holder ??= `${process.pid}-${randomBytes(6).toString("hex")}`;
       this.#db.run(
         "UPDATE replica SET lease_token = ?, lease_holder = ?, lease_expires_at = ? WHERE id = 1",
         token,
-        this.#holder,
+        holder,
         now + ttlMs,
       );
-      return { token, holder: this.#holder };
+      return { token, holder };
     });
   }
 

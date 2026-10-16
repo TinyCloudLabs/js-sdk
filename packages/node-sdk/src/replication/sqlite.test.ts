@@ -7,11 +7,11 @@
  * faked through the internal seams — no WASM, no network.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { chmod, mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { ed25519 } from "@noble/curves/ed25519";
 import type { ReplicaTransport } from "@tinycloud/replica";
@@ -20,26 +20,38 @@ import type {
   PendingWriteState,
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
+import type { ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
 
 import {
   createSqliteReplicaStorage,
+  createProfileReplicaPurge,
   type SqliteReplicaStorageOptions,
 } from "./sqlite";
+import { denyGate, establishSessionStamp, readGateSnapshot } from "@tinycloud/replica/profile-gate";
+import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
 const dirs: string[] = [];
+const roots: string[] = [];
+const stamps = new Map<string, ReplicaSessionStamp>();
 
 async function makeDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tc858-replica-"));
-  dirs.push(dir);
+  const profile = await mkdtemp(join(tmpdir(), "tc858-replica-"));
+  dirs.push(profile);
+  const dir = join(profile, "replication");
+  await mkdir(dir);
+  roots.push(dir);
+  stamps.set(profile, await establishSessionStamp(profile, PRINCIPAL, { siweIssuedAt: 1 }));
   return dir;
 }
 
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  roots.length = 0;
+  stamps.clear();
 });
 
 const HOST_A = "http://127.0.0.1:8000";
@@ -67,10 +79,12 @@ function serialGuard(): <T>(section: () => Promise<T>) => Promise<T> {
   };
 }
 
+const sharedGuard = serialGuard();
+
 function storageOptions(over: Partial<SqliteReplicaStorageOptions> = {}): SqliteReplicaStorageOptions {
   return {
-    dir: dirs[dirs.length - 1]!,
-    guard: serialGuard(),
+    dir: roots[roots.length - 1]!,
+    guard: sharedGuard,
     createDevice: async () => ({ did: DEVICE_DID, jwk: { kty: "OKP" } }),
     transportFor: () => fakeTransport,
     ...over,
@@ -83,6 +97,8 @@ function spec(over: Partial<KVReplicaSpec> = {}): KVReplicaSpec {
     space: SPACE_A,
     prefix: "notes/",
     allowSecrets: false,
+    stamp: stamps.get(dirname(roots[roots.length - 1]!)),
+    grantPolicy: { grantTtlMs: 86_400_000, consentAnchor: { at: Date.now() - 1000, source: "siwe" } },
     ...over,
   };
 }
@@ -189,6 +205,237 @@ async function filesNamed(root: string, filename: string): Promise<string[]> {
   return found;
 }
 
+
+describe("mandatory Node lifecycle gate", () => {
+  test("missing guard refuses pending access without creating a partition", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage({ dir });
+    await expect(storage.pendingWrites!(identity(), { stamp: { incarnation: "x", lifecycleEpoch: 0 } }).read())
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  test("missing lock refuses stamped SQLite open before creating a replica", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage({ dir });
+    await expect(storage.open(spec())).rejects.toMatchObject({
+      code: "REPLICA_GATED", gate: "gate_unavailable",
+    });
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  test("pending readExisting checks the gate even with no partition or file", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const stamp = await establishSessionStamp(dirname(dir), PRINCIPAL, { siweIssuedAt: 1 });
+    const pending = storage.pendingWrites!(identity(), { stamp });
+    expect(await pending.readExisting!()).toBeUndefined();
+    expect(await readdir(dir)).toEqual([]);
+    await rm(join(dirname(dir), REPLICA_GATE_FILE));
+    await expect(pending.readExisting!()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  test("a second process denying the gate fences synchronous delivery", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const stamp = await storage.lifecycle!.restoreSessionStamp(PRINCIPAL, stamps.get(dirname(dir)));
+    expect(storage.lifecycle!.deliverable(stamp)).toBe(true);
+    await denyGate(dirname(dir), { reason: "sign_out", principal: PRINCIPAL }, async () => []);
+    expect(storage.lifecycle!.deliverable(stamp)).toBe(false);
+  });
+
+  test("SQLite grant/status reads do not take the mutation profile lock", async () => {
+    const dir = await makeDir();
+    let block = false;
+    const storage = createSqliteReplicaStorage(storageOptions({
+      guard: async (section) => {
+        if (block) throw new Error("Profile lock held elsewhere");
+        return sharedGuard(section);
+      },
+    }));
+    const handle = await storage.open(spec());
+    block = true;
+    expect(await handle.grant()).toBeNull();
+    expect((await handle.status()).coverage).toBe("empty");
+    block = false;
+    await handle.close();
+  });
+
+  test("denial fences an opened SQLite handle before any replica bytes or keys", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const handle = await storage.open(spec());
+    const denied = await storage.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL });
+    expect(denied.status).toBe("denied");
+    await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(handle.list({ prefix: "notes/" })).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await handle.close();
+    const devices = await filesNamed(dir, "device.jwk");
+    expect(devices).toHaveLength(1);
+    const report = await storage.lifecycle!.erasePending({ signal: new AbortController().signal });
+    expect(report.failed).toEqual([]);
+    expect(await filesNamed(dir, "device.jwk")).toEqual([]);
+  });
+
+  test("deferred revoke survives restart without erasing files, then resumes the exact denial", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const handle = await storage.open(spec());
+    const pending = storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! });
+    await pending.update((state) => { state.seq = 1; });
+    const before = await filesNamed(dir, "pending.json");
+    const devices = await filesNamed(dir, "device.jwk");
+    const databases = await filesNamed(dir, "replica.db");
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    expect(denied).toMatchObject({ status: "denied" });
+    if (denied.status !== "denied" || denied.resumeToken === undefined) throw new Error("Missing durable resume token");
+    const token = denied.resumeToken;
+    expect(await filesNamed(dir, "pending.json")).toEqual(before);
+    expect(await filesNamed(dir, "device.jwk")).toEqual(devices);
+    expect(await filesNamed(dir, "replica.db")).toEqual(databases);
+    await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(pending.read()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await handle.close();
+
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await restarted.deferredErase()).toEqual(token);
+    expect((await restarted.recover({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
+    expect((await restarted.erasePending({ signal: new AbortController().signal })).remaining).toBeGreaterThan(0);
+    expect(await filesNamed(dir, "pending.json")).toEqual(before);
+    expect(await filesNamed(dir, "device.jwk")).toEqual(devices);
+    expect(await filesNamed(dir, "replica.db")).toEqual(databases);
+    await expect(restarted.resumeDeferredErase({ ...token, principalHash: "0".repeat(64) }, {
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(await restarted.deferredErase()).toEqual(token);
+
+    const report = await restarted.resumeDeferredErase(token, { signal: new AbortController().signal });
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(0);
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(await filesNamed(dir, "device.jwk")).toEqual([]);
+    expect(await filesNamed(dir, "replica.db")).toEqual([]);
+    expect(await restarted.deferredErase()).toBeNull();
+    expect(await restarted.resumeDeferredErase(token, { signal: new AbortController().signal }))
+      .toEqual({ erased: [], failed: [], remaining: 0 });
+  });
+
+  test("interruption after clearing deferred marker leaves intents for restart recovery", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const storage = createSqliteReplicaStorage(storageOptions());
+    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
+      .update((state) => { state.seq = 1; });
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    if (denied.status !== "denied" || denied.resumeToken === undefined) throw new Error("Missing durable resume token");
+    const controller = new AbortController();
+    let lockTurns = 0;
+    const interrupted = createProfileReplicaPurge({ profileDir, guard: async (section) => {
+      const result = await sharedGuard(section);
+      if (++lockTurns === 1) controller.abort();
+      return result;
+    } });
+
+    await expect(interrupted.resumeDeferredErase(denied.resumeToken, { signal: controller.signal }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(await purge.deferredErase()).toBeNull();
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+    const restarted = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    expect(await restarted.recover({ signal: new AbortController().signal }))
+      .toMatchObject({ failed: [], remaining: 0 });
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+  });
+
+  test("deferred denial blocks account switch until purge and rejects old token after successor", async () => {
+    const dir = await makeDir();
+    const profileDir = dirname(dir);
+    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
+    await createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), {
+      stamp: stamps.get(profileDir)!,
+    }).update((state) => { state.seq = 1; });
+    expect(() => purge.deny({ reason: "account_switch", principal: PRINCIPAL, next: "did:key:Bob" }, {
+      deferErase: true,
+    })).toThrow(TypeError);
+    expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
+    const denied = await purge.deny({ reason: "sign_out", principal: PRINCIPAL }, { deferErase: true });
+    if (denied.status !== "denied" || denied.resumeToken === undefined) throw new Error("Missing durable resume token");
+    const token = denied.resumeToken;
+    expect(await purge.deny({ reason: "account_switch", principal: PRINCIPAL, next: "did:key:Bob" }))
+      .toMatchObject({ status: "stale" });
+    expect(await purge.deferredErase()).toEqual(token);
+    expect(await createSqliteReplicaStorage(storageOptions()).lifecycle!.activationAllowed("did:key:Bob")).toBe(false);
+    await purge.resumeDeferredErase(token, { signal: new AbortController().signal });
+    const deniedAt = (await readGateSnapshot(profileDir))!.deniedAt!;
+    const originalNow = Date.now();
+    try {
+      setSystemTime(new Date(deniedAt + 2));
+      await createSqliteReplicaStorage(storageOptions()).lifecycle!.establishSessionStamp("did:key:Bob", {
+        consentAnchor: { at: deniedAt + 1, source: "siwe" },
+      });
+    } finally {
+      setSystemTime(originalNow);
+    }
+    await expect(purge.resumeDeferredErase(token, { signal: new AbortController().signal }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+  });
+
+  test("deny advances a pending generation once and fences a queued update", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const stamp = await storage.lifecycle!.establishSessionStamp(PRINCIPAL, {
+      consentAnchor: { at: 1, source: "siwe" },
+    });
+    const pending = storage.pendingWrites!(identity(), { stamp });
+    await pending.update((state) => { state.seq = 1; });
+    const denied = await storage.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL });
+    expect(denied.status).toBe("denied");
+    await expect(pending.read()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    await expect(pending.update((state) => { state.seq = 2; }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED" });
+    const state = await readGateSnapshot(dirname(dir));
+    expect(Object.values(state!.pendingGenerations)).toEqual([1]);
+    await storage.lifecycle!.erasePending({ signal: new AbortController().signal });
+    expect(Object.values((await readGateSnapshot(dirname(dir)))!.pendingGenerations)).toEqual([1]);
+  });
+  test("a queued pending update cannot refill pending.json after denial", async () => {
+    const dir = await makeDir();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const denyWaiting = Promise.withResolvers<void>();
+    const lock = serialGuard();
+    let calls = 0;
+    const storage = createSqliteReplicaStorage(storageOptions({
+      guard: (section) => {
+        if (++calls === 2) denyWaiting.resolve();
+        return lock(section);
+      },
+    }));
+    const pending = storage.pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    const first = pending.update(async (state) => {
+      state.seq = 1;
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const denied = storage.lifecycle!.deny({ reason: "sign_out", principal: PRINCIPAL });
+    await denyWaiting.promise;
+    const queued = pending.update((state) => { state.seq = 2; });
+    release.resolve();
+    await first;
+    expect((await denied).status).toBe("denied");
+    await expect(queued).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
+    await storage.lifecycle!.erasePending({ signal: new AbortController().signal });
+    expect(await filesNamed(dir, "pending.json")).toEqual([]);
+    expect(Object.values((await readGateSnapshot(dirname(dir)))!.pendingGenerations)).toEqual([1]);
+  });
+
+});
 // ---------------------------------------------------------------------------
 // FilePendingWriteStore (§6.3)
 // ---------------------------------------------------------------------------
@@ -197,7 +444,7 @@ describe("FilePendingWriteStore (§6.3)", () => {
   test("durable: records written by update are visible to a fresh store instance", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());
-    const store = storage.pendingWrites!(identity());
+    const store = storage.pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     expect(store.durable).toBe(true);
     const opId = await store.update((state) => {
       state.records.push({
@@ -215,7 +462,7 @@ describe("FilePendingWriteStore (§6.3)", () => {
     });
     expect(opId).toBe("op1");
 
-    const reopened = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity());
+    const reopened = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     const state = await reopened.read();
     expect(state.v).toBe(2);
     expect(state.committedEpoch).toBe(1);
@@ -227,7 +474,7 @@ describe("FilePendingWriteStore (§6.3)", () => {
   test("two contending updates serialize: the second observes the first", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());
-    const store = storage.pendingWrites!(identity());
+    const store = storage.pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     const started = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
     // The first update blocks on the gate mid-mutate; the second is issued
@@ -252,7 +499,7 @@ describe("FilePendingWriteStore (§6.3)", () => {
 
   test("a mutate that throws leaves the file untouched", async () => {
     const dir = await makeDir();
-    const store = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity());
+    const store = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     await store.update((state) => {
       state.seq += 1;
     });
@@ -267,8 +514,8 @@ describe("FilePendingWriteStore (§6.3)", () => {
 
   test("a pending.json naming another identity is STORAGE_ERROR, never silently shared", async () => {
     const dir = await makeDir();
-    const store = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity());
-    await store.read(); // creates the partition
+    const store = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    await store.update(() => undefined); // creates the partition
     const [idDir] = await partitionDirs(dir);
     const other: PendingWriteState = {
       v: 2,
@@ -283,8 +530,8 @@ describe("FilePendingWriteStore (§6.3)", () => {
 
   test("corrupt pending.json is STORAGE_ERROR", async () => {
     const dir = await makeDir();
-    const store = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity());
-    await store.read();
+    const store = createSqliteReplicaStorage(storageOptions()).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    await store.update(() => undefined);
     const [idDir] = await partitionDirs(dir);
     await writeFile(join(dir, idDir!, "pending.json"), "{not json");
     await expect(store.read()).rejects.toMatchObject({ code: "STORAGE_ERROR" });
@@ -293,10 +540,11 @@ describe("FilePendingWriteStore (§6.3)", () => {
   test("pending updates fail closed when an open identity partition is swapped for a symlink", async () => {
     const dir = await makeDir();
     const alternateRoot = await makeDir();
-    const store = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity());
-    const alternate = createSqliteReplicaStorage({ dir: alternateRoot }).pendingWrites!(identity());
-    await store.read();
-    await alternate.read();
+    const store = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    const alternate = createSqliteReplicaStorage(storageOptions({ dir: alternateRoot }))
+      .pendingWrites!(identity(), { stamp: stamps.get(dirname(alternateRoot))! });
+    await store.update(() => undefined);
+    await alternate.update(() => undefined);
     const [partition] = await partitionDirs(dir);
     const [alternatePartition] = await partitionDirs(alternateRoot);
     await rename(join(dir, partition!), join(dir, `${partition!}-moved`));
@@ -307,26 +555,21 @@ describe("FilePendingWriteStore (§6.3)", () => {
     expect((await alternate.read()).seq).toBe(0);
   });
 
-  test("no guard → pendingWrites is still the durable file store, never memory", async () => {
+  test("no guard never creates pending state, even with a valid stamp", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage({ dir });
-    // Review: a missing guard must NEVER silently give the runtime volatile
-    // pending state — the file store is always present and durable.
-    const store = storage.pendingWrites?.(identity());
-    expect(store?.durable).toBe(true);
-    await store!.update((state) => {
-      state.committedEpoch = 3;
-    });
-    const reopened = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
-    expect((await reopened.read()).committedEpoch).toBe(3);
+    const store = storage.pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    expect(store.durable).toBe(true);
+    await expect(store.readExisting!()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    await expect(store.update((state) => { state.committedEpoch = 3; }))
+      .rejects.toMatchObject({ code: "REPLICA_GATED", gate: "gate_unavailable" });
+    expect(await readdir(dir)).toEqual([]);
   });
 
   test("concurrent update() calls on one store all survive — in-process serialization", async () => {
     const dir = await makeDir();
-    // No guard: the fix must serialize in process even when no cross-process
-    // profile lock is supplied (review: unguarded concurrent writes lost
-    // records).
-    const store = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    // Both the in-process queue and the mandatory profile lock serialize updates.
+    const store = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     const N = 50;
     await Promise.all(
       Array.from({ length: N }, (_, i) =>
@@ -344,8 +587,7 @@ describe("FilePendingWriteStore (§6.3)", () => {
         }),
       ),
     );
-    const state = await createSqliteReplicaStorage({ dir })
-      .pendingWrites!(identity())
+    const state = await createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! })
       .read();
     expect(state.seq).toBe(N);
     expect(state.records).toHaveLength(N);
@@ -356,8 +598,8 @@ describe("FilePendingWriteStore (§6.3)", () => {
 
   test("concurrent update() calls across store instances on the same path all survive", async () => {
     const dir = await makeDir();
-    const first = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
-    const second = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
+    const first = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    const second = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     const N = 50;
     // Interleave the two instances: both must share the file's in-process
     // chain, not race independent read-modify-writes.
@@ -392,8 +634,9 @@ describe("FilePendingWriteStore (§6.3)", () => {
     // The regression (Sol P2): lock keyed by resolve() is lexical — a store
     // through the symlink and one through the real path ran independent
     // read-modify-write chains on one file and lost records (80 → 60).
-    const real = createSqliteReplicaStorage({ dir }).pendingWrites!(identity());
-    const linked = createSqliteReplicaStorage({ dir: alias }).pendingWrites!(identity());
+    const real = createSqliteReplicaStorage(storageOptions({ dir })).pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
+    const linked = createSqliteReplicaStorage(storageOptions({ dir: alias, gateFile: join(dirname(dir), REPLICA_GATE_FILE) }))
+      .pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     const N = 80;
     await Promise.all(
       Array.from({ length: N }, (_, i) =>
@@ -428,9 +671,9 @@ describe("identity partition isolation (§6.3)", () => {
   test("same principal+key, different host or space: independent pending state", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());
-    const hostA = storage.pendingWrites!(identity({ host: HOST_A }));
-    const hostB = storage.pendingWrites!(identity({ host: HOST_B }));
-    const spaceB = storage.pendingWrites!(identity({ space: SPACE_B }));
+    const hostA = storage.pendingWrites!(identity({ host: HOST_A }), { stamp: stamps.get(dirname(dir))! });
+    const hostB = storage.pendingWrites!(identity({ host: HOST_B }), { stamp: stamps.get(dirname(dir))! });
+    const spaceB = storage.pendingWrites!(identity({ space: SPACE_B }), { stamp: stamps.get(dirname(dir))! });
 
     await hostA.update((state) => {
       state.committedEpoch = 9;
@@ -475,31 +718,12 @@ describe("identity partition isolation (§6.3)", () => {
   test("canonicalization: HTTPS://host:443 and https://host share one partition", async () => {
     const dir = await makeDir();
     const storage = createSqliteReplicaStorage(storageOptions());
-    const loud = storage.pendingWrites!(
-      identity({ host: "HTTPS://NODE.EXAMPLE:443/" }),
-    );
-    const quiet = storage.pendingWrites!(identity({ host: "https://node.example" }));
+    const loud = storage.pendingWrites!(identity({ host: "HTTPS://NODE.EXAMPLE:443/" }), { stamp: stamps.get(dirname(dir))! });
+    const quiet = storage.pendingWrites!(identity({ host: "https://node.example" }), { stamp: stamps.get(dirname(dir))! });
     await loud.update((state) => {
       state.committedEpoch = 5;
     });
     expect((await quiet.read()).committedEpoch).toBe(5);
-
-    const eip55 = storage.pendingWrites!(
-      identity({
-        space: "tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000AB:default",
-        principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000ab",
-      }),
-    );
-    const lower = storage.pendingWrites!(
-      identity({
-        space: "tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000ab:default",
-        principal: "did:pkh:eip155:1:0x00000000000000000000000000000000000000ab",
-      }),
-    );
-    await eip55.update((state) => {
-      state.committedEpoch = 7;
-    });
-    expect((await lower.read()).committedEpoch).toBe(7);
   });
 });
 
@@ -513,7 +737,7 @@ describe("read-only replica status inspection", () => {
     const storage = createSqliteReplicaStorage(storageOptions({ dir }));
 
     expect(await storage.inspectStatus!(spec(), { signal: new AbortController().signal })).toBeUndefined();
-    const pending = storage.pendingWrites(identity());
+    const pending = storage.pendingWrites(identity(), { stamp: stamps.get(dirname(dir))! });
     expect(await pending.readExisting?.()).toBeUndefined();
     expect(await readdir(dir)).toEqual([]);
     await pending.update((state) => { state.seq = 1; });
@@ -573,6 +797,54 @@ describe("sqlite replica handle", () => {
     const [idDir2] = await partitionDirs(dir2);
     expect(existsSync(join(dir2, idDir2!, "device.jwk"))).toBe(false);
     await delegate.close();
+  });
+
+  test("per-CID install time survives reinstall and effective expiry blocks guarded reads", async () => {
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const now = Date.now();
+    const handle = await storage.open(spec({
+      grantPolicy: { grantTtlMs: 60_000, consentAnchor: { source: "siwe", at: now - 1000 } },
+    }));
+    try {
+      const ucan = await mintUcan({ audience: DEVICE_DID, exp: Math.floor(now / 1000) + 3600 });
+      const first = await handle.installGrant(ucan);
+      expect(first.installedAt).toBeGreaterThan(0);
+      expect(first.effectiveExpiresAt).toBe(first.installedAt! + 60_000);
+      setSystemTime(new Date(now + 10_000));
+      const again = await handle.installGrant(ucan);
+      expect(again.installedAt).toBe(first.installedAt);
+      expect(again.effectiveExpiresAt).toBe(first.effectiveExpiresAt);
+      await handle.sync({ signal: new AbortController().signal, syncStartEpoch: 1 });
+      setSystemTime(new Date(now + 120_000));
+      await expect(handle.get("notes/a")).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+      await expect(handle.list({ prefix: "notes/" })).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+    } finally {
+      setSystemTime();
+      await handle.close();
+    }
+  });
+
+  test("reopening recomputes expiry from the same persisted CID install time", async () => {
+    await makeDir();
+    const storage = createSqliteReplicaStorage(storageOptions());
+    const now = Date.now();
+    const anchor = { source: "siwe" as const, at: now - 1000 };
+    const initial = await storage.open(spec({ grantPolicy: { grantTtlMs: 60_000, consentAnchor: anchor } }));
+    const ucan = await mintUcan({ audience: DEVICE_DID, exp: Math.floor(now / 1000) + 3600 });
+    const first = await initial.installGrant(ucan);
+    await initial.close();
+
+    const restored = await storage.open(spec({ grantPolicy: { grantTtlMs: 30_000, consentAnchor: anchor } }));
+    try {
+      const info = await restored.grant();
+      expect(info?.installedAt).toBe(first.installedAt);
+      expect(info?.effectiveExpiresAt).toBe(first.installedAt! + 30_000);
+      expect(info?.consentAnchor).toEqual(anchor);
+      expect(info?.consentDeadline).toBe(anchor.at + 7 * 24 * 60 * 60 * 1000);
+    } finally {
+      await restored.close();
+    }
   });
 
   test("installGrant → pending info with parentCid and unconstrained; caveated grants reject", async () => {
@@ -825,11 +1097,9 @@ describe("purge across the device union (§10.2)", () => {
 
   test("concurrent first opens of an identical spec both succeed", async () => {
     const dir = await makeDir();
-    // Two unguarded storages — two "processes" racing the first init. The
-    // existence check inside init's guarded write serializes them; the
-    // unguarded pre-check raced and lost 9 times out of 10 (review).
-    const a = createSqliteReplicaStorage(storageOptions({ guard: undefined }));
-    const b = createSqliteReplicaStorage(storageOptions({ guard: undefined }));
+    // Both processes use the same required profile lock, including the first init.
+    const a = createSqliteReplicaStorage(storageOptions());
+    const b = createSqliteReplicaStorage(storageOptions());
     const [ha, hb] = await Promise.all([a.open(spec()), b.open(spec())]);
     expect(ha.deviceDid).toBe(DEVICE_DID);
     expect(hb.deviceDid).toBe(DEVICE_DID);
@@ -846,7 +1116,7 @@ describe("atomic-write durability", () => {
       synced.push(d);
     };
     const storage = createSqliteReplicaStorage(storageOptions({ dirSync }));
-    const store = storage.pendingWrites!(identity());
+    const store = storage.pendingWrites!(identity(), { stamp: stamps.get(dirname(dir))! });
     await store.update((state) => {
       state.seq += 1;
     });
