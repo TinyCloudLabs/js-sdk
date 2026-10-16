@@ -1435,17 +1435,28 @@ export function createSqliteReplicaStorage(
     },
     async recoverLogoutPending({ signal, clearCredentials }) {
       const path = join(profileDir, REPLICA_LOGOUT_PENDING_FILE);
-      const failure = (error: unknown): ReplicaEraseReport => ({
+      const remainingIntents = async (): Promise<number> => {
+        try {
+          return (await (await fileGate()).readGateSnapshot(profileDir))?.intents.length ?? 0;
+        } catch {
+          return 0; // Inspection failed; the failed gate row below still refuses completion.
+        }
+      };
+      const failure = async (error: unknown): Promise<ReplicaEraseReport> => ({
         erased: [],
         failed: [{ id: "logout", code: typeof error === "object" && error !== null &&
           "code" in error && typeof error.code === "string" ? error.code : "STORAGE_ERROR" }],
-        remaining: 1,
+        remaining: await remainingIntents(),
       });
       let found = false;
+      let noMarkerRemaining = 0;
       try {
         await profileSection(async () => {
           const marker = await readLogoutMarker(path);
-          if (marker === null) return;
+          if (marker === null) {
+            noMarkerRemaining = await remainingIntents();
+            return;
+          }
           found = true;
           signal.throwIfAborted();
           const gate = await fileGate();
@@ -1489,7 +1500,7 @@ export function createSqliteReplicaStorage(
       } catch (error) {
         return failure(error);
       }
-      if (!found) return { erased: [], failed: [], remaining: 0 };
+      if (!found) return { erased: [], failed: [], remaining: noMarkerRemaining };
       return lifecycle.erasePending({ signal });
     },
     async pendingPurge() {
