@@ -1,10 +1,13 @@
-import { chmod, mkdtemp, readdir, readlink, rm, stat } from "node:fs/promises";
+import { linkSync, renameSync, symlinkSync } from "node:fs";
+import * as filesystem from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { FAULTS, SqliteReplicaStore } from "./store.js";
+import { loadSqlite } from "./driver.js";
 import { config, deviceGrant } from "../../test/fixtures.js";
 
 const dirs: string[] = [];
@@ -17,6 +20,14 @@ async function makeStore(): Promise<string> {
   await store.close();
   return dir;
 }
+async function makeV1Store(): Promise<string> {
+  const dir = await makeStore();
+  const db = new Database(join(dir, "replica.db"));
+  try { db.exec("DROP TABLE grant_install; PRAGMA user_version = 1"); }
+  finally { db.close(); }
+  return dir;
+}
+
 
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -26,6 +37,11 @@ async function databaseDescriptors(): Promise<string[]> {
   const fds = await readdir("/proc/self/fd");
   const links = await Promise.all(fds.map(async (fd) => readlink(`/proc/self/fd/${fd}`).catch(() => "")));
   return links.filter((link) => /\/replica\.db(?:-wal|-shm)?$/.test(link));
+}
+function schemaVersion(path: string): number {
+  const db = new Database(path, { readonly: true });
+  try { return db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version; }
+  finally { db.close(); }
 }
 
 describe("SQLite gated read transaction", () => {
@@ -75,8 +91,263 @@ describe("SQLite gated read transaction", () => {
       await store.close();
     }
   });
+
+  test("typed section and gate failures retain their original error and code", async () => {
+    const dir = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    const expired = Object.assign(new Error("Grant expired"), { code: "GRANT_EXPIRED" });
+    const refused = Object.assign(new Error("Authority caveated"), { code: "CAVEATED_AUTHORITY" });
+    try {
+      await expect(store.readTransaction(0, async () => {}, async () => { throw expired; }))
+        .rejects.toBe(expired);
+      let checks = 0;
+      await expect(store.readTransaction(0, async () => {
+        if (++checks === 2) throw refused;
+      }, async (snapshot) => snapshot.open())).rejects.toBe(refused);
+      expect(checks).toBe(2);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a closed store reports CLOSED before opening a read snapshot", async () => {
+    const dir = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    await store.close();
+    let called = false;
+    await expect(store.readTransaction(0, async () => { called = true; }, async () => { called = true; }))
+      .rejects.toMatchObject({ code: "REPLICA_CLOSED" });
+    expect(called).toBe(false);
+  });
+
+  test("100 concurrent gated snapshots use the checked descriptor queue over four rounds", async () => {
+    const dir = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    try {
+      for (let round = 0; round < 4; round++) {
+        const results = await Promise.allSettled(Array.from({ length: 100 }, () =>
+          store.readTransaction(0, async () => {}, async (snapshot) => (await snapshot.open())?.generation)));
+        expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+        expect(results.every((result) => result.status === "fulfilled" && result.value === 0)).toBe(true);
+      }
+    } finally {
+      await store.close();
+    }
+  }, 30_000);
+
+  test.skipIf(process.platform !== "linux")("a gated snapshot keeps the original blob directory pinned after parent close and refuses later denial", async () => {
+    const dir = await makeStore();
+    const victim = await makeStore();
+    const hash = "a".repeat(64);
+    const original = new Uint8Array([1, 2, 3]);
+    const foreign = new Uint8Array([9, 8, 7]);
+    await mkdir(join(dir, "blobs", "aa"));
+    await mkdir(join(victim, "blobs", "aa"));
+    await writeFile(join(dir, "blobs", "aa", hash), original);
+    await writeFile(join(victim, "blobs", "aa", hash), foreign);
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    let checks = 0;
+    let moved = false;
+    try {
+      await expect(store.readTransaction(0, async () => {
+        if (++checks === 2) throw Object.assign(new Error("Denied"), { code: "REPLICA_GATED", gate: "stamp_stale" });
+      }, async (snapshot) => {
+        await store.close();
+        renameSync(dir, `${dir}.moved`);
+        moved = true;
+        await symlink(victim, dir);
+        expect(await snapshot.readContent(hash)).toEqual(original);
+      })).rejects.toMatchObject({ code: "REPLICA_GATED" });
+      expect(checks).toBe(2);
+      expect(new Uint8Array(await readFile(join(victim, "blobs", "aa", hash)))).toEqual(foreign);
+    } finally {
+      await store.close().catch(() => undefined);
+      if (moved) {
+        await unlink(dir).catch(() => undefined);
+        await rm(`${dir}.moved`, { recursive: true, force: true });
+      }
+    }
+  });
+  test.skipIf(process.platform !== "linux")("a replaced replica directory cannot deliver an otherwise allowed snapshot", async () => {
+    const dir = await makeStore();
+    const victim = await makeStore();
+    const store = await SqliteReplicaStore.open(dir, { create: false });
+    let moved = false;
+    try {
+      await expect(store.readTransaction(0, async () => {}, async (snapshot) => {
+        const state = await snapshot.open();
+        renameSync(dir, `${dir}.moved`);
+        moved = true;
+        await symlink(victim, dir);
+        return state;
+      })).rejects.toMatchObject({ code: "RESET_REQUIRED" });
+    } finally {
+      await store.close();
+      if (moved) {
+        await unlink(dir).catch(() => undefined);
+        await rm(`${dir}.moved`, { recursive: true, force: true });
+      }
+    }
+  });
+
 });
 
+test("a checked v1 store migrates once to v2 while inspection remains read-only", async () => {
+  const dir = await makeV1Store();
+  const dbPath = join(dir, "replica.db");
+  expect(schemaVersion(dbPath)).toBe(1);
+  expect((await SqliteReplicaStore.inspect(dir))?.state.config.name).toBe(config().name);
+  expect(schemaVersion(dbPath)).toBe(1);
+  const store = await SqliteReplicaStore.open(dir, { create: false });
+  try {
+    expect(schemaVersion(dbPath)).toBe(2);
+    expect((await store.open())?.config.name).toBe(config().name);
+    expect((await store.readTransaction(0, async () => {}, async (snapshot) => snapshot.open()))?.generation).toBe(0);
+  } finally {
+    await store.close();
+  }
+  const reopened = await SqliteReplicaStore.open(dir, { create: false });
+  try { expect(schemaVersion(dbPath)).toBe(2); }
+  finally { await reopened.close(); }
+});
+
+test("swapped and symlinked v1 databases cannot receive a schema upgrade or any bytes", async () => {
+  const selected = await makeV1Store();
+  const victim = await makeV1Store();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  expect([schemaVersion(selectedDb), schemaVersion(victimDb)]).toEqual([1, 1]);
+  const beforeSelected = await readFile(selectedDb);
+  const beforeVictim = await readFile(victimDb);
+  const backup = `${selectedDb}.original`;
+  renameSync(selectedDb, backup);
+  await symlink(victimDb, selectedDb);
+  await expect(SqliteReplicaStore.open(selected, { create: false })).rejects.toMatchObject({ code: "REPLICA_NOT_FOUND" });
+  await rm(selectedDb);
+  renameSync(backup, selectedDb);
+  const opener = await loadSqlite();
+  await expect(SqliteReplicaStore.open(selected, {
+    create: false,
+    sqlite: (path) => {
+      renameSync(selectedDb, backup);
+      linkSync(victimDb, selectedDb);
+      return opener(path);
+    },
+  })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+  expect([schemaVersion(backup), schemaVersion(victimDb)]).toEqual([1, 1]);
+  expect(await readFile(backup)).toEqual(beforeSelected);
+  expect(await readFile(victimDb)).toEqual(beforeVictim);
+});
+
+
+for (const replacement of ["symlink", "regular"] as const) {
+  test(`inspection refuses a ${replacement} replica.db swap before returning victim status`, async () => {
+    const selected = await makeV1Store();
+    const victim = await makeV1Store();
+    const selectedDb = join(selected, "replica.db");
+    const victimDb = join(victim, "replica.db");
+    const original = filesystem.lstat;
+    const before = await readFile(victimDb);
+    let swapped = false;
+    const intercepted = spyOn(filesystem, "lstat").mockImplementation((async (...args: Parameters<typeof filesystem.lstat>) => {
+      const result = await original(...args);
+      if (!swapped && args[0] === selectedDb) {
+        swapped = true;
+        renameSync(selectedDb, `${selectedDb}.original`);
+        if (replacement === "symlink") symlinkSync(victimDb, selectedDb);
+        else linkSync(victimDb, selectedDb);
+      }
+      return result;
+    }) as typeof filesystem.lstat);
+    try {
+      await expect(SqliteReplicaStore.inspect(selected)).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    } finally {
+      intercepted.mockRestore();
+    }
+    expect(swapped).toBe(true);
+    expect(await readFile(victimDb)).toEqual(before);
+    expect(schemaVersion(victimDb)).toBe(1);
+  });
+}
+
+test("opening a symlinked replica.db refuses before changing the victim lease", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const before = await SqliteReplicaStore.inspect(victim);
+  await rm(selectedDb);
+  await symlink(victimDb, selectedDb);
+
+  await expect(SqliteReplicaStore.open(selected, { create: false })).rejects.toMatchObject({ code: "REPLICA_NOT_FOUND" });
+  expect((await SqliteReplicaStore.inspect(victim))?.status).toEqual(before?.status);
+});
+
+test("100 simultaneous create opens use the same database over four rounds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tc-replica-open-race-"));
+  dirs.push(root);
+  const dir = join(root, "replica");
+  for (let round = 0; round < 4; round++) {
+    const results = await Promise.allSettled(Array.from({ length: 100 }, () => SqliteReplicaStore.open(dir, { create: true })));
+    try {
+      expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    } finally {
+      await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+    }
+  }
+  expect((await stat(join(dir, "replica.db"))).isFile()).toBe(true);
+}, 30_000);
+
+test("concurrent prefixes do not confuse SQLite descriptor identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tc-replica-prefix-opens-"));
+  dirs.push(root);
+  const paths = Array.from({ length: 4 }, (_, index) => join(root, `prefix-${index}`));
+  const results = await Promise.allSettled(Array.from({ length: 100 }, (_, index) =>
+    SqliteReplicaStore.open(paths[index % paths.length]!, { create: true })));
+  try {
+    expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    for (const path of paths) expect((await stat(join(path, "replica.db"))).isFile()).toBe(true);
+  } finally {
+    await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+});
+
+test("a regular replica.db swapped for another real database during open is rejected", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const before = await SqliteReplicaStore.inspect(victim);
+  const opener = await loadSqlite();
+  await expect(SqliteReplicaStore.open(selected, {
+    create: false,
+    sqlite: (path) => {
+      renameSync(selectedDb, `${selectedDb}.original`);
+      linkSync(victimDb, selectedDb);
+      return opener(path);
+    },
+  })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+  expect((await SqliteReplicaStore.inspect(victim))?.status).toEqual(before?.status);
+});
+
+test("a replica.db replaced during the native opener is rejected before SQL executes", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const opener = await loadSqlite();
+  let executed = false;
+  await expect(SqliteReplicaStore.open(selected, {
+    create: false,
+    sqlite: (path) => {
+      renameSync(selectedDb, `${selectedDb}.original`);
+      symlinkSync(victimDb, selectedDb);
+      const database = opener(path);
+      return { ...database, exec: () => { executed = true; throw Error("SQL reached replaced database"); } };
+    },
+  })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+  expect(executed).toBe(false);
+});
 describe("SQLite status inspection lifecycle", () => {
   test("inspection of an existing database may create only SQLite sidecars", async () => {
     const dir = await makeStore();

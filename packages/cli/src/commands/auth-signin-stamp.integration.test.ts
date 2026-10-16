@@ -27,7 +27,7 @@ async function run(home: string, args: string[]): Promise<{ stdout: string; stde
   return { stdout, stderr, exitCode };
 }
 
-test("fresh local sign-in persists a genuine stamp that a new CLI process restores before reporting replicas", async () => {
+test("fresh local sign-in persists a genuine stamp for a new process without making report live", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc858-cli-local-stamp-"));
   homes.push(home);
   const node = Bun.serve({
@@ -68,17 +68,26 @@ test("fresh local sign-in persists a genuine stamp that a new CLI process restor
   expect(rootLogin.exitCode, rootLogin.stderr).toBe(0);
   const rootReport = await run(home, ["--replication", "replica", "report", "--json"]);
   expect(rootReport.exitCode, rootReport.stderr).toBe(0);
-  expect(JSON.parse(rootReport.stdout).replicas).toMatchObject([
-    { prefix: "/", state: "unavailable", errorCode: "REPLICATION_ROOT_UNSUPPORTED" },
-  ]);
+  expect(JSON.parse(rootReport.stdout)).toMatchObject({ replicas: [], replicasUnavailable: true });
+  const rootRead = await run(home, ["--replication", "kv", "get", "notes/a", "--raw"]);
+  expect(rootRead.exitCode).not.toBe(0); // The fake node has no KV endpoint.
+  const eventsPath = join(directory, "replication", "events.jsonl");
+  const rootEvents = (await readFile(eventsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  expect(rootEvents).toContainEqual(expect.objectContaining({
+    type: "replication.state", state: "unavailable", code: "REPLICATION_ROOT_UNSUPPORTED",
+  }));
 
   const sessionFile = await withTinyCloudStateRoot(home, () => Promise.resolve(sessionPath(PROFILE)));
   const unstamped = JSON.parse(await readFile(sessionFile, "utf8"));
   delete unstamped.replicaStamp;
   await writeFile(sessionFile, JSON.stringify(unstamped));
-  const gated = await run(home, ["--replication", "replica", "report", "--json"]);
-  expect(gated.exitCode, gated.stderr).toBe(0);
-  expect(JSON.parse(gated.stdout).replicas).toMatchObject([
-    { prefix: "/", state: "gated", gate: "not_established", errorCode: "REPLICA_GATED" },
-  ]);
-});
+  const gatedReport = await run(home, ["--replication", "replica", "report", "--json"]);
+  expect(gatedReport.exitCode, gatedReport.stderr).toBe(0);
+  expect(JSON.parse(gatedReport.stdout)).toMatchObject({ replicas: [], replicasUnavailable: true });
+  const gatedRead = await run(home, ["--replication", "kv", "get", "notes/a", "--raw"]);
+  expect(gatedRead.exitCode).not.toBe(0);
+  const gatedEvents = (await readFile(eventsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  expect(gatedEvents.slice(rootEvents.length)).toContainEqual(expect.objectContaining({
+    type: "replication.read", source: "network", reason: "replica_gated", code: "REPLICA_GATED", outcome: "error",
+  }));
+}, 30_000);
