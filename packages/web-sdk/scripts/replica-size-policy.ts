@@ -244,8 +244,39 @@ export function validateCiToolchainTransition(
   }
 }
 
-// Only policy and release-note paths reviewed for the canonical CI measurement
-// transition. Shipped replica source and worker build inputs remain forbidden.
+// Webpack's index/replica/replica-gated entries and the replica tsup worker
+// entry pull from these workspace packages (including transitive SDK and Share
+// dependencies). No measured entry or dependency imports packages/cli.
+const measuredPackagePrefixes = [
+  "packages/web-sdk/",
+  "packages/node-sdk/",
+  "packages/sdk-services/",
+  "packages/sdk-core/",
+  "packages/replica/",
+  "packages/sdk-rs/",
+  "packages/bootstrap/",
+  "packages/share-sdk/",
+  "packages/share-envelope/",
+] as const;
+
+// These files are exercised by tests or reviewed as contract text, but are not
+// reachable from the build entrypoints above.
+const unbundledMeasuredPackageFiles: ReadonlySet<string> = new Set([
+  "packages/node-sdk/src/replication/replication.e2e.test.ts",
+  "packages/sdk-services/src/kv/replication/CONTRACT.md",
+]);
+
+function isMeasuredArtifactInput(path: string): boolean {
+  if (unbundledMeasuredPackageFiles.has(path)) return false;
+  return path === "bun.lock" || path === "package.json" || path === "bunfig.toml" ||
+    path === "turbo.json" || /^tsconfig(?:\.[^/]+)?\.json$/.test(path) ||
+    path === ".github/workflows/replica-e2e.yml" ||
+    measuredPackagePrefixes.some((prefix) => path.startsWith(prefix));
+}
+
+// A CLI implementation cannot enter either measured entry graph. Keep the
+// excluded class narrow; unknown paths fail closed until their graph is reviewed
+// (notably executable files beside Changesets release notes).
 export const ciCorrectionPolicyOnlyPaths: ReadonlySet<string> = new Set([
   "packages/replica/CHANGELOG.md",
   "packages/replica/README.md",
@@ -268,5 +299,7 @@ export function isPolicyOnlySinceApprovedSource(root: string, approvedSource: st
   }
   const changed = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", `${approvedSource}...HEAD`], { cwd: root });
   return changed.toString("utf8").split("\0").filter(Boolean).every((path) =>
-    allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path));
+    allowed.has(path) || /^\.changeset\/[^/]+\.md$/.test(path) ||
+    (!isMeasuredArtifactInput(path) &&
+      (path.startsWith("packages/cli/") || unbundledMeasuredPackageFiles.has(path))));
 }

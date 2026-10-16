@@ -339,4 +339,77 @@ describe("TC-858 policy-only source identity", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("permits CLI-only auth changes because neither measured bundle imports the CLI", () => {
+    const { root, base } = fixture();
+    try {
+      const cliSource = "packages/cli/src/auth/local-key.ts";
+      mkdirSync(dirname(join(root, cliSource)), { recursive: true });
+      writeFileSync(join(root, cliSource), "export const persistedReplicaStamp = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "persist CLI sign-in stamp");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("permits the unbundled Node real-node test fixture but refuses measured package inputs", () => {
+    const { root, base } = fixture();
+    try {
+      const testFixture = "packages/node-sdk/src/replication/replication.e2e.test.ts";
+      mkdirSync(dirname(join(root, testFixture)), { recursive: true });
+      writeFileSync(join(root, testFixture), "export const guardedFixture = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "guard real-node fixture");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+
+      const contract = "packages/sdk-services/src/kv/replication/CONTRACT.md";
+      mkdirSync(dirname(join(root, contract)), { recursive: true });
+      writeFileSync(join(root, contract), "A replica must be stamped before checking node root support.\n");
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "freeze root gate precedence");
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(true);
+
+      for (const measured of [
+        "packages/web-sdk/src/modules/tcw.ts",
+        "packages/node-sdk/src/TinyCloudNode.ts",
+        "packages/sdk-services/src/kv/replication/controller.ts",
+        "packages/sdk-core/src/index.ts",
+        "packages/replica/src/kv-storage/worker.ts",
+        "packages/sdk-rs/web-sdk-wasm/src/lib.rs",
+        "packages/bootstrap/src/index.ts",
+        "packages/share-sdk/src/index.ts",
+        "packages/share-envelope/src/index.ts",
+        "packages/web-sdk/webpack.config.cjs",
+        "packages/replica/tsup.config.ts",
+        "packages/node-sdk/package.json",
+        "bun.lock",
+        ".github/workflows/replica-e2e.yml",
+      ]) {
+        const path = join(root, measured);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, `measured ${measured}\n`);
+        git(root, "add", ".");
+        git(root, "commit", "-qm", `change measured ${measured}`);
+        expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses moving measured source into an otherwise ignored CLI path", () => {
+    const { root, base } = fixture();
+    try {
+      const cliSource = "packages/cli/src/auth/local-key.ts";
+      mkdirSync(dirname(join(root, cliSource)), { recursive: true });
+      git(root, "mv", source, cliSource);
+      git(root, "commit", "-qm", "move measured web source into CLI");
+      expect(git(root, "diff", "--name-only", `${base}...HEAD`)).toBe(cliSource);
+      expect(isPolicyOnlySinceApprovedSource(root, base, ciCorrectionPolicyOnlyPaths)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
