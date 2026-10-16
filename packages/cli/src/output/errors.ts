@@ -2,7 +2,7 @@ import { closeReplication, registeredReplications } from "../lib/replication-reg
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
-import { ProfileDeletedError, ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
@@ -115,6 +115,9 @@ export function wrapError(error: unknown): CLIError {
   // A store write that waited out a `tc profile delete` of its profile.
   if (error instanceof ProfileDeletedError) {
     return new CLIError("PROFILE_NOT_FOUND", message);
+  }
+  if (error instanceof ProfileSymlinkError) {
+    return new CLIError("PROFILE_SYMLINK", message, ExitCode.ERROR);
   }
 
   // Map known error patterns to exit codes

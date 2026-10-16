@@ -3,10 +3,13 @@
  * `tc profile delete` (TC-18): a deleted profile is never recreated, and
  * nothing is written into it.
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, stat, symlink } from "node:fs/promises";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { KVService, type IServiceContext } from "@tinycloud/sdk-core";
 import {
   Replica,
@@ -17,15 +20,18 @@ import {
   type ReplicaConfig,
   type VerifiedPage,
 } from "@tinycloud/replica";
-import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
+import { SqliteReplicaStore, loadSqlite } from "@tinycloud/replica/sqlite";
 
 // The profile store reads TC_HOME when it loads (and replica.js loads it), so import them afterwards.
-const home = await mkdtemp(join(tmpdir(), "tc-replica-guard-"));
+const home = await mkdtemp(join("/var/tmp", "tc-replica-guard-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { PROFILES_DIR } = await import("../config/constants.js");
-const { createReplica, profileGuard, replicaSecretsWarning } = await import("./replica.js");
+const { createReplica, profileGuard, registerReplicaCommand, replicaSecretsWarning } = await import("./replica.js");
 const { removeProfileReplicas } = await import("../lib/profile-replicas.js");
+const { profilePath, withPinnedProfileDirectory } = await import("@tinycloud/operations/state");
+const { createReplicationEventSink } = await import("../lib/replication-log.js");
+const { registerReplication, closeReplication } = await import("../lib/replication-registry.js");
 
 const PROFILE = "doomed";
 const NOT_FOUND = { code: ReplicaErrorCode.NOT_FOUND };
@@ -53,6 +59,58 @@ async function createProfile(name = PROFILE): Promise<void> {
     spaceName: "default",
     createdAt: "2026-10-01T00:00:00.000Z",
   });
+}
+
+async function resetFromCli(profile: string, name: string, purge = true): Promise<{ exited: boolean; stderr: string }> {
+  const program = new Command();
+  program.option("--profile <name>").option("--json");
+  registerReplicaCommand(program);
+  const previousExit = process.exit;
+  const previousWrite = process.stderr.write;
+  let stderr = "";
+  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await program.parseAsync(
+      ["node", "tc", "--profile", profile, "--json", "replica", "reset", "--replica", name, ...(purge ? ["--purge"] : [])],
+      { from: "node" },
+    );
+    return { exited: false, stderr };
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "expected CLI exit") throw error;
+    return { exited: true, stderr };
+  } finally {
+    process.exit = previousExit;
+    process.stderr.write = previousWrite;
+  }
+}
+
+async function readFromCli(profile: string, args: string[]): Promise<{ exited: boolean; stdout: string; stderr: string }> {
+  const program = new Command().option("--profile <name>").option("--json");
+  registerReplicaCommand(program);
+  const previousExit = process.exit;
+  const previousOutput = process.stdout.write;
+  const previousError = process.stderr.write;
+  let stdout = "";
+  let stderr = "";
+  let exited = false;
+  process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+  process.stdout.write = ((chunk: string | Uint8Array) => { stdout += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => { stderr += Buffer.from(chunk).toString("utf8"); return true; }) as typeof process.stderr.write;
+  try {
+    await program.parseAsync(["node", "tc", "--profile", profile, "--json", ...args], { from: "node" });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "expected CLI exit") throw error;
+    exited = true;
+  } finally {
+    process.exit = previousExit;
+    process.stdout.write = previousOutput;
+    process.stderr.write = previousError;
+  }
+  return { exited, stdout, stderr };
 }
 
 function page(): VerifiedPage {
@@ -217,6 +275,770 @@ describe("replica purge symlink safety", () => {
     });
     expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
     expect(await exists(join(PROFILES_DIR, "victim", "replicas", "victim-replica", "replica.db"))).toBe(true);
+  });
+});
+
+describe("replica reset purge containment", () => {
+  test("refuses a symlinked replicas root without removing the target replica", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await symlink(join(PROFILES_DIR, "victim", "replicas"), join(PROFILES_DIR, PROFILE, "replicas"));
+
+    const result = await resetFromCli(PROFILE, "notes");
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICA_PURGE_FAILED" } });
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses a symlinked replica entry without removing its target", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await mkdir(join(PROFILES_DIR, PROFILE, "replicas"));
+    await symlink(join(PROFILES_DIR, "victim", "replicas", "notes"), join(PROFILES_DIR, PROFILE, "replicas", "notes"));
+
+    const result = await resetFromCli(PROFILE, "notes");
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICA_PURGE_FAILED" } });
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("refuses a symlinked whole profile without removing the selected target's data", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    const result = await resetFromCli("linked", "notes");
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("non-purge reset refuses a profile alias before opening or migrating its database", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    const victimDb = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const db = sqlite(victimDb);
+    try {
+      db.exec("PRAGMA user_version = 0");
+    } finally {
+      db.close();
+    }
+    const before = await readFile(victimDb);
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    const result = await resetFromCli("linked", "notes", false);
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(await readFile(victimDb)).toEqual(before);
+    const readonly = sqlite(victimDb, { readonly: true });
+    try {
+      expect(readonly.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(0);
+    } finally {
+      readonly.close();
+    }
+  });
+
+  const readCommands: Array<[string, string[]]> = [
+    ["reset", ["replica", "reset", "--replica", "notes"]],
+    ["get", ["replica", "get", "notes/a", "--replica", "notes"]],
+    ["list", ["replica", "list", "--replica", "notes"]],
+    ["status", ["replica", "status", "--replica", "notes"]],
+    ["sync", ["replica", "sync", "--replica", "notes"]],
+    ["report", ["replica", "report"]],
+  ];
+
+  async function victimDatabaseAtOldVersion(): Promise<{ path: string; before: Buffer }> {
+    await createProfile("victim");
+    await ProfileManager.setKey(PROFILE, { kty: "OKP", d: "selected-key" });
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    const path = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const db = sqlite(path);
+    try {
+      db.exec("PRAGMA user_version = 0");
+    } finally {
+      db.close();
+    }
+    return { path, before: await readFile(path) };
+  }
+
+  async function expectVictimDatabaseUnchanged(path: string, before: Buffer): Promise<void> {
+    expect((await readFile(path)).equals(before)).toBe(true);
+    const sqlite = await loadSqlite();
+    const readonly = sqlite(path, { readonly: true });
+    try {
+      expect(readonly.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(0);
+    } finally {
+      readonly.close();
+    }
+  }
+
+  test.each(readCommands)("a symlinked replicas root refuses %s before opening a victim database", async (_command, args) => {
+    const victim = await victimDatabaseAtOldVersion();
+    await symlink(join(PROFILES_DIR, "victim", "replicas"), join(PROFILES_DIR, PROFILE, "replicas"));
+
+    const result = await readFromCli(PROFILE, args);
+    await expectVictimDatabaseUnchanged(victim.path, victim.before);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+  });
+
+  test.each(readCommands)("a symlinked replica entry refuses %s before opening a victim database", async (_command, args) => {
+    const victim = await victimDatabaseAtOldVersion();
+    const root = join(PROFILES_DIR, PROFILE, "replicas");
+    await mkdir(root);
+    await symlink(join(PROFILES_DIR, "victim", "replicas", "notes"), join(root, "notes"));
+
+    const result = await readFromCli(PROFILE, args);
+    await expectVictimDatabaseUnchanged(victim.path, victim.before);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+  });
+
+  test.each(readCommands)("a symlinked replica.db refuses %s before opening a victim database", async (_command, args) => {
+    const victim = await victimDatabaseAtOldVersion();
+    const own = await createReplica(PROFILE, config);
+    await own.close();
+    const selectedDb = join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db");
+    await unlink(selectedDb);
+    await symlink(victim.path, selectedDb);
+
+    const result = await readFromCli(PROFILE, args);
+    await expectVictimDatabaseUnchanged(victim.path, victim.before);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+  });
+
+  test("replica creation refuses a linked root before writing to a victim database", async () => {
+    const victim = await victimDatabaseAtOldVersion();
+    await symlink(join(PROFILES_DIR, "victim", "replicas"), join(PROFILES_DIR, PROFILE, "replicas"));
+    await expect(createReplica(PROFILE, config)).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+    await expectVictimDatabaseUnchanged(victim.path, victim.before);
+  });
+
+  test.each(["darwin", "win32"])("named-path %s reset refuses a linked replicas root without DB writes", async (platform) => {
+    const victim = await victimDatabaseAtOldVersion();
+    await symlink(join(PROFILES_DIR, "victim", "replicas"), join(PROFILES_DIR, PROFILE, "replicas"));
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "reset", "--replica", "notes"]);
+      await expectVictimDatabaseUnchanged(victim.path, victim.before);
+      expect(result.exited).toBe(true);
+      expect(result.stdout).toBe("");
+      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  test.each(["darwin", "win32"])("named-path %s status still reads a real selected replica", async (platform) => {
+    const store = await createReplica(PROFILE, config);
+    await store.close();
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "status", "--replica", "notes"]);
+      expect(result.exited).toBe(false);
+      expect(JSON.parse(result.stdout)).toMatchObject({ name: "notes" });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  test.each(["darwin", "win32"])("named-path %s reset rechecks a moved profile immediately before SQLite open", async (platform) => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    await own.close();
+    const victim = await victimDatabaseAtOldVersion();
+    const selected = join(PROFILES_DIR, PROFILE);
+    const parked = `${selected}.parked`;
+    const originalLstat = fsPromises.lstat;
+    const originalOpen = SqliteReplicaStore.open;
+    const originalPlatform = process.platform;
+    let moved = false;
+    let sqliteOpenAttempted = false;
+    const lstatSpy = spyOn(fsPromises, "lstat").mockImplementation(async (...args) => {
+      const info = await originalLstat(...args);
+      if (!moved && String(args[0]) === join(selected, "replicas", "notes", "replica.db")) {
+        await rename(selected, parked);
+        await symlink(join(PROFILES_DIR, "victim"), selected);
+        moved = true;
+      }
+      return info;
+    });
+    SqliteReplicaStore.open = async function (dir, options) {
+      if (!options.create) sqliteOpenAttempted = true;
+      return originalOpen.call(this, dir, options);
+    };
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "reset", "--replica", "notes"]);
+      expect(moved).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(sqliteOpenAttempted).toBe(false);
+      await expectVictimDatabaseUnchanged(victim.path, victim.before);
+      expect(await exists(join(parked, "replicas", "notes", "replica.db"))).toBe(true);
+    } finally {
+      lstatSpy.mockRestore();
+      SqliteReplicaStore.open = originalOpen;
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  test("sync pins the selected profile through its SQLite open after a real-directory swap", async () => {
+    await createProfile("victim");
+    await ProfileManager.setKey(PROFILE, { kty: "OKP", d: "selected-key" });
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    const victimDb = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const db = sqlite(victimDb);
+    try {
+      db.exec("PRAGMA user_version = 0");
+    } finally {
+      db.close();
+    }
+    const before = await readFile(victimDb);
+    const selected = join(PROFILES_DIR, PROFILE);
+    const moved = `${selected}.moved`;
+    const originalGetKey = ProfileManager.getKey;
+    let swapped = false;
+    ProfileManager.getKey = async function (name) {
+      const key = await originalGetKey.call(this, name);
+      if (name === PROFILE && !swapped) {
+        swapped = true;
+        await rename(selected, moved);
+        await symlink(join(PROFILES_DIR, "victim"), selected);
+      }
+      return key;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "sync", "--replica", "notes"]);
+      expect(swapped).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(await readFile(victimDb)).toEqual(before);
+      const readonly = sqlite(victimDb, { readonly: true });
+      try {
+        expect(readonly.get<{ user_version: number }>("PRAGMA user_version")?.user_version).toBe(0);
+      } finally {
+        readonly.close();
+      }
+    } finally {
+      ProfileManager.getKey = originalGetKey;
+    }
+  });
+
+  test("report refuses a whole-profile alias without reading the target diagnostics", async () => {
+    await createProfile("victim");
+    const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
+    const selected = join(PROFILES_DIR, PROFILE);
+    await rm(selected, { recursive: true });
+    await symlink(join(PROFILES_DIR, "victim"), selected);
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(result.stdout).toBe("");
+  });
+
+  test("report refuses a symlinked replication root without exposing another profile", async () => {
+    await createProfile("victim");
+    const victimRoot = join(PROFILES_DIR, "victim", "replication");
+    const partition = join(victimRoot, "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
+    await symlink(victimRoot, join(PROFILES_DIR, PROFILE, "replication"));
+
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(result.stderr).not.toContain("victim.example");
+  });
+
+  test("report refuses a symlinked partition directory instead of skipping it", async () => {
+    await createProfile("victim");
+    const partitionName = "a".repeat(26);
+    const victimPartition = join(PROFILES_DIR, "victim", "replication", partitionName);
+    await mkdir(victimPartition, { recursive: true });
+    await writeFile(join(victimPartition, "identity.json"), JSON.stringify({ host: "victim.example" }));
+    const selectedRoot = join(PROFILES_DIR, PROFILE, "replication");
+    await mkdir(selectedRoot);
+    await symlink(victimPartition, join(selectedRoot, partitionName));
+
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(result.stderr).not.toContain("victim.example");
+  });
+
+  test("report refuses a symlinked identity file without disclosing its host", async () => {
+    await createProfile("victim");
+    const partitionName = "a".repeat(26);
+    const victimPartition = join(PROFILES_DIR, "victim", "replication", partitionName);
+    const selectedPartition = join(PROFILES_DIR, PROFILE, "replication", partitionName);
+    await mkdir(victimPartition, { recursive: true });
+    await mkdir(selectedPartition, { recursive: true });
+    await writeFile(join(victimPartition, "identity.json"), JSON.stringify({ host: "victim.example" }));
+    await symlink(join(victimPartition, "identity.json"), join(selectedPartition, "identity.json"));
+
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    expect(result.stderr).not.toContain("victim.example");
+  });
+
+  test("report refuses a symlinked event file without disclosing its counts", async () => {
+    await createProfile("victim");
+    const victimRoot = join(PROFILES_DIR, "victim", "replication");
+    const selectedRoot = join(PROFILES_DIR, PROFILE, "replication");
+    await mkdir(victimRoot);
+    await mkdir(selectedRoot);
+    await writeFile(join(victimRoot, "events.jsonl"), `${JSON.stringify({
+      type: "replication.read", at: new Date().toISOString(), source: "replica", reason: "hit",
+    })}\n`);
+    await symlink(join(victimRoot, "events.jsonl"), join(selectedRoot, "events.jsonl"));
+
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+  });
+
+  test("report refuses a symlinked pending file without disclosing its records", async () => {
+    await createProfile("victim");
+    const partitionName = "a".repeat(26);
+    const victimPartition = join(PROFILES_DIR, "victim", "replication", partitionName);
+    const selectedPartition = join(PROFILES_DIR, PROFILE, "replication", partitionName);
+    await mkdir(victimPartition, { recursive: true });
+    await mkdir(selectedPartition, { recursive: true });
+    await writeFile(join(victimPartition, "pending.json"), JSON.stringify({ records: [{ state: "in_flight" }] }));
+    await symlink(join(victimPartition, "pending.json"), join(selectedPartition, "pending.json"));
+
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+  });
+
+  test.each(["darwin", "win32"])("report checks named descendant identity on %s", async (platform) => {
+    await createProfile("victim");
+    const victimRoot = join(PROFILES_DIR, "victim", "replication");
+    await mkdir(victimRoot);
+    await symlink(victimRoot, join(PROFILES_DIR, PROFILE, "replication"));
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "report"]);
+      expect(result.exited).toBe(true);
+      expect(result.stdout).toBe("");
+      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  test("report reads a regular persisted identity and pending summary", async () => {
+    const partitionName = "a".repeat(26);
+    const partition = join(PROFILES_DIR, PROFILE, "replication", partitionName);
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "selected.example", space: "selected-space" }));
+    await writeFile(join(partition, "pending.json"), JSON.stringify({ records: [{ state: "in_flight" }, { state: "committed" }] }));
+
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(false);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      partitions: [{ idHash: partitionName, host: "selected.example", space: "selected-space", pinned: 1 }],
+      replicasUnavailable: true,
+    });
+  });
+
+  test("report refuses a real diagnostics-root replacement between event and partition reads", async () => {
+    const selectedRoot = join(PROFILES_DIR, PROFILE, "replication");
+    const parked = join(PROFILES_DIR, PROFILE, "replication-parked");
+    const victimRoot = join(PROFILES_DIR, "victim", "replication");
+    await createProfile("victim");
+    await mkdir(selectedRoot);
+    await mkdir(join(victimRoot, "a".repeat(26)), { recursive: true });
+    await writeFile(join(selectedRoot, "events.jsonl"), `${JSON.stringify({
+      type: "replication.read", at: new Date().toISOString(), source: "replica",
+      reason: "tc841-report-swap", latencyMs: 1, stalenessMs: 0,
+    })}\n`);
+    await writeFile(join(victimRoot, "a".repeat(26), "identity.json"), JSON.stringify({ host: "victim.example" }));
+    const originalParse = JSON.parse;
+    let swapped = false;
+    JSON.parse = ((text: string, reviver?: (this: any, key: string, value: any) => any) => {
+      const parsed = originalParse(text, reviver);
+      if (!swapped && text.includes("tc841-report-swap")) {
+        renameSync(selectedRoot, parked);
+        renameSync(victimRoot, selectedRoot);
+        swapped = true;
+      }
+      return parsed;
+    }) as typeof JSON.parse;
+    let result: Awaited<ReturnType<typeof readFromCli>>;
+    try {
+      result = await readFromCli(PROFILE, ["replica", "report"]);
+    } finally {
+      JSON.parse = originalParse;
+    }
+    expect(swapped).toBe(true);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+  });
+
+  test("report reads persisted events without starting replication", async () => {
+    const root = join(PROFILES_DIR, PROFILE, "replication");
+    await mkdir(root, { recursive: true });
+    const eventsPath = join(root, "events.jsonl");
+    const original = Buffer.from(`${JSON.stringify({
+      type: "replication.read",
+      at: new Date().toISOString(),
+      source: "replica",
+      reason: "hit",
+      latencyMs: 1,
+      stalenessMs: 0,
+    })}\n`);
+    await writeFile(eventsPath, original);
+    const previousReplication = process.env.TC_REPLICATION;
+    process.env.TC_REPLICATION = "1";
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "report"]);
+      expect(result.exited).toBe(false);
+      expect(JSON.parse(result.stdout)).toMatchObject({ totals: { reads: 1 }, replicasUnavailable: true });
+      expect(await readFile(eventsPath)).toEqual(original);
+    } finally {
+      if (previousReplication === undefined) delete process.env.TC_REPLICATION;
+      else process.env.TC_REPLICATION = previousReplication;
+    }
+  });
+
+  test.skipIf(process.platform !== "linux")("report never closes a control whose descriptor now names another profile", async () => {
+    await createProfile("victim");
+    const victimEvents = join(PROFILES_DIR, "victim", "replication", "events.jsonl");
+    await mkdir(join(PROFILES_DIR, "victim", "replication"), { recursive: true });
+    const original = Buffer.from("victim-event-sentinel\n");
+    await writeFile(victimEvents, original);
+    await withPinnedProfileDirectory("victim", async () => {
+      const reusedRoot = profilePath("victim");
+      const sink = createReplicationEventSink(reusedRoot, { debug: false, quiet: true });
+      let emitOnClose = true;
+      registerReplication(PROFILE, {
+        status: async () => [],
+        sync: async () => undefined,
+        purge: async () => ({ purged: [], failed: [] }),
+        clearPending: async () => 0,
+        close: async () => {
+          if (emitOnClose) sink({ type: "replication.state", at: new Date().toISOString(), space: "default", replica: "notes/", state: "closed" });
+        },
+      });
+      try {
+        const result = await readFromCli(PROFILE, ["replica", "report"]);
+        expect(result.exited).toBe(false);
+        expect(await readFile(victimEvents)).toEqual(original);
+        expect(JSON.parse(result.stdout)).toMatchObject({ replicasUnavailable: true });
+      } finally {
+        emitOnClose = false;
+        await closeReplication();
+      }
+    });
+  });
+
+  test.each([
+    ["--purge", "replica reset --replica <name> --purge"],
+    ["--clear-pending", "TC-1309"],
+  ])("report refuses %s without starting a runtime", async (option, guidance) => {
+    const result = await readFromCli(PROFILE, ["replica", "report", option]);
+    expect(result.exited).toBe(true);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPORT_READ_ONLY" } });
+    expect(result.stderr).toContain(guidance);
+  });
+
+  test("report refuses an absent profile without reading another profile's diagnostics", async () => {
+    await createProfile("victim");
+    const partition = join(PROFILES_DIR, "victim", "replication", "a".repeat(26));
+    await mkdir(partition, { recursive: true });
+    await writeFile(join(partition, "identity.json"), JSON.stringify({ host: "victim.example", space: "victim-space" }));
+    await rm(join(PROFILES_DIR, PROFILE), { recursive: true });
+    const result = await readFromCli(PROFILE, ["replica", "report"]);
+    expect(result.exited).toBe(true);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "PROFILE_NOT_FOUND" } });
+    expect(result.stdout).toBe("");
+  });
+
+  test("a symlinked replica.db cannot acquire a lease in the victim database", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const selectedDb = join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db");
+    const victimDb = join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db");
+    const sqlite = await loadSqlite();
+    const readToken = () => {
+      const db = sqlite(victimDb, { readonly: true });
+      try { return db.get<{ lease_token: number }>("SELECT lease_token FROM replica WHERE id = 1")?.lease_token; }
+      finally { db.close(); }
+    };
+    const before = readToken();
+    await unlink(selectedDb);
+    await symlink(victimDb, selectedDb);
+
+    expect((await resetFromCli(PROFILE, "notes")).exited).toBe(true);
+    expect(readToken()).toBe(before);
+    expect(await exists(victimDb)).toBe(true);
+  });
+
+  test("rejects a whole-profile alias before reading or writing its key and session", async () => {
+    await createProfile("victim");
+    const key = { kty: "OKP", d: "victim-private-key" };
+    const session = { delegationCid: "victim-session" };
+    await ProfileManager.setKey("victim", key);
+    await ProfileManager.setSession("victim", session);
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    for (const access of [
+      () => ProfileManager.getProfile("linked"),
+      () => ProfileManager.getKey("linked"),
+      () => ProfileManager.getSession("linked"),
+      () => ProfileManager.setKey("linked", { kty: "OKP", d: "attacker" }),
+      () => ProfileManager.resolveContext({ profile: "linked" }, { storedSession: "unused" }),
+    ]) {
+      await expect(access()).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
+    }
+    expect(await ProfileManager.getKey("victim")).toEqual(key);
+    expect(await ProfileManager.getSession("victim")).toEqual(session);
+  });
+
+  test("replica status refuses a whole-profile alias without reading the victim store", async () => {
+    await createProfile("victim");
+    const victim = await createReplica("victim", config);
+    await victim.close();
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+    const program = new Command();
+    program.option("--profile <name>").option("--json");
+    registerReplicaCommand(program);
+    const previousExit = process.exit;
+    const previousWrite = process.stderr.write;
+    let stderr = "";
+    process.exit = (() => { throw new Error("expected CLI exit"); }) as typeof process.exit;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await expect(program.parseAsync(["node", "tc", "--profile", "linked", "--json", "replica", "status", "--replica", "notes"], { from: "node" }))
+        .rejects.toThrow("expected CLI exit");
+      expect(JSON.parse(stderr)).toMatchObject({ error: { code: "PROFILE_SYMLINK" } });
+      expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+    } finally {
+      process.exit = previousExit;
+      process.stderr.write = previousWrite;
+    }
+  });
+
+  test("a pending logout marker blocks every legacy read for its profile and an alias", async () => {
+    const store = await createReplica(PROFILE, config);
+    const lease = await store.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await store.applyPage(lease!, page());
+    await store.releaseLease(lease!);
+    await store.close();
+    const commands = [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+    ];
+    for (const command of commands) expect((await readFromCli(PROFILE, command)).exited).toBe(false);
+    await writeFile(join(PROFILES_DIR, PROFILE, "replica-logout-pending.json"), "{}");
+    await symlink(join(PROFILES_DIR, PROFILE), join(PROFILES_DIR, "linked"));
+
+    for (const profile of [PROFILE, "linked"]) {
+      for (const command of commands) {
+        const result = await readFromCli(profile, command);
+        expect(result.exited).toBe(true);
+        expect(JSON.parse(result.stderr).error.code).toBe(profile === PROFILE ? "REPLICA_GATED" : "PROFILE_SYMLINK");
+        expect(result.stdout).not.toContain("secret");
+        expect(result.stdout).not.toContain("notes/a");
+      }
+    }
+    expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+  });
+
+  test("an in-flight legacy get refuses a marker committed after SQLite read", async () => {
+    const store = await createReplica(PROFILE, config);
+    const lease = await store.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await store.applyPage(lease!, page());
+    await store.releaseLease(lease!);
+    await store.close();
+    const originalGet = SqliteReplicaStore.prototype.get;
+    const marker = join(PROFILES_DIR, PROFILE, "replica-logout-pending.json");
+    let readCompleted = false;
+    SqliteReplicaStore.prototype.get = async function (key) {
+      const entry = await originalGet.call(this, key);
+      readCompleted = true;
+      await writeFile(marker, "{}");
+      return entry;
+    };
+    try {
+      const result = await readFromCli(PROFILE, ["replica", "get", "notes/a", "--replica", "notes", "--raw"]);
+      expect(readCompleted).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr).error.code).toBe("REPLICA_GATED");
+      expect(result.stdout).not.toContain("secret");
+      expect(await exists(join(PROFILES_DIR, PROFILE, "replicas", "notes", "replica.db"))).toBe(true);
+    } finally {
+      SqliteReplicaStore.prototype.get = originalGet;
+    }
+  });
+
+  test("a whole-profile alias cannot read another profile's legacy values or keys", async () => {
+    await createProfile("victim");
+    const store = await createReplica("victim", config);
+    const lease = await store.acquireSyncLease(60_000);
+    expect(lease).not.toBeNull();
+    await store.applyPage(lease!, page());
+    await store.releaseLease(lease!);
+    await store.close();
+    expect((await readFromCli("victim", ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).stdout).toContain("secret");
+    await symlink(join(PROFILES_DIR, "victim"), join(PROFILES_DIR, "linked"));
+
+    for (const command of [
+      ["replica", "get", "notes/a", "--replica", "notes", "--raw"],
+      ["replica", "list", "--replica", "notes"],
+      ["replica", "status", "--replica", "notes"],
+    ]) {
+      const result = await readFromCli("linked", command);
+      expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr).error.code).toBe("PROFILE_SYMLINK");
+      expect(result.stdout).not.toContain("secret");
+      expect(result.stdout).not.toContain("notes/a");
+    }
+    expect((await readFromCli("victim", ["replica", "get", "notes/a", "--replica", "notes", "--raw"])).stdout).toContain("secret");
+  });
+
+  test("refuses an entry replaced after lookup, before opening the store", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const entry = join(PROFILES_DIR, PROFILE, "replicas", "notes");
+    const originalOpen = SqliteReplicaStore.open;
+    let swapped = false;
+    SqliteReplicaStore.open = async function (dir, options) {
+      if (!swapped && dir.endsWith("/notes") && !options.create) {
+        swapped = true;
+        await rename(entry, `${entry}.original`);
+        await symlink(join(PROFILES_DIR, "victim", "replicas", "notes"), entry);
+      }
+      return originalOpen.call(this, dir, options);
+    };
+    try {
+      const result = await resetFromCli(PROFILE, "notes");
+      expect(result.exited).toBe(true);
+      expect(swapped).toBe(true);
+      expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+      expect(await exists(`${entry}.original/replica.db`)).toBe(true);
+    } finally {
+      SqliteReplicaStore.open = originalOpen;
+    }
+  });
+
+  test("refuses a real replica entry swapped before SQLite can open it", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const entry = join(PROFILES_DIR, PROFILE, "replicas", "notes");
+    const victimEntry = join(PROFILES_DIR, "victim", "replicas", "notes");
+    const originalOpen = SqliteReplicaStore.open;
+    let sqliteCalled = false;
+    SqliteReplicaStore.open = async function (dir, options) {
+      await rename(entry, `${entry}.original`);
+      await rename(victimEntry, entry);
+      return originalOpen.call(this, dir, {
+        ...options,
+        sqlite: () => {
+          sqliteCalled = true;
+          throw new Error("SQLite must not open a replaced replica entry");
+        },
+      });
+    };
+    try {
+      expect((await resetFromCli(PROFILE, "notes")).exited).toBe(true);
+      expect(sqliteCalled).toBe(false);
+      expect(await exists(`${entry}.original/replica.db`)).toBe(true);
+      expect(await exists(join(entry, "replica.db"))).toBe(true);
+    } finally {
+      SqliteReplicaStore.open = originalOpen;
+    }
+  });
+
+  test("purges only its selected replica when the replicas root moves during open", async () => {
+    await createProfile("victim");
+    const own = await createReplica(PROFILE, config);
+    const victim = await createReplica("victim", config);
+    await own.close();
+    await victim.close();
+    const root = join(PROFILES_DIR, PROFILE, "replicas");
+    const originalOpen = SqliteReplicaStore.open;
+    let swapped = false;
+    SqliteReplicaStore.open = async function (dir, options) {
+      if (!swapped && dir.endsWith("/notes") && !options.create) {
+        swapped = true;
+        await rename(root, `${root}.original`);
+        await symlink(join(PROFILES_DIR, "victim", "replicas"), root);
+      }
+      return originalOpen.call(this, dir, options);
+    };
+    try {
+      const result = await resetFromCli(PROFILE, "notes");
+      expect(swapped).toBe(true);
+      expect(result.exited).toBe(false);
+      expect(await exists(join(PROFILES_DIR, "victim", "replicas", "notes", "replica.db"))).toBe(true);
+      expect(await exists(`${root}.original/notes/replica.db`)).toBe(false);
+    } finally {
+      SqliteReplicaStore.open = originalOpen;
+    }
+  });
+
+  test("refuses an entry swapped for a symlink after the store opens", async () => {
+    const store = await createReplica(PROFILE, config);
+    await store.close();
+    const entry = join(PROFILES_DIR, PROFILE, "replicas", "notes");
+    const outside = join(home, "moved-replica");
+    const originalDestroy = SqliteReplicaStore.prototype.destroy;
+    SqliteReplicaStore.prototype.destroy = async function (lease) {
+      await rename(entry, outside);
+      await symlink(outside, entry);
+      return originalDestroy.call(this, lease);
+    };
+    try {
+      const result = await resetFromCli(PROFILE, "notes");
+      expect(result.exited).toBe(true);
+      expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REPLICA_PURGE_FAILED" } });
+      expect(await exists(join(outside, "replica.db"))).toBe(true);
+    } finally {
+      SqliteReplicaStore.prototype.destroy = originalDestroy;
+    }
   });
 });
 
