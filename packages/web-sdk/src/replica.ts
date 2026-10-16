@@ -165,10 +165,11 @@ async function recoveredBrowserReplication(
 }
 
 /** Runtime loader callbacks let the root-owned registry activate replica only after opt-in. */
+const validateConfig = assertValidReplicationConfig;
 export const browserReplicaPlugin: BrowserReplicaPlugin = {
-  validateConfig: assertValidReplicationConfig,
+  validateConfig,
   loaders: {
-    validateConfig: assertValidReplicationConfig,
+    validateConfig,
     runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
     authority: () => import("@tinycloud/node-sdk/replication/authority"),
     gate: () => import("@tinycloud/replica/profile-gate"),

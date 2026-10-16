@@ -23,11 +23,11 @@
     {
       "pr": "#548",
       "ticket": "TC-858",
-      "replica.mjs": 45657,
-      "replica.cjs": 65177,
-      "activation.mjs": 23136,
-      "activation.cjs": 24946,
-      "note": "Bun 1.4.3 post-#550 observed loaded gzip; root-external first import, deferred IDB activation and #550 worker are separate buckets. The approved 2578c6a7 relocation moves stamp dispatch only; current optional overages remain red."
+      "replica.mjs": 45538,
+      "replica.cjs": 65095,
+      "activation.mjs": 23063,
+      "activation.cjs": 24654,
+      "note": "Bun 1.4.3 after S1 222922c4+aed35eef and S4 gated-network event fix: observed loaded gzip; first import reuses root, deferred IDB activation and hashed worker are separate. Approved 2578c6a7 paired relocation and both optional ceilings remain unchanged."
     }
   ]
 }
