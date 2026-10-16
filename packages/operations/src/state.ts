@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { constants as fsConstants, readFileSync, readlinkSync } from "node:fs";
+import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from "node:fs";
 import {
   chmod,
   link,
@@ -71,10 +71,16 @@ function processWideContext<T>(key: string): AsyncLocalStorage<T> {
 const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot.v1");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
 const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v2");
-/** Profile paths inside a lock/read stay on the directory opened at entry. */
-const pinnedProfiles = processWideContext<ReadonlyMap<string, string>>("tinycloud.operations.pinnedProfiles.v1");
-/** Turn locks use the same opened home as their profile, not its mutable name. */
-const pinnedHomes = processWideContext<ReadonlyMap<string, string>>("tinycloud.operations.pinnedHomes.v1");
+/** Descriptors inherited by deferred async work are unusable after their owner's action returns. */
+interface PinnedDirectory {
+  readonly path: string;
+  readonly fd: number;
+  readonly dev: number;
+  readonly ino: number;
+  active: boolean;
+}
+const pinnedProfiles = processWideContext<ReadonlyMap<string, PinnedDirectory>>("tinycloud.operations.pinnedProfiles.v2");
+const pinnedHomes = processWideContext<ReadonlyMap<string, PinnedDirectory>>("tinycloud.operations.pinnedHomes.v2");
 /** One ID across separately bundled ESM, CJS, CLI and MCP copies in this process. */
 const processInstanceId: string =
   (globalThis as unknown as Record<symbol, string | undefined>)[Symbol.for("tinycloud.operations.profileLockInstance.v1")] ??=
@@ -452,7 +458,8 @@ export function namedProfilePath(profile: string): string {
 
 export function profilePath(profile: string): string {
   const named = namedProfilePath(profile);
-  return pinnedProfiles.getStore()?.get(named) ?? named;
+  const pinned = pinnedProfiles.getStore()?.get(named);
+  return pinned ? livePinnedPath(profile, pinned) : named;
 }
 
 export function profileConfigPath(profile: string): string {
@@ -495,7 +502,8 @@ export function profileLockMetadataPath(profile: string): string {
  */
 export function profileTurnLockPath(profile: string): string {
   const home = tinycloudHomePath();
-  return join(pinnedHomes.getStore()?.get(home) ?? home, "profile-locks", validateProfileName(profile));
+  const pinned = pinnedHomes.getStore()?.get(home);
+  return join(pinned ? livePinnedPath(profile, pinned) : home, "profile-locks", validateProfileName(profile));
 }
 
 /**
@@ -628,6 +636,17 @@ export class ProfileSymlinkError extends Error {
   }
 }
 
+function livePinnedPath(profile: string, pinned: PinnedDirectory): string {
+  if (!pinned.active) throw new ProfileSymlinkError(profile, "its pinned directory is no longer active");
+  try {
+    const stats = fstatSync(pinned.fd);
+    if (stats.dev === pinned.dev && stats.ino === pinned.ino) return pinned.path;
+  } catch {
+    // A closed or reused descriptor must never supply another profile's path.
+  }
+  throw new ProfileSymlinkError(profile, "its pinned directory changed during use");
+}
+
 /** Missing profiles remain missing; existing profiles are always opened without following aliases. */
 export async function withPinnedProfileDirectory<T>(
   profile: string,
@@ -636,9 +655,18 @@ export async function withPinnedProfileDirectory<T>(
 ): Promise<T> {
   const named = namedProfilePath(profile);
   const existing = pinnedProfiles.getStore()?.get(named);
-  if (existing) return action(existing);
+  if (existing) return action(livePinnedPath(profile, existing));
   if (process.platform !== "linux") {
-    throw new ProfileSymlinkError(profile, "cannot be pinned safely on this platform");
+    // Only destructive replica purge needs a descriptor-relative child path.
+    // Preserve ordinary profile state access on platforms without /proc/self/fd.
+    if (options.create) await mkdir(named, { recursive: true, mode: PRIVATE_DIR_MODE });
+    const stats = await lstat(named).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!stats) return action(null);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) throw new ProfileSymlinkError(profile);
+    return action(named);
   }
   const handles: FileHandle[] = [];
   const fdPath = (fd: number) => `/proc/self/fd/${fd}`;
@@ -667,11 +695,24 @@ export async function withPinnedProfileDirectory<T>(
       throw new ProfileSymlinkError(profile, "changed while opening its directory");
     }
     const directory = fdPath(opened.fd);
+    const pinned: PinnedDirectory = {
+      path: directory, fd: opened.fd, dev: actual.dev, ino: actual.ino, active: true,
+    };
+    const homeHandle = handles[0]!;
+    const homeStats = await homeHandle.stat();
+    const homePinned: PinnedDirectory = {
+      path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeStats.dev, ino: homeStats.ino, active: true,
+    };
     const context = new Map(pinnedProfiles.getStore());
-    context.set(named, directory);
+    context.set(named, pinned);
     const homes = new Map(pinnedHomes.getStore());
-    homes.set(tinycloudHomePath(), fdPath(handles[0]!.fd));
-    return await pinnedHomes.run(homes, () => pinnedProfiles.run(context, () => action(directory)));
+    homes.set(tinycloudHomePath(), homePinned);
+    try {
+      return await pinnedHomes.run(homes, () => pinnedProfiles.run(context, () => action(directory)));
+    } finally {
+      pinned.active = false;
+      homePinned.active = false;
+    }
   } finally {
     for (const handle of handles.reverse()) await handle.close();
   }
@@ -680,7 +721,11 @@ export async function withPinnedProfileDirectory<T>(
 /** Missing profiles retain their existing read/create behavior; aliases never do. */
 export async function assertRealProfileDirectory(profile: string): Promise<void> {
   const named = namedProfilePath(profile);
-  if (pinnedProfiles.getStore()?.has(named)) return;
+  const pinned = pinnedProfiles.getStore()?.get(named);
+  if (pinned) {
+    livePinnedPath(profile, pinned);
+    return;
+  }
   const stats = await lstat(named).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null;
     throw error;

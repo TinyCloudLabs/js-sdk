@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, lstatSync } from "node:fs";
 import { open, readdir, rename, stat, unlink, readFile, lstat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -15,7 +15,6 @@ import {
   readAdditionalDelegations,
   readSession,
   withProfileLock,
-  withPinnedProfileDirectory,
 } from "@tinycloud/operations/state";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import type { ReplicationEvent, ReplicationControl } from "@tinycloud/node-sdk";
@@ -175,6 +174,29 @@ export function profileGuard(profile: string): MutationGuard {
 
 async function openReplica(profile: string, name: string, guard: MutationGuard = profileGuard(profile)): Promise<SqliteReplicaStore> {
   return SqliteReplicaStore.open(join(replicasRoot(profile), name), { create: false, guard });
+}
+
+/** The marker is durable until recovery finishes; local reads never infer clearance from session state. */
+function assertLegacyLogoutClear(profile: string): void {
+  try {
+    lstatSync(join(profilePath(profile), "replica-logout-pending.json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return;
+  }
+  throw new CLIError(
+    "REPLICA_GATED",
+    "A logout is pending or its state cannot be checked for this profile.",
+    ExitCode.PERMISSION_DENIED,
+  );
+}
+
+/** Keep the selected profile pinned and its read and output serialized with logout. */
+async function withLegacyReplicaRead(profile: string, action: (checkDelivery: () => Promise<void>) => Promise<void>): Promise<void> {
+  await withProfileLock(profile, async () => {
+    const checkDelivery = async () => { assertLegacyLogoutClear(profile); };
+    await checkDelivery();
+    await action(checkDelivery);
+  }, { requireProfile: true });
 }
 
 /**
@@ -617,32 +639,35 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((key: string, options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
-        let result: ReplicaReadResult;
-        try {
-          result = await new Replica({ store }).get(key, { verify: options.verify !== false });
-        } finally {
-          await store.close();
-        }
-        if (result.status !== "present") {
-          const failure = READ_FAILURE[result.status];
-          throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
-        }
-        if (options.output) {
-          await writeFileAtomic(options.output, result.value);
-          outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
-          return;
-        }
-        if (options.raw) {
+        await withLegacyReplicaRead(profile, async (checkDelivery) => {
+          const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
+          let result: ReplicaReadResult;
+          try {
+            result = await new Replica({ store }).get(key, { verify: options.verify !== false });
+          } finally {
+            await store.close();
+          }
+          await checkDelivery();
+          if (result.status !== "present") {
+            const failure = READ_FAILURE[result.status];
+            throw new CLIError(failure.code, `Key ${JSON.stringify(key)} ${failure.what}.`, failure.exit);
+          }
+          if (options.output) {
+            await writeFileAtomic(options.output, result.value);
+            outputJson({ key, written: options.output, etag: result.etag, meta: result.meta });
+            return;
+          }
+          if (options.raw) {
+            process.stdout.write(result.value);
+            return;
+          }
+          if (shouldOutputJson()) {
+            outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
+            return;
+          }
           process.stdout.write(result.value);
-          return;
-        }
-        if (shouldOutputJson()) {
-          outputJson({ key, status: result.status, ...jsonValue(result.value), etag: result.etag, metadata: result.metadata, meta: result.meta });
-          return;
-        }
-        process.stdout.write(result.value);
-        process.stdout.write("\n");
+          process.stdout.write("\n");
+        });
       }),
     );
 
@@ -658,28 +683,31 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           throw new CLIError("USAGE_ERROR", "--limit must be a positive integer.", ExitCode.USAGE_ERROR);
         }
         const profile = await profileName(cmd);
-        const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
-        try {
-          const { entries, meta } = await new Replica({ store }).list({
-            ...(prefix === undefined ? {} : { prefix }),
-            ...(options.after === undefined ? {} : { after: options.after }),
-            ...(options.limit === undefined ? {} : { limit: options.limit }),
-          });
-          if (shouldOutputJson()) {
-            outputJson({ keys: entries, count: entries.length, prefix: prefix ?? null, meta });
-          } else if (entries.length === 0) {
-            process.stdout.write(theme.muted("No keys.") + "\n");
-          } else {
-            process.stdout.write(
-              formatTable(
-                ["Key", "Content"],
-                entries.map((entry) => [entry.key, entry.content ? "local" : "missing"]),
-              ) + "\n",
-            );
+        await withLegacyReplicaRead(profile, async (checkDelivery) => {
+          const store = await openReplica(profile, await existingReplicaName(profile, options.replica));
+          try {
+            const { entries, meta } = await new Replica({ store }).list({
+              ...(prefix === undefined ? {} : { prefix }),
+              ...(options.after === undefined ? {} : { after: options.after }),
+              ...(options.limit === undefined ? {} : { limit: options.limit }),
+            });
+            await checkDelivery();
+            if (shouldOutputJson()) {
+              outputJson({ keys: entries, count: entries.length, prefix: prefix ?? null, meta });
+            } else if (entries.length === 0) {
+              process.stdout.write(theme.muted("No keys.") + "\n");
+            } else {
+              process.stdout.write(
+                formatTable(
+                  ["Key", "Content"],
+                  entries.map((entry) => [entry.key, entry.content ? "local" : "missing"]),
+                ) + "\n",
+              );
+            }
+          } finally {
+            await store.close();
           }
-        } finally {
-          await store.close();
-        }
+        });
       }),
     );
 
@@ -690,7 +718,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     .action((options, cmd: Command) =>
       run(async () => {
         const profile = await profileName(cmd);
-        await withPinnedProfileDirectory(profile, async () => {
+        await withLegacyReplicaRead(profile, async (checkDelivery) => {
           const names = options.replica === undefined ? await replicaNames(profile) : [assertName(options.replica)];
           const statuses: ReplicaStatus[] = [];
           for (const name of names) {
@@ -701,6 +729,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               await store.close();
             }
           }
+          await checkDelivery();
           if (shouldOutputJson()) {
             outputJson(options.replica === undefined ? { replicas: statuses } : statuses[0]);
           } else if (statuses.length === 0) {
