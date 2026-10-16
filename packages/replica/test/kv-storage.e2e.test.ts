@@ -456,6 +456,7 @@ describe.skipIf(!RUN)("kv-storage over a fake feed (Chromium)", () => {
     const dump = await page.evaluate(() => window.__kv.dump());
     expect(dump.entries).toEqual({});
     expect(dump.blobs).toEqual({});
+    expect(dump.partitions).toEqual({});
     expect(await page.evaluate(() => window.__kv.get("stored", "notes/a"))).toMatchObject({ ok: false, code: "RESET_REQUIRED" });
     expect(await page.evaluate(() => window.__kv.get("injected", "notes/a"))).toMatchObject({ ok: false, code: "RESET_REQUIRED" });
   }, 60_000);
