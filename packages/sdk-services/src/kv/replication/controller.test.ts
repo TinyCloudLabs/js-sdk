@@ -752,6 +752,18 @@ describe("consent deadline delivery", () => {
     expect(result.ok && result.data.data).toBe("local");
     expect(env.counters()).toMatchObject({ installs: 0, networkCalls: 0 });
   });
+
+  test("compact signed coverage without an installed device grant stays network-only", async () => {
+    const env = setup({
+      sessionOnly: true,
+      statusOverrides: { grant: null },
+      delivery: () => ({ status: "allow" }),
+    });
+    const result = await env.controller.get(readRequest(env.network));
+    expect(result.ok && result.data.data).toBe("network");
+    expect(env.counters()).toMatchObject({ installs: 0, localReads: 0, networkCalls: 1 });
+  });
+
   test("a valid installed compact grant never overrides a current-session refusal", async () => {
     for (const refused of ["NOT_COVERED", "CAVEATED_AUTHORITY", "SESSION_EXPIRING"] as const) {
       const env = setup({

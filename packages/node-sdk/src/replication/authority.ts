@@ -367,7 +367,8 @@ export function createReplicationAuthority(host: ReplicationAuthorityHost): Repl
     sessionGrant(prefix: string): { ucan: string; device: ReplicaDevice } | AuthorityRefusal {
       const session = activeSession();
       if (session === undefined) return { refused: "SESSION_EXPIRING" };
-      if (verifiedAnchor === null) return { refused: "NOT_COVERED" };
+      // A compact session proves current signed coverage, not consent to install or mint.
+      if (verifiedAnchor === null && session.siwe !== undefined) return { refused: "NOT_COVERED" };
       const siweExpiry = session.siwe ? host.siweExpiration(session.siwe)?.getTime() : undefined;
       if (siweExpiry !== undefined && siweExpiry <= Date.now() + AUTHORITY_EXPIRY_MARGIN_MS) {
         return { refused: "SESSION_EXPIRING" };

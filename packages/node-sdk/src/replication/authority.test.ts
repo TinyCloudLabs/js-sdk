@@ -436,6 +436,55 @@ describe("createReplicationAuthority (§4.2-4.3)", () => {
     if ("refused" in result) throw new Error(`unexpected refusal ${result.refused}`);
     expect(result.device.did).toBe(SESSION_DID);
   });
+
+  test("compact signed coverage can reuse an installed grant without gaining consent or mint authority", async () => {
+    const session = fakeSession({
+      siwe: undefined,
+      signature: undefined,
+      delegationHeader: { Authorization: fakeSessionUcan({
+        [`tinycloud://${SPACE}/kv/notes/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+      }) },
+    });
+    const mintDelegation = mock(async () => ({ ucan: "unexpected", expiresAt: Date.now() + 60_000 }));
+    const authority = createReplicationAuthority(makeHost({
+      replicationSession: () => session,
+      verifiedConsentAnchor: () => null,
+      mintDelegation,
+    }));
+    expect(authority.sessionOnly).toBe(true);
+    expect(authority.consentAnchor?.()).toBeNull();
+    expect(authority.sessionGrant("notes/")).toEqual({
+      ucan: session.delegationHeader.Authorization,
+      device: { did: SESSION_DID, jwk: session.jwk },
+    });
+    expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
+    await expect(authority.mint(DEVICE_DID, "notes/", new AbortController().signal)).rejects.toThrow(/compact/i);
+    expect(mintDelegation).not.toHaveBeenCalled();
+  });
+
+  test("compact session coverage still rejects wrong-space, disjoint and caveated grants", () => {
+    const notes = `tinycloud://${SPACE}/kv/notes/`;
+    for (const [att, refusal] of [
+      [{ [`tinycloud://other-space/kv/notes/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} } }, "NOT_COVERED"],
+      [{ [notes]: { "tinycloud.kv/get": {} }, [`tinycloud://${SPACE}/kv/other/`]: { "tinycloud.kv/sync": {} } }, "NOT_COVERED"],
+      [{ [notes]: { "tinycloud.kv/get": { ifMatch: ["etag"] }, "tinycloud.kv/sync": {} } }, "CAVEATED_AUTHORITY"],
+    ] as const) {
+      const session = fakeSession({ siwe: undefined, delegationHeader: { Authorization: fakeSessionUcan(att) } });
+      const authority = createReplicationAuthority(makeHost({ replicationSession: () => session, verifiedConsentAnchor: () => null }));
+      expect(authority.sessionGrant("notes/")).toEqual({ refused: refusal });
+    }
+  });
+
+  test("unverified full owner session still cannot offer a reusable grant", () => {
+    const session = fakeSession({
+      delegationHeader: { Authorization: fakeSessionUcan({
+        [`tinycloud://${SPACE}/kv/notes/`]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": {} },
+      }) },
+    });
+    const authority = createReplicationAuthority(makeHost({ replicationSession: () => session, verifiedConsentAnchor: () => null }));
+    expect(authority.sessionGrant("notes/")).toEqual({ refused: "NOT_COVERED" });
+  });
+
   test("an exact-key grant cannot cover folders; a trailing-slash grant can", () => {
     const exactSession = fakeSession({
       delegationHeader: {
