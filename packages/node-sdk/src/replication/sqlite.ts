@@ -49,6 +49,7 @@ import type {
   ReplicaGateAccess,
   ReplicaLifecycleGate,
   ReplicaConsentAnchor,
+  ReplicaPurgeIntent,
   ReplicaSessionStamp,
 } from "@tinycloud/sdk-services/kv/replication";
 import { CONSENT_WINDOW_MS, MAX_GRANT_TTL_MS, REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
