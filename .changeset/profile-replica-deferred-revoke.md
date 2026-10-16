@@ -2,4 +2,4 @@
 "@tinycloud/sdk-services": patch
 ---
 
-Add the node/CLI `ProfileReplicaPurge` deferred-revoke and discriminated logout-marker types. Document token-fenced replay, orphan-profile wipe with discard consent when local writes are indeterminate, and durable signed-out credential cleanup on plain or successful remote logout, including the no-marker path. Failed remote revoke retains credentials and physical replicas; the browser lifecycle interface is unchanged.
+Add node/CLI deferred-revoke and exact-inventory logout-marker types. Document source-schema-verified legacy cleanup, remote-pending credential retention, all-CID completion before erasure, and a two-command inventory-token approval for changed files during plain-logout override. Crash recovery retains inventory approval, signed-out credential cleanup and fresh approval for changed files; browser lifecycle contracts are unchanged.
