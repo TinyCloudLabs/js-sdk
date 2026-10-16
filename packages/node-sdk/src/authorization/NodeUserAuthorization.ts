@@ -1923,6 +1923,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       protocolVersion: 1,
       siwe: prepared.siwe,
       jwk,
+      verificationMethod: prepared.verificationMethod,
       host: hostHint,
       keyId: options?.openkeyKeyId,
       presentation,
