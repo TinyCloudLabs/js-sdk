@@ -581,13 +581,13 @@ function assertApprovedInventory(
   }
   for (const entry of current.knownEntries) {
     if (allowRemoved && entry.kind === "file" &&
-        /^replication\/[a-z2-7]{26}\/replicas\/[a-z2-7]{26}\/replica\.db-(?:wal|shm|journal)$/.test(entry.path)) {
+        /^(?:replication\/[a-z2-7]{26}\/replicas\/[a-z2-7]{26}|replicas\/[^/]+)\/replica\.db-(?:wal|shm|journal)$/.test(entry.path)) {
       const database = entry.path.replace(/-(?:wal|shm|journal)$/, "");
       const original = knownFiles.get(database);
       const present = current.knownEntries.find((item) => item.path === database);
-      // SQLite can create/recreate only these sidecars after an approved
-      // snapshot. The database and partition root must retain their inode;
-      // the eraser captures each sidecar's current inode before unlink.
+      // SQLite can create/recreate only these source-owned sidecars after
+      // approval. The database and replica root must retain their inode;
+      // the remover captures each sidecar's current inode before unlink.
       if (original?.kind === "file" && present?.dev === original.dev &&
           present.ino === original.ino) continue;
     }
