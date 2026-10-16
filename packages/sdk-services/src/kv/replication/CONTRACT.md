@@ -572,8 +572,9 @@ An active gate with a missing `session.json` **without** this marker is not
 logout evidence: fresh sign-in can establish the gate before persisting its
 network session. Never infer abandonment from that absence alone.
 
-With a missing/corrupt gate and flag-owned files, scoped intents cannot be
-reconstructed without the gate salt. The CLI instead uses a **distinct**
+With a missing gate and flag-owned files, or a corrupt gate even when its
+roots appear empty, scoped intents cannot be reconstructed without a
+verified gate salt. The CLI instead uses a **distinct**
 profile-wide orphan marker `{ v: 2, scope: "orphan_profile", nonce }` with a
 fresh opaque nonce, fsynced before credential unlink. Before writing it,
 the facade validates both roots under the profile lock: each must be a
@@ -597,6 +598,18 @@ pending index and is indeterminate: it requires explicit
 intents nor a legacy root, `prepareLogoutPending` returns null; the no-marker
 recovery report still reads the durable outstanding-intent count under the
 profile lock, never a fabricated zero.
+
+A `null` marker is **not** completed logout: with no replica-owned work
+pending, `recoverLogoutPending` does not call `clearCredentials`. The CLI
+still commits `profile.json.authSignedOut: true` atomically with file and
+directory fsync under the profile lock **before** unlinking and fsyncing
+both credentials, for plain logout and verified successful revoke. At
+startup `authSignedOut: true` itself forbids network restore or implicit
+profile-key sign-in; the CLI finishes any interrupted credential unlink
+and pinned legacy cleanup under the same lock before ordinary commands.
+If the signed-out write fails, retire the in-memory session, report nonzero
+and do not claim crash-safe completion or unlink credentials without
+durable signed-out provenance.
 
 At startup and after marker preparation, the CLI invokes
 `recoverLogoutPending({ signal, clearCredentials, eraseLegacyReplicas })`

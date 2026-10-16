@@ -418,14 +418,17 @@ export interface ProfileReplicaPurge extends Pick<ReplicaLifecycleGate, "recover
   /**
    * CLI-only: under the profile lock, atomically write and fsync a logout
    * marker before credential unlink. A readable active gate uses scoped v1;
-   * a missing/corrupt gate with flag-owned files uses profile-wide orphan v2;
+   * a missing gate with flag-owned files or a corrupt gate uses orphan v2;
    * an inactive readable gate with intents or legacy files uses epoch-bound
    * v3, without fabricating a principal hash. Before v2, pending/unknown
    * local writes or a corrupt gate refuse unless the user explicitly opts
    * to `discardLocalChanges`; v3 treats any nonempty legacy child as unknown
-   * and requires the same consent. Return null only when no marker is needed
-   * and the owned state is verified empty or already safely denied.
-   * All CLI-bound replica reads and network restore refuse any marker.
+   * and requires the same consent. Null means no replica marker is needed,
+   * not that logout completed: the CLI still durably writes authSignedOut
+   * and unlinks/fsyncs both credentials under the profile lock, and on
+   * startup finishes an interrupted unlink before network restore. No-marker
+   * recovery does not call `clearCredentials`. All CLI-bound replica reads
+   * and network restore refuse any marker.
    */
   prepareLogoutPending(input: { principal: string; discardLocalChanges?: boolean }): Promise<ProfileReplicaLogoutPending | null>;
   /**
