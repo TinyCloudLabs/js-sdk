@@ -1,5 +1,5 @@
 import { linkSync, renameSync, symlinkSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -69,6 +69,44 @@ test("concurrent prefixes do not confuse SQLite descriptor identity", async () =
     for (const path of paths) expect((await stat(join(path, "replica.db"))).isFile()).toBe(true);
   } finally {
     await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+});
+
+test("concurrent controllers can open one writable replica while another remains live", async () => {
+  const dir = await makeStore();
+  const first = await SqliteReplicaStore.open(dir, { create: false });
+  let firstClosed = false;
+  const results = await Promise.allSettled(Array.from({ length: 4 }, () =>
+    SqliteReplicaStore.open(dir, { create: true })));
+  try {
+    expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+    const stores = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    expect(await stores[0]!.open()).not.toBeNull();
+    await first.close();
+    firstClosed = true;
+    expect((await stores[1]!.status()).coverage).toBe("empty");
+  } finally {
+    if (!firstClosed) await first.close();
+    await Promise.all(results.map((result) => result.status === "fulfilled" ? result.value.close() : undefined));
+  }
+});
+
+test("a live writable controller cannot authorize a replaced database", async () => {
+  const selected = await makeStore();
+  const victim = await makeStore();
+  const selectedDb = join(selected, "replica.db");
+  const victimDb = join(victim, "replica.db");
+  const victimBefore = await readFile(victimDb);
+  const first = await SqliteReplicaStore.open(selected, { create: false });
+  try {
+    renameSync(selectedDb, `${selectedDb}.original`);
+    linkSync(victimDb, selectedDb);
+    await expect(SqliteReplicaStore.open(selected, { create: false }).then(async (store) => {
+      await store.close();
+    })).rejects.toMatchObject({ code: "STORAGE_ERROR" });
+    expect(await readFile(victimDb)).toEqual(victimBefore);
+  } finally {
+    await first.close();
   }
 });
 
